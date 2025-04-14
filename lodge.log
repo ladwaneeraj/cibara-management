@@ -1,0 +1,25 @@
+2025-04-14 11:53:42,392 - __main__ - INFO - Initializing data...
+2025-04-14 11:53:42,400 - __main__ - INFO - Data loaded from lodge_data.json
+2025-04-14 11:53:42,477 - werkzeug - INFO - [31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:5000
+ * Running on http://192.168.1.35:5000
+2025-04-14 11:53:42,478 - werkzeug - INFO - [33mPress CTRL+C to quit[0m
+2025-04-14 11:53:42,481 - werkzeug - INFO -  * Restarting with stat
+2025-04-14 11:53:43,018 - __main__ - INFO - Initializing data...
+2025-04-14 11:53:43,024 - __main__ - INFO - Data loaded from lodge_data.json
+2025-04-14 11:53:43,059 - werkzeug - WARNING -  * Debugger is active!
+2025-04-14 11:53:43,073 - werkzeug - INFO -  * Debugger PIN: 670-869-143
+2025-04-14 11:53:44,673 - werkzeug - INFO - 127.0.0.1 - - [14/Apr/2025 11:53:44] "GET / HTTP/1.1" 200 -
+2025-04-14 11:53:45,023 - werkzeug - INFO - 127.0.0.1 - - [14/Apr/2025 11:53:45] "GET /static/booking.css HTTP/1.1" 200 -
+2025-04-14 11:53:45,032 - werkzeug - INFO - 127.0.0.1 - - [14/Apr/2025 11:53:45] "GET /static/shift.js HTTP/1.1" 200 -
+2025-04-14 11:53:45,038 - werkzeug - INFO - 127.0.0.1 - - [14/Apr/2025 11:53:45] "[33mGET /static/history.js HTTP/1.1[0m" 404 -
+2025-04-14 11:53:45,041 - werkzeug - INFO - 127.0.0.1 - - [14/Apr/2025 11:53:45] "GET /static/style.css HTTP/1.1" 200 -
+2025-04-14 11:53:45,054 - werkzeug - INFO - 127.0.0.1 - - [14/Apr/2025 11:53:45] "GET /static/expense.js HTTP/1.1" 200 -
+2025-04-14 11:53:45,055 - werkzeug - INFO - 127.0.0.1 - - [14/Apr/2025 11:53:45] "GET /static/analytics.js HTTP/1.1" 200 -
+2025-04-14 11:53:45,064 - werkzeug - INFO - 127.0.0.1 - - [14/Apr/2025 11:53:45] "GET /static/script.js HTTP/1.1" 200 -
+2025-04-14 11:53:45,080 - werkzeug - INFO - 127.0.0.1 - - [14/Apr/2025 11:53:45] "GET /static/booking.js HTTP/1.1" 200 -
+2025-04-14 11:53:45,201 - werkzeug - INFO - 127.0.0.1 - - [14/Apr/2025 11:53:45] "GET /get_data HTTP/1.1" 200 -
+2025-04-14 11:53:51,270 - werkzeug - INFO - 127.0.0.1 - - [14/Apr/2025 11:53:51] "GET /get_data HTTP/1.1" 200 -
+2025-04-14 11:54:20,555 - werkzeug - INFO -  * Detected change in 'D:\\WorkSpace\\V2\\app.py', reloading
+2025-04-14 11:54:20,592 - werkzeug - INFO -  * Restarting with stat

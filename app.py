@@ -1561,36 +1561,6 @@ def check_availability():
         return jsonify(success=False, message=f"Error checking availability: {str(e)}")
 
 
-@app.route("/login")
-def login():
-    return render_template("login.html")
-
-@app.route("/logout")
-def logout():
-    return render_template("login.html", message="You have been logged out")
-
-# Protect routes requiring authentication
-@app.before_request
-def check_auth():
-    # Skip auth check for these routes
-    public_routes = ['/login', '/static', '/favicon.ico']
-    
-    for route in public_routes:
-        if request.path.startswith(route):
-            return None  # Continue to the route handler
-    
-    # For all other routes, check if an ID token is provided
-    id_token = request.cookies.get('firebase_id_token')
-    
-    if not id_token:
-        return redirect('/login')
-        
-    # In a real app, you'd verify the ID token with Firebase here
-    # This is simplified for the example
-    
-    return None  # Continue to the route handler
-
-
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port)

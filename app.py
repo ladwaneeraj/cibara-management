@@ -10,6 +10,7 @@ from firebase_admin import credentials, firestore, storage
 from werkzeug.utils import secure_filename
 import tempfile
 import pytz
+import base64
 
 # Configure logging
 logging.basicConfig(
@@ -21,21 +22,34 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__, static_folder='static')
 
+import os
+import json
+import base64
+from firebase_admin import credentials, firestore, storage
+
 # Initialize Firebase Admin SDK
 try:
-    # For production deployment, use this approach
-    cred = credentials.Certificate('D:\WorkSpace\V2\cibara-software-61512-firebase-adminsdk-fbsvc-9a37e53816.json')  # Replace with your key path
+    # Check if using environment variable for credentials (production)
+    if 'FIREBASE_CREDENTIALS' in os.environ:
+        # Decode base64 encoded credentials
+        cred_json = base64.b64decode(os.environ.get('FIREBASE_CREDENTIALS')).decode('utf-8')
+        cred_dict = json.loads(cred_json)
+        cred = credentials.Certificate(cred_dict)
+        
+        # Get storage bucket from environment
+        storage_bucket = os.environ.get('FIREBASE_STORAGE_BUCKET', 'your-project-id.appspot.com')
+        
+        firebase_admin.initialize_app(cred, {
+            'storageBucket': storage_bucket
+        })
+    else:
+        # Local development - use service account file
+        cred = credentials.Certificate('service-account.json')  # Create this file for local development
+        firebase_admin.initialize_app(cred, {
+            'storageBucket': 'your-project-id.appspot.com'  # Replace with your bucket
+        })
     
-    # For deployment platforms that support environment variables like Heroku
-    # import json
-    # cred_dict = json.loads(os.environ.get('FIREBASE_CREDENTIALS'))
-    # cred = credentials.Certificate(cred_dict)
-    
-    firebase_admin.initialize_app(cred, {
-        'storageBucket': 'your-project-id.appspot.com'  # Replace with your storage bucket
-    })
-    
-    # Get Firestore database
+    # Get Firestore database and storage bucket
     db = firestore.client()
     bucket = storage.bucket()
     

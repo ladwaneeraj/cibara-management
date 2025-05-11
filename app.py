@@ -67,6 +67,7 @@ logs_ref = db.collection('logs')
 totals_ref = db.collection('totals')
 bookings_ref = db.collection('bookings')
 settings_ref = db.collection('settings')
+settlements_ref = db.collection('settlements')  # New collection for settlements
 
 # Upload folder for temporary storage during processing
 UPLOAD_FOLDER = 'uploads'
@@ -128,7 +129,7 @@ def initialize_data():
             batch.commit()
             
             # Create log structure
-            log_types = ["cash", "online", "balance", "add_ons", "refunds", "renewals", "booking_payments"]
+            log_types = ["cash", "online", "balance", "add_ons", "refunds", "renewals", "booking_payments", "discounts"]
             for log_type in log_types:
                 logs_ref.document(log_type).set({
                     "entries": []
@@ -187,6 +188,11 @@ def get_totals():
             "refunds": 0,
             "advance_bookings": 0
         }
+
+# Get all pending settlements
+def get_pending_settlements():
+    settlements_stream = settlements_ref.where("status", "==", "pending").stream()
+    return [doc.to_dict() for doc in settlements_stream]
 
 # Get last rent check time
 def get_last_rent_check():
@@ -266,6 +272,7 @@ def checkin():
         balance = price - amount_paid
         payment = data_json["payment"]
         photo_path = data_json.get("photoPath")  # Get photo path if provided
+        is_ac = data_json.get("isAC", False)  # New AC field
         
         # Validation: don't allow amount_paid > 0 with payment="balance"
         if amount_paid > 0 and payment == "balance":
@@ -278,7 +285,8 @@ def checkin():
             "guests": int(data_json["guests"]),
             "payment": payment,
             "balance": balance,
-            "photo": photo_path  # Store photo path with guest info
+            "photo": photo_path,  # Store photo path with guest info
+            "isAC": is_ac  # Add AC field
         }
         
         # Use consistent datetime format YYYY-MM-DD HH:MM for easier manipulation
@@ -353,6 +361,7 @@ def checkout():
         is_refund = data_json.get("is_refund", False)
         is_final_checkout = data_json.get("final_checkout", False)
         process_refund = data_json.get("process_refund", False)
+        settle_later = data_json.get("settle_later", False)  # New option for settle later
         
         # Get current room data
         room_doc = rooms_ref.document(room).get()
@@ -474,7 +483,53 @@ def checkout():
         elif is_final_checkout:
             # Check balance status
             balance = room_data["balance"]
-            if balance > 0:
+            
+            # If there's a balance and settle_later is enabled, create a settlement record
+            if balance > 0 and settle_later:
+                # Create settlement entry
+                settlement_id = str(uuid.uuid4())
+                guest_info = room_data["guest"]
+                settlement_amount = balance
+                
+                # Create settlement record
+                settlement = {
+                    "id": settlement_id,
+                    "guest_name": guest_info["name"],
+                    "guest_mobile": guest_info["mobile"],
+                    "room": room,
+                    "amount": settlement_amount,
+                    "checkout_date": datetime.now(IST).strftime("%Y-%m-%d"),
+                    "checkout_time": datetime.now(IST).strftime("%H:%M"),
+                    "status": "pending",
+                    "notes": data_json.get("settlement_notes", ""),
+                    "photo": guest_info.get("photo")
+                }
+                
+                # Add to settlements collection
+                settlements_ref.document(settlement_id).set(settlement)
+                
+                # Reduce balance from totals
+                totals["balance"] -= settlement_amount
+                
+                # Add to balance logs
+                balance_log = {
+                    "room": room,
+                    "name": guest_info["name"],
+                    "amount": -settlement_amount,  # Negative to show reduction
+                    "time": datetime.now(IST).strftime("%H:%M"),
+                    "date": datetime.now(IST).strftime("%Y-%m-%d"),
+                    "note": "Converted to 'settle later' during checkout",
+                    "settlement_id": settlement_id
+                }
+                
+                logs_ref.document("balance").update({
+                    "entries": firestore.ArrayUnion([balance_log])
+                })
+                
+                logger.info(f"Settlement created for room {room}, amount: ₹{settlement_amount}")
+            
+            # Only prevent checkout if there's a positive balance AND settle_later is not enabled
+            elif balance > 0 and not settle_later:
                 return jsonify(success=False, message="Please clear the balance before checkout")
             
             # Process any refund if there's a negative balance
@@ -535,6 +590,10 @@ def add_on():
         price = int(data_json["price"])
         payment_method = data_json.get("payment_method", "balance")  # Default to balance if not specified
         
+        # New fields for quantity tracking
+        unit_price = data_json.get("unit_price", price)  # If not provided, use the price (for backward compatibility)
+        quantity = data_json.get("quantity", 1)  # Default to 1 if not specified
+        
         # Get current room data
         room_doc = rooms_ref.document(room).get()
         if not room_doc.exists:
@@ -545,11 +604,13 @@ def add_on():
         # Get totals
         totals = get_totals()
         
-        # Create add-on entry
+        # Create add-on entry with quantity information
         add_on_entry = {
             "room": room, 
             "item": item, 
             "price": price, 
+            "unit_price": unit_price,
+            "quantity": quantity,
             "time": datetime.now(IST).strftime("%H:%M"),
             "date": datetime.now(IST).strftime("%Y-%m-%d"),
             "payment_method": payment_method  # Store payment method
@@ -564,6 +625,8 @@ def add_on():
                 "time": datetime.now(IST).strftime("%H:%M"),
                 "date": datetime.now(IST).strftime("%Y-%m-%d"),
                 "item": item,  # Add item info to indicate this is a service payment
+                "unit_price": unit_price,
+                "quantity": quantity,
                 "payment_method": payment_method
             }
             
@@ -591,6 +654,8 @@ def add_on():
                 "time": datetime.now(IST).strftime("%H:%M"),
                 "date": datetime.now(IST).strftime("%Y-%m-%d"),
                 "item": item,
+                "unit_price": unit_price,
+                "quantity": quantity,
                 "note": f"Added {item} to balance"
             }
             
@@ -891,11 +956,6 @@ def apply_discount():
         })
         
         # Log the discount
-        if "discounts" not in logs_ref.document("discounts").get().to_dict():
-            logs_ref.document("discounts").set({
-                "entries": []
-            })
-            
         discount_log = {
             "room": room,
             "name": room_data["guest"]["name"],
@@ -1559,6 +1619,178 @@ def check_availability():
     except Exception as e:
         logger.error(f"Error checking availability: {str(e)}")
         return jsonify(success=False, message=f"Error checking availability: {str(e)}")
+
+# New endpoints for settlement management
+
+@app.route("/get_pending_settlements", methods=["GET"])
+def get_pending_settlements():
+    try:
+        settlements = get_pending_settlements()
+            
+        return jsonify(
+            success=True,
+            settlements=settlements
+        )
+    except Exception as e:
+        logger.error(f"Error fetching pending settlements: {str(e)}")
+        return jsonify(success=False, message=f"Error fetching pending settlements: {str(e)}")
+
+@app.route("/collect_settlement", methods=["POST"])
+def collect_settlement():
+    try:
+        data_json = request.json
+        settlement_id = data_json["settlement_id"]
+        payment_mode = data_json["payment_mode"]
+        
+        # Get partial payment amount (if provided)
+        payment_amount = int(data_json.get("payment_amount", 0))
+        
+        # Get discount amount (if provided)
+        discount_amount = int(data_json.get("discount_amount", 0))
+        discount_reason = data_json.get("discount_reason", "")
+        
+        # Find the settlement
+        settlement_doc = settlements_ref.document(settlement_id).get()
+        if not settlement_doc.exists:
+            return jsonify(success=False, message="Settlement not found")
+        
+        settlement = settlement_doc.to_dict()
+        
+        # Process the discount if provided
+        if discount_amount > 0:
+            if discount_amount > settlement["amount"]:
+                return jsonify(success=False, message=f"Discount amount (₹{discount_amount}) exceeds settlement amount (₹{settlement['amount']})")
+                
+            # Apply the discount
+            settlement["amount"] -= discount_amount
+            settlement["discount_amount"] = discount_amount
+            settlement["discount_reason"] = discount_reason
+            
+            # Log the discount
+            discount_log = {
+                "settlement_id": settlement_id,
+                "name": settlement["guest_name"],
+                "amount": discount_amount,
+                "reason": discount_reason,
+                "date": datetime.now(IST).strftime("%Y-%m-%d"),
+                "time": datetime.now(IST).strftime("%H:%M")
+            }
+            
+            logs_ref.document("discounts").update({
+                "entries": firestore.ArrayUnion([discount_log])
+            })
+        
+        # Set default payment amount to full amount if not specified
+        if payment_amount <= 0:
+            payment_amount = settlement["amount"]
+        
+        # Validate payment amount
+        if payment_amount > settlement["amount"]:
+            return jsonify(success=False, message=f"Payment amount (₹{payment_amount}) exceeds settlement amount (₹{settlement['amount']})")
+        
+        # Process the payment
+        # Add to payment logs
+        payment_log = {
+            "room": settlement["room"],
+            "name": settlement["guest_name"],
+            "amount": payment_amount,
+            "time": datetime.now(IST).strftime("%H:%M"),
+            "date": datetime.now(IST).strftime("%Y-%m-%d"),
+            "settlement_id": settlement_id,
+            "note": "Settlement payment collected"
+        }
+        
+        logs_ref.document(payment_mode).update({
+            "entries": firestore.ArrayUnion([payment_log])
+        })
+        
+        # Update totals
+        totals = get_totals()
+        totals[payment_mode] += payment_amount
+        totals_ref.document('current_totals').set(totals)
+        
+        # Update settlement status
+        if payment_amount == settlement["amount"]:
+            # Full payment
+            settlement["status"] = "paid"
+            settlement["payment_date"] = datetime.now(IST).strftime("%Y-%m-%d")
+            settlement["payment_time"] = datetime.now(IST).strftime("%H:%M")
+            settlement["payment_mode"] = payment_mode
+        else:
+            # Partial payment
+            settlement["status"] = "partial"
+            settlement["amount"] -= payment_amount
+            
+            if "payments" not in settlement:
+                settlement["payments"] = []
+                
+            settlement["payments"].append({
+                "amount": payment_amount,
+                "date": datetime.now(IST).strftime("%Y-%m-%d"),
+                "time": datetime.now(IST).strftime("%H:%M"),
+                "mode": payment_mode
+            })
+        
+        # Update settlement in Firestore
+        settlements_ref.document(settlement_id).set(settlement)
+        
+        if payment_amount == settlement["amount"]:
+            message = f"Full payment of ₹{payment_amount} collected successfully"
+        else:
+            message = f"Partial payment of ₹{payment_amount} collected. Remaining: ₹{settlement['amount']}"
+            
+        return jsonify(
+            success=True,
+            message=message,
+            payment_mode=payment_mode,
+            remaining=settlement["amount"]
+        )
+        
+    except Exception as e:
+        logger.error(f"Error collecting settlement payment: {str(e)}")
+        return jsonify(success=False, message=f"Error collecting settlement payment: {str(e)}")
+
+@app.route("/cancel_settlement", methods=["POST"])
+def cancel_settlement():
+    try:
+        data_json = request.json
+        settlement_id = data_json["settlement_id"]
+        reason = data_json.get("reason", "Cancelled by user")
+        
+        # Check if settlement exists
+        settlement_doc = settlements_ref.document(settlement_id).get()
+        if not settlement_doc.exists:
+            return jsonify(success=False, message="Settlement not found")
+            
+        settlement = settlement_doc.to_dict()
+        
+        # Get settlement info for logging
+        guest_name = settlement["guest_name"]
+        amount = settlement["amount"]
+        
+        if data_json.get("delete", False):
+            # Remove completely
+            settlements_ref.document(settlement_id).delete()
+        else:
+            # Mark as cancelled
+            settlement["status"] = "cancelled"
+            settlement["cancel_date"] = datetime.now(IST).strftime("%Y-%m-%d")
+            settlement["cancel_time"] = datetime.now(IST).strftime("%H:%M")
+            settlement["cancel_reason"] = reason
+            
+            # Update in Firestore
+            settlements_ref.document(settlement_id).set(settlement)
+        
+        logger.info(f"Settlement cancelled: ₹{amount} from {guest_name}, reason: {reason}")
+        
+        return jsonify(
+            success=True,
+            message=f"Settlement of ₹{amount} cancelled successfully"
+        )
+        
+    except Exception as e:
+        logger.error(f"Error cancelling settlement: {str(e)}")
+        return jsonify(success=False, message=f"Error cancelling settlement: {str(e)}")
 
 
 if __name__ == "__main__":

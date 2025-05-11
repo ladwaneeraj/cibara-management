@@ -169,6 +169,11 @@ document.addEventListener("DOMContentLoaded", function () {
 
   // Fetch initial data
   fetchData();
+  // Initialize the stats toggle functionality
+  initCollapsibleStats();
+
+  // Call function to update stats visibility from localStorage
+  restoreStatsVisibility();
 
   // Bottom navigation
   document.querySelectorAll(".nav-item").forEach((item) => {
@@ -243,13 +248,6 @@ document.addEventListener("DOMContentLoaded", function () {
     });
   }
 
-  // Add Room button
-  if (addRoomBtn) {
-    addRoomBtn.addEventListener("click", () => {
-      showAddRoomModal();
-    });
-  }
-
   // Handle payment method selection for check-in
   document.querySelectorAll(".payment-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
@@ -281,10 +279,6 @@ document.addEventListener("DOMContentLoaded", function () {
       e.preventDefault();
 
       const roomNumberElement = document.getElementById("checkin-room-number");
-      if (!roomNumberElement) {
-        showNotification("Error: Room number element not found", "error");
-        return;
-      }
 
       const roomNumber = roomNumberElement.textContent;
       const guestName = document.getElementById("guest-name")?.value;
@@ -541,6 +535,10 @@ document.addEventListener("DOMContentLoaded", function () {
 
 // This function will be called when the DOM is fully loaded
 function setupCheckoutConfirmation() {
+  if (checkoutHandlersInitialized) {
+    console.log("Checkout handlers already initialized, skipping setup");
+    return;
+  }
   const confirmCheckoutBtn = document.getElementById("confirm-checkout-btn");
 
   if (!confirmCheckoutBtn) {
@@ -570,7 +568,6 @@ function setupCheckoutConfirmation() {
 
     // If balance is positive, show warning and don't proceed
     if (balance > 0) {
-      showNotification("Please clear the balance before checkout", "error");
       console.log("Checkout blocked - positive balance");
       return;
     }
@@ -870,7 +867,6 @@ const paymentOrRefundSection = document.getElementById(
   "payment-or-refund-section"
 );
 const notificationContainer = document.getElementById("notification-container");
-const addRoomBtn = document.getElementById("add-room-btn");
 
 // Initialize modals
 const checkinModal = document.getElementById("checkin-modal");
@@ -962,8 +958,8 @@ function closeNotification(notification) {
   }
 }
 
-// Render rooms in grid
-// Update room timer logic to show 2 hours prior to checkout
+// Function to render room cards with new AC and guest count indicators
+// Function to render room cards with new AC and guest count indicators
 function renderRooms() {
   if (!roomsGrid) {
     debugLog("roomsGrid element not found");
@@ -1017,15 +1013,41 @@ function renderRooms() {
     let roomContent = `
       <div class="room-status ${info.status}"></div>
       <div class="room-content">
-        <div class="room-number">${roomNumber}</div>
     `;
 
+    // For occupied rooms, add AC indicator and guest count
     if (info.status === "occupied" && info.guest) {
-      // Add guest information
+      const guestCount = info.guest.guests || 1;
+
+      // Check if room number is in the AC range (202-205) AND if the AC toggle was on during check-in
+      const roomNum = parseInt(roomNumber);
+      const isPremiumACRoom = roomNum >= 202 && roomNum <= 205;
+      const isAcRoom = isPremiumACRoom && info.guest.isAC === true;
+
       roomContent += `
+        <div class="room-number-row">
+          ${
+            isAcRoom
+              ? '<span class="ac-indicator">❄️</span>'
+              : '<span class="ac-indicator-placeholder"></span>'
+          }
+          <div class="room-number">${roomNumber}</div>
+          <span class="guest-count-indicator" data-guests="${guestCount}">
+            <i class="fas fa-user" style="font-size: 0.7rem; margin-right: 2px;"></i>${guestCount}
+          </span>
+        </div>
         <div class="guest-name">${info.guest.name}</div>
       `;
+    } else {
+      // For vacant rooms, just show the room number without AC/guest indicators
+      roomContent += `
+        <div class="room-number">${roomNumber}</div>
+        <div class="guest-name">Vacant</div>
+      `;
+    }
 
+    // Show day indicator for renewals
+    if (info.status === "occupied" && info.guest) {
       // Get renewal status
       const renewalStatus = getRoomRenewalStatus(info);
 
@@ -1042,15 +1064,14 @@ function renderRooms() {
         </div>
       `;
 
-      // Always show checkout timer for occupied rooms
-      // This is the key change - show the timer for any room that has less than 2 hours left
+      // Show checkout timer for occupied rooms
       if (renewalStatus.expired) {
         // If already expired, show renewal badge
         roomContent += `
           <div class="renewal-badge" id="renewal-badge-${roomNumber}">Renewal Due</div>
         `;
       } else if (renewalStatus.hoursLeft <= 2) {
-        // Show timer when less than 2 hours remaining (this is the key change)
+        // Show timer when less than 2 hours remaining
         const isWarning = renewalStatus.hoursLeft < 2;
         let timerText = `${renewalStatus.hoursLeft}h ${renewalStatus.minutesLeft}m left`;
 
@@ -1080,7 +1101,6 @@ function renderRooms() {
     } else {
       // Show vacant room info
       roomContent += `
-        <div class="guest-name">Vacant</div>
         <div class="room-footer">
           <div>Available</div>
         </div>
@@ -1090,7 +1110,7 @@ function renderRooms() {
     roomContent += `</div>`;
     roomCard.innerHTML = roomContent;
 
-    // Setup click handlers and other event listeners as before
+    // Setup click handlers and other event listeners
     roomCard.addEventListener("click", () => {
       if (info.status === "vacant") {
         showCheckinModal(roomNumber);
@@ -1149,6 +1169,7 @@ function renderRooms() {
 }
 
 // Render transaction logs
+
 function renderLogs() {
   if (!transactionLog) {
     debugLog("Transaction log element not found");
@@ -1350,6 +1371,7 @@ async function fetchData() {
     renderRooms();
     renderLogs();
     updateStats();
+    updateStatsToggleBadge();
 
     return true;
   } catch (error) {
@@ -2006,7 +2028,7 @@ function updateRenewalHistory(roomNumber) {
   nextRenewalTime.innerHTML = `<i class="fas fa-clock"></i> ${nextRenewalStr}`;
 }
 
-// Update payment logs in checkout modal
+// Update the updatePaymentLogs function to simplify labels to just "Cash" and "Online"
 function updatePaymentLogs(roomNumber) {
   const paymentLogsContainer = document.getElementById("checkout-payment-logs");
   if (!paymentLogsContainer) {
@@ -2215,10 +2237,6 @@ function updatePaymentLogs(roomNumber) {
 async function addPayment(mode) {
   try {
     const roomNumberElement = document.getElementById("checkout-room-number");
-    if (!roomNumberElement) {
-      showNotification("Error: Room number element not found", "error");
-      return;
-    }
 
     const roomNumber = roomNumberElement.textContent;
     const amountInput = document.getElementById("checkout-payment-amount");
@@ -2318,10 +2336,6 @@ async function addPayment(mode) {
 async function processRefund() {
   try {
     const roomNumberElement = document.getElementById("checkout-room-number");
-    if (!roomNumberElement) {
-      showNotification("Error: Room number element not found", "error");
-      return;
-    }
 
     const roomNumber = roomNumberElement.textContent;
 
@@ -2432,6 +2446,18 @@ function resetServiceForm() {
     cashBtn.classList.add("active");
   }
 
+  // Reset quantity to 1
+  const quantityInput = document.getElementById("service-quantity");
+  if (quantityInput) {
+    quantityInput.value = 1;
+  }
+
+  // Reset total price
+  const totalPriceElement = document.getElementById("service-total-price");
+  if (totalPriceElement) {
+    totalPriceElement.textContent = "₹0";
+  }
+
   servicePaymentMethod = "cash";
   if (servicePaymentMethodInput) servicePaymentMethodInput.value = "cash";
 }
@@ -2466,12 +2492,21 @@ function initServiceButtons() {
         serviceName.value = service;
         servicePrice.value = price;
 
+        // Reset quantity to 1
+        const quantityInput = document.getElementById("service-quantity");
+        if (quantityInput) {
+          quantityInput.value = 1;
+        }
+
         if (price) {
           servicePrice.readOnly = true;
         } else {
           servicePrice.readOnly = false;
           servicePrice.focus();
         }
+
+        // Update total price
+        updateServiceTotalPrice();
 
         // Show service form
         serviceForm.classList.remove("hidden");
@@ -2483,6 +2518,18 @@ function initServiceButtons() {
       }
     });
   });
+
+  // Add event listeners for price and quantity changes
+  const servicePriceInput = document.getElementById("service-price");
+  const serviceQuantityInput = document.getElementById("service-quantity");
+
+  if (servicePriceInput) {
+    servicePriceInput.addEventListener("input", updateServiceTotalPrice);
+  }
+
+  if (serviceQuantityInput) {
+    serviceQuantityInput.addEventListener("input", updateServiceTotalPrice);
+  }
 
   // Service payment method selection
   const servicePaymentBtns = document.querySelectorAll(
@@ -2531,10 +2578,6 @@ function initServiceButtons() {
 async function addService() {
   try {
     const roomNumberElement = document.getElementById("checkout-room-number");
-    if (!roomNumberElement) {
-      showNotification("Error: Room number element not found", "error");
-      return;
-    }
 
     const roomNumber = roomNumberElement.textContent;
 
@@ -2546,6 +2589,10 @@ async function addService() {
     const service = serviceName.value;
     const price = parseInt(servicePrice.value);
 
+    // Get quantity from the input
+    const quantityInput = document.getElementById("service-quantity");
+    const quantity = quantityInput ? parseInt(quantityInput.value) || 1 : 1;
+
     if (!service) {
       showNotification("Please select a service", "error");
       return;
@@ -2553,6 +2600,11 @@ async function addService() {
 
     if (!price || price <= 0) {
       showNotification("Please enter a valid price", "error");
+      return;
+    }
+
+    if (quantity <= 0) {
+      showNotification("Please enter a valid quantity", "error");
       return;
     }
 
@@ -2567,13 +2619,22 @@ async function addService() {
     addServiceBtn.innerHTML =
       '<span class="loader" style="width: 14px; height: 14px;"></span> Adding...';
 
+    // Calculate total price
+    const totalPrice = price * quantity;
+
+    // Service name with quantity if more than 1
+    const serviceWithQuantity =
+      quantity > 1 ? `${service} × ${quantity}` : service;
+
     const response = await fetch("/add_on", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         room: roomNumber,
-        item: service,
-        price: price,
+        item: serviceWithQuantity,
+        price: totalPrice,
+        unit_price: price,
+        quantity: quantity,
         payment_method: servicePaymentMethod,
       }),
     });
@@ -2589,10 +2650,13 @@ async function addService() {
 
       // Show an appropriate message based on the payment method
       if (servicePaymentMethod === "balance") {
-        showNotification(`Added ${service} (₹${price}) to balance`, "success");
+        showNotification(
+          `Added ${serviceWithQuantity} (₹${totalPrice}) to balance`,
+          "success"
+        );
       } else {
         showNotification(
-          `Added ${service} (₹${price}) - paid by ${servicePaymentMethod}`,
+          `Added ${serviceWithQuantity} (₹${totalPrice}) - paid by ${servicePaymentMethod}`,
           "success"
         );
       }
@@ -2897,88 +2961,6 @@ function showRoomDetailsModal(roomNumber) {
   roomDetailsModal.classList.add("show");
 }
 
-// Show add room modal
-function showAddRoomModal() {
-  if (!addRoomModal) {
-    debugLog("Add room modal not found");
-    return;
-  }
-
-  // Reset the form
-  const addRoomForm = document.getElementById("add-room-form");
-  if (addRoomForm) {
-    addRoomForm.reset();
-  }
-
-  // Show the modal
-  addRoomModal.classList.add("show");
-}
-
-// Add a new room
-async function addRoom(event) {
-  event.preventDefault();
-
-  const roomNumberInput = document.getElementById("new-room-number");
-  if (!roomNumberInput) {
-    showNotification("Error: Room number input not found", "error");
-    return;
-  }
-
-  const roomNumber = roomNumberInput.value.trim();
-
-  if (!roomNumber) {
-    showNotification("Please enter a room number", "error");
-    return;
-  }
-
-  try {
-    // Disable submit button and show loading state
-    const submitBtn = event.target.querySelector("button[type=submit]");
-    if (!submitBtn) {
-      debugLog("Submit button not found in add room form");
-      return;
-    }
-
-    const originalContent = submitBtn.innerHTML;
-    submitBtn.disabled = true;
-    submitBtn.innerHTML =
-      '<span class="loader" style="width: 20px; height: 20px;"></span> Adding...';
-
-    const response = await fetch("/add_room", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        roomNumber: roomNumber,
-      }),
-    });
-
-    if (!response.ok) {
-      throw new Error(`Server responded with status: ${response.status}`);
-    }
-
-    const result = await response.json();
-    if (result.success) {
-      if (addRoomModal) {
-        addRoomModal.classList.remove("show");
-      }
-      await fetchData();
-      showNotification(`Room ${roomNumber} added successfully!`, "success");
-    } else {
-      showNotification(result.message || "Error adding room", "error");
-    }
-  } catch (error) {
-    console.error("Error adding room:", error);
-    showNotification(`Error adding room: ${error.message}`, "error");
-  } finally {
-    // Re-enable submit button
-    const submitBtn = event.target.querySelector("button[type=submit]");
-    if (submitBtn) {
-      submitBtn.disabled = false;
-      submitBtn.innerHTML = "Add Room";
-    }
-  }
-}
-
 async function generateReport() {
   // Just call the enhanced report function in analytics.js
   if (typeof generateEnhancedReport === "function") {
@@ -3279,10 +3261,7 @@ async function processRefund() {
   try {
     // Get room number
     const roomNumberElement = document.getElementById("checkout-room-number");
-    if (!roomNumberElement) {
-      showNotification("Error: Room number element not found", "error");
-      return;
-    }
+
     const roomNumber = roomNumberElement.textContent;
 
     // Get guest information for logging
@@ -3417,10 +3396,6 @@ async function processRefund() {
 async function addPayment(mode) {
   try {
     const roomNumberElement = document.getElementById("checkout-room-number");
-    if (!roomNumberElement) {
-      showNotification("Error: Room number element not found", "error");
-      return;
-    }
 
     const roomNumber = roomNumberElement.textContent;
     const amountInput = document.getElementById("checkout-payment-amount");
@@ -3515,15 +3490,13 @@ async function addPayment(mode) {
   }
 }
 
-// Update the checkin form submission to use the selected room number
 document.addEventListener("DOMContentLoaded", function () {
-  // Updated check-in form submission with proper null checks
   const checkinForm = document.getElementById("checkin-form");
   if (checkinForm) {
     checkinForm.addEventListener("submit", async (e) => {
       e.preventDefault();
 
-      // Get room number - either from dropdown or fallback to the span
+      // Get room number from dropdown or fallback to span
       let roomNumber = "";
       const roomDropdown = document.getElementById("checkin-room-dropdown");
       if (roomDropdown && roomDropdown.value) {
@@ -3549,6 +3522,10 @@ document.addEventListener("DOMContentLoaded", function () {
       const guestCountInput = document.getElementById("guest-count");
       const amountPaidInput = document.getElementById("amount-paid");
       const paymentMethodInput = document.getElementById("payment-method");
+
+      // Get AC toggle state for AC rooms
+      const acToggle = document.getElementById("ac-toggle");
+      const isAC = acToggle && acToggle.checked;
 
       if (
         !guestNameInput ||
@@ -3608,6 +3585,7 @@ document.addEventListener("DOMContentLoaded", function () {
             payment: paymentMethod,
             amountPaid: amountPaid,
             photoPath: uploadedPhotoUrl,
+            isAC: isAC, // Add this new field
           }),
         });
 
@@ -3632,8 +3610,6 @@ document.addEventListener("DOMContentLoaded", function () {
         submitBtn.innerHTML = "Complete Check-in";
       }
     });
-  } else {
-    debugLog("Check-in form not found");
   }
 });
 
@@ -3982,3 +3958,423 @@ document.addEventListener("DOMContentLoaded", function () {
     initBookings();
   }
 });
+
+function updateServiceTotalPrice() {
+  const priceInput = document.getElementById("service-price");
+  const quantityInput = document.getElementById("service-quantity");
+  const totalPriceElement = document.getElementById("service-total-price");
+
+  if (priceInput && quantityInput && totalPriceElement) {
+    const price = parseInt(priceInput.value) || 0;
+    const quantity = parseInt(quantityInput.value) || 1;
+    const totalPrice = price * quantity;
+
+    totalPriceElement.textContent = `₹${totalPrice}`;
+  }
+}
+
+// Room pricing configuration
+const roomPricing = {
+  // Function to calculate price based on room number and guest count
+  calculatePrice: function (roomNumber, guestCount) {
+    roomNumber = String(roomNumber);
+    guestCount = parseInt(guestCount);
+
+    // First floor regular rooms (3-5, 13-20)
+    if (
+      (roomNumber >= 3 && roomNumber <= 5) ||
+      (roomNumber >= 13 && roomNumber <= 20)
+    ) {
+      return 250; // Fixed price for 1 guest
+    }
+
+    // First floor rooms 23-27
+    else if (roomNumber >= 23 && roomNumber <= 27) {
+      if (guestCount === 1) return 300;
+      else return 500; // For 2 or more guests
+    }
+
+    // Second floor premium rooms (non-AC: 200, 201, 206, 207)
+    else if (["200", "201", "206", "207"].includes(roomNumber)) {
+      if (guestCount === 1) return 800;
+      else return 1000 + Math.max(0, guestCount - 2) * 300; // 1000 for 2 guests, +300 for each extra
+    }
+
+    // Second floor premium AC rooms (202-205)
+    else if (roomNumber >= 202 && roomNumber <= 205) {
+      return 1600 + Math.max(0, guestCount - 2) * 300; // 1600 for 2 guests, +300 for each extra
+    }
+
+    // Second floor rooms (208-211, 220-227, 215)
+    else if (
+      (roomNumber >= 208 && roomNumber <= 211) ||
+      (roomNumber >= 220 && roomNumber <= 227) ||
+      roomNumber === "215"
+    ) {
+      if (guestCount === 1) return 450;
+      else return 700 + Math.max(0, guestCount - 2) * 300; // 700 for 2 guests, +300 for each extra
+    }
+
+    // Second floor rooms (212-214, 216-219)
+    else if (
+      (roomNumber >= 212 && roomNumber <= 214) ||
+      (roomNumber >= 216 && roomNumber <= 219)
+    ) {
+      if (guestCount === 1) return 450;
+      else return 700; // Fixed price for 2 or more guests
+    }
+
+    // Default fallback
+    return 500;
+  },
+
+  // Function to get room category
+  getRoomCategory: function (roomNumber) {
+    roomNumber = String(roomNumber);
+
+    // First floor rooms (1-27) - Non-attach category
+    if (roomNumber >= 1 && roomNumber <= 27) {
+      return {
+        category: "non-attach",
+        label: "Non-Attach Room",
+        analytics: {
+          type: "non-attach",
+        },
+      };
+    }
+
+    // Premium AC rooms (202-205)
+    else if (roomNumber >= 202 && roomNumber <= 205) {
+      return {
+        category: "premium-ac",
+        label: "Premium AC Room",
+        analytics: {
+          type: "premium",
+          isAC: true,
+        },
+      };
+    }
+
+    // Premium rooms (200, 201, 206, 207)
+    else if (["200", "201", "206", "207"].includes(roomNumber)) {
+      return {
+        category: "premium",
+        label: "Premium Room",
+        analytics: {
+          type: "premium",
+          isAC: false,
+        },
+      };
+    }
+
+    // Single rooms (212-215, 216-219)
+    else if (
+      (roomNumber >= 212 && roomNumber <= 215) ||
+      (roomNumber >= 216 && roomNumber <= 219)
+    ) {
+      return {
+        category: "single",
+        label: "Single Room",
+        analytics: {
+          type: "single",
+        },
+      };
+    }
+
+    // Regular second floor rooms
+    else if (roomNumber >= 208 && roomNumber <= 227) {
+      return {
+        category: "regular",
+        label: "Regular Room",
+        analytics: {
+          type: "regular",
+        },
+      };
+    }
+
+    // Default fallback
+    return {
+      category: "regular",
+      label: "Regular Room",
+      analytics: {
+        type: "regular",
+      },
+    };
+  },
+};
+
+// Initialize enhanced check-in form functionality
+function initEnhancedCheckinForm() {
+  const roomDropdown = document.getElementById("checkin-room-dropdown");
+  const guestCountInput = document.getElementById("guest-count");
+  const roomPriceInput = document.getElementById("room-price");
+  const amountPaidInput = document.getElementById("amount-paid");
+  const roomCategoryIndicator = document.getElementById("room-category");
+  const acToggleContainer = document.getElementById("ac-toggle-container");
+  const acToggle = document.getElementById("ac-toggle");
+
+  // Handle room selection change
+  if (roomDropdown) {
+    roomDropdown.addEventListener("change", updateRoomInfo);
+  }
+
+  // Handle guest count change
+  if (guestCountInput) {
+    guestCountInput.addEventListener("change", updateRoomPrice);
+    guestCountInput.addEventListener("input", updateRoomPrice);
+  }
+
+  // Handle AC toggle change
+  if (acToggle) {
+    acToggle.addEventListener("change", updateRoomPrice);
+  }
+
+  // Update price when the form is first loaded
+  function updateRoomInfo() {
+    const selectedRoom = roomDropdown.value;
+
+    // Update room category indicator
+    if (roomCategoryIndicator && selectedRoom) {
+      const category = roomPricing.getRoomCategory(selectedRoom);
+      roomCategoryIndicator.textContent = category.label;
+      roomCategoryIndicator.className =
+        "room-category-indicator room-category-" + category.category;
+
+      // Show AC toggle only for rooms 202-205 (premium AC rooms)
+      if (acToggleContainer) {
+        if (selectedRoom >= 202 && selectedRoom <= 205) {
+          acToggleContainer.style.display = "block";
+          if (acToggle) {
+            acToggle.checked = false; // AC toggle OFF by default
+
+            // Update the room category label to "Premium Room" when AC is off by default
+            if (roomCategoryIndicator) {
+              roomCategoryIndicator.textContent = "Premium Room";
+              roomCategoryIndicator.className =
+                "room-category-indicator room-category-premium";
+            }
+          }
+        } else {
+          acToggleContainer.style.display = "none";
+        }
+      }
+
+      // Store category data for analytics
+      if (roomDropdown.dataset) {
+        roomDropdown.dataset.roomCategory = category.analytics.type;
+        roomDropdown.dataset.isAc = category.analytics.isAC || false;
+      }
+
+      // Set default guest count based on room number
+      if (guestCountInput) {
+        // Set default to 2 guests for specified rooms
+        if (
+          (selectedRoom >= 200 && selectedRoom <= 211) ||
+          selectedRoom == 215 ||
+          (selectedRoom >= 220 && selectedRoom <= 227) ||
+          (selectedRoom >= 23 && selectedRoom <= 27)
+        ) {
+          guestCountInput.value = 2;
+        } else {
+          // Default to 1 guest for other rooms
+          guestCountInput.value = 1;
+        }
+      }
+    }
+
+    updateRoomPrice();
+  }
+
+  // Calculate and update room price based on room number and guest count
+  function updateRoomPrice() {
+    if (!roomDropdown || !guestCountInput || !roomPriceInput) return;
+
+    const selectedRoom = roomDropdown.value;
+    const guestCount = parseInt(guestCountInput.value) || 1;
+
+    if (selectedRoom) {
+      let price = roomPricing.calculatePrice(selectedRoom, guestCount);
+
+      // For premium AC rooms (202-205)
+      if (selectedRoom >= 202 && selectedRoom <= 205) {
+        // Apply price adjustment if AC is toggled off
+        if (acToggle && !acToggle.checked) {
+          // Reduce price by 600 if AC is turned off
+          price -= 600;
+
+          // Update the room category label to "Premium Room" when AC is off
+          if (roomCategoryIndicator) {
+            roomCategoryIndicator.textContent = "Premium Room";
+            roomCategoryIndicator.className =
+              "room-category-indicator room-category-premium";
+          }
+        } else if (acToggle && acToggle.checked) {
+          // Ensure the label is "Premium AC Room" when AC is on
+          if (roomCategoryIndicator) {
+            roomCategoryIndicator.textContent = "Premium AC Room";
+            roomCategoryIndicator.className =
+              "room-category-indicator room-category-premium-ac";
+          }
+        }
+      }
+
+      roomPriceInput.value = price;
+
+      // Also update amount paid to match the room price by default
+      if (amountPaidInput) {
+        amountPaidInput.value = price;
+      }
+    }
+  }
+
+  // Call this when the form is first opened
+  document.addEventListener("checkinModalOpened", updateRoomInfo);
+}
+
+// Function to trigger when check-in modal is shown
+function showEnhancedCheckinModal(roomNumber) {
+  if (!checkinModal) {
+    console.log("Check-in modal not found");
+    return;
+  }
+
+  // Populate room dropdown first
+  populateRoomDropdown().then(() => {
+    // Set the selected room number
+    const dropdown = document.getElementById("checkin-room-dropdown");
+    if (dropdown) {
+      // Find the option with the matching room number
+      const option = Array.from(dropdown.options).find(
+        (opt) => opt.value === roomNumber
+      );
+
+      if (option) {
+        dropdown.value = roomNumber;
+      } else if (dropdown.options.length > 0) {
+        // If the room isn't in the list (might be occupied), select the first available
+        dropdown.selectedIndex = 0;
+      }
+    }
+
+    // Reset form fields
+    const checkinForm = document.getElementById("checkin-form");
+    if (checkinForm) {
+      checkinForm.reset();
+    }
+
+    // Reset photo elements
+    const photoPreviewContainer = document.getElementById(
+      "photo-preview-container"
+    );
+    if (photoPreviewContainer) {
+      photoPreviewContainer.style.display = "none";
+    }
+
+    const cameraContainer = document.getElementById("camera-container");
+    if (cameraContainer) {
+      cameraContainer.style.display = "none";
+    }
+
+    // Reset captured photo data
+    capturedPhotoData = null;
+    uploadedPhotoUrl = null;
+
+    // Make sure cash is the default active payment method
+    document.querySelectorAll(".payment-btn").forEach((btn) => {
+      btn.classList.remove("active");
+    });
+
+    const cashBtn = document.querySelector('.payment-btn[data-payment="cash"]');
+    if (cashBtn) {
+      cashBtn.classList.add("active");
+    }
+
+    const paymentMethodInput = document.getElementById("payment-method");
+    if (paymentMethodInput) {
+      paymentMethodInput.value = "cash";
+    }
+
+    // Update room info based on selected room
+    const event = new Event("checkinModalOpened");
+    document.dispatchEvent(event);
+
+    // Show the modal
+    checkinModal.classList.add("show");
+  });
+}
+
+// Initialize the enhanced form when DOM is loaded
+document.addEventListener("DOMContentLoaded", function () {
+  initEnhancedCheckinForm();
+
+  // Override the original showCheckinModal function
+  window.showCheckinModal = showEnhancedCheckinModal;
+});
+// Initialize collapsible stats functionality
+function initCollapsibleStats() {
+  const statsToggle = document.getElementById("stats-toggle");
+  const statsContainer = document.getElementById("stats-container");
+
+  if (!statsToggle || !statsContainer) {
+    console.log("Stats toggle elements not found");
+    return;
+  }
+
+  // Add click event to toggle stats visibility
+  statsToggle.addEventListener("click", function () {
+    // Toggle active class on the button
+    this.classList.toggle("active");
+
+    // Toggle hidden class on the stats container
+    statsContainer.classList.toggle("hidden");
+
+    // Save state to localStorage
+    const isVisible = !statsContainer.classList.contains("hidden");
+    localStorage.setItem("statsVisible", isVisible ? "true" : "false");
+  });
+}
+
+// Function to restore stats visibility from localStorage
+function restoreStatsVisibility() {
+  const statsToggle = document.getElementById("stats-toggle");
+  const statsContainer = document.getElementById("stats-container");
+
+  if (!statsToggle || !statsContainer) return;
+
+  // Get saved preference (default to hidden if not set)
+  const isVisible = localStorage.getItem("statsVisible") === "true";
+
+  if (isVisible) {
+    statsToggle.classList.add("active");
+    statsContainer.classList.remove("hidden");
+  } else {
+    statsToggle.classList.remove("active");
+    statsContainer.classList.add("hidden");
+  }
+}
+
+// Update stats toggle badge to show important information
+function updateStatsToggleBadge() {
+  const statsToggle = document.getElementById("stats-toggle");
+  const statsContainer = document.getElementById("stats-container");
+
+  if (
+    !statsToggle ||
+    !statsContainer ||
+    !statsContainer.classList.contains("hidden")
+  ) {
+    return; // Only add badge when stats are hidden
+  }
+
+  let renewalsDue = 0;
+
+  // Count rooms due for renewal
+  Object.values(rooms).forEach((room) => {
+    if (room.status === "occupied") {
+      const renewalStatus = getRoomRenewalStatus(room);
+      if (renewalStatus.canRenew) {
+        renewalsDue++;
+      }
+    }
+  });
+}

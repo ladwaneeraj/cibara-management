@@ -262,18 +262,40 @@
             "last_renewal_time": null
         },
         "203": {
-            "status": "vacant",
-            "guest": null,
-            "checkin_time": null,
+            "status": "occupied",
+            "guest": {
+                "name": "Neeraj S Ladwa",
+                "mobile": "6361800647",
+                "price": 1600,
+                "guests": 2,
+                "payment": "cash",
+                "balance": 0,
+                "photo": null,
+                "isAC": true
+            },
+            "checkin_time": "2025-05-11 18:25",
             "balance": 0,
-            "add_ons": []
+            "add_ons": [],
+            "renewal_count": 0,
+            "last_renewal_time": null
         },
         "204": {
-            "status": "vacant",
-            "guest": null,
-            "checkin_time": null,
+            "status": "occupied",
+            "guest": {
+                "name": "Neeraj S Ladwa",
+                "mobile": "6361800647",
+                "price": 1600,
+                "guests": 2,
+                "payment": "online",
+                "balance": 0,
+                "photo": null,
+                "isAC": true
+            },
+            "checkin_time": "2025-05-11 18:39",
             "balance": 0,
-            "add_ons": []
+            "add_ons": [],
+            "renewal_count": 0,
+            "last_renewal_time": null
         },
         "205": {
             "status": "vacant",
@@ -338,11 +360,22 @@
             "last_renewal_time": null
         },
         "211": {
-            "status": "vacant",
-            "guest": null,
-            "checkin_time": null,
+            "status": "occupied",
+            "guest": {
+                "name": "Neeraj S Ladwa",
+                "mobile": "8764327189",
+                "price": 1000,
+                "guests": 3,
+                "payment": "online",
+                "balance": 0,
+                "photo": null,
+                "isAC": true
+            },
+            "checkin_time": "2025-05-11 18:31",
             "balance": 0,
-            "add_ons": []
+            "add_ons": [],
+            "renewal_count": 0,
+            "last_renewal_time": null
         },
         "212": {
             "status": "vacant",
@@ -352,21 +385,11 @@
             "add_ons": []
         },
         "213": {
-            "status": "occupied",
-            "guest": {
-                "name": "Manu BP",
-                "mobile": "6361800647",
-                "price": 450,
-                "guests": 1,
-                "payment": "cash",
-                "balance": 450,
-                "photo": null
-            },
-            "checkin_time": "2025-04-11 03:50",
-            "balance": 1800,
-            "add_ons": [],
-            "renewal_count": 3,
-            "last_renewal_time": null
+            "status": "vacant",
+            "guest": null,
+            "checkin_time": null,
+            "balance": 0,
+            "add_ons": []
         },
         "214": {
             "status": "occupied",
@@ -3604,6 +3627,31 @@
                 "amount": 700,
                 "time": "11:49",
                 "date": "2025-04-14"
+            },
+            {
+                "room": "203",
+                "name": "Neeraj S Ladwa",
+                "amount": 1600,
+                "time": "18:25",
+                "date": "2025-05-11"
+            },
+            {
+                "room": "213",
+                "name": "Manu BP",
+                "amount": 200,
+                "time": "18:30",
+                "date": "2025-05-11",
+                "settlement_id": "1dad607a-891e-4c1b-bc47-ed7e97416624",
+                "note": "Settlement payment collected"
+            },
+            {
+                "room": "213",
+                "name": "Manu BP",
+                "amount": 0,
+                "time": "18:31",
+                "date": "2025-05-11",
+                "settlement_id": "1dad607a-891e-4c1b-bc47-ed7e97416624",
+                "note": "Settlement payment collected"
             }
         ],
         "online": [
@@ -4896,6 +4944,29 @@
                 "amount": 500,
                 "time": "11:28",
                 "date": "2025-04-14"
+            },
+            {
+                "room": "213",
+                "name": "Manu BP",
+                "amount": 1200,
+                "time": "18:30",
+                "date": "2025-05-11",
+                "settlement_id": "1dad607a-891e-4c1b-bc47-ed7e97416624",
+                "note": "Settlement payment collected"
+            },
+            {
+                "room": "211",
+                "name": "Neeraj S Ladwa",
+                "amount": 1000,
+                "time": "18:31",
+                "date": "2025-05-11"
+            },
+            {
+                "room": "204",
+                "name": "Neeraj S Ladwa",
+                "amount": 1600,
+                "time": "18:39",
+                "date": "2025-05-11"
             }
         ],
         "balance": [
@@ -7141,6 +7212,15 @@
                 "date": "2025-04-14",
                 "note": "Day 2 rent renewal",
                 "day": 2
+            },
+            {
+                "room": "213",
+                "name": "Manu BP",
+                "amount": -1800,
+                "time": "18:30",
+                "date": "2025-05-11",
+                "note": "Converted to 'settle later' during checkout",
+                "settlement_id": "1dad607a-891e-4c1b-bc47-ed7e97416624"
             }
         ],
         "add_ons": [
@@ -11039,6 +11119,14 @@
                 "reason": "Regular Customer",
                 "date": "2025-04-13",
                 "time": "14:41"
+            },
+            {
+                "settlement_id": "1dad607a-891e-4c1b-bc47-ed7e97416624",
+                "name": "Manu BP",
+                "amount": 400,
+                "reason": "Regular Customer",
+                "date": "2025-05-11",
+                "time": "18:31"
             }
         ],
         "room_shifts": [
@@ -11299,9 +11387,9 @@
         ]
     },
     "totals": {
-        "cash": 189777,
-        "online": 115560,
-        "balance": 17263,
+        "cash": 191577,
+        "online": 119360,
+        "balance": 15463,
         "refunds": 2490,
         "advance_bookings": 3123,
         "expenses": 5110

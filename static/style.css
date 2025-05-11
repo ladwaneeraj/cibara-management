@@ -2275,7 +2275,7 @@ input:checked + .toggle-slider:before {
 .guest-count-indicator {
   font-size: 0.75rem;
   font-weight: bold;
-  background-color: #4361ee;
+  background-color: #889dff;
   color: white;
   border-radius: 8px;
   padding: 2px 6px;

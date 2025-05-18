@@ -1623,17 +1623,18 @@ def check_availability():
 # New endpoints for settlement management
 
 @app.route("/get_pending_settlements", methods=["GET"])
-def get_pending_settlements():
-    try:
-        settlements = get_pending_settlements()
-            
-        return jsonify(
-            success=True,
-            settlements=settlements
-        )
-    except Exception as e:
-        logger.error(f"Error fetching pending settlements: {str(e)}")
-        return jsonify(success=False, message=f"Error fetching pending settlements: {str(e)}")
+# More efficient query if you have lots of settlements
+def fetch_settlements():
+    # Get only pending and partial status settlements
+    settlements_stream = settlements_ref.where("status", "in", ["pending", "partial"]).stream()
+    settlements_list = []
+    
+    for doc in settlements_stream:
+        settlement_data = doc.to_dict()
+        settlement_data["id"] = doc.id
+        settlements_list.append(settlement_data)
+        
+    return settlements_list
 
 @app.route("/collect_settlement", methods=["POST"])
 def collect_settlement():

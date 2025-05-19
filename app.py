@@ -189,11 +189,6 @@ def get_totals():
             "advance_bookings": 0
         }
 
-# Get all pending settlements
-def get_pending_settlements():
-    settlements_stream = settlements_ref.where("status", "==", "pending").stream()
-    return [doc.to_dict() for doc in settlements_stream]
-
 # Get last rent check time
 def get_last_rent_check():
     settings_doc = settings_ref.document('app_settings').get()
@@ -1622,19 +1617,31 @@ def check_availability():
 
 # New endpoints for settlement management
 
-@app.route("/get_pending_settlements", methods=["GET"])
-# More efficient query if you have lots of settlements
+# Helper function to fetch settlements
 def fetch_settlements():
-    # Get only pending and partial status settlements
-    settlements_stream = settlements_ref.where("status", "in", ["pending", "partial"]).stream()
+    # Get all settlements including pending, partial, paid, and cancelled
+    settlements_stream = settlements_ref.stream()
     settlements_list = []
     
     for doc in settlements_stream:
         settlement_data = doc.to_dict()
-        settlement_data["id"] = doc.id
+        settlement_data["id"] = doc.id  # Add the document ID to the data
         settlements_list.append(settlement_data)
         
     return settlements_list
+
+@app.route("/get_pending_settlements", methods=["GET"])
+def get_pending_settlements_route():
+    try:
+        settlements = fetch_settlements()
+        
+        return jsonify(
+            success=True,
+            settlements=settlements
+        )
+    except Exception as e:
+        logger.error(f"Error fetching settlements: {str(e)}")
+        return jsonify(success=False, message=f"Error fetching settlements: {str(e)}")
 
 @app.route("/collect_settlement", methods=["POST"])
 def collect_settlement():

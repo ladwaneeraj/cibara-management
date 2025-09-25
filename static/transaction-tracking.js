@@ -276,9 +276,33 @@ class TransactionLogManager {
       ...recentDiscountLogs.map((log) => ({ ...log, logType: "discounts" })),
       ...recentExpenseLogs.map((log) => ({ ...log, logType: "expenses" })),
     ].sort((a, b) => {
-      const dateA = new Date(`${a.date} ${a.time || "00:00"}`);
-      const dateB = new Date(`${b.date} ${b.time || "00:00"}`);
-      return dateB - dateA;
+      // First sort by date
+      if (a.date !== b.date) {
+        return new Date(b.date) - new Date(a.date);
+      }
+
+      // Then sort by time within the same date
+      const timeA = a.time || "00:00:00";
+      const timeB = b.time || "00:00:00";
+
+      // Convert time to comparable format (HH:MM:SS to seconds)
+      const getSeconds = (timeStr) => {
+        const [hours, minutes, seconds = 0] = timeStr.split(":").map(Number);
+        return hours * 3600 + minutes * 60 + seconds;
+      };
+
+      const timeSecondsA = getSeconds(timeA);
+      const timeSecondsB = getSeconds(timeB);
+
+      if (timeSecondsA !== timeSecondsB) {
+        return timeSecondsB - timeSecondsA; // Most recent time first
+      }
+
+      // If same date and time, sort by serial number (higher serial = more recent)
+      const serialA = a.serial_number || 0;
+      const serialB = b.serial_number || 0;
+
+      return serialB - serialA; // Higher serial number first
     });
 
     // Update totals

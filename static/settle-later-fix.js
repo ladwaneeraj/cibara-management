@@ -1,40 +1,216 @@
-// This file fixes the settle later functionality by overriding the original checkout process
 (function () {
   // Wait for all scripts to load
   window.addEventListener("load", function () {
-    // Complete override of the checkout confirmation process
-    const originalConfirmCheckoutBtn = document.getElementById(
-      "confirm-checkout-btn"
+    // Enhanced proceed checkout handler with proper refund validation
+    const originalProceedCheckoutBtn = document.getElementById(
+      "proceed-checkout-btn"
     );
 
-    if (originalConfirmCheckoutBtn) {
-      // Remove all existing event listeners by cloning and replacing the button
-      const newBtn = originalConfirmCheckoutBtn.cloneNode(true);
-      originalConfirmCheckoutBtn.parentNode.replaceChild(
-        newBtn,
-        originalConfirmCheckoutBtn
+    if (originalProceedCheckoutBtn) {
+      // Remove all existing event listeners
+      const newProceedBtn = originalProceedCheckoutBtn.cloneNode(true);
+      originalProceedCheckoutBtn.parentNode.replaceChild(
+        newProceedBtn,
+        originalProceedCheckoutBtn
       );
 
-      // Add our new event listener
+      // Add enhanced event listener with refund validation
+      newProceedBtn.addEventListener("click", async function () {
+        console.log("Enhanced proceed checkout clicked");
+
+        // Prevent multiple calls
+        if (typeof checkoutInProgress !== "undefined" && checkoutInProgress) {
+          console.log("Checkout already in progress, ignoring proceed click");
+          return;
+        }
+
+        if (typeof checkoutInProgress !== "undefined") {
+          checkoutInProgress = true;
+        }
+
+        // Disable button and show loading state
+        this.disabled = true;
+        this.innerHTML =
+          '<span class="loader" style="width: 20px; height: 20px;"></span> Processing...';
+
+        const roomNumberElement = document.getElementById(
+          "checkout-room-number"
+        );
+        if (!roomNumberElement) {
+          showNotification("Room number element not found", "error");
+          console.error("Room number element not found during checkout");
+          this.resetButton();
+          return;
+        }
+
+        const roomNumber = roomNumberElement.textContent;
+        const balance = rooms[roomNumber].balance;
+
+        // Check if settle later is enabled
+        const settleLaterEnabled =
+          document.getElementById("settle-later-checkbox")?.checked || false;
+        const settlementNotes =
+          document.getElementById("settlement-notes")?.value || "";
+
+        console.log(`Balance: ${balance}, Settle Later: ${settleLaterEnabled}`);
+
+        // *** ENHANCED BALANCE VALIDATION ***
+
+        // 1. STRICT BLOCKING for positive balance without settle later
+        if (balance > 0 && !settleLaterEnabled) {
+          console.log(
+            "Checkout blocked - positive balance without settle later"
+          );
+          showNotification(
+            `Cannot checkout with pending balance of ₹${balance}. Please clear all dues first or use 'Settle Later' option.`,
+            "error"
+          );
+          this.resetButton();
+          this.closeConfirmationModal();
+          return;
+        }
+
+        // 2. STRICT BLOCKING for negative balance (refunds) - NO EXCEPTIONS
+        if (balance < 0) {
+          console.log("Checkout blocked - refund pending");
+          showNotification(
+            `Cannot checkout with pending refund of ₹${Math.abs(
+              balance
+            )}. Please process the refund first.`,
+            "error"
+          );
+          this.resetButton();
+          this.closeConfirmationModal();
+          return;
+        }
+
+        // *** END OF ENHANCED VALIDATION ***
+
+        // Get refund method if there's a negative balance (shouldn't reach here due to validation above)
+        const refundMethod =
+          balance < 0
+            ? document.querySelector(".refund-container .payment-btn.active")
+                ?.id === "refund-cash-btn"
+              ? "cash"
+              : "online"
+            : null;
+
+        try {
+          console.log("Sending checkout request to server");
+          const response = await fetch("/checkout", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              room: roomNumber,
+              final_checkout: true,
+              refund_method: refundMethod,
+              settle_later: settleLaterEnabled,
+              settlement_notes: settlementNotes,
+            }),
+          });
+
+          if (!response.ok) {
+            throw new Error(`Server responded with status: ${response.status}`);
+          }
+
+          const result = await response.json();
+          if (result.success) {
+            console.log("Checkout successful");
+
+            // Close both modals
+            this.closeConfirmationModal();
+            const checkoutModal = document.getElementById("checkout-modal");
+            if (checkoutModal) {
+              checkoutModal.classList.remove("show");
+            }
+
+            await fetchData();
+
+            // Show appropriate success message
+            if (settleLaterEnabled && balance > 0) {
+              showNotification(
+                `Checkout completed with 'Settle Later' option. Payment of ₹${balance} added to pending settlements.`,
+                "success"
+              );
+            }
+          } else {
+            console.error("Checkout failed:", result.message);
+            showNotification(
+              result.message || "Error during checkout",
+              "error"
+            );
+          }
+        } catch (error) {
+          console.error("Error during checkout:", error);
+          showNotification(`Error during checkout: ${error.message}`, "error");
+        } finally {
+          this.resetButton();
+        }
+      });
+
+      // Add helper methods to the button element
+      newProceedBtn.resetButton = function () {
+        if (typeof checkoutInProgress !== "undefined") {
+          checkoutInProgress = false;
+        }
+        this.disabled = false;
+        this.innerHTML = "Yes, Checkout";
+      };
+
+      newProceedBtn.closeConfirmationModal = function () {
+        const checkoutConfirmModal = document.getElementById(
+          "checkout-confirm-modal"
+        );
+        if (checkoutConfirmModal) {
+          checkoutConfirmModal.classList.remove("show");
+        }
+      };
+    }
+
+    console.log("Enhanced checkout validation applied successfully!");
+  });
+})();
+
+// Additional validation for the main checkout button (confirm-checkout-btn)
+(function () {
+  window.addEventListener("load", function () {
+    const confirmCheckoutBtn = document.getElementById("confirm-checkout-btn");
+
+    if (confirmCheckoutBtn) {
+      // Remove existing listeners and add enhanced one
+      const newBtn = confirmCheckoutBtn.cloneNode(true);
+      confirmCheckoutBtn.parentNode.replaceChild(newBtn, confirmCheckoutBtn);
+
       newBtn.addEventListener("click", function (event) {
         event.preventDefault();
 
         const roomNumberElement = document.getElementById(
           "checkout-room-number"
         );
-        const guestNameElement = document.getElementById("checkout-guest-name");
-
         if (!roomNumberElement) {
           showNotification("Room number element not found", "error");
-          console.error("Room number element not found");
           return;
         }
 
         const roomNumber = roomNumberElement.textContent;
+        const balance = rooms[roomNumber].balance;
+
+        // Pre-validation before showing confirmation modal
+        if (balance < 0) {
+          showNotification(
+            `Cannot proceed to checkout with pending refund of ₹${Math.abs(
+              balance
+            )}. Please process the refund first.`,
+            "error"
+          );
+          return;
+        }
+
+        // Continue with normal confirmation modal display
+        const guestNameElement = document.getElementById("checkout-guest-name");
         const guestName = guestNameElement
           ? guestNameElement.textContent
           : "Unknown";
-        const balance = rooms[roomNumber].balance;
 
         // Set the room and guest name in the confirmation modal
         const confirmRoomElement = document.getElementById(
@@ -91,137 +267,9 @@
         );
         if (checkoutConfirmModal) {
           checkoutConfirmModal.classList.add("show");
-          console.log("Confirmation modal displayed with updated code");
-        } else {
-          console.error("Confirmation modal element not found");
-          showNotification("Error: Confirmation modal not found", "error");
+          console.log("Confirmation modal displayed with enhanced validation");
         }
       });
     }
-
-    // Also fix the proceed checkout button
-    const originalProceedCheckoutBtn = document.getElementById(
-      "proceed-checkout-btn"
-    );
-
-    if (originalProceedCheckoutBtn) {
-      // Remove all existing event listeners
-      const newProceedBtn = originalProceedCheckoutBtn.cloneNode(true);
-      originalProceedCheckoutBtn.parentNode.replaceChild(
-        newProceedBtn,
-        originalProceedCheckoutBtn
-      );
-
-      // Add new event listener
-      newProceedBtn.addEventListener("click", async function () {
-        console.log("Fixed proceed checkout clicked");
-
-        // Disable button and show loading state
-        this.disabled = true;
-        this.innerHTML =
-          '<span class="loader" style="width: 20px; height: 20px;"></span> Processing...';
-
-        const roomNumberElement = document.getElementById(
-          "checkout-room-number"
-        );
-        if (!roomNumberElement) {
-          showNotification("Room number element not found", "error");
-          console.error("Room number element not found during checkout");
-          return;
-        }
-
-        const roomNumber = roomNumberElement.textContent;
-        const balance = rooms[roomNumber].balance;
-
-        // Check if settle later is enabled
-        const settleLaterEnabled =
-          document.getElementById("settle-later-checkbox")?.checked || false;
-        const settlementNotes =
-          document.getElementById("settlement-notes")?.value || "";
-
-        // Only block checkout if balance is positive AND settle later is not checked
-        if (balance > 0 && !settleLaterEnabled) {
-          showNotification(
-            "Please clear the balance before checkout or use 'Settle Later' option",
-            "error"
-          );
-          this.disabled = false;
-          this.innerHTML = "Yes, Checkout";
-          return;
-        }
-
-        // Get refund method if there's a negative balance
-        const refundMethod =
-          balance < 0
-            ? document.querySelector(".refund-container .payment-btn.active")
-                ?.id === "refund-cash-btn"
-              ? "cash"
-              : "online"
-            : null;
-
-        try {
-          console.log("Sending checkout request to server");
-          const response = await fetch("/checkout", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              room: roomNumber,
-              final_checkout: true,
-              refund_method: refundMethod,
-              settle_later: settleLaterEnabled,
-              settlement_notes: settlementNotes,
-            }),
-          });
-
-          if (!response.ok) {
-            throw new Error(`Server responded with status: ${response.status}`);
-          }
-
-          const result = await response.json();
-          if (result.success) {
-            console.log("Checkout successful");
-            // Close both modals
-            const checkoutConfirmModal = document.getElementById(
-              "checkout-confirm-modal"
-            );
-            if (checkoutConfirmModal) {
-              checkoutConfirmModal.classList.remove("show");
-            }
-
-            const checkoutModal = document.getElementById("checkout-modal");
-            if (checkoutModal) {
-              checkoutModal.classList.remove("show");
-            }
-
-            await fetchData();
-
-            // If settled later, let the user know
-            if (settleLaterEnabled && balance > 0) {
-              showNotification(
-                `Checkout with 'Settle Later' option completed. Payment of ₹${balance} is now in pending settlements.`,
-                "success"
-              );
-            } else {
-              showNotification("Checkout successful!", "success");
-            }
-          } else {
-            console.error("Checkout failed:", result.message);
-            showNotification(
-              result.message || "Error during checkout",
-              "error"
-            );
-          }
-        } catch (error) {
-          console.error("Error during checkout:", error);
-          showNotification(`Error during checkout: ${error.message}`, "error");
-        } finally {
-          // Re-enable button
-          this.disabled = false;
-          this.innerHTML = "Yes, Checkout";
-        }
-      });
-    }
-
-    console.log("Settle Later Fix applied successfully!");
   });
 })();

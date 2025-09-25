@@ -1,4 +1,3 @@
-# app.py
 from flask import Flask, render_template, request, jsonify, send_from_directory
 from datetime import datetime, timedelta
 import json
@@ -67,12 +66,62 @@ logs_ref = db.collection('logs')
 totals_ref = db.collection('totals')
 bookings_ref = db.collection('bookings')
 settings_ref = db.collection('settings')
-settlements_ref = db.collection('settlements')  # New collection for settlements
+settlements_ref = db.collection('settlements')
+counters_ref = db.collection('daily_counters')  # NEW: For serial number tracking
+metadata_ref = db.collection('transaction_metadata')  # NEW: For transaction metadata
 
 # Upload folder for temporary storage during processing
 UPLOAD_FOLDER = 'uploads'
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+
+# NEW: Helper functions for serial number management
+def get_next_serial_number(date_str):
+    """Get the next serial number for fresh check-ins on a given date"""
+    counter_doc = counters_ref.document(date_str).get()
+    
+    if counter_doc.exists:
+        current_count = counter_doc.to_dict().get('count', 0)
+        new_count = current_count + 1
+        counters_ref.document(date_str).update({'count': new_count})
+    else:
+        new_count = 1
+        counters_ref.document(date_str).set({'count': new_count})
+    
+    return new_count
+
+def store_transaction_metadata(room, date, serial_number, transaction_type="checkin"):
+    """Store metadata for a transaction"""
+    key = f"{date}_{room}"
+    metadata_ref.document(key).set({
+        'serial_number': serial_number,
+        'transaction_type': transaction_type,
+        'timestamp': datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S")
+    })
+
+def cleanup_old_counters():
+    """Remove counters older than 30 days"""
+    try:
+        cutoff_date = (datetime.now(IST) - timedelta(days=30)).strftime("%Y-%m-%d")
+        
+        # Clean daily counters
+        old_counters = counters_ref.where('__name__', '<', cutoff_date).stream()
+        batch = db.batch()
+        
+        for counter in old_counters:
+            batch.delete(counter.reference)
+        
+        # Clean transaction metadata
+        old_metadata = metadata_ref.where('__name__', '<', cutoff_date).stream()
+        
+        for metadata in old_metadata:
+            batch.delete(metadata.reference)
+        
+        batch.commit()
+        logger.info("Cleaned up old daily counters and metadata entries")
+        
+    except Exception as e:
+        logger.error(f"Error cleaning up old counters: {str(e)}")
 
 # Initialize or load existing data
 def initialize_data():
@@ -111,7 +160,9 @@ def initialize_data():
                     "guest": None, 
                     "checkin_time": None, 
                     "balance": 0, 
-                    "add_ons": []
+                    "add_ons": [],
+                    "renewal_count": 0,  # NEW
+                    "last_renewal_time": None  # NEW
                 })
                 
             # Add second floor rooms
@@ -122,21 +173,24 @@ def initialize_data():
                     "guest": None, 
                     "checkin_time": None, 
                     "balance": 0, 
-                    "add_ons": []
+                    "add_ons": [],
+                    "renewal_count": 0,  # NEW
+                    "last_renewal_time": None  # NEW
                 })
             
             # Commit the batch
             batch.commit()
             
-            # Create log structure
-            log_types = ["cash", "online", "balance", "add_ons", "refunds", "renewals", "booking_payments", "discounts"]
+            # Create log structure - UPDATED with new log types
+            log_types = ["cash", "online", "balance", "add_ons", "refunds", "renewals", 
+                        "booking_payments", "discounts", "expenses", "room_shifts"]  # NEW: expenses, room_shifts
             for log_type in log_types:
                 logs_ref.document(log_type).set({
                     "entries": []
                 })
             
-            # Create totals structure
-            total_types = ["cash", "online", "balance", "refunds", "advance_bookings"]
+            # Create totals structure - UPDATED with new totals
+            total_types = ["cash", "online", "balance", "refunds", "advance_bookings", "expenses"]  # NEW: expenses
             totals_doc = {}
             for total_type in total_types:
                 totals_doc[total_type] = 0
@@ -179,14 +233,21 @@ def get_all_logs():
 def get_totals():
     totals_doc = totals_ref.document('current_totals').get()
     if totals_doc.exists:
-        return totals_doc.to_dict()
+        totals = totals_doc.to_dict()
+        # Ensure all required totals exist
+        required_totals = ["cash", "online", "balance", "refunds", "advance_bookings", "expenses"]
+        for total_type in required_totals:
+            if total_type not in totals:
+                totals[total_type] = 0
+        return totals
     else:
         return {
             "cash": 0, 
             "online": 0, 
             "balance": 0, 
             "refunds": 0,
-            "advance_bookings": 0
+            "advance_bookings": 0,
+            "expenses": 0  # NEW
         }
 
 # Get last rent check time
@@ -266,10 +327,9 @@ def checkin():
         price = int(data_json["price"])
         balance = price - amount_paid
         payment = data_json["payment"]
-        photo_path = data_json.get("photoPath")  # Get photo path if provided
-        is_ac = data_json.get("isAC", False)  # New AC field
+        is_ac = data_json.get("isAC", False)
         
-        # Validation: don't allow amount_paid > 0 with payment="balance"
+        # NEW: Validation - don't allow amount_paid > 0 with payment="balance"
         if amount_paid > 0 and payment == "balance":
             return jsonify(success=False, message="Cannot use 'Pay Later' with an amount paid. Please select Cash or Online.")
         
@@ -280,12 +340,18 @@ def checkin():
             "guests": int(data_json["guests"]),
             "payment": payment,
             "balance": balance,
-            "photo": photo_path,  # Store photo path with guest info
-            "isAC": is_ac  # Add AC field
+            "isAC": is_ac
         }
         
         # Use consistent datetime format YYYY-MM-DD HH:MM for easier manipulation
         current_time = datetime.now(IST).strftime("%Y-%m-%d %H:%M")
+        current_date = datetime.now(IST).strftime("%Y-%m-%d")
+        
+        # NEW: Get serial number for fresh check-in
+        serial_number = get_next_serial_number(current_date)
+        
+        # NEW: Store transaction metadata
+        store_transaction_metadata(room, current_date, serial_number, "fresh_checkin")
         
         # Update room in Firestore
         room_ref = rooms_ref.document(room)
@@ -295,38 +361,62 @@ def checkin():
             "checkin_time": current_time,
             "balance": balance,
             "add_ons": [],
-            "renewal_count": 0,
-            "last_renewal_time": None
+            "renewal_count": 0,  # NEW
+            "last_renewal_time": None  # NEW
         })
         
         # Get current totals
         totals = get_totals()
         
-        # Add payment log and update totals
-        if amount_paid > 0:
-            log_entry = {
+        # NEW: Always log the transaction, even for pay later (amount = 0)
+        if payment != "balance":
+            # For cash/online payments
+            if amount_paid > 0:
+                log_entry = {
+                    "room": room, 
+                    "name": guest["name"], 
+                    "amount": amount_paid, 
+                    "time": datetime.now(IST).strftime("%H:%M"),
+                    "date": current_date,
+                    "serial_number": serial_number,  # NEW
+                    "transaction_type": "fresh_checkin",  # NEW
+                    "is_fresh_checkin": True  # NEW
+                }
+                
+                # Update payment logs
+                logs_ref.document(payment).update({
+                    "entries": firestore.ArrayUnion([log_entry])
+                })
+                
+                # Update totals
+                totals[payment] += amount_paid
+        else:
+            # NEW: For pay later, log with amount 0 in cash logs to show the transaction
+            pay_later_log = {
                 "room": room, 
                 "name": guest["name"], 
-                "amount": amount_paid, 
+                "amount": 0, 
                 "time": datetime.now(IST).strftime("%H:%M"),
-                "date": datetime.now(IST).strftime("%Y-%m-%d")
+                "date": current_date,
+                "serial_number": serial_number,  # NEW
+                "transaction_type": "fresh_checkin",  # NEW
+                "is_fresh_checkin": True,  # NEW
+                "payment_method": "pay_later"  # NEW
             }
             
-            # Update payment logs
-            logs_ref.document(payment).update({
-                "entries": firestore.ArrayUnion([log_entry])
+            logs_ref.document("cash").update({
+                "entries": firestore.ArrayUnion([pay_later_log])
             })
-            
-            # Update totals
-            totals[payment] += amount_paid
         
-        # Add balance log if needed
+        # Add balance log if needed with metadata
         if balance > 0:
             balance_log = {
                 "room": room, 
                 "name": guest["name"], 
                 "amount": balance,
-                "date": datetime.now(IST).strftime("%Y-%m-%d")
+                "date": current_date,
+                "serial_number": serial_number,  # NEW
+                "transaction_type": "fresh_checkin"  # NEW
             }
             
             # Update balance logs
@@ -340,8 +430,12 @@ def checkin():
         # Update totals in Firestore
         totals_ref.document('current_totals').set(totals)
             
-        logger.info(f"Check-in successful for room {room}, guest: {guest['name']}")
-        return jsonify(success=True, message=f"Check-in successful for {guest['name']}")
+        logger.info(f"Check-in successful for room {room}, guest: {guest['name']}, serial: {serial_number}")
+        return jsonify(
+            success=True, 
+            message=f"Check-in successful for {guest['name']} (#{serial_number})",  # NEW: Include serial number
+            serial_number=serial_number  # NEW
+        )
     except Exception as e:
         logger.error(f"Error during check-in: {str(e)}")
         return jsonify(success=False, message=f"Error during check-in: {str(e)}")
@@ -356,7 +450,7 @@ def checkout():
         is_refund = data_json.get("is_refund", False)
         is_final_checkout = data_json.get("final_checkout", False)
         process_refund = data_json.get("process_refund", False)
-        settle_later = data_json.get("settle_later", False)  # New option for settle later
+        settle_later = data_json.get("settle_later", False)
         
         # Get current room data
         room_doc = rooms_ref.document(room).get()
@@ -372,13 +466,26 @@ def checkout():
         if amount > 0 and payment_mode and not is_refund and not process_refund:
             current_balance = room_data["balance"]
             
-            # Log the payment
+            # NEW: Determine if this is a renewal payment
+            is_renewal_payment = False
+            if room_data["guest"] and room_data["checkin_time"]:
+                try:
+                    checkin_date = datetime.strptime(room_data["checkin_time"].split()[0], "%Y-%m-%d")
+                    current_date = datetime.now(IST).date()
+                    days_since_checkin = (current_date - checkin_date.date()).days
+                    is_renewal_payment = days_since_checkin >= 1
+                except:
+                    is_renewal_payment = False
+            
+            # NEW: Log the payment with enhanced metadata
             log_entry = {
                 "room": room, 
                 "name": room_data["guest"]["name"], 
                 "amount": amount, 
                 "time": datetime.now(IST).strftime("%H:%M"),
-                "date": datetime.now(IST).strftime("%Y-%m-%d")
+                "date": datetime.now(IST).strftime("%Y-%m-%d"),
+                "is_renewal": is_renewal_payment,  # NEW
+                "transaction_type": "renewal_payment" if is_renewal_payment else "regular_payment"  # NEW
             }
             
             # Add to payment logs
@@ -389,32 +496,23 @@ def checkout():
             # Update totals
             totals[payment_mode] += amount
             
-            # Handle case where balance is positive
+            # Handle balance updates
             if current_balance > 0:
-                # Check if payment equals or exceeds balance
                 if amount >= current_balance:
-                    # Update totals - remove from balance total
                     totals["balance"] -= current_balance
-                    
-                    # Calculate any overpayment
                     overpayment = amount - current_balance
                     
-                    # Set balance to exactly 0 or negative for overpayment
                     if overpayment > 0:
-                        # This is an overpayment
                         new_balance = -overpayment
                         message = f"Payment of ₹{amount} received. Balance cleared. Overpayment: ₹{overpayment}"
                     else:
-                        # This is an exact payment
                         new_balance = 0
                         message = f"Payment of ₹{amount} received. Balance cleared."
                 else:
-                    # Normal partial payment
                     new_balance = current_balance - amount
                     totals["balance"] -= amount
                     message = "Payment recorded successfully."
             else:
-                # Adding payment when no balance or negative balance
                 new_balance = current_balance - amount
                 message = "Payment recorded successfully."
             
@@ -426,10 +524,10 @@ def checkout():
             # Update totals in Firestore
             totals_ref.document('current_totals').set(totals)
             
-            logger.info(f"Payment of ₹{amount} recorded for room {room}")
+            logger.info(f"Payment of ₹{amount} recorded for room {room} (type: {log_entry['transaction_type']})")
             return jsonify(success=True, message=message)
         
-        # Process refund if requested
+        # Process manual refund (from process refund button)
         elif process_refund and is_refund and amount > 0:
             current_balance = room_data["balance"]
             
@@ -441,10 +539,10 @@ def checkout():
                 )
             
             # Get refund details
-            refund_method = payment_mode or "cash"  # Default to cash if not specified
+            refund_method = payment_mode or "cash"
             guest_name = room_data["guest"]["name"]
             
-            # Create refund log entry
+            # NEW: Create refund log entry - SINGLE LOG for manual refunds
             refund_log = {
                 "room": room,
                 "name": guest_name,
@@ -452,15 +550,16 @@ def checkout():
                 "payment_mode": refund_method,
                 "time": data_json.get("time", datetime.now(IST).strftime("%H:%M")),
                 "date": data_json.get("date", datetime.now(IST).strftime("%Y-%m-%d")),
-                "note": "Partial refund" if abs(current_balance) > amount else "Full refund"
+                "note": "Manual refund",
+                "transaction_type": "manual_refund"  # NEW
             }
             
-            # Add to refunds log
+            # Only add to refunds log - NO DUPLICATION
             logs_ref.document("refunds").update({
                 "entries": firestore.ArrayUnion([refund_log])
             })
             
-            # Update room balance - only reduce by the amount being refunded
+            # Update room balance
             new_balance = current_balance + amount
             rooms_ref.document(room).update({
                 "balance": new_balance
@@ -470,23 +569,22 @@ def checkout():
             totals["refunds"] += amount
             totals_ref.document('current_totals').set(totals)
             
-            logger.info(f"Refund of ₹{amount} processed for room {room}")
+            logger.info(f"Manual refund of ₹{amount} processed for room {room}")
             
             return jsonify(success=True, message=f"Refund of ₹{amount} processed successfully")
         
-        # Process final checkout
+        # FIXED: Process final checkout - prevent double refund logging
         elif is_final_checkout:
             # Check balance status
             balance = room_data["balance"]
+            guest_name = room_data["guest"]["name"] if room_data["guest"] else "Unknown"
             
-            # If there's a balance and settle_later is enabled, create a settlement record
+            # Handle settlements first
             if balance > 0 and settle_later:
-                # Create settlement entry
                 settlement_id = str(uuid.uuid4())
                 guest_info = room_data["guest"]
                 settlement_amount = balance
                 
-                # Create settlement record
                 settlement = {
                     "id": settlement_id,
                     "guest_name": guest_info["name"],
@@ -510,11 +608,12 @@ def checkout():
                 balance_log = {
                     "room": room,
                     "name": guest_info["name"],
-                    "amount": -settlement_amount,  # Negative to show reduction
+                    "amount": -settlement_amount,
                     "time": datetime.now(IST).strftime("%H:%M"),
                     "date": datetime.now(IST).strftime("%Y-%m-%d"),
                     "note": "Converted to 'settle later' during checkout",
-                    "settlement_id": settlement_id
+                    "settlement_id": settlement_id,
+                    "transaction_type": "settlement"  # NEW
                 }
                 
                 logs_ref.document("balance").update({
@@ -523,51 +622,61 @@ def checkout():
                 
                 logger.info(f"Settlement created for room {room}, amount: ₹{settlement_amount}")
             
-            # Only prevent checkout if there's a positive balance AND settle_later is not enabled
+            # Prevent checkout if positive balance and not settling later
             elif balance > 0 and not settle_later:
                 return jsonify(success=False, message="Please clear the balance before checkout")
             
-            # Process any refund if there's a negative balance
-            if balance < 0 and "refund_method" in data_json:
+            # NEW: Handle checkout refund ONLY if refund_method is provided and balance is negative
+            refund_processed = False
+            if balance < 0 and data_json.get("refund_method"):
                 refund_amount = abs(balance)
                 refund_method = data_json.get("refund_method", "cash")
                 
-                # Log the refund
-                refund_log = {
+                # Create SINGLE checkout refund log
+                checkout_refund_log = {
                     "room": room,
-                    "name": room_data["guest"]["name"],
+                    "name": guest_name,
                     "amount": refund_amount,
                     "payment_mode": refund_method,
                     "time": datetime.now(IST).strftime("%H:%M"),
                     "date": datetime.now(IST).strftime("%Y-%m-%d"),
-                    "note": "Checkout refund"
+                    "note": "Checkout refund",
+                    "transaction_type": "checkout_refund"  # NEW
                 }
                 
+                # SINGLE LOG ENTRY - only add to refunds, nowhere else
                 logs_ref.document("refunds").update({
-                    "entries": firestore.ArrayUnion([refund_log])
+                    "entries": firestore.ArrayUnion([checkout_refund_log])
                 })
                 
-                # Update total refunds
                 totals["refunds"] += refund_amount
-                totals_ref.document('current_totals').set(totals)
+                refund_processed = True
                 
-                logger.info(f"Checkout refund of ₹{refund_amount} processed for room {room}")
+                logger.info(f"Checkout refund of ₹{refund_amount} processed for room {room} via {refund_method}")
             
-            # Clear room data
-            guest_name = room_data["guest"]["name"] if room_data["guest"] else "Unknown"
-            
-            # Reset room to vacant
+            # Clear room data - this should happen regardless
             rooms_ref.document(room).update({
                 "status": "vacant", 
                 "guest": None, 
                 "checkin_time": None, 
                 "balance": 0, 
-                "add_ons": []
+                "add_ons": [],
+                "renewal_count": 0,  # NEW
+                "last_renewal_time": None  # NEW
             })
             
-            logger.info(f"Room {room} checked out. Guest: {guest_name}")
+            # Update totals
+            totals_ref.document('current_totals').set(totals)
             
-            return jsonify(success=True, message=f"Checkout successful")
+            # Create appropriate success message
+            if refund_processed:
+                refund_amount = abs(balance)
+                message = f"Checkout successful. Refund of ₹{refund_amount} processed."
+            else:
+                message = "Checkout successful"
+            
+            logger.info(f"Room {room} checked out. Guest: {guest_name}")
+            return jsonify(success=True, message=message)
         
         # If none of the above conditions match
         return jsonify(success=False, message="Invalid request parameters")
@@ -585,7 +694,7 @@ def add_on():
         price = int(data_json["price"])
         payment_method = data_json.get("payment_method", "balance")  # Default to balance if not specified
         
-        # New fields for quantity tracking
+        # NEW: New fields for quantity tracking
         unit_price = data_json.get("unit_price", price)  # If not provided, use the price (for backward compatibility)
         quantity = data_json.get("quantity", 1)  # Default to 1 if not specified
         
@@ -599,16 +708,17 @@ def add_on():
         # Get totals
         totals = get_totals()
         
-        # Create add-on entry with quantity information
+        # NEW: Create add-on entry WITHOUT serial number (services don't get serial numbers)
         add_on_entry = {
             "room": room, 
             "item": item, 
             "price": price, 
-            "unit_price": unit_price,
-            "quantity": quantity,
+            "unit_price": unit_price,  # NEW
+            "quantity": quantity,  # NEW
             "time": datetime.now(IST).strftime("%H:%M"),
             "date": datetime.now(IST).strftime("%Y-%m-%d"),
-            "payment_method": payment_method  # Store payment method
+            "payment_method": payment_method,
+            "transaction_type": "service"  # NEW: Mark as service transaction
         }
         
         # If payment is immediate (cash or online), log it as a payment with item information
@@ -620,9 +730,11 @@ def add_on():
                 "time": datetime.now(IST).strftime("%H:%M"),
                 "date": datetime.now(IST).strftime("%Y-%m-%d"),
                 "item": item,  # Add item info to indicate this is a service payment
-                "unit_price": unit_price,
-                "quantity": quantity,
-                "payment_method": payment_method
+                "unit_price": unit_price,  # NEW
+                "quantity": quantity,  # NEW
+                "payment_method": payment_method,
+                "transaction_type": "service"  # NEW: Mark as service
+                # NO serial_number for services
             }
             
             # Update payment logs
@@ -649,9 +761,11 @@ def add_on():
                 "time": datetime.now(IST).strftime("%H:%M"),
                 "date": datetime.now(IST).strftime("%Y-%m-%d"),
                 "item": item,
-                "unit_price": unit_price,
-                "quantity": quantity,
-                "note": f"Added {item} to balance"
+                "unit_price": unit_price,  # NEW
+                "quantity": quantity,  # NEW
+                "note": f"Added {item} to balance",
+                "transaction_type": "service"  # NEW
+                # NO serial_number for services
             }
             
             logs_ref.document("balance").update({
@@ -711,7 +825,7 @@ def get_history():
         room_cash_logs = [log for log in logs.get("cash", []) if log["room"] == room and log["name"] == guest_name]
         room_online_logs = [log for log in logs.get("online", []) if log["room"] == room and log["name"] == guest_name]
         room_refund_logs = [log for log in logs.get("refunds", []) if log["room"] == room and log["name"] == guest_name]
-        room_addons_logs = [log for log in logs.get("add_ons", []) if log["room"] == room and log.get("name") == guest_name]
+        room_addons_logs = [log for log in logs.get("add_ons", []) if log["room"] == room]
         room_renewal_logs = [log for log in logs.get("renewals", []) if log["room"] == room and log["name"] == guest_name]
         
         return jsonify(
@@ -748,13 +862,13 @@ def renew_rent():
         # Add new balance for rent renewal
         new_balance = room_data["balance"] + price
         
-        # Update renewal count - this is the key value used to calculate next renewal time
+        # NEW: Update renewal count - this is the key value used to calculate next renewal time
         renewal_count = data_json.get("renewal_count", 0)
         
         # Update room in Firestore
         rooms_ref.document(room).update({
             "balance": new_balance,
-            "renewal_count": renewal_count
+            "renewal_count": renewal_count  # NEW
         })
         
         # Get totals and update balance
@@ -764,7 +878,7 @@ def renew_rent():
         
         logger.info(f"Rent renewed for room {room}, new renewal count: {renewal_count}")
         
-        # Log the renewal
+        # NEW: Log the renewal - NO SERIAL NUMBER for renewals
         renewal_log = {
             "room": room, 
             "name": guest["name"], 
@@ -772,7 +886,9 @@ def renew_rent():
             "time": datetime.now(IST).strftime("%H:%M"),
             "date": datetime.now(IST).strftime("%Y-%m-%d"),
             "note": f"Day {renewal_count + 1} rent renewal",
-            "day": renewal_count + 1
+            "day": renewal_count + 1,
+            "transaction_type": "rent_renewal"  # NEW
+            # NO serial_number for renewals
         }
         
         # Add to balance logs
@@ -814,11 +930,11 @@ def update_checkin_time():
         # Validate the new time
         datetime.strptime(new_checkin_time, "%Y-%m-%d %H:%M")
         
-        # Update the checkin time
+        # NEW: Reset renewal data when changing check-in time
         rooms_ref.document(room).update({
             "checkin_time": new_checkin_time,
-            "renewal_count": 0,
-            "last_renewal_time": None
+            "renewal_count": 0,  # NEW
+            "last_renewal_time": None  # NEW
         })
         
         logger.info(f"Check-in time updated for room {room}: {new_checkin_time}")
@@ -879,7 +995,9 @@ def add_room():
             "guest": None, 
             "checkin_time": None, 
             "balance": 0, 
-            "add_ons": []
+            "add_ons": [],
+            "renewal_count": 0,  # NEW
+            "last_renewal_time": None  # NEW
         })
         
         logger.info(f"New room {room_number} added")
@@ -1006,13 +1124,12 @@ def transfer_room():
             "guest": None, 
             "checkin_time": None, 
             "balance": 0, 
-            "add_ons": []
+            "add_ons": [],
+            "renewal_count": 0,  # NEW
+            "last_renewal_time": None  # NEW
         })
         
-        # Create a batch for updating logs
-        batch = db.batch()
-        
-        # Record the room shift event
+        # NEW: Record the room shift event
         shift_log = {
             "room": new_room,
             "name": guest_name,
@@ -1084,9 +1201,6 @@ def add_expense():
         if expense_type == "transaction":
             # Update totals
             totals = get_totals()
-            if "expenses" not in totals:
-                totals["expenses"] = 0
-                
             totals["expenses"] += amount
             totals_ref.document('current_totals').set(totals)
         
@@ -1512,8 +1626,8 @@ def convert_booking_to_checkin():
             "checkin_time": datetime.now(IST).strftime("%Y-%m-%d %H:%M"),
             "balance": balance_after_payment if balance_after_payment > 0 else 0,
             "add_ons": [],
-            "renewal_count": 0,
-            "last_renewal_time": None
+            "renewal_count": 0,  # NEW
+            "last_renewal_time": None  # NEW
         })
         
         # If there's still balance, add to balance log
@@ -1614,8 +1728,6 @@ def check_availability():
     except Exception as e:
         logger.error(f"Error checking availability: {str(e)}")
         return jsonify(success=False, message=f"Error checking availability: {str(e)}")
-
-# New endpoints for settlement management
 
 # Helper function to fetch settlements
 def fetch_settlements():
@@ -1800,6 +1912,35 @@ def cancel_settlement():
         logger.error(f"Error cancelling settlement: {str(e)}")
         return jsonify(success=False, message=f"Error cancelling settlement: {str(e)}")
 
+# NEW: Transaction metadata endpoints
+@app.route("/get_transaction_metadata", methods=["GET"])
+def get_transaction_metadata():
+    try:
+        # Get daily counters
+        counters_stream = counters_ref.stream()
+        daily_counters = {doc.id: doc.to_dict().get('count', 0) for doc in counters_stream}
+        
+        # Get transaction metadata
+        metadata_stream = metadata_ref.stream()
+        transaction_metadata = {doc.id: doc.to_dict() for doc in metadata_stream}
+        
+        return jsonify(
+            success=True, 
+            daily_counters=daily_counters,
+            transaction_metadata=transaction_metadata
+        )
+    except Exception as e:
+        logger.error(f"Error getting transaction metadata: {str(e)}")
+        return jsonify(success=False, message=f"Error getting transaction metadata: {str(e)}")
+
+# NEW: Cleanup endpoint
+@app.route("/cleanup_old_data", methods=["POST"])
+def cleanup_old_data_route():
+    try:
+        cleanup_old_counters()
+        return jsonify(success=True, message="Old data cleaned up successfully")
+    except Exception as e:
+        return jsonify(success=False, message=f"Error cleaning up data: {str(e)}")
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))

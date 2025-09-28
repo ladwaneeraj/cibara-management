@@ -560,7 +560,9 @@ class TransactionLogManager {
       log.booking_id ||
       log.type === "booking_advance" ||
       log.type === "booking_payment" ||
-      log.type === "booking_final_payment"
+      log.type === "booking_final_payment" ||
+      log.transaction_type === "booking_conversion" ||
+      log.is_booking_conversion
     ) {
       tags.push({
         text: "BOOKING",

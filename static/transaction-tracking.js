@@ -80,103 +80,48 @@ class TransactionTracker {
     this.saveDailyCounters();
   }
 
-  // Get transaction tags for a log entry
-  getTransactionTags(log, logType) {
+  // Determine transaction type and return appropriate tag
+  getTransactionTag(log, logType) {
     const tags = [];
 
-    // PRIORITY 1: Refund (highest priority - overrides everything)
-    if (
-      logType === "refunds" ||
-      log.transaction_type === "refund" ||
-      log.transaction_type === "checkout_refund"
-    ) {
-      tags.push({
-        text: "REFUND",
-        class: "transaction-tag refund-tag",
-        color: "#dc3545",
-      });
-      return tags; // Return early - refunds don't get other tags
-    }
-
-    // PRIORITY 2: Expenses (but don't add tags for cleaner display)
-    if (logType === "expenses") {
-      return tags; // Return empty tags for expenses - cleaner display
-    }
-
-    // PRIORITY 3: Service/Add-on (third priority - overrides continue)
-    if (log.item || log.transaction_type === "service") {
-      tags.push({
-        text: "SERVICE",
-        class: "transaction-tag service-tag",
-        color: "#ffc107",
-      });
-      return tags; // Return early - services don't get other tags
-    }
-
-    // PRIORITY 4: Booking transactions
+    // Check for booking transactions
     if (
       log.booking_id ||
       log.type === "booking_advance" ||
       log.type === "booking_payment" ||
-      log.type === "booking_final_payment" ||
-      log.transaction_type === "booking_conversion" ||
-      log.is_booking_conversion
+      log.type === "booking_final_payment"
     ) {
       tags.push({
         text: "BOOKING",
         class: "transaction-tag booking-tag",
         color: "#6f42c1",
       });
-      return tags; // Return early - bookings don't get other tags
     }
 
-    // PRIORITY 5: Pay Later
-    if (
-      log.payment_method === "pay_later" ||
-      (log.amount === 0 && log.is_fresh_checkin)
-    ) {
-      tags.push({
-        text: "PAY LATER",
-        class: "transaction-tag pay-later-tag",
-        color: "#fd7e14",
-      });
-      return tags; // Return early
-    }
-
-    // PRIORITY 6: Continue/Renewal (only if none of the above)
-    let isRenewal = false;
-
-    // Method 1: Direct flags
-    if (log.is_renewal === true || log.transaction_type === "renewal_payment") {
-      isRenewal = true;
-    }
-
-    // Method 2: Date comparison (only for non-service, non-refund transactions)
-    if (
-      !isRenewal &&
-      log.room &&
-      log.date &&
-      rooms[log.room] &&
-      rooms[log.room].checkin_time
-    ) {
-      try {
-        const checkinDate = rooms[log.room].checkin_time.split(" ")[0];
-        const logDate = log.date;
-
-        if (checkinDate !== logDate) {
-          isRenewal = true;
-        }
-      } catch (error) {
-        // Ignore error
-      }
-    }
-
-    // Add CONTINUE tag only if it's a renewal
-    if (isRenewal) {
+    // Check for renewal/continue transactions
+    if (log.room && this.isRenewalTransaction(log)) {
       tags.push({
         text: "CONTINUE",
         class: "transaction-tag continue-tag",
         color: "#28a745",
+      });
+    }
+
+    // Check for service/add-on transactions
+    if (log.item) {
+      tags.push({
+        text: "SERVICE",
+        class: "transaction-tag service-tag",
+        color: "#ffc107",
+      });
+    }
+
+    // Check for refund transactions
+    if (logType === "refunds") {
+      tags.push({
+        text: "REFUND",
+        class: "transaction-tag refund-tag",
+        color: "#dc3545",
       });
     }
 
@@ -313,12 +258,6 @@ class TransactionLogManager {
       recentDates.includes(log.date)
     );
 
-    // Make sure discounts array exists and is filtered properly
-    const discountLogs = logs.discounts || [];
-    const recentDiscountLogs = discountLogs.filter((log) =>
-      recentDates.includes(log.date)
-    );
-
     // Add expenses logs - filter to only show transaction expenses
     const expensesLogs = logs.expenses || [];
     const recentExpenseLogs = expensesLogs.filter(
@@ -331,7 +270,6 @@ class TransactionLogManager {
       ...recentCashLogs.map((log) => ({ ...log, logType: "cash" })),
       ...recentOnlineLogs.map((log) => ({ ...log, logType: "online" })),
       ...recentRefundLogs.map((log) => ({ ...log, logType: "refunds" })),
-      ...recentDiscountLogs.map((log) => ({ ...log, logType: "discounts" })),
       ...recentExpenseLogs.map((log) => ({ ...log, logType: "expenses" })),
     ].sort((a, b) => {
       // First sort by date

@@ -1027,6 +1027,18 @@ function initializeConvertBookingForm() {
       const result = await response.json();
 
       if (result.success) {
+        // Assign serial number for booking check-in
+        if (typeof transactionTracker !== "undefined" && transactionTracker) {
+          const serialNumber = transactionTracker.processCheckin(
+            booking.room,
+            null,
+            true
+          );
+          console.log(
+            `Assigned serial number ${serialNumber} to booking check-in for room ${booking.room}`
+          );
+        }
+
         // Close modal and refresh data
         const convertModal = document.getElementById("convert-booking-modal");
         if (convertModal) {

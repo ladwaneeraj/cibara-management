@@ -80,48 +80,103 @@ class TransactionTracker {
     this.saveDailyCounters();
   }
 
-  // Determine transaction type and return appropriate tag
-  getTransactionTag(log, logType) {
+  // Get transaction tags for a log entry
+  getTransactionTags(log, logType) {
     const tags = [];
 
-    // Check for booking transactions
+    // PRIORITY 1: Refund (highest priority - overrides everything)
+    if (
+      logType === "refunds" ||
+      log.transaction_type === "refund" ||
+      log.transaction_type === "checkout_refund"
+    ) {
+      tags.push({
+        text: "REFUND",
+        class: "transaction-tag refund-tag",
+        color: "#dc3545",
+      });
+      return tags; // Return early - refunds don't get other tags
+    }
+
+    // PRIORITY 2: Expenses (but don't add tags for cleaner display)
+    if (logType === "expenses") {
+      return tags; // Return empty tags for expenses - cleaner display
+    }
+
+    // PRIORITY 3: Service/Add-on (third priority - overrides continue)
+    if (log.item || log.transaction_type === "service") {
+      tags.push({
+        text: "SERVICE",
+        class: "transaction-tag service-tag",
+        color: "#ffc107",
+      });
+      return tags; // Return early - services don't get other tags
+    }
+
+    // PRIORITY 4: Booking transactions
     if (
       log.booking_id ||
       log.type === "booking_advance" ||
       log.type === "booking_payment" ||
-      log.type === "booking_final_payment"
+      log.type === "booking_final_payment" ||
+      log.transaction_type === "booking_conversion" ||
+      log.is_booking_conversion
     ) {
       tags.push({
         text: "BOOKING",
         class: "transaction-tag booking-tag",
         color: "#6f42c1",
       });
+      return tags; // Return early - bookings don't get other tags
     }
 
-    // Check for renewal/continue transactions
-    if (log.room && this.isRenewalTransaction(log)) {
+    // PRIORITY 5: Pay Later
+    if (
+      log.payment_method === "pay_later" ||
+      (log.amount === 0 && log.is_fresh_checkin)
+    ) {
+      tags.push({
+        text: "PAY LATER",
+        class: "transaction-tag pay-later-tag",
+        color: "#fd7e14",
+      });
+      return tags; // Return early
+    }
+
+    // PRIORITY 6: Continue/Renewal (only if none of the above)
+    let isRenewal = false;
+
+    // Method 1: Direct flags
+    if (log.is_renewal === true || log.transaction_type === "renewal_payment") {
+      isRenewal = true;
+    }
+
+    // Method 2: Date comparison (only for non-service, non-refund transactions)
+    if (
+      !isRenewal &&
+      log.room &&
+      log.date &&
+      rooms[log.room] &&
+      rooms[log.room].checkin_time
+    ) {
+      try {
+        const checkinDate = rooms[log.room].checkin_time.split(" ")[0];
+        const logDate = log.date;
+
+        if (checkinDate !== logDate) {
+          isRenewal = true;
+        }
+      } catch (error) {
+        // Ignore error
+      }
+    }
+
+    // Add CONTINUE tag only if it's a renewal
+    if (isRenewal) {
       tags.push({
         text: "CONTINUE",
         class: "transaction-tag continue-tag",
         color: "#28a745",
-      });
-    }
-
-    // Check for service/add-on transactions
-    if (log.item) {
-      tags.push({
-        text: "SERVICE",
-        class: "transaction-tag service-tag",
-        color: "#ffc107",
-      });
-    }
-
-    // Check for refund transactions
-    if (logType === "refunds") {
-      tags.push({
-        text: "REFUND",
-        class: "transaction-tag refund-tag",
-        color: "#dc3545",
       });
     }
 
@@ -189,16 +244,19 @@ class TransactionTracker {
   }
 
   // Process check-in and assign serial number
-  processCheckin(roomNumber, checkinDate = null) {
+  processCheckin(roomNumber, checkinDate = null, isBookingConversion = false) {
     const date = checkinDate || this.todayDate;
 
-    // Only assign serial numbers for today's check-ins
+    // Assign serial numbers for today's check-ins (both fresh and booking conversions)
     if (date === this.todayDate) {
       const serialNumber = this.getNextSerialNumber();
       this.storeSerialNumber(date, roomNumber, serialNumber);
 
+      const checkinType = isBookingConversion
+        ? "booking conversion"
+        : "fresh check-in";
       console.log(
-        `Assigned serial number ${serialNumber} to room ${roomNumber} for ${date}`
+        `Assigned serial number ${serialNumber} to room ${roomNumber} for ${date} (${checkinType})`
       );
       return serialNumber;
     }
@@ -384,7 +442,7 @@ class TransactionLogManager {
       type = "Refund";
       color = 'style="color: var(--danger)"';
     } else if (logType === "expenses") {
-      type = log.description || "Expense";
+      type = log.category || "Expense";
       color = 'style="color: var(--danger)"';
       additionalInfo = "";
     } else if (log.item || log.transaction_type === "service") {
@@ -426,7 +484,7 @@ class TransactionLogManager {
       ? `<span class="room-shifted-badge">Shifted: ${log.old_room} → ${log.room}</span>`
       : "";
 
-    // Special handling for zero amount transactions
+    // Special handling for zero amount transactions and expenses
     let amountDisplay = `₹${log.amount}`;
     if (
       log.amount === 0 &&
@@ -434,12 +492,14 @@ class TransactionLogManager {
     ) {
       amountDisplay = "₹0";
       color = 'style="color: var(--warning)"';
+    } else if (logType === "expenses") {
+      amountDisplay = `<strong>₹${log.amount}</strong>`;
     }
 
     // For expenses, show simpler format
     let titleContent = "";
     if (logType === "expenses") {
-      titleContent = log.description || "Expense";
+      titleContent = `<strong>${log.description || "Expense"}</strong>`;
     } else {
       titleContent = `Room ${log.room} - ${log.name}`;
     }
@@ -594,8 +654,14 @@ class TransactionLogManager {
 
   // Get log serial number for display
   getLogSerialNumber(log) {
-    // Rule 1: Only show serial for fresh check-ins on the same day
-    if (!log.is_fresh_checkin && log.transaction_type !== "fresh_checkin") {
+    // Rule 1: Show serial for fresh check-ins AND booking conversions on the same day
+    const isEligibleCheckin =
+      log.is_fresh_checkin ||
+      log.transaction_type === "fresh_checkin" ||
+      log.transaction_type === "booking_conversion" ||
+      log.is_booking_conversion;
+
+    if (!isEligibleCheckin) {
       return null;
     }
 

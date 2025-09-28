@@ -1545,24 +1545,15 @@ def convert_booking_to_checkin():
         booking_data = request.json
         booking_id = booking_data.get("booking_id")
         
-        # Check if booking exists
-        booking_doc = bookings_ref.document(booking_id).get()
-        if not booking_doc.exists:
+        if not booking_id or booking_id not in data.get("bookings", {}):
             return jsonify(success=False, message="Invalid booking ID")
         
         # Get the booking
-        booking = booking_doc.to_dict()
+        booking = data["bookings"][booking_id]
         
         # Check if the room is currently vacant
         room_number = booking["room"]
-        room_doc = rooms_ref.document(room_number).get()
-        
-        if not room_doc.exists:
-            return jsonify(success=False, message=f"Room {room_number} not found")
-            
-        room_data = room_doc.to_dict()
-        
-        if room_data["status"] != "vacant":
+        if room_number not in rooms or rooms[room_number]["status"] != "vacant":
             return jsonify(success=False, message=f"Room {room_number} is not vacant")
         
         # Process remaining payment if provided
@@ -1570,43 +1561,69 @@ def convert_booking_to_checkin():
         payment_method = booking_data.get("payment_method", "cash")
         balance_after_payment = booking["balance"] - remaining_payment
         
-        # Get totals
-        totals = get_totals()
+        # Get serial number for booking conversion check-in
+        current_date = datetime.now(IST).strftime("%Y-%m-%d")
+        serial_number = get_next_serial_number(current_date)
         
+        # Store transaction metadata for booking conversion
+        store_transaction_metadata(room_number, current_date, serial_number, "booking_conversion")
+        
+        # ALWAYS log the booking conversion, even with zero payment
         if remaining_payment > 0:
-            # Add payment to logs
+            # Log actual payment with remaining amount
             payment_log = {
                 "booking_id": booking_id,
                 "room": booking["room"],
                 "name": booking["guest_name"],
                 "amount": remaining_payment,
                 "time": datetime.now(IST).strftime("%H:%M"),
-                "date": datetime.now(IST).strftime("%Y-%m-%d"),
-                "type": "booking_final_payment"
+                "date": current_date,
+                "type": "booking_final_payment",
+                "serial_number": serial_number,
+                "transaction_type": "booking_conversion",
+                "is_booking_conversion": True
             }
             
-            logs_ref.document(payment_method).update({
-                "entries": firestore.ArrayUnion([payment_log])
-            })
+            logs[payment_method].append(payment_log)
             
-            # Add to booking payments log
-            booking_payment = {
+            # Update totals for actual payment
+            totals[payment_method] += remaining_payment
+        else:
+            # Log zero payment booking conversion (similar to pay later for fresh check-ins)
+            zero_payment_log = {
                 "booking_id": booking_id,
                 "room": booking["room"],
                 "name": booking["guest_name"],
-                "amount": remaining_payment,
-                "payment_method": payment_method,
+                "amount": 0,
                 "time": datetime.now(IST).strftime("%H:%M"),
-                "date": datetime.now(IST).strftime("%Y-%m-%d"),
-                "type": "final_payment"
+                "date": current_date,
+                "type": "booking_conversion_zero_payment",
+                "serial_number": serial_number,
+                "transaction_type": "booking_conversion",
+                "is_booking_conversion": True,
+                "payment_method": "already_paid"
             }
             
-            logs_ref.document("booking_payments").update({
-                "entries": firestore.ArrayUnion([booking_payment])
-            })
-            
-            # Update totals
-            totals[payment_method] += remaining_payment
+            # Log in cash logs (like pay later transactions)
+            logs["cash"].append(zero_payment_log)
+            # Don't add to totals for zero payments
+        
+        # Always add to booking payments log for record keeping
+        booking_payment = {
+            "booking_id": booking_id,
+            "room": booking["room"],
+            "name": booking["guest_name"],
+            "amount": remaining_payment,
+            "payment_method": payment_method if remaining_payment > 0 else "already_paid",
+            "time": datetime.now(IST).strftime("%H:%M"),
+            "date": current_date,
+            "type": "final_payment" if remaining_payment > 0 else "conversion_no_payment",
+            "serial_number": serial_number,
+            "transaction_type": "booking_conversion",
+            "is_booking_conversion": True
+        }
+        
+        logs["booking_payments"].append(booking_payment)
         
         # Create guest object for check-in
         guest = {
@@ -1620,47 +1637,52 @@ def convert_booking_to_checkin():
         }
         
         # Update room to occupied
-        rooms_ref.document(room_number).update({
-            "status": "occupied",
-            "guest": guest,
-            "checkin_time": datetime.now(IST).strftime("%Y-%m-%d %H:%M"),
-            "balance": balance_after_payment if balance_after_payment > 0 else 0,
-            "add_ons": [],
-            "renewal_count": 0,  # NEW
-            "last_renewal_time": None  # NEW
-        })
+        rooms[room_number]["status"] = "occupied"
+        rooms[room_number]["guest"] = guest
+        rooms[room_number]["checkin_time"] = datetime.now(IST).strftime("%Y-%m-%d %H:%M")
+        rooms[room_number]["balance"] = balance_after_payment if balance_after_payment > 0 else 0
+        rooms[room_number]["add_ons"] = []
+        rooms[room_number]["renewal_count"] = 0
+        rooms[room_number]["last_renewal_time"] = None
         
-        # If there's still balance, add to balance log
+        # If there's still balance, add to balance log with booking conversion metadata
         if balance_after_payment > 0:
             balance_log = {
                 "room": room_number,
                 "name": guest["name"],
                 "amount": balance_after_payment,
-                "date": datetime.now(IST).strftime("%Y-%m-%d"),
-                "note": "Remaining balance from booking"
+                "date": current_date,
+                "note": "Remaining balance from booking",
+                "serial_number": serial_number,
+                "transaction_type": "booking_conversion",
+                "is_booking_conversion": True
             }
             
-            logs_ref.document("balance").update({
-                "entries": firestore.ArrayUnion([balance_log])
-            })
-            
+            logs["balance"].append(balance_log)
             totals["balance"] += balance_after_payment
-        
-        # Update totals
-        totals_ref.document('current_totals').set(totals)
         
         # Update booking status
         booking["status"] = "checked_in"
         booking["check_in_time"] = datetime.now(IST).strftime("%Y-%m-%d %H:%M")
-        bookings_ref.document(booking_id).set(booking)
         
-        logger.info(f"Booking {booking_id} converted to check-in for room {room_number}")
-        return jsonify(success=True, message=f"Guest checked in to Room {room_number}")
+        # Update the global data object
+        data["rooms"] = rooms
+        data["bookings"][booking_id] = booking
+        data["logs"] = logs
+        data["totals"] = totals
+        save_data(data)
+        
+        logger.info(f"Booking {booking_id} converted to check-in for room {room_number} with serial #{serial_number}")
+        return jsonify(
+            success=True, 
+            message=f"Guest checked in to Room {room_number} (#{serial_number})",
+            serial_number=serial_number
+        )
         
     except Exception as e:
         logger.error(f"Error converting booking to check-in: {str(e)}")
         return jsonify(success=False, message=f"Error converting booking to check-in: {str(e)}")
-
+    
 @app.route("/check_availability", methods=["POST"])
 def check_availability():
     try:

@@ -2584,9 +2584,20 @@ function initEnhancedCheckinForm() {
 
       roomPriceInput.value = price;
 
-      // Also update amount paid to match the room price by default
+      // Update amount paid based on current payment method
       if (amountPaidInput) {
-        amountPaidInput.value = price;
+        const paymentMethodInput = document.getElementById("payment-method");
+        const currentPaymentMethod = paymentMethodInput
+          ? paymentMethodInput.value
+          : "cash";
+
+        if (currentPaymentMethod === "balance") {
+          // Keep amount as 0 for Pay Later
+          amountPaidInput.value = 0;
+        } else {
+          // Set to room price for Cash/Online
+          amountPaidInput.value = price;
+        }
       }
     }
   }
@@ -3546,6 +3557,20 @@ document.addEventListener("DOMContentLoaded", function () {
           const paymentMethodInput = document.getElementById("payment-method");
           if (paymentMethodInput) {
             paymentMethodInput.value = activePaymentMethod;
+          }
+
+          // Auto-adjust amount paid based on payment method
+          const amountPaidInput = document.getElementById("amount-paid");
+          const roomPriceInput = document.getElementById("room-price");
+
+          if (amountPaidInput && roomPriceInput) {
+            if (activePaymentMethod === "balance") {
+              // Set amount to 0 for "Pay Later"
+              amountPaidInput.value = 0;
+            } else {
+              // Set amount to room price for Cash/Online
+              amountPaidInput.value = roomPriceInput.value || 0;
+            }
           }
         }
       }

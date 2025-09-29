@@ -1,4 +1,4 @@
-// Quick Room Transfer Functionality
+// Enhanced Quick Room Transfer Functionality
 function initQuickTransferButton() {
   const quickTransferBtn = document.getElementById("quick-transfer-btn");
   if (!quickTransferBtn) {
@@ -35,7 +35,7 @@ function initQuickTransferButton() {
   }
 }
 
-// Show quick transfer modal
+// Show enhanced quick transfer modal
 function showQuickTransferModal() {
   const quickTransferModal = document.getElementById("quick-transfer-modal");
   if (!quickTransferModal) {
@@ -50,6 +50,12 @@ function showQuickTransferModal() {
   const quickGuestName = document.getElementById("quick-guest-name");
   const quickBalance = document.getElementById("quick-balance");
 
+  // Enhanced fields
+  const roomPriceSection = document.getElementById("room-price-section");
+  const newRoomPriceInput = document.getElementById("new-room-price");
+  const acToggleSection = document.getElementById("ac-toggle-section");
+  const newRoomAcToggle = document.getElementById("new-room-ac-toggle");
+
   if (!sourceRoomSelect || !destRoomSelect) {
     console.error("Quick transfer form elements not found");
     return;
@@ -58,6 +64,8 @@ function showQuickTransferModal() {
   // Reset the form
   quickGuestInfo.style.display = "none";
   quickBalanceInfo.style.display = "none";
+  if (roomPriceSection) roomPriceSection.style.display = "none";
+  if (acToggleSection) acToggleSection.style.display = "none";
 
   // Populate source room dropdown (only occupied rooms)
   sourceRoomSelect.innerHTML = '<option value="">Select source room</option>';
@@ -93,6 +101,8 @@ function showQuickTransferModal() {
       // Reset UI if no room selected
       quickGuestInfo.style.display = "none";
       quickBalanceInfo.style.display = "none";
+      if (roomPriceSection) roomPriceSection.style.display = "none";
+      if (acToggleSection) acToggleSection.style.display = "none";
       destRoomSelect.innerHTML =
         '<option value="">Select destination room</option>';
       destRoomSelect.disabled = true;
@@ -146,6 +156,51 @@ function showQuickTransferModal() {
     }
   });
 
+  // Set up destination room change handler
+  destRoomSelect.addEventListener("change", function () {
+    const destRoom = this.value;
+    const sourceRoom = sourceRoomSelect.value;
+
+    if (!destRoom || !sourceRoom) {
+      if (roomPriceSection) roomPriceSection.style.display = "none";
+      if (acToggleSection) acToggleSection.style.display = "none";
+      return;
+    }
+
+    // Calculate suggested room price based on destination room
+    const guestCount = rooms[sourceRoom].guest.guests || 1;
+    const suggestedPrice = roomPricing.calculatePrice(destRoom, guestCount);
+
+    // Show room price section
+    if (roomPriceSection && newRoomPriceInput) {
+      newRoomPriceInput.value = suggestedPrice;
+      roomPriceSection.style.display = "block";
+    }
+
+    // Show AC toggle for premium AC rooms (202-205)
+    if (acToggleSection && newRoomAcToggle) {
+      if (destRoom >= 202 && destRoom <= 205) {
+        // Reset AC toggle to unchecked (non-AC by default)
+        newRoomAcToggle.checked = false;
+        acToggleSection.style.display = "block";
+
+        // Update price when AC toggle changes
+        newRoomAcToggle.addEventListener("change", function () {
+          let price = roomPricing.calculatePrice(destRoom, guestCount);
+          if (!this.checked) {
+            // Reduce price by 600 if AC is turned off
+            price -= 600;
+          }
+          if (newRoomPriceInput) {
+            newRoomPriceInput.value = price;
+          }
+        });
+      } else {
+        acToggleSection.style.display = "none";
+      }
+    }
+  });
+
   // Set up form submission
   const quickTransferForm = document.getElementById("quick-transfer-form");
   if (quickTransferForm) {
@@ -154,6 +209,10 @@ function showQuickTransferModal() {
 
       const oldRoom = sourceRoomSelect.value;
       const newRoom = destRoomSelect.value;
+      const newPrice = newRoomPriceInput
+        ? parseInt(newRoomPriceInput.value)
+        : null;
+      const isAC = newRoomAcToggle ? newRoomAcToggle.checked : false;
 
       if (!oldRoom || !newRoom) {
         showNotification(
@@ -163,7 +222,18 @@ function showQuickTransferModal() {
         return;
       }
 
-      processRoomTransfer(oldRoom, newRoom, quickTransferModal);
+      if (newPrice && newPrice <= 0) {
+        showNotification("Please enter a valid room price", "error");
+        return;
+      }
+
+      processEnhancedRoomTransfer(
+        oldRoom,
+        newRoom,
+        newPrice,
+        isAC,
+        quickTransferModal
+      );
     };
   }
 
@@ -171,9 +241,17 @@ function showQuickTransferModal() {
   quickTransferModal.classList.add("show");
 }
 
-// Update processRoomTransfer to accept a modal element parameter
-async function processRoomTransfer(oldRoom, newRoom, modalElement = null) {
-  console.log(`Processing room transfer from ${oldRoom} to ${newRoom}`);
+// Enhanced room transfer process
+async function processEnhancedRoomTransfer(
+  oldRoom,
+  newRoom,
+  newPrice = null,
+  isAC = false,
+  modalElement = null
+) {
+  console.log(
+    `Processing enhanced room transfer from ${oldRoom} to ${newRoom}`
+  );
 
   if (!oldRoom) {
     console.error("Source room not specified");
@@ -187,7 +265,7 @@ async function processRoomTransfer(oldRoom, newRoom, modalElement = null) {
   }
 
   try {
-    // Disable the submit button - use the appropriate modal
+    // Disable the submit button
     const submitBtn = modalElement
       ? modalElement.querySelector("button[type=submit]")
       : document.querySelector("#transfer-room-form button[type=submit]");
@@ -198,18 +276,28 @@ async function processRoomTransfer(oldRoom, newRoom, modalElement = null) {
         '<span class="loader" style="width: 20px; height: 20px;"></span> Processing...';
     }
 
-    // Ensure room numbers are strings for consistency
-    const requestData = {
+    // Prepare transfer data
+    const transferData = {
       old_room: String(oldRoom),
       new_room: String(newRoom),
     };
 
-    console.log("Sending transfer request:", requestData);
+    // Add new price if provided
+    if (newPrice) {
+      transferData.new_price = newPrice;
+    }
+
+    // Add AC status for premium rooms
+    if (newRoom >= 202 && newRoom <= 205) {
+      transferData.is_ac = isAC;
+    }
+
+    console.log("Sending enhanced transfer request:", transferData);
 
     const response = await fetch("/transfer_room", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(requestData),
+      body: JSON.stringify(transferData),
     });
 
     console.log("Server response status:", response.status);
@@ -224,11 +312,10 @@ async function processRoomTransfer(oldRoom, newRoom, modalElement = null) {
     console.log("Response data:", result);
 
     if (result.success) {
-      // Close the modal that was used (quick transfer or regular transfer)
+      // Close the modal
       if (modalElement) {
         modalElement.classList.remove("show");
       } else {
-        // Close both regular modals
         const transferRoomModal = document.getElementById(
           "transfer-room-modal"
         );
@@ -245,10 +332,15 @@ async function processRoomTransfer(oldRoom, newRoom, modalElement = null) {
       // Refresh data
       await fetchData();
 
-      showNotification(
-        result.message || "Room transferred successfully",
-        "success"
-      );
+      let successMessage = `Guest transferred from Room ${oldRoom} to Room ${newRoom}`;
+      if (newPrice) {
+        successMessage += ` (Price updated to ₹${newPrice})`;
+      }
+      if (newRoom >= 202 && newRoom <= 205) {
+        successMessage += isAC ? " (AC)" : " (Non-AC)";
+      }
+
+      showNotification(successMessage, "success");
     } else {
       showNotification(result.message || "Error transferring room", "error");
     }
@@ -256,7 +348,7 @@ async function processRoomTransfer(oldRoom, newRoom, modalElement = null) {
     console.error("Error transferring room:", error);
     showNotification(`Error: ${error.message}`, "error");
   } finally {
-    // Re-enable the submit button - use the appropriate modal
+    // Re-enable the submit button
     const submitBtn = modalElement
       ? modalElement.querySelector("button[type=submit]")
       : document.querySelector("#transfer-room-form button[type=submit]");
@@ -266,6 +358,17 @@ async function processRoomTransfer(oldRoom, newRoom, modalElement = null) {
       submitBtn.innerHTML = "Transfer Room";
     }
   }
+}
+
+// Backward compatibility - update the original function
+async function processRoomTransfer(oldRoom, newRoom, modalElement = null) {
+  return processEnhancedRoomTransfer(
+    oldRoom,
+    newRoom,
+    null,
+    false,
+    modalElement
+  );
 }
 
 // Initialize the quick transfer button

@@ -1186,6 +1186,43 @@
             <label class="form-label">Current Balance</label>
             <div class="form-control-static" id="quick-balance"></div>
           </div>
+
+          <!-- New Room Price Section -->
+          <div id="room-price-section" style="display: none" class="form-group">
+            <label class="form-label" for="new-room-price"
+              >New Room Price (₹)</label
+            >
+            <input
+              type="number"
+              class="form-control"
+              id="new-room-price"
+              min="1"
+            />
+            <div
+              class="form-helper"
+              style="font-size: 0.8rem; color: var(--gray); margin-top: 0.25rem"
+            >
+              Price calculated automatically based on room type and guest count
+            </div>
+          </div>
+
+          <!-- AC Toggle Section for Premium Rooms -->
+          <div id="ac-toggle-section" style="display: none" class="form-group">
+            <div
+              class="checkbox-wrapper"
+              style="display: flex; align-items: center; gap: 0.5rem"
+            >
+              <input type="checkbox" id="new-room-ac-toggle" />
+              <label
+                class="form-label"
+                for="new-room-ac-toggle"
+                style="margin: 0"
+              >
+                Enable AC ?
+              </label>
+            </div>
+          </div>
+
           <div class="action-row">
             <button
               type="button"
@@ -1201,6 +1238,7 @@
         </form>
       </div>
     </div>
+
     <!-- Add the Expense Modal -->
     <div class="modal-backdrop" id="expense-modal">
       <div class="modal-content">

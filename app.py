@@ -1095,72 +1095,181 @@ def transfer_room():
         data_json = request.json
         old_room = str(data_json["old_room"])
         new_room = str(data_json["new_room"])
+        new_price = data_json.get("new_price")  # Optional new price
+        is_ac = data_json.get("is_ac", False)   # Optional AC status
         
-        # Get room data
-        old_room_doc = rooms_ref.document(old_room).get()
-        new_room_doc = rooms_ref.document(new_room).get()
-        
-        if not old_room_doc.exists or not new_room_doc.exists:
+        # Check if both rooms exist and conditions are met
+        if old_room not in rooms or new_room not in rooms:
             return jsonify(success=False, message="One or both rooms do not exist.")
             
-        old_room_data = old_room_doc.to_dict()
-        new_room_data = new_room_doc.to_dict()
-            
-        if old_room_data["status"] != "occupied":
+        if rooms[old_room]["status"] != "occupied":
             return jsonify(success=False, message="Source room is not occupied.")
             
-        if new_room_data["status"] != "vacant":
+        if rooms[new_room]["status"] != "vacant":
             return jsonify(success=False, message="Destination room is not vacant.")
         
-        # Store guest name before transfer
-        guest_name = old_room_data["guest"]["name"]
+        # Store guest information before transfer
+        guest_name = rooms[old_room]["guest"]["name"]
+        guest_mobile = rooms[old_room]["guest"]["mobile"]
+        checkin_time = rooms[old_room]["checkin_time"]
         
         # Transfer guest data to new room
-        rooms_ref.document(new_room).set(old_room_data)
+        rooms[new_room] = rooms[old_room].copy()
+        
+        # Update room price if provided
+        if new_price:
+            rooms[new_room]["guest"]["price"] = int(new_price)
+        
+        # Update AC status for premium rooms (202-205)
+        if new_room >= "202" and new_room <= "205":
+            rooms[new_room]["guest"]["isAC"] = is_ac
+        
+        # IMPORTANT: Update all log entries for this guest's current stay
+        current_checkin_time = datetime.strptime(checkin_time, "%Y-%m-%d %H:%M")
+        
+        # Update cash logs
+        for log in logs["cash"]:
+            if (log["room"] == old_room and 
+                log["name"] == guest_name and
+                is_log_from_current_stay(log, current_checkin_time)):
+                log["room"] = new_room
+                log["room_shifted"] = True
+                log["old_room"] = old_room
+        
+        # Update online logs
+        for log in logs["online"]:
+            if (log["room"] == old_room and 
+                log["name"] == guest_name and
+                is_log_from_current_stay(log, current_checkin_time)):
+                log["room"] = new_room
+                log["room_shifted"] = True
+                log["old_room"] = old_room
+        
+        # Update balance logs
+        for log in logs["balance"]:
+            if (log["room"] == old_room and 
+                log["name"] == guest_name and
+                is_log_from_current_stay(log, current_checkin_time)):
+                log["room"] = new_room
+                log["room_shifted"] = True
+                log["old_room"] = old_room
+        
+        # Update add-on logs
+        for log in logs["add_ons"]:
+            if (log["room"] == old_room and
+                is_log_from_current_stay(log, current_checkin_time)):
+                log["room"] = new_room
+                log["room_shifted"] = True
+                log["old_room"] = old_room
+        
+        # Update refund logs
+        for log in logs.get("refunds", []):
+            if (log["room"] == old_room and 
+                log["name"] == guest_name and
+                is_log_from_current_stay(log, current_checkin_time)):
+                log["room"] = new_room
+                log["room_shifted"] = True
+                log["old_room"] = old_room
+        
+        # Update renewal logs
+        for log in logs.get("renewals", []):
+            if (log["room"] == old_room and 
+                log["name"] == guest_name and
+                is_log_from_current_stay(log, current_checkin_time)):
+                log["room"] = new_room
+                log["room_shifted"] = True
+                log["old_room"] = old_room
+        
+        # Update booking payment logs if they exist
+        for log in logs.get("booking_payments", []):
+            if (log["room"] == old_room and 
+                log["name"] == guest_name and
+                is_log_from_current_stay(log, current_checkin_time)):
+                log["room"] = new_room
+                log["room_shifted"] = True
+                log["old_room"] = old_room
+        
+        # Update discount logs if they exist
+        for log in logs.get("discounts", []):
+            if (log["room"] == old_room and 
+                log["name"] == guest_name and
+                is_log_from_current_stay(log, current_checkin_time)):
+                log["room"] = new_room
+                log["room_shifted"] = True
+                log["old_room"] = old_room
         
         # Clear old room
-        rooms_ref.document(old_room).set({
+        rooms[old_room] = {
             "status": "vacant", 
             "guest": None, 
             "checkin_time": None, 
             "balance": 0, 
             "add_ons": [],
-            "renewal_count": 0,  # NEW
-            "last_renewal_time": None  # NEW
-        })
+            "renewal_count": 0,
+            "last_renewal_time": None
+        }
         
-        # NEW: Record the room shift event
+        # Record the room shift event
         shift_log = {
             "room": new_room,
             "name": guest_name,
             "old_room": old_room,
             "time": datetime.now(IST).strftime("%H:%M"),
             "date": datetime.now(IST).strftime("%Y-%m-%d"),
-            "note": f"Transferred from Room {old_room} to Room {new_room}"
+            "note": f"Transferred from Room {old_room} to Room {new_room}",
+            "room_shifted": True,
+            "guest_mobile": guest_mobile  # Include mobile for better tracking
         }
         
-        # Create a room_shifts log if it doesn't exist
-        room_shifts_doc = logs_ref.document("room_shifts").get()
-        if not room_shifts_doc.exists:
-            logs_ref.document("room_shifts").set({
-                "entries": [shift_log]
-            })
-        else:
-            logs_ref.document("room_shifts").update({
-                "entries": firestore.ArrayUnion([shift_log])
-            })
+        # Add price change info if applicable
+        if new_price:
+            shift_log["new_price"] = new_price
+            shift_log["note"] += f" (Price updated to ₹{new_price})"
         
-        logger.info(f"Guest transferred from Room {old_room} to Room {new_room}")
+        # Add AC info for premium rooms
+        if new_room >= "202" and new_room <= "205":
+            shift_log["is_ac"] = is_ac
+            shift_log["note"] += f" ({'AC' if is_ac else 'Non-AC'})"
+        
+        logs["room_shifts"].append(shift_log)
+        
+        # Update the global data object
+        data["rooms"] = rooms
+        data["logs"] = logs
+        save_data(data)
+        
+        logger.info(f"Guest {guest_name} transferred from Room {old_room} to Room {new_room} with payment history")
         
         return jsonify(
             success=True, 
-            message=f"Guest transferred from Room {old_room} to Room {new_room} successfully."
+            message=f"Guest transferred successfully with payment history."
         )
         
     except Exception as e:
         logger.error(f"Error transferring room: {str(e)}", exc_info=True)
         return jsonify(success=False, message=f"Error transferring room: {str(e)}")
 
+# Helper function to check if a log entry is from the current stay
+def is_log_from_current_stay(log, checkin_time):
+    """Check if a log entry is from the current guest stay"""
+    try:
+        # Get log date and time
+        log_date = log.get("date")
+        log_time = log.get("time", "00:00")
+        
+        if not log_date:
+            return True  # Include logs without dates to be safe
+        
+        # Parse log datetime
+        log_datetime = datetime.strptime(f"{log_date} {log_time}", "%Y-%m-%d %H:%M")
+        
+        # Include logs that are on or after the check-in time
+        return log_datetime >= checkin_time
+        
+    except Exception as e:
+        logger.error(f"Error parsing log datetime: {str(e)}")
+        return True  # Include the log if we can't parse the date to be safe
+    
 @app.route("/add_expense", methods=["POST"])
 def add_expense():
     try:

@@ -1098,108 +1098,76 @@ def transfer_room():
         new_price = data_json.get("new_price")  # Optional new price
         is_ac = data_json.get("is_ac", False)   # Optional AC status
         
+        # Get rooms and logs from Firestore
+        rooms_dict = get_all_rooms()
+        logs_dict = get_all_logs()
+        
         # Check if both rooms exist and conditions are met
-        if old_room not in rooms or new_room not in rooms:
+        if old_room not in rooms_dict or new_room not in rooms_dict:
             return jsonify(success=False, message="One or both rooms do not exist.")
             
-        if rooms[old_room]["status"] != "occupied":
+        if rooms_dict[old_room]["status"] != "occupied":
             return jsonify(success=False, message="Source room is not occupied.")
             
-        if rooms[new_room]["status"] != "vacant":
+        if rooms_dict[new_room]["status"] != "vacant":
             return jsonify(success=False, message="Destination room is not vacant.")
         
         # Store guest information before transfer
-        guest_name = rooms[old_room]["guest"]["name"]
-        guest_mobile = rooms[old_room]["guest"]["mobile"]
-        checkin_time = rooms[old_room]["checkin_time"]
+        guest_name = rooms_dict[old_room]["guest"]["name"]
+        guest_mobile = rooms_dict[old_room]["guest"]["mobile"]
+        checkin_time = rooms_dict[old_room]["checkin_time"]
         
         # Transfer guest data to new room
-        rooms[new_room] = rooms[old_room].copy()
+        new_room_data = rooms_dict[old_room].copy()
         
         # Update room price if provided
         if new_price:
-            rooms[new_room]["guest"]["price"] = int(new_price)
+            new_room_data["guest"]["price"] = int(new_price)
         
         # Update AC status for premium rooms (202-205)
         if new_room >= "202" and new_room <= "205":
-            rooms[new_room]["guest"]["isAC"] = is_ac
+            new_room_data["guest"]["isAC"] = is_ac
         
-        # IMPORTANT: Update all log entries for this guest's current stay
+        # Update new room in Firestore
+        rooms_ref.document(new_room).set(new_room_data)
+        
+        # Update all log entries for this guest's current stay
         current_checkin_time = datetime.strptime(checkin_time, "%Y-%m-%d %H:%M")
         
-        # Update cash logs
-        for log in logs["cash"]:
-            if (log["room"] == old_room and 
-                log["name"] == guest_name and
-                is_log_from_current_stay(log, current_checkin_time)):
-                log["room"] = new_room
-                log["room_shifted"] = True
-                log["old_room"] = old_room
+        # Batch update for better performance
+        batch = db.batch()
         
-        # Update online logs
-        for log in logs["online"]:
-            if (log["room"] == old_room and 
-                log["name"] == guest_name and
-                is_log_from_current_stay(log, current_checkin_time)):
-                log["room"] = new_room
-                log["room_shifted"] = True
-                log["old_room"] = old_room
+        # Helper function to update logs
+        def update_log_entries(log_type):
+            log_doc = logs_ref.document(log_type).get()
+            if log_doc.exists:
+                entries = log_doc.to_dict().get('entries', [])
+                updated = False
+                
+                for log in entries:
+                    if (log.get("room") == old_room and 
+                        log.get("name") == guest_name and
+                        is_log_from_current_stay(log, current_checkin_time)):
+                        log["room"] = new_room
+                        log["room_shifted"] = True
+                        log["old_room"] = old_room
+                        updated = True
+                
+                if updated:
+                    batch.set(logs_ref.document(log_type), {"entries": entries})
         
-        # Update balance logs
-        for log in logs["balance"]:
-            if (log["room"] == old_room and 
-                log["name"] == guest_name and
-                is_log_from_current_stay(log, current_checkin_time)):
-                log["room"] = new_room
-                log["room_shifted"] = True
-                log["old_room"] = old_room
+        # Update all log types
+        log_types = ["cash", "online", "balance", "add_ons", "refunds", "renewals", 
+                     "booking_payments", "discounts"]
         
-        # Update add-on logs
-        for log in logs["add_ons"]:
-            if (log["room"] == old_room and
-                is_log_from_current_stay(log, current_checkin_time)):
-                log["room"] = new_room
-                log["room_shifted"] = True
-                log["old_room"] = old_room
+        for log_type in log_types:
+            update_log_entries(log_type)
         
-        # Update refund logs
-        for log in logs.get("refunds", []):
-            if (log["room"] == old_room and 
-                log["name"] == guest_name and
-                is_log_from_current_stay(log, current_checkin_time)):
-                log["room"] = new_room
-                log["room_shifted"] = True
-                log["old_room"] = old_room
+        # Commit batch updates
+        batch.commit()
         
-        # Update renewal logs
-        for log in logs.get("renewals", []):
-            if (log["room"] == old_room and 
-                log["name"] == guest_name and
-                is_log_from_current_stay(log, current_checkin_time)):
-                log["room"] = new_room
-                log["room_shifted"] = True
-                log["old_room"] = old_room
-        
-        # Update booking payment logs if they exist
-        for log in logs.get("booking_payments", []):
-            if (log["room"] == old_room and 
-                log["name"] == guest_name and
-                is_log_from_current_stay(log, current_checkin_time)):
-                log["room"] = new_room
-                log["room_shifted"] = True
-                log["old_room"] = old_room
-        
-        # Update discount logs if they exist
-        for log in logs.get("discounts", []):
-            if (log["room"] == old_room and 
-                log["name"] == guest_name and
-                is_log_from_current_stay(log, current_checkin_time)):
-                log["room"] = new_room
-                log["room_shifted"] = True
-                log["old_room"] = old_room
-        
-        # Clear old room
-        rooms[old_room] = {
+        # Clear old room in Firestore
+        rooms_ref.document(old_room).update({
             "status": "vacant", 
             "guest": None, 
             "checkin_time": None, 
@@ -1207,7 +1175,7 @@ def transfer_room():
             "add_ons": [],
             "renewal_count": 0,
             "last_renewal_time": None
-        }
+        })
         
         # Record the room shift event
         shift_log = {
@@ -1218,7 +1186,7 @@ def transfer_room():
             "date": datetime.now(IST).strftime("%Y-%m-%d"),
             "note": f"Transferred from Room {old_room} to Room {new_room}",
             "room_shifted": True,
-            "guest_mobile": guest_mobile  # Include mobile for better tracking
+            "guest_mobile": guest_mobile
         }
         
         # Add price change info if applicable
@@ -1231,45 +1199,39 @@ def transfer_room():
             shift_log["is_ac"] = is_ac
             shift_log["note"] += f" ({'AC' if is_ac else 'Non-AC'})"
         
-        logs["room_shifts"].append(shift_log)
+        # Add to room_shifts log
+        logs_ref.document("room_shifts").update({
+            "entries": firestore.ArrayUnion([shift_log])
+        })
         
-        # Update the global data object
-        data["rooms"] = rooms
-        data["logs"] = logs
-        save_data(data)
-        
-        logger.info(f"Guest {guest_name} transferred from Room {old_room} to Room {new_room} with payment history")
+        logger.info(f"Guest {guest_name} transferred from Room {old_room} to Room {new_room}")
         
         return jsonify(
             success=True, 
-            message=f"Guest transferred successfully with payment history."
+            message=f"Guest transferred successfully from Room {old_room} to Room {new_room}."
         )
         
     except Exception as e:
         logger.error(f"Error transferring room: {str(e)}", exc_info=True)
         return jsonify(success=False, message=f"Error transferring room: {str(e)}")
-
-# Helper function to check if a log entry is from the current stay
+    
+# Helper function - add this if it doesn't exist
 def is_log_from_current_stay(log, checkin_time):
     """Check if a log entry is from the current guest stay"""
     try:
-        # Get log date and time
         log_date = log.get("date")
         log_time = log.get("time", "00:00")
         
         if not log_date:
-            return True  # Include logs without dates to be safe
+            return True
         
-        # Parse log datetime
         log_datetime = datetime.strptime(f"{log_date} {log_time}", "%Y-%m-%d %H:%M")
-        
-        # Include logs that are on or after the check-in time
         return log_datetime >= checkin_time
         
     except Exception as e:
         logger.error(f"Error parsing log datetime: {str(e)}")
-        return True  # Include the log if we can't parse the date to be safe
-    
+        return True
+       
 @app.route("/add_expense", methods=["POST"])
 def add_expense():
     try:
@@ -1654,15 +1616,23 @@ def convert_booking_to_checkin():
         booking_data = request.json
         booking_id = booking_data.get("booking_id")
         
-        if not booking_id or booking_id not in data.get("bookings", {}):
+        # Get the booking from Firestore
+        booking_doc = bookings_ref.document(booking_id).get()
+        if not booking_doc.exists:
             return jsonify(success=False, message="Invalid booking ID")
         
-        # Get the booking
-        booking = data["bookings"][booking_id]
+        booking = booking_doc.to_dict()
         
         # Check if the room is currently vacant
         room_number = booking["room"]
-        if room_number not in rooms or rooms[room_number]["status"] != "vacant":
+        room_doc = rooms_ref.document(room_number).get()
+        
+        if not room_doc.exists:
+            return jsonify(success=False, message=f"Room {room_number} does not exist")
+        
+        room_data = room_doc.to_dict()
+        
+        if room_data["status"] != "vacant":
             return jsonify(success=False, message=f"Room {room_number} is not vacant")
         
         # Process remaining payment if provided
@@ -1676,6 +1646,9 @@ def convert_booking_to_checkin():
         
         # Store transaction metadata for booking conversion
         store_transaction_metadata(room_number, current_date, serial_number, "booking_conversion")
+        
+        # Get totals
+        totals = get_totals()
         
         # ALWAYS log the booking conversion, even with zero payment
         if remaining_payment > 0:
@@ -1693,7 +1666,9 @@ def convert_booking_to_checkin():
                 "is_booking_conversion": True
             }
             
-            logs[payment_method].append(payment_log)
+            logs_ref.document(payment_method).update({
+                "entries": firestore.ArrayUnion([payment_log])
+            })
             
             # Update totals for actual payment
             totals[payment_method] += remaining_payment
@@ -1714,8 +1689,9 @@ def convert_booking_to_checkin():
             }
             
             # Log in cash logs (like pay later transactions)
-            logs["cash"].append(zero_payment_log)
-            # Don't add to totals for zero payments
+            logs_ref.document("cash").update({
+                "entries": firestore.ArrayUnion([zero_payment_log])
+            })
         
         # Always add to booking payments log for record keeping
         booking_payment = {
@@ -1732,7 +1708,9 @@ def convert_booking_to_checkin():
             "is_booking_conversion": True
         }
         
-        logs["booking_payments"].append(booking_payment)
+        logs_ref.document("booking_payments").update({
+            "entries": firestore.ArrayUnion([booking_payment])
+        })
         
         # Create guest object for check-in
         guest = {
@@ -1745,14 +1723,16 @@ def convert_booking_to_checkin():
             "photo": booking.get("photo_path")
         }
         
-        # Update room to occupied
-        rooms[room_number]["status"] = "occupied"
-        rooms[room_number]["guest"] = guest
-        rooms[room_number]["checkin_time"] = datetime.now(IST).strftime("%Y-%m-%d %H:%M")
-        rooms[room_number]["balance"] = balance_after_payment if balance_after_payment > 0 else 0
-        rooms[room_number]["add_ons"] = []
-        rooms[room_number]["renewal_count"] = 0
-        rooms[room_number]["last_renewal_time"] = None
+        # Update room to occupied in Firestore
+        rooms_ref.document(room_number).update({
+            "status": "occupied",
+            "guest": guest,
+            "checkin_time": datetime.now(IST).strftime("%Y-%m-%d %H:%M"),
+            "balance": balance_after_payment if balance_after_payment > 0 else 0,
+            "add_ons": [],
+            "renewal_count": 0,
+            "last_renewal_time": None
+        })
         
         # If there's still balance, add to balance log with booking conversion metadata
         if balance_after_payment > 0:
@@ -1761,27 +1741,31 @@ def convert_booking_to_checkin():
                 "name": guest["name"],
                 "amount": balance_after_payment,
                 "date": current_date,
+                "time": datetime.now(IST).strftime("%H:%M"),
                 "note": "Remaining balance from booking",
                 "serial_number": serial_number,
                 "transaction_type": "booking_conversion",
                 "is_booking_conversion": True
             }
             
-            logs["balance"].append(balance_log)
+            logs_ref.document("balance").update({
+                "entries": firestore.ArrayUnion([balance_log])
+            })
+            
             totals["balance"] += balance_after_payment
         
         # Update booking status
         booking["status"] = "checked_in"
         booking["check_in_time"] = datetime.now(IST).strftime("%Y-%m-%d %H:%M")
         
-        # Update the global data object
-        data["rooms"] = rooms
-        data["bookings"][booking_id] = booking
-        data["logs"] = logs
-        data["totals"] = totals
-        save_data(data)
+        # Update booking in Firestore
+        bookings_ref.document(booking_id).set(booking)
+        
+        # Update totals in Firestore
+        totals_ref.document('current_totals').set(totals)
         
         logger.info(f"Booking {booking_id} converted to check-in for room {room_number} with serial #{serial_number}")
+        
         return jsonify(
             success=True, 
             message=f"Guest checked in to Room {room_number} (#{serial_number})",
@@ -1789,9 +1773,9 @@ def convert_booking_to_checkin():
         )
         
     except Exception as e:
-        logger.error(f"Error converting booking to check-in: {str(e)}")
+        logger.error(f"Error converting booking to check-in: {str(e)}", exc_info=True)
         return jsonify(success=False, message=f"Error converting booking to check-in: {str(e)}")
-    
+           
 @app.route("/check_availability", methods=["POST"])
 def check_availability():
     try:

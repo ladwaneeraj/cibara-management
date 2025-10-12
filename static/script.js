@@ -493,79 +493,120 @@ function renderRooms() {
   }
 }
 
-// Fetch data from the server
+// Fetch data from the server using chunked loading
 async function fetchData() {
   try {
-    debugLog("Fetching data from server...");
-    const response = await fetch("/get_data");
-    if (!response.ok) {
-      throw new Error(`Server responded with status: ${response.status}`);
+    debugLog("Fetching data from server (chunked)...");
+
+    // Show loading indicator
+    if (roomsGrid) {
+      roomsGrid.innerHTML =
+        '<div class="loading-indicator"><span class="loader"></span><p>Loading rooms...</p></div>';
     }
 
-    const data = await response.json();
-    debugLog("Data fetched successfully");
-
-    rooms = data.rooms;
-    logs = data.logs;
-    totals = data.totals;
-
-    // Fetch transaction metadata
+    // Step 1: Load totals first (fastest, most important for dashboard)
     try {
-      const metadataResponse = await fetch("/get_transaction_metadata");
-      if (metadataResponse.ok) {
-        const metadataData = await metadataResponse.json();
-        if (metadataData.success) {
-          transactionMetadata = metadataData.transaction_metadata || {};
-          dailyCounters = metadataData.daily_counters || {};
+      const totalsResponse = await fetch("/get_totals_only");
+      if (totalsResponse.ok) {
+        const totalsData = await totalsResponse.json();
+        if (totalsData.success) {
+          totals = totalsData.totals;
+          updateStats(); // Update stats immediately with totals
         }
       }
     } catch (error) {
-      console.warn("Could not fetch transaction metadata:", error);
+      console.warn("Could not fetch totals:", error);
     }
 
-    // Process rooms to ensure they have renewal data
-    Object.entries(rooms).forEach(([roomNumber, roomInfo]) => {
-      if (roomInfo.status === "occupied") {
-        // Ensure renewal count exists
-        if (roomInfo.renewal_count === undefined) {
-          roomInfo.renewal_count = 0;
-        }
-
-        // Make sure last_renewal_time is defined if it should be
-        if (roomInfo.renewal_count > 0 && !roomInfo.last_renewal_time) {
-          // Estimate a last renewal time if missing
-          const checkinDate = new Date(roomInfo.checkin_time);
-          const estimatedLastRenewal = new Date(
-            checkinDate.getTime() + roomInfo.renewal_count * 24 * 60 * 60 * 1000
-          );
-          roomInfo.last_renewal_time = formatDateTime(estimatedLastRenewal);
-        }
+    // Step 2: Load rooms (most important for UI)
+    try {
+      const roomsResponse = await fetch("/get_rooms_only");
+      if (!roomsResponse.ok) {
+        throw new Error(
+          `Server responded with status: ${roomsResponse.status}`
+        );
       }
-    });
 
-    // Make sure all log types exist
-    const requiredLogTypes = [
-      "cash",
-      "online",
-      "balance",
-      "add_ons",
-      "refunds",
-      "renewals",
-    ];
-    requiredLogTypes.forEach((type) => {
-      if (!logs[type]) logs[type] = [];
-    });
+      const roomsData = await roomsResponse.json();
+      if (roomsData.success) {
+        rooms = roomsData.rooms;
 
-    renderRooms();
+        // Process rooms to ensure they have renewal data
+        Object.entries(rooms).forEach(([roomNumber, roomInfo]) => {
+          if (roomInfo.status === "occupied") {
+            if (roomInfo.renewal_count === undefined) {
+              roomInfo.renewal_count = 0;
+            }
+            if (roomInfo.renewal_count > 0 && !roomInfo.last_renewal_time) {
+              const checkinDate = new Date(roomInfo.checkin_time);
+              const estimatedLastRenewal = new Date(
+                checkinDate.getTime() +
+                  roomInfo.renewal_count * 24 * 60 * 60 * 1000
+              );
+              roomInfo.last_renewal_time = formatDateTime(estimatedLastRenewal);
+            }
+          }
+        });
 
-    // Use transaction log manager for rendering logs
-    if (typeof renderEnhancedLogs === "function") {
-      renderEnhancedLogs();
+        renderRooms(); // Render rooms immediately
+        updateStats(); // Update stats with room data
+      }
+    } catch (error) {
+      console.error("Error fetching rooms:", error);
+      showNotification(`Error loading rooms: ${error.message}`, "error");
+      return false;
     }
 
-    updateStats();
-    updateStatsToggleBadge();
+    // Step 3: Load logs in background (less critical)
+    setTimeout(async () => {
+      try {
+        const logsResponse = await fetch("/get_logs_only");
+        if (logsResponse.ok) {
+          const logsData = await logsResponse.json();
+          if (logsData.success) {
+            logs = logsData.logs;
 
+            // Make sure all log types exist
+            const requiredLogTypes = [
+              "cash",
+              "online",
+              "balance",
+              "add_ons",
+              "refunds",
+              "renewals",
+            ];
+            requiredLogTypes.forEach((type) => {
+              if (!logs[type]) logs[type] = [];
+            });
+
+            // Render logs if the function exists
+            if (typeof renderEnhancedLogs === "function") {
+              renderEnhancedLogs();
+            }
+          }
+        }
+      } catch (error) {
+        console.warn("Could not fetch logs:", error);
+      }
+
+      // Step 4: Load transaction metadata in background
+      try {
+        const metadataResponse = await fetch("/get_transaction_metadata");
+        if (metadataResponse.ok) {
+          const metadataData = await metadataResponse.json();
+          if (metadataData.success) {
+            transactionMetadata = metadataData.transaction_metadata || {};
+            dailyCounters = metadataData.daily_counters || {};
+          }
+        }
+      } catch (error) {
+        console.warn("Could not fetch transaction metadata:", error);
+      }
+
+      updateStatsToggleBadge();
+    }, 100); // Load logs after a small delay
+
+    debugLog("Initial data loaded successfully");
     return true;
   } catch (error) {
     console.error("Error fetching data:", error);

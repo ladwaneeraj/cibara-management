@@ -794,6 +794,60 @@ def add_on():
     except Exception as e:
         logger.error(f"Error adding add-on: {str(e)}")
         return jsonify(success=False, message=f"Error adding add-on: {str(e)}")
+@app.route("/get_rooms_only")
+def get_rooms_only():
+    """Get only rooms data - faster endpoint"""
+    try:
+        rooms = get_all_rooms()
+        return jsonify(success=True, rooms=rooms)
+    except Exception as e:
+        logger.error(f"Error getting rooms: {str(e)}")
+        return jsonify(success=False, message=str(e))
+
+@app.route("/get_logs_only")
+def get_logs_only():
+    """Get only logs data - with limits"""
+    try:
+        logs = get_all_logs_limited()
+        return jsonify(success=True, logs=logs)
+    except Exception as e:
+        logger.error(f"Error getting logs: {str(e)}")
+        return jsonify(success=False, message=str(e))
+
+@app.route("/get_totals_only")
+def get_totals_only():
+    """Get only totals - fastest endpoint"""
+    try:
+        totals = get_totals()
+        return jsonify(success=True, totals=totals)
+    except Exception as e:
+        logger.error(f"Error getting totals: {str(e)}")
+        return jsonify(success=False, message=str(e))
+
+def get_all_logs_limited():
+    """Get logs with limits to prevent memory overflow"""
+    logs_dict = {}
+    try:
+        log_types = ["cash", "online", "balance", "add_ons", "refunds", 
+                     "renewals", "booking_payments", "discounts", "expenses", "room_shifts"]
+        
+        for log_type in log_types:
+            try:
+                log_doc = logs_ref.document(log_type).get()
+                if log_doc.exists:
+                    entries = log_doc.to_dict().get('entries', [])
+                    # Only return last 200 entries to save memory
+                    logs_dict[log_type] = entries[-200:] if len(entries) > 200 else entries
+                else:
+                    logs_dict[log_type] = []
+            except Exception as e:
+                logger.error(f"Error fetching {log_type} logs: {str(e)}")
+                logs_dict[log_type] = []
+                
+    except Exception as e:
+        logger.error(f"Error fetching logs: {str(e)}")
+    
+    return logs_dict
 
 @app.route("/get_data")
 def get_data():

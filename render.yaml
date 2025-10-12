@@ -2,14 +2,17 @@ services:
   - type: web
     name: lodge-management
     env: python
+    region: oregon
+    plan: free
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn app:app
+    startCommand: gunicorn -c gunicorn_config.py app:app
+    healthCheckPath: /
     envVars:
       - key: PYTHON_VERSION
-        value: 3.9.0
-      - key: FIREBASE_PROJECT_ID
+        value: 3.11.0
+      - key: FIREBASE_CREDENTIALS
         sync: false
       - key: FIREBASE_STORAGE_BUCKET
         sync: false
-      - key: FIREBASE_CREDENTIALS
-        sync: false
+      - key: RENDER
+        value: "true"

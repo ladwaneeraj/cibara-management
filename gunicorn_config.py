@@ -1,28 +1,30 @@
 import os
 
 # Server socket
-bind = f"0.0.0.0:{os.environ.get('PORT', 5000)}"
-backlog = 512
+bind = f"0.0.0.0:{os.environ.get('PORT', 10000)}"
+backlog = 256
 
-# Worker processes - ONLY 1 for free plan
+# CRITICAL: Only 1 worker on free plan
 workers = 1
 worker_class = 'sync'
-worker_connections = 50
-timeout = 180
+worker_connections = 10
+timeout = 300  # 5 minutes
+graceful_timeout = 30
 keepalive = 2
 
-# Restart workers periodically
-max_requests = 100
-max_requests_jitter = 10
+# Aggressive worker recycling
+max_requests = 50
+max_requests_jitter = 5
 
-# Logging
-accesslog = '-'
+# Minimal logging
+accesslog = None
 errorlog = '-'
-loglevel = 'warning'
+loglevel = 'error'
 
 # Process naming
 proc_name = 'lodge_management'
 
 # Server mechanics
 daemon = False
-preload_app = False  # Don't preload on free tier
+preload_app = False
+worker_tmp_dir = '/tmp'

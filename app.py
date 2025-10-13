@@ -13,10 +13,13 @@ import base64
 from functools import wraps
 import threading
 import gc
-import psutil
+from concurrent.futures import ThreadPoolExecutor, TimeoutError
+import time
 
-os.environ['PYTHONHASHSEED'] = '0'  # Reduce memory variance
-gc.set_threshold(400, 5, 5)  # More aggressive garbage collection
+# Memory optimization
+os.environ['PYTHONHASHSEED'] = '0'
+os.environ['GRPC_ENABLE_FORK_SUPPORT'] = '1'
+gc.set_threshold(400, 5, 5)
 
 # Configure logging
 logging.basicConfig(
@@ -34,10 +37,13 @@ IST = pytz.timezone('Asia/Kolkata')
 # Global cache for frequently accessed data
 _cache = {}
 _cache_lock = threading.Lock()
-CACHE_TTL = 3  # seconds
+CACHE_TTL = 3
 CACHE_MAX_SIZE = 50
 
-# Initialize Firebase Admin SDK
+# Thread pool for parallel Firebase queries
+executor = ThreadPoolExecutor(max_workers=3)
+
+# Initialize Firebase Admin SDK with optimizations
 try:
     if 'FIREBASE_CREDENTIALS' in os.environ:
         cred_json = base64.b64decode(os.environ.get('FIREBASE_CREDENTIALS')).decode('utf-8')
@@ -92,38 +98,95 @@ def cached(ttl=CACHE_TTL):
         return wrapper
     return decorator
 
-# Optimized data retrieval with caching
+# Optimized data retrieval with parallel fetching and timeouts
 @cached(ttl=5)
 def get_all_rooms():
-    """Get all rooms with caching"""
+    """Get all rooms with optimized query"""
     rooms_dict = {}
-    rooms_stream = rooms_ref.stream()
-    for room_doc in rooms_stream:
-        rooms_dict[room_doc.id] = room_doc.to_dict()
-    return rooms_dict
+    try:
+        start_time = time.time()
+        
+        # Stream documents efficiently
+        rooms_stream = rooms_ref.stream()
+        
+        count = 0
+        for room_doc in rooms_stream:
+            try:
+                rooms_dict[room_doc.id] = room_doc.to_dict()
+                count += 1
+            except Exception as e:
+                logger.error(f"Error processing room {room_doc.id}: {str(e)}")
+                continue
+        
+        elapsed = time.time() - start_time
+        logger.info(f"Loaded {count} rooms in {elapsed:.2f}s")
+        
+        return rooms_dict
+    except Exception as e:
+        logger.error(f"Error in get_all_rooms: {str(e)}")
+        return {}
 
 @cached(ttl=10)
-def get_all_logs():
-    """Get all logs with caching"""
+def get_all_logs_limited():
+    """Get logs with aggressive limits and parallel fetching"""
     logs_dict = {}
-    logs_stream = logs_ref.stream()
-    for log_doc in logs_stream:
-        log_data = log_doc.to_dict()
-        logs_dict[log_doc.id] = log_data.get('entries', [])
+    
+    def fetch_log_type(log_type):
+        try:
+            log_doc = logs_ref.document(log_type).get(timeout=15)
+            if log_doc.exists:
+                entries = log_doc.to_dict().get('entries', [])
+                # Only return last 50 entries for speed
+                return log_type, entries[-50:] if len(entries) > 50 else entries
+            return log_type, []
+        except Exception as e:
+            logger.error(f"Error fetching {log_type} logs: {str(e)}")
+            return log_type, []
+    
+    try:
+        log_types = ["cash", "online", "balance", "add_ons", "refunds", 
+                     "renewals", "booking_payments", "discounts", "expenses", "room_shifts"]
+        
+        # Fetch logs in parallel with timeout
+        futures = {executor.submit(fetch_log_type, log_type): log_type for log_type in log_types}
+        
+        for future in futures:
+            try:
+                log_type, entries = future.result(timeout=20)
+                logs_dict[log_type] = entries
+            except TimeoutError:
+                log_type = futures[future]
+                logger.warning(f"Timeout fetching {log_type} logs")
+                logs_dict[log_type] = []
+            except Exception as e:
+                log_type = futures[future]
+                logger.error(f"Error fetching {log_type}: {str(e)}")
+                logs_dict[log_type] = []
+        
+        # Force garbage collection
+        gc.collect()
+        
+    except Exception as e:
+        logger.error(f"Error fetching logs: {str(e)}")
+    
     return logs_dict
 
 @cached(ttl=5)
 def get_totals():
-    """Get totals with caching"""
-    totals_doc = totals_ref.document('current_totals').get()
-    if totals_doc.exists:
-        totals = totals_doc.to_dict()
-        required_totals = ["cash", "online", "balance", "refunds", "advance_bookings", "expenses"]
-        for total_type in required_totals:
-            if total_type not in totals:
-                totals[total_type] = 0
-        return totals
-    return {"cash": 0, "online": 0, "balance": 0, "refunds": 0, "advance_bookings": 0, "expenses": 0}
+    """Get totals with caching and timeout"""
+    try:
+        totals_doc = totals_ref.document('current_totals').get(timeout=10)
+        if totals_doc.exists:
+            totals = totals_doc.to_dict()
+            required_totals = ["cash", "online", "balance", "refunds", "advance_bookings", "expenses"]
+            for total_type in required_totals:
+                if total_type not in totals:
+                    totals[total_type] = 0
+            return totals
+        return {"cash": 0, "online": 0, "balance": 0, "refunds": 0, "advance_bookings": 0, "expenses": 0}
+    except Exception as e:
+        logger.error(f"Error in get_totals: {str(e)}")
+        return {"cash": 0, "online": 0, "balance": 0, "refunds": 0, "advance_bookings": 0, "expenses": 0}
 
 def invalidate_cache(cache_keys=None):
     """Invalidate specific cache keys or all cache"""
@@ -134,9 +197,8 @@ def invalidate_cache(cache_keys=None):
         else:
             _cache.clear()
         
-        # ADD THIS SECTION: Limit cache size
+        # Limit cache size
         if len(_cache) > CACHE_MAX_SIZE:
-            # Remove oldest entries
             sorted_items = sorted(_cache.items(), key=lambda x: x[1][1])
             for key, _ in sorted_items[:len(_cache) - CACHE_MAX_SIZE]:
                 _cache.pop(key, None)
@@ -151,33 +213,42 @@ def cleanup_memory():
         logger.error(f"Error during memory cleanup: {str(e)}")
 
 def get_last_rent_check():
-    settings_doc = settings_ref.document('app_settings').get()
-    if settings_doc.exists:
-        settings = settings_doc.to_dict()
-        return settings.get('last_rent_check', datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S"))
-    return datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S")
+    try:
+        settings_doc = settings_ref.document('app_settings').get(timeout=10)
+        if settings_doc.exists:
+            settings = settings_doc.to_dict()
+            return settings.get('last_rent_check', datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S"))
+        return datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S")
+    except Exception as e:
+        logger.error(f"Error in get_last_rent_check: {str(e)}")
+        return datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S")
 
 def update_last_rent_check():
-    settings_ref.document('app_settings').update({
-        'last_rent_check': datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S")
-    })
+    try:
+        settings_ref.document('app_settings').update({
+            'last_rent_check': datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S")
+        })
+    except Exception as e:
+        logger.error(f"Error updating last rent check: {str(e)}")
 
 # Lazy initialization
 def initialize_data():
     """Lazy initialization - runs in background"""
     logger.info("Checking Firebase data structure...")
     try:
-        settings_doc = settings_ref.document('app_settings').get()
+        settings_doc = settings_ref.document('app_settings').get(timeout=10)
         if not settings_doc.exists:
             settings_ref.document('app_settings').set({
                 'last_rent_check': datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S")
             })
         
+        # Quick check if rooms exist
         rooms_count = len(list(rooms_ref.limit(1).stream()))
         if rooms_count == 0:
             logger.info("Creating default room structure in background...")
             threading.Thread(target=create_default_structure, daemon=True).start()
         
+        logger.info("Firebase initialization complete")
         return True
     except Exception as e:
         logger.error(f"Error initializing Firebase data: {str(e)}")
@@ -189,6 +260,7 @@ def create_default_structure():
         first_floor_rooms = list(range(1, 6)) + list(range(13, 21)) + list(range(23, 28))
         second_floor_rooms = list(range(200, 229))
         
+        # Use batched writes for speed
         batch = db.batch()
         batch_count = 0
         
@@ -205,7 +277,8 @@ def create_default_structure():
             })
             batch_count += 1
             
-            if batch_count >= 400:
+            # Commit in smaller batches for speed
+            if batch_count >= 100:
                 batch.commit()
                 batch = db.batch()
                 batch_count = 0
@@ -213,6 +286,7 @@ def create_default_structure():
         if batch_count > 0:
             batch.commit()
         
+        # Create log documents
         log_types = ["cash", "online", "balance", "add_ons", "refunds", "renewals",
                     "booking_payments", "discounts", "expenses", "room_shifts"]
         batch = db.batch()
@@ -266,17 +340,39 @@ def cleanup_old_counters():
     """Cleanup old counters in background"""
     try:
         cutoff_date = (datetime.now(IST) - timedelta(days=30)).strftime("%Y-%m-%d")
-        batch = db.batch()
         
-        old_counters = counters_ref.where('__name__', '<', cutoff_date).limit(500).stream()
+        # Delete old counters in batches
+        old_counters = counters_ref.where('__name__', '<', cutoff_date).limit(100).stream()
+        batch = db.batch()
+        count = 0
+        
         for counter in old_counters:
             batch.delete(counter.reference)
+            count += 1
+            if count >= 100:
+                batch.commit()
+                batch = db.batch()
+                count = 0
         
-        old_metadata = metadata_ref.where('__name__', '<', cutoff_date).limit(500).stream()
+        if count > 0:
+            batch.commit()
+        
+        # Delete old metadata
+        old_metadata = metadata_ref.where('__name__', '<', cutoff_date).limit(100).stream()
+        batch = db.batch()
+        count = 0
+        
         for metadata in old_metadata:
             batch.delete(metadata.reference)
+            count += 1
+            if count >= 100:
+                batch.commit()
+                batch = db.batch()
+                count = 0
         
-        batch.commit()
+        if count > 0:
+            batch.commit()
+        
         logger.info("Cleaned up old daily counters and metadata")
     except Exception as e:
         logger.error(f"Error cleaning up old counters: {str(e)}")
@@ -312,6 +408,41 @@ def serve_static(path):
 @app.route("/uploads/<path:filename>")
 def uploaded_file(filename):
     return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
+
+@app.route("/quick_health")
+def quick_health():
+    """Ultra-fast health check for Render"""
+    return jsonify({
+        "status": "ok", 
+        "timestamp": datetime.now(IST).isoformat(),
+        "cache_size": len(_cache)
+    })
+
+@app.route("/health")
+def health_check():
+    """Health check endpoint with memory info"""
+    try:
+        import psutil
+        process = psutil.Process(os.getpid())
+        memory_info = process.memory_info()
+        memory_mb = memory_info.rss / 1024 / 1024
+        
+        return jsonify({
+            "status": "healthy",
+            "memory_mb": round(memory_mb, 2),
+            "memory_percent": round(process.memory_percent(), 2),
+            "cache_size": len(_cache)
+        })
+    except ImportError:
+        return jsonify({
+            "status": "healthy",
+            "cache_size": len(_cache)
+        })
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        })
 
 @app.route("/upload_photo", methods=["POST"])
 def upload_photo():
@@ -464,7 +595,7 @@ def checkout():
         process_refund = data_json.get("process_refund", False)
         settle_later = data_json.get("settle_later", False)
         
-        room_doc = rooms_ref.document(room).get()
+        room_doc = rooms_ref.document(room).get(timeout=10)
         if not room_doc.exists:
             return jsonify(success=False, message="Room not found")
             
@@ -682,7 +813,7 @@ def add_on():
         unit_price = data_json.get("unit_price", price)
         quantity = data_json.get("quantity", 1)
         
-        room_doc = rooms_ref.document(room).get()
+        room_doc = rooms_ref.document(room).get(timeout=10)
         if not room_doc.exists:
             return jsonify(success=False, message="Room not found")
             
@@ -766,7 +897,6 @@ def add_on():
         logger.error(f"Error adding add-on: {str(e)}")
         return jsonify(success=False, message=f"Error adding add-on: {str(e)}")
 
-
 @app.route("/get_rooms_only")
 def get_rooms_only():
     """Get only rooms data - faster endpoint"""
@@ -797,41 +927,44 @@ def get_totals_only():
         logger.error(f"Error getting totals: {str(e)}")
         return jsonify(success=False, message=str(e))
 
-def get_all_logs_limited():
-    """Get logs with aggressive limits to prevent memory overflow"""
-    logs_dict = {}
-    try:
-        log_types = ["cash", "online", "balance", "add_ons", "refunds", 
-                     "renewals", "booking_payments", "discounts", "expenses", "room_shifts"]
-        
-        for log_type in log_types:
-            try:
-                log_doc = logs_ref.document(log_type).get()
-                if log_doc.exists:
-                    entries = log_doc.to_dict().get('entries', [])
-                    # Only return last 100 entries (reduced from 200)
-                    logs_dict[log_type] = entries[-100:] if len(entries) > 100 else entries
-                else:
-                    logs_dict[log_type] = []
-            except Exception as e:
-                logger.error(f"Error fetching {log_type} logs: {str(e)}")
-                logs_dict[log_type] = []
-        
-        # Force garbage collection after heavy operation
-        gc.collect()
-                
-    except Exception as e:
-        logger.error(f"Error fetching logs: {str(e)}")
-    
-    return logs_dict
-
 @app.route("/get_data")
 def get_data():
+    """Optimized endpoint with parallel fetching"""
     try:
-        rooms = get_all_rooms()
-        logs = get_all_logs()
-        totals = get_totals()
-        return jsonify(rooms=rooms, logs=logs, totals=totals)
+        logger.info("Starting get_data request")
+        start_time = time.time()
+        
+        # Use parallel fetching with timeout
+        rooms_future = executor.submit(get_all_rooms)
+        logs_future = executor.submit(get_all_logs_limited)
+        totals_future = executor.submit(get_totals)
+        
+        try:
+            rooms_data = rooms_future.result(timeout=60)
+        except TimeoutError:
+            logger.error("Timeout fetching rooms")
+            rooms_data = {}
+        
+        try:
+            logs_data = logs_future.result(timeout=60)
+        except TimeoutError:
+            logger.error("Timeout fetching logs")
+            logs_data = {}
+        
+        try:
+            totals_data = totals_future.result(timeout=30)
+        except TimeoutError:
+            logger.error("Timeout fetching totals")
+            totals_data = {}
+        
+        elapsed = time.time() - start_time
+        logger.info(f"Completed get_data request in {elapsed:.2f}s")
+        
+        return jsonify(
+            rooms=rooms_data,
+            logs=logs_data,
+            totals=totals_data
+        )
     except Exception as e:
         logger.error(f"Error getting data: {str(e)}")
         return jsonify(success=False, message=f"Error getting data: {str(e)}")
@@ -846,7 +979,7 @@ def get_history():
         if not room or not guest_name:
             return jsonify(success=False, message="Room and guest name are required.")
         
-        logs = get_all_logs()
+        logs = get_all_logs_limited()
         
         room_cash_logs = [log for log in logs.get("cash", []) if log["room"] == room and log["name"] == guest_name]
         room_online_logs = [log for log in logs.get("online", []) if log["room"] == room and log["name"] == guest_name]
@@ -872,7 +1005,7 @@ def renew_rent():
         data_json = request.json
         room = data_json["room"]
         
-        room_doc = rooms_ref.document(room).get()
+        room_doc = rooms_ref.document(room).get(timeout=10)
         if not room_doc.exists:
             return jsonify(success=False, message="Room not found")
             
@@ -935,7 +1068,7 @@ def update_checkin_time():
         room = data_json["room"]
         new_checkin_time = data_json["checkin_time"]
         
-        room_doc = rooms_ref.document(room).get()
+        room_doc = rooms_ref.document(room).get(timeout=10)
         if not room_doc.exists:
             return jsonify(success=False, message="Room not found")
             
@@ -963,8 +1096,9 @@ def update_checkin_time():
 @app.route("/get_room_numbers", methods=["GET"])
 def get_room_numbers():
     try:
-        rooms_stream = rooms_ref.stream()
-        room_numbers = [doc.id for doc in rooms_stream]
+        # Use cached rooms data if available
+        rooms_data = get_all_rooms()
+        room_numbers = list(rooms_data.keys())
         
         def room_sort_key(room_num):
             if room_num.startswith('2'):
@@ -996,7 +1130,7 @@ def add_room():
         if not room_number:
             return jsonify(success=False, message="Room number is required")
         
-        room_doc = rooms_ref.document(room_number).get()
+        room_doc = rooms_ref.document(room_number).get(timeout=10)
         if room_doc.exists:
             return jsonify(success=False, message=f"Room {room_number} already exists")
             
@@ -1027,7 +1161,7 @@ def apply_discount():
         amount = int(data_json.get("amount", 0))
         reason = data_json.get("reason", "Discount")
         
-        room_doc = rooms_ref.document(room).get()
+        room_doc = rooms_ref.document(room).get(timeout=10)
         if not room_doc.exists:
             return jsonify(success=False, message="Room not found.")
             
@@ -1100,7 +1234,6 @@ def transfer_room():
         is_ac = data_json.get("is_ac", False)
         
         rooms_dict = get_all_rooms()
-        logs_dict = get_all_logs()
         
         if old_room not in rooms_dict or new_room not in rooms_dict:
             return jsonify(success=False, message="One or both rooms do not exist.")
@@ -1129,29 +1262,35 @@ def transfer_room():
         
         current_checkin_time = datetime.strptime(checkin_time, "%Y-%m-%d %H:%M")
         
-        def update_log_entries(log_type):
-            log_doc = logs_ref.document(log_type).get()
-            if log_doc.exists:
-                entries = log_doc.to_dict().get('entries', [])
-                updated = False
+        # Update logs asynchronously for speed
+        def update_logs_async():
+            try:
+                logs_dict = get_all_logs_limited()
+                log_types = ["cash", "online", "balance", "add_ons", "refunds", "renewals",
+                           "booking_payments", "discounts"]
                 
-                for log in entries:
-                    if (log.get("room") == old_room and
-                        log.get("name") == guest_name and
-                        is_log_from_current_stay(log, current_checkin_time)):
-                        log["room"] = new_room
-                        log["room_shifted"] = True
-                        log["old_room"] = old_room
-                        updated = True
-                
-                if updated:
-                    batch.set(logs_ref.document(log_type), {"entries": entries})
+                for log_type in log_types:
+                    log_doc = logs_ref.document(log_type).get(timeout=15)
+                    if log_doc.exists:
+                        entries = log_doc.to_dict().get('entries', [])
+                        updated = False
+                        
+                        for log in entries:
+                            if (log.get("room") == old_room and
+                                log.get("name") == guest_name and
+                                is_log_from_current_stay(log, current_checkin_time)):
+                                log["room"] = new_room
+                                log["room_shifted"] = True
+                                log["old_room"] = old_room
+                                updated = True
+                        
+                        if updated:
+                            logs_ref.document(log_type).set({"entries": entries})
+            except Exception as e:
+                logger.error(f"Error updating logs: {str(e)}")
         
-        log_types = ["cash", "online", "balance", "add_ons", "refunds", "renewals",
-                     "booking_payments", "discounts"]
-        
-        for log_type in log_types:
-            update_log_entries(log_type)
+        # Start log updates in background
+        threading.Thread(target=update_logs_async, daemon=True).start()
         
         batch.update(rooms_ref.document(old_room), {
             "status": "vacant",
@@ -1226,13 +1365,9 @@ def add_expense():
             "time": datetime.now(IST).strftime("%H:%M")
         }
         
-        expenses_doc = logs_ref.document("expenses").get()
-        if not expenses_doc.exists:
-            batch.set(logs_ref.document("expenses"), {"entries": [expense_entry]})
-        else:
-            batch.update(logs_ref.document("expenses"), {
-                "entries": firestore.ArrayUnion([expense_entry])
-            })
+        batch.update(logs_ref.document("expenses"), {
+            "entries": firestore.ArrayUnion([expense_entry])
+        })
         
         if expense_type == "transaction":
             totals = get_totals()
@@ -1262,7 +1397,7 @@ def get_reports():
         start = datetime.strptime(start_date, "%Y-%m-%d")
         end = datetime.strptime(end_date, "%Y-%m-%d") + timedelta(days=1)
         
-        all_logs = get_all_logs()
+        all_logs = get_all_logs_limited()
         
         cash_logs = [log for log in all_logs.get("cash", []) if start <= datetime.strptime(log.get("date", "1970-01-01"), "%Y-%m-%d") < end]
         online_logs = [log for log in all_logs.get("online", []) if start <= datetime.strptime(log.get("date", "1970-01-01"), "%Y-%m-%d") < end]
@@ -1425,7 +1560,7 @@ def update_booking():
         booking_data = request.json
         booking_id = booking_data.get("booking_id")
         
-        booking_doc = bookings_ref.document(booking_id).get()
+        booking_doc = bookings_ref.document(booking_id).get(timeout=10)
         if not booking_doc.exists:
             return jsonify(success=False, message="Invalid booking ID")
         
@@ -1504,7 +1639,7 @@ def cancel_booking():
         booking_data = request.json
         booking_id = booking_data.get("booking_id")
         
-        booking_doc = bookings_ref.document(booking_id).get()
+        booking_doc = bookings_ref.document(booking_id).get(timeout=10)
         if not booking_doc.exists:
             return jsonify(success=False, message="Invalid booking ID")
         
@@ -1559,14 +1694,14 @@ def convert_booking_to_checkin():
         booking_data = request.json
         booking_id = booking_data.get("booking_id")
         
-        booking_doc = bookings_ref.document(booking_id).get()
+        booking_doc = bookings_ref.document(booking_id).get(timeout=10)
         if not booking_doc.exists:
             return jsonify(success=False, message="Invalid booking ID")
         
         booking = booking_doc.to_dict()
         
         room_number = booking["room"]
-        room_doc = rooms_ref.document(room_number).get()
+        room_doc = rooms_ref.document(room_number).get(timeout=10)
         
         if not room_doc.exists:
             return jsonify(success=False, message=f"Room {room_number} does not exist")
@@ -1738,16 +1873,12 @@ def check_availability():
         today = datetime.now(IST).replace(hour=0, minute=0, second=0, microsecond=0)
         
         if check_in.date() == today.date():
-            rooms_stream = rooms_ref.stream()
-            
-            for room_doc in rooms_stream:
-                room_data = room_doc.to_dict()
+            rooms_data = get_all_rooms()
+            for room_id, room_data in rooms_data.items():
                 if room_data["status"] == "occupied":
-                    booked_rooms.add(room_doc.id)
+                    booked_rooms.add(room_id)
         
-        all_rooms_stream = rooms_ref.stream()
-        all_rooms = [room_doc.id for room_doc in all_rooms_stream]
-        
+        all_rooms = list(get_all_rooms().keys())
         available_rooms = [room for room in all_rooms if room not in booked_rooms]
         available_rooms.sort(key=lambda r: (int(r) if r.isdigit() else float('inf'), r))
         
@@ -1758,15 +1889,19 @@ def check_availability():
         return jsonify(success=False, message=f"Error checking availability: {str(e)}")
 
 def fetch_settlements():
-    settlements_stream = settlements_ref.stream()
-    settlements_list = []
-    
-    for doc in settlements_stream:
-        settlement_data = doc.to_dict()
-        settlement_data["id"] = doc.id
-        settlements_list.append(settlement_data)
+    try:
+        settlements_stream = settlements_ref.stream()
+        settlements_list = []
         
-    return settlements_list
+        for doc in settlements_stream:
+            settlement_data = doc.to_dict()
+            settlement_data["id"] = doc.id
+            settlements_list.append(settlement_data)
+            
+        return settlements_list
+    except Exception as e:
+        logger.error(f"Error fetching settlements: {str(e)}")
+        return []
 
 @app.route("/get_pending_settlements", methods=["GET"])
 def get_pending_settlements_route():
@@ -1788,7 +1923,7 @@ def collect_settlement():
         discount_amount = int(data_json.get("discount_amount", 0))
         discount_reason = data_json.get("discount_reason", "")
         
-        settlement_doc = settlements_ref.document(settlement_id).get()
+        settlement_doc = settlements_ref.document(settlement_id).get(timeout=10)
         if not settlement_doc.exists:
             return jsonify(success=False, message="Settlement not found")
         
@@ -1887,7 +2022,7 @@ def cancel_settlement():
         settlement_id = data_json["settlement_id"]
         reason = data_json.get("reason", "Cancelled by user")
         
-        settlement_doc = settlements_ref.document(settlement_id).get()
+        settlement_doc = settlements_ref.document(settlement_id).get(timeout=10)
         if not settlement_doc.exists:
             return jsonify(success=False, message="Settlement not found")
             
@@ -1944,33 +2079,6 @@ def cleanup_old_data_route():
         return jsonify(success=True, message="Old data cleaned up successfully")
     except Exception as e:
         return jsonify(success=False, message=f"Error cleaning up data: {str(e)}")
-
-@app.route("/health")
-def health_check():
-    """Health check endpoint with memory info"""
-    try:
-        import psutil
-        process = psutil.Process(os.getpid())
-        memory_info = process.memory_info()
-        memory_mb = memory_info.rss / 1024 / 1024
-        
-        return jsonify({
-            "status": "healthy",
-            "memory_mb": round(memory_mb, 2),
-            "memory_percent": round(process.memory_percent(), 2),
-            "cache_size": len(_cache)
-        })
-    except ImportError:
-        # If psutil not available, just return basic health
-        return jsonify({
-            "status": "healthy",
-            "cache_size": len(_cache)
-        })
-    except Exception as e:
-        return jsonify({
-            "status": "error",
-            "message": str(e)
-        })
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))

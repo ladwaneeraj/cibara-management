@@ -12,6 +12,11 @@ import pytz
 import base64
 from functools import wraps
 import threading
+import gc
+import psutil
+
+os.environ['PYTHONHASHSEED'] = '0'  # Reduce memory variance
+gc.set_threshold(400, 5, 5)  # More aggressive garbage collection
 
 # Configure logging
 logging.basicConfig(
@@ -29,7 +34,8 @@ IST = pytz.timezone('Asia/Kolkata')
 # Global cache for frequently accessed data
 _cache = {}
 _cache_lock = threading.Lock()
-CACHE_TTL = 5  # seconds
+CACHE_TTL = 3  # seconds
+CACHE_MAX_SIZE = 50
 
 # Initialize Firebase Admin SDK
 try:
@@ -127,6 +133,22 @@ def invalidate_cache(cache_keys=None):
                 _cache.pop(key, None)
         else:
             _cache.clear()
+        
+        # ADD THIS SECTION: Limit cache size
+        if len(_cache) > CACHE_MAX_SIZE:
+            # Remove oldest entries
+            sorted_items = sorted(_cache.items(), key=lambda x: x[1][1])
+            for key, _ in sorted_items[:len(_cache) - CACHE_MAX_SIZE]:
+                _cache.pop(key, None)
+
+def cleanup_memory():
+    """Periodic memory cleanup"""
+    try:
+        invalidate_cache()
+        gc.collect()
+        logger.info("Memory cleanup completed")
+    except Exception as e:
+        logger.error(f"Error during memory cleanup: {str(e)}")
 
 def get_last_rent_check():
     settings_doc = settings_ref.document('app_settings').get()
@@ -418,6 +440,7 @@ def checkin():
         batch.commit()
         
         invalidate_cache()
+        cleanup_memory()
         
         logger.info(f"Check-in successful for room {room}, guest: {guest['name']}, serial: {serial_number}")
         return jsonify(
@@ -630,6 +653,7 @@ def checkout():
             batch.commit()
             
             invalidate_cache()
+            cleanup_memory()
             
             if refund_processed:
                 refund_amount = abs(balance)
@@ -774,7 +798,7 @@ def get_totals_only():
         return jsonify(success=False, message=str(e))
 
 def get_all_logs_limited():
-    """Get logs with limits to prevent memory overflow"""
+    """Get logs with aggressive limits to prevent memory overflow"""
     logs_dict = {}
     try:
         log_types = ["cash", "online", "balance", "add_ons", "refunds", 
@@ -785,13 +809,16 @@ def get_all_logs_limited():
                 log_doc = logs_ref.document(log_type).get()
                 if log_doc.exists:
                     entries = log_doc.to_dict().get('entries', [])
-                    # Only return last 200 entries to save memory
-                    logs_dict[log_type] = entries[-200:] if len(entries) > 200 else entries
+                    # Only return last 100 entries (reduced from 200)
+                    logs_dict[log_type] = entries[-100:] if len(entries) > 100 else entries
                 else:
                     logs_dict[log_type] = []
             except Exception as e:
                 logger.error(f"Error fetching {log_type} logs: {str(e)}")
                 logs_dict[log_type] = []
+        
+        # Force garbage collection after heavy operation
+        gc.collect()
                 
     except Exception as e:
         logger.error(f"Error fetching logs: {str(e)}")
@@ -1917,6 +1944,33 @@ def cleanup_old_data_route():
         return jsonify(success=True, message="Old data cleaned up successfully")
     except Exception as e:
         return jsonify(success=False, message=f"Error cleaning up data: {str(e)}")
+
+@app.route("/health")
+def health_check():
+    """Health check endpoint with memory info"""
+    try:
+        import psutil
+        process = psutil.Process(os.getpid())
+        memory_info = process.memory_info()
+        memory_mb = memory_info.rss / 1024 / 1024
+        
+        return jsonify({
+            "status": "healthy",
+            "memory_mb": round(memory_mb, 2),
+            "memory_percent": round(process.memory_percent(), 2),
+            "cache_size": len(_cache)
+        })
+    except ImportError:
+        # If psutil not available, just return basic health
+        return jsonify({
+            "status": "healthy",
+            "cache_size": len(_cache)
+        })
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        })
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))

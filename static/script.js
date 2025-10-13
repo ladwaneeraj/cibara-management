@@ -604,7 +604,7 @@ async function fetchData() {
       }
 
       updateStatsToggleBadge();
-    }, 100); // Load logs after a small delay
+    }, 500); // Load logs after a small delay
 
     debugLog("Initial data loaded successfully");
     return true;

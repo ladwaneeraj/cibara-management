@@ -1,0 +1,17 @@
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+uploads/
+*.log
+.git
+.gitignore
+node_modules/
+.DS_Store
+*.swp
+.vscode/
+.idea/
+firebase-creds-base64.txt

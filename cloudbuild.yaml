@@ -1,25 +1,29 @@
 # ========================================================
-# Cloud Build configuration for Cibara Management (Docker + Cloud Run)
+# Cloud Build configuration for Cloud Run (Docker)
 # ========================================================
 
 steps:
-  # Step 1: Build the Docker image
+  # Step 1: Build Docker image
   - name: "gcr.io/cloud-builders/docker"
     args:
       - "build"
+      - "--no-cache"
       - "-t"
       - "gcr.io/$PROJECT_ID/lodge-management:latest"
       - "-t"
-      - "gcr.io/$PROJECT_ID/lodge-management:$SHORT_SHA"
+      - "gcr.io/$PROJECT_ID/lodge-management:${_TAG}"
       - "."
 
-  # Step 2: Push the Docker image to Google Container Registry
+  # Step 2: Push both tags to Container Registry
   - name: "gcr.io/cloud-builders/docker"
+    entrypoint: bash
     args:
-      - "push"
-      - "gcr.io/$PROJECT_ID/lodge-management"
+      - "-c"
+      - |
+        docker push gcr.io/$PROJECT_ID/lodge-management:latest
+        docker push gcr.io/$PROJECT_ID/lodge-management:${_TAG}
 
-  # Step 3: Deploy to Cloud Run (Fixed - uses latest gcloud CLI)
+  # Step 3: Deploy to Cloud Run
   - name: "gcr.io/google.com/cloudsdktool/cloud-sdk:slim"
     entrypoint: gcloud
     args:
@@ -27,7 +31,7 @@ steps:
       - "deploy"
       - "lodge-management"
       - "--image"
-      - "gcr.io/$PROJECT_ID/lodge-management:$SHORT_SHA"
+      - "gcr.io/$PROJECT_ID/lodge-management:${_TAG}"
       - "--region"
       - "us-central1"
       - "--platform"
@@ -37,20 +41,15 @@ steps:
       - "FIREBASE_CREDENTIALS=${_FIREBASE_CREDENTIALS},FIREBASE_STORAGE_BUCKET=${_FIREBASE_STORAGE_BUCKET}"
 
 # ========================================================
-# Timeout: 30 minutes
+# Global Settings
 # ========================================================
 timeout: "1800s"
 
-# ========================================================
-# Image tracking for Cloud Build
-# ========================================================
-images:
-  - "gcr.io/$PROJECT_ID/lodge-management:latest"
-  - "gcr.io/$PROJECT_ID/lodge-management:$SHORT_SHA"
-
-# ========================================================
-# Substitutions for environment variables (custom build vars)
-# ========================================================
 substitutions:
+  _TAG: "local" # Default tag for manual builds
   _FIREBASE_CREDENTIALS: ""
   _FIREBASE_STORAGE_BUCKET: ""
+
+images:
+  - "gcr.io/$PROJECT_ID/lodge-management:${_TAG}"
+  - "gcr.io/$PROJECT_ID/lodge-management:latest"

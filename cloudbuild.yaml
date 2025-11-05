@@ -1,3 +1,7 @@
+# ========================================================
+# Cloud Build configuration for Cibara Management (Docker + Cloud Run)
+# ========================================================
+
 steps:
   # Step 1: Build the Docker image
   - name: "gcr.io/cloud-builders/docker"
@@ -8,18 +12,18 @@ steps:
       - "-t"
       - "gcr.io/$PROJECT_ID/lodge-management:$SHORT_SHA"
       - "."
-    id: "build"
 
-  # Step 2: Push to Container Registry
+  # Step 2: Push the Docker image to Google Container Registry
   - name: "gcr.io/cloud-builders/docker"
     args:
       - "push"
       - "gcr.io/$PROJECT_ID/lodge-management"
-    id: "push"
 
-  # Step 3: Deploy to Cloud Run (WITHOUT --base-image - FIXED!)
-  - name: "gcr.io/cloud-builders/run"
+  # Step 3: Deploy to Cloud Run (Fixed - uses latest gcloud CLI)
+  - name: "gcr.io/google.com/cloudsdktool/cloud-sdk:slim"
+    entrypoint: gcloud
     args:
+      - "run"
       - "deploy"
       - "lodge-management"
       - "--image"
@@ -31,17 +35,22 @@ steps:
       - "--allow-unauthenticated"
       - "--set-env-vars"
       - "FIREBASE_CREDENTIALS=${_FIREBASE_CREDENTIALS},FIREBASE_STORAGE_BUCKET=${_FIREBASE_STORAGE_BUCKET}"
-    id: "deploy"
 
-# Timeout
+# ========================================================
+# Timeout: 30 minutes
+# ========================================================
 timeout: "1800s"
 
-# Build images to push
+# ========================================================
+# Image tracking for Cloud Build
+# ========================================================
 images:
   - "gcr.io/$PROJECT_ID/lodge-management:latest"
   - "gcr.io/$PROJECT_ID/lodge-management:$SHORT_SHA"
 
-# Substitutions for environment variables
+# ========================================================
+# Substitutions for environment variables (custom build vars)
+# ========================================================
 substitutions:
   _FIREBASE_CREDENTIALS: ""
   _FIREBASE_STORAGE_BUCKET: ""

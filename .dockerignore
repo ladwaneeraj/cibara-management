@@ -1,0 +1,78 @@
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+pip-log.txt
+pip-delete-this-directory.txt
+.tox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.log
+.git
+.mypy_cache
+.pytest_cache
+.hypothesis
+
+# Sensitive files - NEVER UPLOAD THESE
+service-account.json
+firebase-creds-base64.txt
+.env
+.env.local
+.env.*.local
+*.key
+*.pem
+*.p12
+
+# Local data
+uploads/
+*.db
+*.sqlite
+*.sqlite3
+lodge_data.json
+lodge.log
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Render specific (not needed on Cloud Run)
+render.yaml
+
+# Git files
+.git/
+.gitignore
+.gitattributes
+
+# Documentation
+README.md
+LICENSE
+docs/
+
+# Test files
+tests/
+test_*.py
+*_test.py
+
+# Build artifacts
+dist/
+build/
+*.egg-info/
+
+# Node modules (if any)
+node_modules/
+
+# Backup files
+*.bak
+*.backup

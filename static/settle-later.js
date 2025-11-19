@@ -115,6 +115,12 @@ function initSettleLater() {
         this.innerHTML = "Yes, Checkout";
       }
     };
+    // Mark that this script has attached the settle-later handler so other scripts can avoid adding a duplicate
+    try {
+      originalProceedCheckoutBtn.dataset.settleLaterHandler = "true";
+    } catch (e) {
+      // ignore if dataset not supported
+    }
   }
 
   // 3. Initialize the quick actions button for pending settlements

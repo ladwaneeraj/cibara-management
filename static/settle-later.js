@@ -914,59 +914,88 @@ document.addEventListener("DOMContentLoaded", function () {
     });
   }, 1000);
 });
-
-async function showPendingSettlementsModal() {
-  const modal = document.getElementById("pending-settlements-modal");
-  if (!modal) {
-    console.error("Pending settlements modal not found");
+// Render pending settlements into the modal
+function renderPendingSettlements() {
+  const settlementsList = document.getElementById("settlements-list");
+  if (!settlementsList) {
+    console.error("settlements-list element not found");
     return;
   }
 
-  console.log("Opening pending settlements modal");
+  // Clear existing content to avoid duplicates
+  settlementsList.innerHTML = "";
 
-  // Show the modal
-  modal.classList.add("show");
+  // Filter settlements based on current filter
+  let filtered = pendingSettlements || [];
+  if (currentSettlementFilter === "pending") {
+    filtered = filtered.filter(
+      (s) => s.status === "pending" || s.status === "partial"
+    );
+  } else if (currentSettlementFilter === "paid") {
+    filtered = filtered.filter((s) => s.status === "paid");
+  } else if (currentSettlementFilter === "cancelled") {
+    filtered = filtered.filter((s) => s.status === "cancelled");
+  } // 'all' leaves the full list
 
-  // Set default filter to pending
-  currentSettlementFilter = "pending";
-
-  // Set active filter button
-  document
-    .querySelectorAll("#pending-settlements-modal .filter-btn")
-    .forEach((btn) => {
-      btn.classList.remove("active");
-      if (btn.dataset.filter === currentSettlementFilter) {
-        btn.classList.add("active");
-      }
-    });
-
-  // Show loading indicator
-  const settlementsList = document.getElementById("settlements-list");
-  if (settlementsList) {
+  if (!filtered || filtered.length === 0) {
     settlementsList.innerHTML = `
-      <div class="loading-indicator">
-        <span class="loader"></span>
-        <p>Loading pending settlements...</p>
+      <div class="empty-state">
+        <i class="fas fa-check-circle fa-3x"></i>
+        <p>No settlements found.</p>
       </div>
     `;
+    updateDashboardWithSettlements();
+    return;
   }
 
-  // Fetch and render settlements
-  console.log("Fetching settlements from server...");
-  const fetchSuccess = await fetchPendingSettlements();
+  // Build DOM elements for each settlement
+  filtered.forEach((s) => {
+    const item = document.createElement("div");
+    item.className = "settlement-item";
 
-  if (fetchSuccess) {
-    console.log("Settlements fetched successfully, rendering...");
-    renderPendingSettlements();
-  } else {
-    console.error("Failed to fetch settlements");
-    if (settlementsList) {
-      settlementsList.innerHTML = `
-        <div class="empty-state">
-          <i class="fas fa-exclamation-circle fa-3x"></i>
-          <p>Error loading settlements. Please try again.</p>
-        </div>
-      `;
-    }
-  }
+    const left = document.createElement("div");
+    left.className = "settlement-left";
+    left.innerHTML = `
+      <div class="settlement-guest">${s.guest_name || s.name || "Unknown"}</div>
+      <div class="settlement-meta">Room: ${s.room || "-"} • ${
+      s.checkout_date || "-"
+    }</div>
+    `;
+
+    const right = document.createElement("div");
+    right.className = "settlement-right";
+    right.innerHTML = `
+      <div class="settlement-amount">₹${s.amount || 0}</div>
+    `;
+
+    const actions = document.createElement("div");
+    actions.className = "settlement-actions";
+
+    const collectBtn = document.createElement("button");
+    collectBtn.className = "action-btn btn-primary";
+    collectBtn.textContent = "Collect";
+    collectBtn.addEventListener("click", function () {
+      showCollectSettlementModal(s.id);
+    });
+
+    const cancelBtn = document.createElement("button");
+    cancelBtn.className = "action-btn btn-secondary";
+    cancelBtn.textContent = "Cancel";
+    cancelBtn.addEventListener("click", function () {
+      activeSettlementId = s.id;
+      showCancelSettlementConfirmation();
+    });
+
+    actions.appendChild(collectBtn);
+    actions.appendChild(cancelBtn);
+
+    item.appendChild(left);
+    item.appendChild(right);
+    item.appendChild(actions);
+
+    settlementsList.appendChild(item);
+  });
+
+  // Update dashboard counters/badges
+  updateDashboardWithSettlements();
 }

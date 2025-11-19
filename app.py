@@ -550,25 +550,54 @@ def checkout():
             guest_name = room_data["guest"]["name"] if room_data["guest"] else "Unknown"
             
             if balance > 0 and settle_later:
-                settlement_id = str(uuid.uuid4())
                 guest_info = room_data["guest"]
                 settlement_amount = balance
                 
-                settlement = {
-                    "id": settlement_id,
-                    "guest_name": guest_info["name"],
-                    "guest_mobile": guest_info["mobile"],
-                    "room": room,
-                    "amount": settlement_amount,
-                    "checkout_date": datetime.now(IST).strftime("%Y-%m-%d"),
-                    "checkout_time": datetime.now(IST).strftime("%H:%M"),
-                    "status": "pending",
-                    "notes": data_json.get("settlement_notes", ""),
-                    "photo": guest_info.get("photo")
-                }
+                # Check if a pending settlement already exists for this room from today
+                existing_settlement = None
+                today = datetime.now(IST).strftime("%Y-%m-%d")
                 
-                batch.set(settlements_ref.document(settlement_id), settlement)
+                for settlement_doc in settlements_ref.where('room', '==', room).where('status', '==', 'pending').stream():
+                    existing_settlement_data = settlement_doc.to_dict()
+                    if existing_settlement_data.get('checkout_date') == today:
+                        existing_settlement = settlement_doc
+                        break
                 
+                if existing_settlement:
+                    # Update existing settlement instead of creating a new one
+                    settlement_id = existing_settlement.id
+                    existing_data = existing_settlement.to_dict()
+                    
+                    # Update only the amount and notes if they changed
+                    batch.update(settlements_ref.document(settlement_id), {
+                        "amount": settlement_amount,
+                        "notes": data_json.get("settlement_notes", existing_data.get("notes", "")),
+                        "updated_at": datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S")
+                    })
+                    
+                    logger.info(f"Updated existing settlement {settlement_id} for room {room}")
+                else:
+                    # Create new settlement only if one doesn't exist
+                    settlement_id = str(uuid.uuid4())
+                    
+                    settlement = {
+                        "id": settlement_id,
+                        "guest_name": guest_info["name"],
+                        "guest_mobile": guest_info["mobile"],
+                        "room": room,
+                        "amount": settlement_amount,
+                        "checkout_date": datetime.now(IST).strftime("%Y-%m-%d"),
+                        "checkout_time": datetime.now(IST).strftime("%H:%M"),
+                        "status": "pending",
+                        "notes": data_json.get("settlement_notes", ""),
+                        "photo": guest_info.get("photo"),
+                        "created_at": datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S")
+                    }
+                    
+                    batch.set(settlements_ref.document(settlement_id), settlement)
+                    
+                    logger.info(f"Created new settlement {settlement_id} for room {room}")
+                            
                 totals["balance"] -= settlement_amount
                 
                 balance_log = {
@@ -1745,11 +1774,36 @@ def fetch_settlements():
 def get_pending_settlements_route():
     try:
         settlements = fetch_settlements()
-        return jsonify(success=True, settlements=settlements)
+        
+        # Deduplicate at API level - keep latest version of each settlement
+        unique_settlements = {}
+        
+        for settlement in settlements:
+            settlement_id = settlement.get("id")
+            
+            if not settlement_id:
+                continue
+            
+            if settlement_id in unique_settlements:
+                # Compare timestamps and keep the newer one
+                existing = unique_settlements[settlement_id]
+                existing_time = existing.get("updated_at") or existing.get("created_at") or existing.get("checkout_date")
+                new_time = settlement.get("updated_at") or settlement.get("created_at") or settlement.get("checkout_date")
+                
+                if new_time > existing_time:
+                    unique_settlements[settlement_id] = settlement
+            else:
+                unique_settlements[settlement_id] = settlement
+        
+        settlements_list = list(unique_settlements.values())
+        
+        logger.info(f"Returning {len(settlements_list)} unique settlements (deuplicated from {len(settlements)})")
+        
+        return jsonify(success=True, settlements=settlements_list)
     except Exception as e:
         logger.error(f"Error fetching settlements: {str(e)}")
         return jsonify(success=False, message=f"Error fetching settlements: {str(e)}")
-
+    
 @app.route("/collect_settlement", methods=["POST"])
 def collect_settlement():
     try:

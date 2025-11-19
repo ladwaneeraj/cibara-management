@@ -460,9 +460,18 @@ class TransactionLogManager {
     `;
   }
 
-  // Get transaction tags for a log entry
   getTransactionTags(log, logType) {
     const tags = [];
+
+    // PRIORITY 0: Settlement Collection (highest priority)
+    if (log.transaction_type === "settlement_collection" || log.settlement_id) {
+      tags.push({
+        text: "SETTLEMENT",
+        class: "transaction-tag settlement-tag",
+        color: "#20c997",
+      });
+      return tags; // Return early - settlements don't get other tags
+    }
 
     // PRIORITY 1: Refund (highest priority - overrides everything)
     if (
@@ -868,6 +877,10 @@ const transactionTrackingStyles = `
 
     .pay-later-tag {
         background-color: #fd7e14;
+    }
+      
+     .settlement-tag {
+        background-color: #20c997;
     }
 
     .serial-number {

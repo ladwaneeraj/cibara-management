@@ -359,6 +359,7 @@ function enhanceCheckoutConfirmation() {
 // Fetch pending settlements from the server
 async function fetchPendingSettlements() {
   try {
+    console.log("Fetching pending settlements...");
     const response = await fetch("/get_pending_settlements");
     if (!response.ok) {
       throw new Error(`Server responded with status: ${response.status}`);
@@ -366,12 +367,58 @@ async function fetchPendingSettlements() {
 
     const result = await response.json();
     if (result.success) {
-      // Deduplicate settlements by ID to prevent duplicates
+      // Comprehensive deduplication by settlement ID
       const uniqueSettlements = {};
-      (result.settlements || []).forEach((settlement) => {
-        uniqueSettlements[settlement.id] = settlement;
+      const settlementList = result.settlements || [];
+
+      console.log(`Fetched ${settlementList.length} settlements from server`);
+
+      settlementList.forEach((settlement) => {
+        if (!settlement.id) {
+          console.warn("Settlement without ID found, skipping:", settlement);
+          return;
+        }
+
+        // Keep only the latest version of each settlement by ID
+        // If duplicate exists, keep the one with latest timestamp or full data
+        if (uniqueSettlements[settlement.id]) {
+          const existing = uniqueSettlements[settlement.id];
+          const existingTime = new Date(
+            existing.updated_at || existing.created_at || existing.checkout_date
+          );
+          const newTime = new Date(
+            settlement.updated_at ||
+              settlement.created_at ||
+              settlement.checkout_date
+          );
+
+          if (newTime > existingTime) {
+            console.log(
+              `Replacing duplicate settlement ${settlement.id} with newer version`
+            );
+            uniqueSettlements[settlement.id] = settlement;
+          } else {
+            console.log(
+              `Keeping existing settlement ${settlement.id}, skipping older duplicate`
+            );
+          }
+        } else {
+          uniqueSettlements[settlement.id] = settlement;
+        }
       });
+
       pendingSettlements = Object.values(uniqueSettlements);
+
+      console.log(
+        `After deduplication: ${pendingSettlements.length} unique settlements`
+      );
+
+      // Log all settlement IDs for debugging
+      console.log(
+        "Settlement IDs:",
+        pendingSettlements.map((s) => s.id)
+      );
+
       return true;
     } else {
       console.error("Failed to fetch pending settlements:", result.message);
@@ -627,6 +674,33 @@ async function collectSettlementPayment() {
     const result = await response.json();
 
     if (result.success) {
+      // Create a log entry for settlement collection
+      const today = new Date().toISOString().split("T")[0];
+      const currentTime = new Date().toTimeString().split(" ")[0].slice(0, 5);
+
+      // Add settlement payment log to the logs system
+      if (!logs.cash) logs.cash = [];
+      if (!logs.online) logs.online = [];
+
+      const settlementPaymentLog = {
+        settlement_id: activeSettlementId,
+        room: settlement.room,
+        name: settlement.guest_name,
+        amount: paymentAmount,
+        date: today,
+        time: currentTime,
+        payment_mode: settlementPaymentMethod,
+        transaction_type: "settlement_collection",
+        note: `Settlement collection from ${settlement.checkout_date}`,
+      };
+
+      // Add to appropriate log based on payment method
+      if (settlementPaymentMethod === "cash") {
+        logs.cash.push(settlementPaymentLog);
+      } else if (settlementPaymentMethod === "online") {
+        logs.online.push(settlementPaymentLog);
+      }
+
       // Refresh settlements data
       await fetchPendingSettlements();
 
@@ -638,6 +712,11 @@ async function collectSettlementPayment() {
 
       // Refresh the settlements display
       renderPendingSettlements();
+
+      // Refresh transaction logs to show the settlement payment with tag
+      if (typeof renderEnhancedLogs === "function") {
+        renderEnhancedLogs();
+      }
 
       // Show success message
       showNotification(
@@ -835,177 +914,59 @@ document.addEventListener("DOMContentLoaded", function () {
     });
   }, 1000);
 });
-// ADD this at the beginning of the function:
-function renderPendingSettlements() {
-  const settlementsList = document.getElementById("settlements-list");
-  if (!settlementsList) {
-    console.error("Settlements list element not found");
+
+async function showPendingSettlementsModal() {
+  const modal = document.getElementById("pending-settlements-modal");
+  if (!modal) {
+    console.error("Pending settlements modal not found");
     return;
   }
 
-  // Remove any duplicate entries from the UI
-  const existingItems = settlementsList.querySelectorAll(".settlement-item");
-  const seenIds = new Set();
+  console.log("Opening pending settlements modal");
 
-  existingItems.forEach((item) => {
-    const id = item.getAttribute("data-id");
-    if (seenIds.has(id)) {
-      item.remove(); // Remove duplicate
-    } else {
-      seenIds.add(id);
-    }
-  });
+  // Show the modal
+  modal.classList.add("show");
 
-  if (pendingSettlements.length === 0) {
-    settlementsList.innerHTML = `
-      <div class="empty-state">
-        <i class="fas fa-money-bill-wave fa-3x"></i>
-        <p>No pending settlements found</p>
-      </div>
-    `;
-    return;
-  }
+  // Set default filter to pending
+  currentSettlementFilter = "pending";
 
-  // Filter settlements based on current filter
-  let filteredSettlements = pendingSettlements;
-
-  if (currentSettlementFilter !== "all") {
-    filteredSettlements = pendingSettlements.filter(
-      (s) => s.status === currentSettlementFilter
-    );
-  }
-
-  if (filteredSettlements.length === 0) {
-    settlementsList.innerHTML = `
-      <div class="empty-state">
-        <i class="fas fa-filter fa-3x"></i>
-        <p>No settlements found matching the current filter</p>
-      </div>
-    `;
-    return;
-  }
-
-  // Sort by checkout date (most recent first)
-  filteredSettlements.sort((a, b) => {
-    const dateA = new Date(`${a.checkout_date} ${a.checkout_time || "00:00"}`);
-    const dateB = new Date(`${b.checkout_date} ${b.checkout_time || "00:00"}`);
-    return dateB - dateA;
-  });
-
-  // Generate HTML
-  let html = "";
-
-  filteredSettlements.forEach((settlement) => {
-    // Get status badge
-    let statusBadge = "";
-
-    switch (settlement.status) {
-      case "pending":
-        statusBadge = `<span class="status-badge" style="background-color: var(--warning);">Pending</span>`;
-        break;
-      case "partial": // New status for partial payments
-        statusBadge = `<span class="status-badge" style="background-color: var(--primary);">Partial</span>`;
-        break;
-      case "paid":
-        statusBadge = `<span class="status-badge" style="background-color: var(--success);">Paid</span>`;
-        break;
-      case "cancelled":
-        statusBadge = `<span class="status-badge" style="background-color: var(--danger);">Cancelled</span>`;
-        break;
-      default:
-        statusBadge = `<span class="status-badge" style="background-color: var(--gray);">${settlement.status}</span>`;
-    }
-
-    // Create item HTML
-    html += `
-      <div class="settlement-item" data-id="${settlement.id}" data-status="${
-      settlement.status
-    }">
-        <div class="settlement-header">
-          <div class="settlement-guest">
-            <strong>${settlement.guest_name}</strong>
-            <a href="tel:${settlement.guest_mobile}" class="call-link">
-              <i class="fas fa-phone"></i> ${settlement.guest_mobile}
-            </a>
-          </div>
-          <div class="settlement-badges">
-            ${statusBadge}
-          </div>
-        </div>
-        <div class="settlement-details">
-          <div class="settlement-info">
-            <div><strong>Room:</strong> ${settlement.room}</div>
-            <div><strong>Checkout:</strong> ${settlement.checkout_date}</div>
-            <div><strong>Amount:</strong> ₹${settlement.amount}</div>
-          </div>
-          <div class="settlement-actions">
-            ${
-              settlement.status === "pending" || settlement.status === "partial"
-                ? `<button class="action-btn btn-sm btn-success collect-btn" data-id="${settlement.id}">
-                  <i class="fas fa-money-bill-wave"></i> Collect
-                </button>`
-                : settlement.status === "paid"
-                ? `<div class="settlement-paid-info">
-                  Paid on ${settlement.payment_date || "N/A"} via 
-                  <span class="payment-badge ${settlement.payment_mode}">${
-                    settlement.payment_mode || "unknown"
-                  }</span>
-                </div>`
-                : `<div class="settlement-cancelled-info">
-                  Cancelled on ${settlement.cancel_date || "N/A"}
-                </div>`
-            }
-          </div>
-        </div>
-        ${
-          // Show partial payments if they exist
-          settlement.payments && settlement.payments.length > 0
-            ? `<div class="settlement-payments">
-                <div class="settlement-payments-title">Previous Payments</div>
-                ${settlement.payments
-                  .map(
-                    (payment) => `
-                  <div class="settlement-payment-item">
-                    ₹${payment.amount} paid on ${payment.date} via 
-                    <span class="payment-badge ${payment.mode}">${payment.mode}</span>
-                  </div>
-                `
-                  )
-                  .join("")}
-              </div>`
-            : ""
-        }
-        ${
-          // Show discount if applied
-          settlement.discount_amount > 0
-            ? `<div class="settlement-discount">
-                <div class="settlement-discount-title">Discount Applied</div>
-                <div class="settlement-discount-info">
-                  ₹${settlement.discount_amount} discount (${
-                settlement.discount_reason || "No reason provided"
-              })
-                </div>
-              </div>`
-            : ""
-        }
-        ${
-          settlement.notes
-            ? `<div class="settlement-notes">
-              <i class="fas fa-sticky-note"></i> ${settlement.notes}
-            </div>`
-            : ""
-        }
-      </div>
-    `;
-  });
-
-  settlementsList.innerHTML = html;
-
-  // Add click handlers for collect buttons
-  document.querySelectorAll(".collect-btn").forEach((btn) => {
-    btn.addEventListener("click", function () {
-      const settlementId = this.dataset.id;
-      showCollectSettlementModal(settlementId);
+  // Set active filter button
+  document
+    .querySelectorAll("#pending-settlements-modal .filter-btn")
+    .forEach((btn) => {
+      btn.classList.remove("active");
+      if (btn.dataset.filter === currentSettlementFilter) {
+        btn.classList.add("active");
+      }
     });
-  });
+
+  // Show loading indicator
+  const settlementsList = document.getElementById("settlements-list");
+  if (settlementsList) {
+    settlementsList.innerHTML = `
+      <div class="loading-indicator">
+        <span class="loader"></span>
+        <p>Loading pending settlements...</p>
+      </div>
+    `;
+  }
+
+  // Fetch and render settlements
+  console.log("Fetching settlements from server...");
+  const fetchSuccess = await fetchPendingSettlements();
+
+  if (fetchSuccess) {
+    console.log("Settlements fetched successfully, rendering...");
+    renderPendingSettlements();
+  } else {
+    console.error("Failed to fetch settlements");
+    if (settlementsList) {
+      settlementsList.innerHTML = `
+        <div class="empty-state">
+          <i class="fas fa-exclamation-circle fa-3x"></i>
+          <p>Error loading settlements. Please try again.</p>
+        </div>
+      `;
+    }
+  }
 }

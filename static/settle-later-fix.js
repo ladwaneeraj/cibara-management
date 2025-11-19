@@ -179,6 +179,18 @@ function initSettleLater() {
         quickActionMenu.classList.remove("show");
       }
     });
+  } else {
+    // Fallback: event delegation in case the element is not present at init time
+    document.addEventListener("click", function (e) {
+      const target =
+        e.target.closest && e.target.closest("#quick-settlements-btn");
+      if (target) {
+        console.log("quick-settlements-btn clicked (delegated)");
+        showPendingSettlementsModal();
+        const quickActionMenu = document.querySelector(".quick-action-menu");
+        if (quickActionMenu) quickActionMenu.classList.remove("show");
+      }
+    });
   }
 
   // 4. Initialize filter buttons in pending settlements modal

@@ -366,7 +366,12 @@ async function fetchPendingSettlements() {
 
     const result = await response.json();
     if (result.success) {
-      pendingSettlements = result.settlements || [];
+      // Deduplicate settlements by ID to prevent duplicates
+      const uniqueSettlements = {};
+      (result.settlements || []).forEach((settlement) => {
+        uniqueSettlements[settlement.id] = settlement;
+      });
+      pendingSettlements = Object.values(uniqueSettlements);
       return true;
     } else {
       console.error("Failed to fetch pending settlements:", result.message);
@@ -417,7 +422,8 @@ async function showPendingSettlementsModal() {
     `;
   }
 
-  // Fetch and render settlements
+  // Fetch and render settlements with a small delay to prevent race conditions
+  await new Promise((resolve) => setTimeout(resolve, 300));
   await fetchPendingSettlements();
   renderPendingSettlements();
 }
@@ -829,13 +835,26 @@ document.addEventListener("DOMContentLoaded", function () {
     });
   }, 1000);
 });
-// Render the pending settlements list
+// ADD this at the beginning of the function:
 function renderPendingSettlements() {
   const settlementsList = document.getElementById("settlements-list");
   if (!settlementsList) {
     console.error("Settlements list element not found");
     return;
   }
+
+  // Remove any duplicate entries from the UI
+  const existingItems = settlementsList.querySelectorAll(".settlement-item");
+  const seenIds = new Set();
+
+  existingItems.forEach((item) => {
+    const id = item.getAttribute("data-id");
+    if (seenIds.has(id)) {
+      item.remove(); // Remove duplicate
+    } else {
+      seenIds.add(id);
+    }
+  });
 
   if (pendingSettlements.length === 0) {
     settlementsList.innerHTML = `

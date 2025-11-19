@@ -1818,8 +1818,13 @@ def collect_settlement():
             settlement["payment_date"] = datetime.now(IST).strftime("%Y-%m-%d")
             settlement["payment_time"] = datetime.now(IST).strftime("%H:%M")
             settlement["payment_mode"] = payment_mode
+            
+            # Clear any previous partial payments to avoid confusion
+            if "payments" in settlement:
+                del settlement["payments"]
         else:
             settlement["status"] = "partial"
+            settlement["remaining_amount"] = settlement["amount"] - payment_amount
             settlement["amount"] -= payment_amount
             
             if "payments" not in settlement:
@@ -1831,7 +1836,7 @@ def collect_settlement():
                 "time": datetime.now(IST).strftime("%H:%M"),
                 "mode": payment_mode
             })
-        
+
         batch.set(settlements_ref.document(settlement_id), settlement)
         batch.commit()
         

@@ -285,6 +285,7 @@ function closeNotification(notification) {
 }
 
 // Function to render room cards
+
 function renderRooms() {
   if (!roomsGrid) {
     debugLog("roomsGrid element not found");
@@ -295,8 +296,17 @@ function renderRooms() {
   let roomCount = 0;
 
   Object.entries(rooms).forEach(([roomNumber, info]) => {
-    // Apply filters (status, floor, search) as before
-    if (currentFilter === "vacant" && info.status !== "vacant") {
+    // Initialize cleaning_status if it doesn't exist
+    if (!info.hasOwnProperty("cleaning_status")) {
+      info.cleaning_status = null;
+    }
+
+    // Apply filters
+    if (
+      currentFilter === "vacant" &&
+      info.status !== "vacant" &&
+      info.status !== "cleaning"
+    ) {
       return;
     }
 
@@ -332,19 +342,40 @@ function renderRooms() {
     const roomCard = document.createElement("div");
     roomCard.className = "room-card";
     roomCard.id = `room-card-${roomNumber}`;
-    roomCard.setAttribute("aria-label", `Room ${roomNumber} - ${info.status}`);
+
+    // Determine display status
+    let displayStatus = info.status;
+    if (info.status === "cleaning") {
+      displayStatus = "cleaning";
+    }
+
+    roomCard.setAttribute(
+      "aria-label",
+      `Room ${roomNumber} - ${displayStatus}`
+    );
 
     // Create basic room structure
     let roomContent = `
-      <div class="room-status ${info.status}"></div>
+      <div class="room-status ${displayStatus}"></div>
       <div class="room-content">
     `;
 
+    // For cleaning rooms, show cleaning button
+    // For cleaning rooms, show cleaning button
+    if (info.status === "cleaning") {
+      const cleaningTime = getCleaningTime(roomNumber);
+      roomContent += `
+        <div class="room-number">${roomNumber}</div>
+        <div class="guest-name" style="color: #f39c12; font-weight: bold;">🧹 Cleaning</div>
+        <div style="font-size: 12px; color: #666; margin-top: 4px;">${cleaningTime}</div>
+        <button class="cleaned-btn" onclick="handleCleanedClick(event, '${roomNumber}')">
+          <i class="fas fa-check"></i> Cleaned
+        </button>
+      `;
+    }
     // For occupied rooms, add AC indicator and guest count
-    if (info.status === "occupied" && info.guest) {
+    else if (info.status === "occupied" && info.guest) {
       const guestCount = info.guest.guests || 1;
-
-      // Check if room number is in the AC range (202-205) AND if the AC toggle was on during check-in
       const roomNum = parseInt(roomNumber);
       const isPremiumACRoom = roomNum >= 202 && roomNum <= 205;
       const isAcRoom = isPremiumACRoom && info.guest.isAC === true;
@@ -363,25 +394,13 @@ function renderRooms() {
         </div>
         <div class="guest-name">${info.guest.name}</div>
       `;
-    } else {
-      // For vacant rooms, just show the room number without AC/guest indicators
-      roomContent += `
-        <div class="room-number">${roomNumber}</div>
-        <div class="guest-name">Vacant</div>
-      `;
-    }
 
-    // Show day indicator for renewals
-    if (info.status === "occupied" && info.guest) {
-      // Get renewal status
       const renewalStatus = getRoomRenewalStatus(info);
 
-      // Show day indicator
       if (renewalStatus.dayNumber > 1) {
         roomContent += `<div class="day-indicator">D${renewalStatus.dayNumber}</div>`;
       }
 
-      // Add enhanced footer
       roomContent += `
         <div class="enhanced-footer">
           <div>₹${info.guest.price}</div>
@@ -389,18 +408,14 @@ function renderRooms() {
         </div>
       `;
 
-      // Show checkout timer for occupied rooms
       if (renewalStatus.expired) {
-        // If already expired, show renewal badge
         roomContent += `
           <div class="renewal-badge" id="renewal-badge-${roomNumber}">Renewal Due</div>
         `;
       } else if (renewalStatus.hoursLeft <= 2) {
-        // Show timer when less than 2 hours remaining
         const isWarning = renewalStatus.hoursLeft < 2;
         let timerText = `${renewalStatus.hoursLeft}h ${renewalStatus.minutesLeft}m left`;
 
-        // Make text more urgent when less than 30 minutes
         if (renewalStatus.hoursLeft === 0 && renewalStatus.minutesLeft <= 30) {
           timerText = `<strong>⚠️ ${renewalStatus.minutesLeft}m left</strong>`;
         }
@@ -414,18 +429,18 @@ function renderRooms() {
         `;
       }
 
-      // Show balance badges
       if (info.balance > 0) {
         roomContent += `<div class="badge" style="background-color:#ff9191;">₹${info.balance}</div>`;
       } else if (info.balance < 0) {
-        // Show a green badge for refunds due with the amount
         roomContent += `<div class="badge" style="background-color: var(--success);">₹${Math.abs(
           info.balance
         )}</div>`;
       }
     } else {
-      // Show vacant room info
+      // For vacant rooms
       roomContent += `
+        <div class="room-number">${roomNumber}</div>
+        <div class="guest-name">Vacant</div>
         <div class="room-footer">
           <div>Available</div>
         </div>
@@ -435,8 +450,14 @@ function renderRooms() {
     roomContent += `</div>`;
     roomCard.innerHTML = roomContent;
 
-    // Setup click handlers and other event listeners
+    // Setup click handlers
     roomCard.addEventListener("click", () => {
+      // Prevent interaction with cleaning rooms
+      if (info.status === "cleaning") {
+        showNotification("Room is being cleaned", "info");
+        return;
+      }
+
       if (info.status === "vacant") {
         showCheckinModal(roomNumber);
       } else if (info.status === "occupied") {
@@ -446,13 +467,14 @@ function renderRooms() {
 
     // Setup long-press for detailed view
     let longPressTimer;
-    const longPressThreshold = 500; // ms
+    const longPressThreshold = 500;
 
-    // Mouse events for desktop
     roomCard.addEventListener("mousedown", function (e) {
-      longPressTimer = setTimeout(() => {
-        showRoomDetailsModal(roomNumber);
-      }, longPressThreshold);
+      if (info.status !== "cleaning") {
+        longPressTimer = setTimeout(() => {
+          showRoomDetailsModal(roomNumber);
+        }, longPressThreshold);
+      }
     });
 
     roomCard.addEventListener("mouseup", function () {
@@ -463,11 +485,12 @@ function renderRooms() {
       clearTimeout(longPressTimer);
     });
 
-    // Touch events for mobile
     roomCard.addEventListener("touchstart", function (e) {
-      longPressTimer = setTimeout(() => {
-        showRoomDetailsModal(roomNumber);
-      }, longPressThreshold);
+      if (info.status !== "cleaning") {
+        longPressTimer = setTimeout(() => {
+          showRoomDetailsModal(roomNumber);
+        }, longPressThreshold);
+      }
     });
 
     roomCard.addEventListener("touchend", function () {
@@ -481,7 +504,6 @@ function renderRooms() {
     roomsGrid.appendChild(roomCard);
   });
 
-  // Show appropriate message when no rooms match filter
   if (roomCount === 0) {
     const emptyState = document.createElement("div");
     emptyState.className = "empty-state";
@@ -491,6 +513,12 @@ function renderRooms() {
     `;
     roomsGrid.appendChild(emptyState);
   }
+}
+
+// Handle cleaned button click
+function handleCleanedClick(event, roomNumber) {
+  event.stopPropagation();
+  markRoomAsCleaned(roomNumber);
 }
 
 // Fetch data from the server
@@ -1152,6 +1180,114 @@ function showCheckoutModal(roomNumber) {
 
   updateCheckoutModal(roomNumber);
   checkoutModal.classList.add("show");
+
+  // Update the proceed checkout button to mark room for cleaning
+  const proceedCheckoutBtn = document.getElementById("proceed-checkout-btn");
+  if (proceedCheckoutBtn) {
+    // Store the original handler and create a new one
+    proceedCheckoutBtn.onclick = async function () {
+      if (checkoutInProgress) {
+        return;
+      }
+
+      checkoutInProgress = true;
+      this.disabled = true;
+      this.innerHTML =
+        '<span class="loader" style="width: 20px; height: 20px;"></span> Processing...';
+
+      const roomNumberElement = document.getElementById("checkout-room-number");
+      if (!roomNumberElement) {
+        showNotification("Room number element not found", "error");
+        checkoutInProgress = false;
+        this.disabled = false;
+        this.innerHTML = "Yes, Checkout";
+        return;
+      }
+
+      const currentRoomNumber = roomNumberElement.textContent;
+      const balance = rooms[currentRoomNumber].balance;
+
+      if (balance > 0) {
+        showNotification("Please clear the balance before checkout", "error");
+        checkoutInProgress = false;
+        this.disabled = false;
+        this.innerHTML = "Yes, Checkout";
+
+        const checkoutConfirmModal = document.getElementById(
+          "checkout-confirm-modal"
+        );
+        if (checkoutConfirmModal) {
+          checkoutConfirmModal.classList.remove("show");
+        }
+        return;
+      }
+
+      if (balance < 0) {
+        checkoutInProgress = false;
+        this.disabled = false;
+        this.innerHTML = "Yes, Checkout";
+
+        const checkoutConfirmModal = document.getElementById(
+          "checkout-confirm-modal"
+        );
+        if (checkoutConfirmModal) {
+          checkoutConfirmModal.classList.remove("show");
+        }
+        return;
+      }
+
+      try {
+        const response = await fetch("/checkout", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            room: currentRoomNumber,
+            final_checkout: true,
+          }),
+        });
+
+        if (!response.ok) {
+          throw new Error(`Server responded with status: ${response.status}`);
+        }
+
+        const result = await response.json();
+        if (result.success) {
+          // Mark room for cleaning
+          await markRoomForCleaning(currentRoomNumber);
+
+          // Close modals
+          const checkoutConfirmModal = document.getElementById(
+            "checkout-confirm-modal"
+          );
+          if (checkoutConfirmModal) {
+            checkoutConfirmModal.classList.remove("show");
+          }
+
+          if (checkoutModal) {
+            checkoutModal.classList.remove("show");
+          }
+
+          // Refresh data
+          await fetchData();
+          renderRooms();
+
+          showNotification(
+            result.message || "Checkout successful! Room marked for cleaning.",
+            "success"
+          );
+        } else {
+          showNotification(result.message || "Error during checkout", "error");
+        }
+      } catch (error) {
+        console.error("Error during checkout:", error);
+        showNotification(`Error during checkout: ${error.message}`, "error");
+      } finally {
+        checkoutInProgress = false;
+        this.disabled = false;
+        this.innerHTML = "Yes, Checkout";
+      }
+    };
+  }
 }
 
 // Update renewal history
@@ -3442,6 +3578,8 @@ document.addEventListener("DOMContentLoaded", function () {
 
   // Call function to update stats visibility from localStorage
   restoreStatsVisibility();
+
+  initializeCleaningFeature();
 
   // Initialize enhanced check-in form
   initEnhancedCheckinForm();

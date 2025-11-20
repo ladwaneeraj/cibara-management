@@ -2318,3 +2318,39 @@ input:checked + .toggle-slider:before {
     font-size: 0.75rem;
   }
 }
+
+/* Cleaned Button - Mobile Optimized */
+.cleaned-btn {
+  position: relative;
+  margin-top: 6px;
+  background-color: #27ae60;
+  color: white;
+  border: none;
+  padding: 5px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: bold;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  transition: all 0.3s ease;
+  box-shadow: 0 2px 6px rgba(39, 174, 96, 0.4);
+  z-index: 10;
+  width: 100%;
+  justify-content: center;
+}
+
+.cleaned-btn:hover {
+  background-color: #229954;
+  box-shadow: 0 4px 10px rgba(39, 174, 96, 0.6);
+  transform: scale(1.02);
+}
+
+.cleaned-btn:active {
+  transform: scale(0.98);
+}
+
+.cleaned-btn i {
+  font-size: 12px;
+}

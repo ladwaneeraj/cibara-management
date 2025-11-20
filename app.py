@@ -179,7 +179,9 @@ def create_default_structure():
                 "balance": 0,
                 "add_ons": [],
                 "renewal_count": 0,
-                "last_renewal_time": None
+                "last_renewal_time": None,
+                "cleaning_status": None,
+                "cleaning_start_time": None
             })
             batch_count += 1
             
@@ -617,13 +619,16 @@ def checkout():
                 logger.info(f"Checkout refund of ₹{refund_amount} processed for room {room}")
             
             batch.update(rooms_ref.document(room), {
-                "status": "vacant",
+                "status": "cleaning",
                 "guest": None,
                 "checkin_time": None,
                 "balance": 0,
                 "add_ons": [],
                 "renewal_count": 0,
-                "last_renewal_time": None
+                "last_renewal_time": None,
+                "cleaning_status": "in_progress",  # Add cleaning status
+                "cleaning_start_time": datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S")
+
             })
             
             batch.set(totals_ref.document('current_totals'), totals)
@@ -980,7 +985,9 @@ def add_room():
             "balance": 0,
             "add_ons": [],
             "renewal_count": 0,
-            "last_renewal_time": None
+            "last_renewal_time": None,
+            "cleaning_status": None,
+            "cleaning_start_time": None
         })
         
         invalidate_cache()
@@ -1133,7 +1140,9 @@ def transfer_room():
             "balance": 0,
             "add_ons": [],
             "renewal_count": 0,
-            "last_renewal_time": None
+            "last_renewal_time": None,
+            "cleaning_status": None,
+            "cleaning_start_time": None
         })
         
         shift_log = {
@@ -2049,6 +2058,44 @@ def send_whatsapp_message(phone_number, message):
     except Exception as e:
         logger.error(f"Error sending WhatsApp via Twilio: {str(e)}")
         return False
+
+@app.route("/mark_room_cleaned", methods=["POST"])
+def mark_room_cleaned():
+    try:
+        data_json = request.json
+        room = data_json["room"]
+        
+        room_doc = rooms_ref.document(room).get()
+        if not room_doc.exists:
+            return jsonify(success=False, message="Room not found")
+            
+        room_data = room_doc.to_dict()
+        
+        # Verify room is in cleaning status before marking as cleaned
+        if room_data.get("status") != "cleaning":
+            return jsonify(success=False, message="This room is not in cleaning status")
+        
+        # Mark room as vacant and clear cleaning status
+        rooms_ref.document(room).update({
+            "status": "vacant",
+            "cleaning_status": None,
+            "cleaning_start_time": None,
+            "guest": None,
+            "checkin_time": None,
+            "balance": 0,
+            "add_ons": [],
+            "renewal_count": 0,
+            "last_renewal_time": None
+        })
+        
+        invalidate_cache()
+        
+        logger.info(f"Room {room} marked as cleaned")
+        return jsonify(success=True, message=f"Room {room} marked as vacant")
+        
+    except Exception as e:
+        logger.error(f"Error marking room as cleaned: {str(e)}")
+        return jsonify(success=False, message=f"Error marking room as cleaned: {str(e)}")
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))

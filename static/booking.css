@@ -428,3 +428,119 @@
     font-size: 0.7rem;
   }
 }
+
+/* WhatsApp Booking Confirmation Styles */
+
+/* WhatsApp button styling */
+#send-whatsapp-btn {
+  background-color: #25d366;
+  border-color: #25d366;
+  color: white;
+  transition: var(--transition);
+}
+
+#send-whatsapp-btn:hover {
+  background-color: #20ba5a;
+  border-color: #20ba5a;
+  box-shadow: 0 2px 8px rgba(37, 211, 102, 0.3);
+}
+
+/* WhatsApp icon in button */
+#send-whatsapp-btn i {
+  margin-right: 4px;
+}
+
+/* Alert info styling for WhatsApp modal */
+.alert {
+  padding: 0.75rem 1rem;
+  margin-bottom: 1rem;
+  border-radius: var(--border-radius);
+  border-left: 4px solid;
+}
+
+.alert-info {
+  background-color: #e3f2fd;
+  border-color: #2196f3;
+  color: #1565c0;
+}
+
+.alert-info i {
+  margin-right: 0.5rem;
+}
+
+.alert ul {
+  margin: 0.5rem 0 0 0;
+  padding-left: 1.25rem;
+  font-size: 0.9rem;
+}
+
+.alert li {
+  margin-bottom: 0.25rem;
+}
+
+/* Input group styling */
+.input-group {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+}
+
+.input-helper-text {
+  font-size: 0.85rem;
+  color: #25d366;
+  margin-top: 0.35rem;
+  display: flex;
+  align-items: center;
+}
+
+/* Modal styling adjustments */
+.modal-sm {
+  max-width: 450px;
+  width: 100%;
+}
+
+/* WhatsApp success message */
+.whatsapp-success-message {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 1rem;
+  background-color: #e8f5e9;
+  border-left: 4px solid #25d366;
+  border-radius: var(--border-radius);
+  color: #2e7d32;
+  margin: 1rem 0;
+}
+
+.whatsapp-success-message i {
+  color: #25d366;
+  font-size: 1.25rem;
+}
+
+/* Responsive adjustments */
+@media (max-width: 576px) {
+  .modal-sm {
+    max-width: 95%;
+  }
+
+  .alert ul {
+    font-size: 0.85rem;
+  }
+}
+
+/* WhatsApp Button Styling */
+#send-whatsapp-btn {
+  background-color: #25d366 !important;
+  border-color: #25d366 !important;
+  color: white !important;
+  transition: all 0.3s ease;
+}
+
+#send-whatsapp-btn:hover {
+  background-color: #20ba5a !important;
+  box-shadow: 0 2px 8px rgba(37, 211, 102, 0.3);
+}
+
+#send-whatsapp-btn i {
+  margin-right: 4px;
+}

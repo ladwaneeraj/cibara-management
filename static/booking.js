@@ -2398,3 +2398,89 @@ window.addEventListener("resize", function () {
     optimizeCalendarForScreenSize();
   }
 });
+
+// WhatsApp Booking Confirmation - whatsapp-booking.js
+// Save this file as: /static/whatsapp-booking.js
+
+function sendWhatsAppBookingConfirmation() {
+  try {
+    // Get booking details from the modal
+    const bookingId = document.getElementById("details-booking-id").textContent;
+    const guestName = document.getElementById("details-guest-name").textContent;
+    const guestMobile = document.getElementById(
+      "details-guest-mobile"
+    ).textContent;
+    const room = document.getElementById("details-room-number").textContent;
+    const checkIn = document.getElementById("details-check-in").textContent;
+    const checkOut = document.getElementById("details-check-out").textContent;
+    const totalAmount = document.getElementById(
+      "details-total-amount"
+    ).textContent;
+    const paidAmount = document.getElementById(
+      "details-paid-amount"
+    ).textContent;
+    const balance = document.getElementById("details-balance").textContent;
+    const nights = document.getElementById("details-nights").textContent;
+    const guests = document.getElementById("details-guests").textContent;
+
+    // Validate phone number
+    if (!guestMobile || guestMobile.trim() === "") {
+      showNotification("Phone number not available", "error");
+      return;
+    }
+
+    // Format phone number
+    let phone = guestMobile.trim();
+    // Remove any non-digit characters except +
+    phone = phone.replace(/[^\d+]/g, "");
+
+    if (phone.startsWith("0")) {
+      phone = phone.substring(1); // Remove leading 0
+    }
+    if (!phone.startsWith("91")) {
+      phone = `91${phone}`; // Add country code
+    }
+
+    // Google Maps link to your lodge
+    const mapsLink = "https://maps.app.goo.gl/Mz5rTrvC3ctyMmUt5";
+
+    // Build WhatsApp message
+    const message = `🏨 *BOOKING CONFIRMATION*
+
+Hello ${guestName},
+
+Your booking at our lodge has been confirmed!
+
+📋 *Booking Details:*
+• Booking ID: ${bookingId.substring(0, 8).toUpperCase()}
+• Room: ${room}
+• Check-in: ${checkIn}
+• Check-out: ${checkOut}
+• Duration: ${nights}
+• Guests: ${guests}
+
+💰 *Payment Status:*
+• Total Amount: ${totalAmount}
+• Paid: ${paidAmount}
+• Balance Due: ${balance}
+
+📍 *Location:*
+${mapsLink}
+
+Thank you for choosing us! 🙏`;
+
+    // Encode message for URL
+    const encodedMessage = encodeURIComponent(message);
+
+    // Create WhatsApp URL
+    const whatsappUrl = `https://wa.me/${phone}?text=${encodedMessage}`;
+
+    // Open WhatsApp with pre-filled message
+    window.open(whatsappUrl, "_blank");
+
+    showNotification("✅ Opening WhatsApp...", "success");
+  } catch (error) {
+    console.error("Error sending WhatsApp confirmation:", error);
+    showNotification("Error preparing message: " + error.message, "error");
+  }
+}

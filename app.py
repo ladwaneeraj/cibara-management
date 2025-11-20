@@ -1918,6 +1918,138 @@ def cleanup_old_data_route():
     except Exception as e:
         return jsonify(success=False, message=f"Error cleaning up data: {str(e)}")
 
+# Add this route to your Flask app (app.py)
+
+@app.route("/send_booking_confirmation", methods=["POST"])
+def send_booking_confirmation():
+    try:
+        data_json = request.json
+        booking_id = data_json.get("booking_id")
+        phone_number = data_json.get("phone_number")  # Guest mobile
+        
+        if not booking_id or not phone_number:
+            return jsonify(success=False, message="Booking ID and phone number are required")
+        
+        booking_doc = bookings_ref.document(booking_id).get()
+        if not booking_doc.exists:
+            return jsonify(success=False, message="Invalid booking ID")
+        
+        booking = booking_doc.to_dict()
+        
+        # Format phone number (remove leading 0 if present, add country code)
+        phone_number = phone_number.strip()
+        if phone_number.startswith('0'):
+            phone_number = phone_number[1:]
+        
+        # Add India country code if not present
+        if not phone_number.startswith('91'):
+            phone_number = f"91{phone_number}"
+        
+        # Google Maps link
+        maps_link = "https://maps.app.goo.gl/Mz5rTrvC3ctyMmUt5"
+        
+        # Format dates
+        check_in = datetime.strptime(booking["check_in_date"], "%Y-%m-%d")
+        check_out = datetime.strptime(booking["check_out_date"], "%Y-%m-%d")
+        nights = (check_out - check_in).days
+        
+        formatted_check_in = check_in.strftime("%d %b %Y")
+        formatted_check_out = check_out.strftime("%d %b %Y")
+        
+        # Build WhatsApp message
+        message = f"""🏨 *BOOKING CONFIRMATION*
+
+Hello {booking['guest_name']},
+
+Your booking at our lodge has been confirmed!
+
+📋 *Booking Details:*
+• Booking ID: {booking_id[:8].upper()}
+• Room: {booking['room']}
+• Check-in: {formatted_check_in}
+• Check-out: {formatted_check_out}
+• Duration: {nights} night{'s' if nights != 1 else ''}
+• Guests: {booking['guest_count']}
+
+💰 *Payment Status:*
+• Total Amount: ₹{booking['total_amount']}
+• Paid: ₹{booking['paid_amount']}
+• Balance Due: ₹{booking['balance']}
+
+📍 *Location:*
+{maps_link}
+
+If you have any questions, please feel free to contact us.
+
+Thank you for choosing us! 🙏"""
+
+        # Send via WhatsApp
+        success = send_whatsapp_message(phone_number, message)
+        
+        if success:
+            # Log the message send
+            log_entry = {
+                "booking_id": booking_id,
+                "guest_name": booking["guest_name"],
+                "phone_number": phone_number,
+                "message_type": "booking_confirmation",
+                "status": "sent",
+                "date": datetime.now(IST).strftime("%Y-%m-%d"),
+                "time": datetime.now(IST).strftime("%H:%M")
+            }
+            
+            # Create log document if it doesn't exist
+            whatsapp_log = logs_ref.document("whatsapp_messages").get()
+            if whatsapp_log.exists:
+                logs_ref.document("whatsapp_messages").update({
+                    "entries": firestore.ArrayUnion([log_entry])
+                })
+            else:
+                logs_ref.document("whatsapp_messages").set({
+                    "entries": [log_entry]
+                })
+            
+            logger.info(f"WhatsApp confirmation sent for booking {booking_id} to {phone_number}")
+            return jsonify(success=True, message="Confirmation message sent successfully")
+        else:
+            return jsonify(success=False, message="Failed to send WhatsApp message. Please check API configuration.")
+            
+    except Exception as e:
+        logger.error(f"Error sending booking confirmation: {str(e)}")
+        return jsonify(success=False, message=f"Error sending confirmation: {str(e)}")
+
+
+def send_whatsapp_message(phone_number, message):
+    """
+    Send WhatsApp message via Twilio
+    Requires: TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_WHATSAPP_NUMBER env variables
+    """
+    try:
+        from twilio.rest import Client
+        
+        account_sid = os.environ.get('TWILIO_ACCOUNT_SID')
+        auth_token = os.environ.get('TWILIO_AUTH_TOKEN')
+        twilio_whatsapp_number = os.environ.get('TWILIO_WHATSAPP_NUMBER', 'whatsapp:+14155552671')
+        
+        if not account_sid or not auth_token:
+            logger.warning("Twilio credentials not configured")
+            return False
+        
+        client = Client(account_sid, auth_token)
+        
+        msg = client.messages.create(
+            from_=twilio_whatsapp_number,
+            body=message,
+            to=f"whatsapp:+{phone_number}"
+        )
+        
+        logger.info(f"WhatsApp message sent via Twilio: {msg.sid}")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Error sending WhatsApp via Twilio: {str(e)}")
+        return False
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port)

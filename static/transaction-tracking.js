@@ -1,4 +1,4 @@
-// transaction-tracking.js - Enhanced Transaction Tracking System
+// transaction-tracking.js - Enhanced Transaction Tracking System with Unified Styling
 
 class TransactionTracker {
   constructor() {
@@ -7,7 +7,6 @@ class TransactionTracker {
     this.initializeTodayCounter();
   }
 
-  // Load daily counters from localStorage
   loadDailyCounters() {
     try {
       const stored = localStorage.getItem("lodge_daily_counters");
@@ -18,7 +17,6 @@ class TransactionTracker {
     }
   }
 
-  // Save daily counters to localStorage
   saveDailyCounters() {
     try {
       localStorage.setItem(
@@ -30,7 +28,6 @@ class TransactionTracker {
     }
   }
 
-  // Initialize today's counter if it doesn't exist
   initializeTodayCounter() {
     if (!this.dailyCounters[this.todayDate]) {
       this.dailyCounters[this.todayDate] = 0;
@@ -38,7 +35,6 @@ class TransactionTracker {
     }
   }
 
-  // Get next serial number for fresh check-in
   getNextSerialNumber() {
     this.dailyCounters[this.todayDate] =
       (this.dailyCounters[this.todayDate] || 0) + 1;
@@ -46,27 +42,20 @@ class TransactionTracker {
     return this.dailyCounters[this.todayDate];
   }
 
-  // Get serial number for a specific date (for existing check-ins)
   getSerialNumberForDate(date, roomNumber) {
-    // Check if this room has a serial number for this date
     const key = `${date}_${roomNumber}`;
     const stored = localStorage.getItem(`serial_${key}`);
-
     if (stored) {
       return parseInt(stored);
     }
-
-    // If not found, this might be an old entry - return null
     return null;
   }
 
-  // Store serial number for a specific room and date
   storeSerialNumber(date, roomNumber, serialNumber) {
     const key = `${date}_${roomNumber}`;
     localStorage.setItem(`serial_${key}`, serialNumber.toString());
   }
 
-  // Clean up old counters (keep only last 30 days)
   cleanupOldCounters() {
     const thirtyDaysAgo = new Date();
     thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
@@ -80,11 +69,9 @@ class TransactionTracker {
     this.saveDailyCounters();
   }
 
-  // Determine transaction type and return appropriate tag
   getTransactionTag(log, logType) {
     const tags = [];
 
-    // Check for booking transactions
     if (
       log.booking_id ||
       log.type === "booking_advance" ||
@@ -98,7 +85,6 @@ class TransactionTracker {
       });
     }
 
-    // Check for renewal/continue transactions
     if (log.room && this.isRenewalTransaction(log)) {
       tags.push({
         text: "CONTINUE",
@@ -107,7 +93,6 @@ class TransactionTracker {
       });
     }
 
-    // Check for service/add-on transactions
     if (log.item) {
       tags.push({
         text: "SERVICE",
@@ -116,7 +101,6 @@ class TransactionTracker {
       });
     }
 
-    // Check for refund transactions
     if (logType === "refunds") {
       tags.push({
         text: "REFUND",
@@ -128,9 +112,7 @@ class TransactionTracker {
     return tags;
   }
 
-  // Check if transaction is from a renewal
   isRenewalTransaction(log) {
-    // Check if this payment happened after the original check-in
     if (!log.room || !rooms[log.room]) return false;
 
     const room = rooms[log.room];
@@ -140,7 +122,6 @@ class TransactionTracker {
       const checkinDate = new Date(room.checkin_time);
       const logDateTime = new Date(`${log.date} ${log.time || "00:00"}`);
 
-      // If payment is more than 23 hours after check-in, it's likely a renewal
       const timeDiff = logDateTime - checkinDate;
       const hoursDiff = timeDiff / (1000 * 60 * 60);
 
@@ -151,24 +132,19 @@ class TransactionTracker {
     }
   }
 
-  // Get serial number for display in logs
   getDisplaySerialNumber(log) {
     if (!log.room || !log.date) return null;
 
-    // First check if we have a stored serial number
     const storedSerial = this.getSerialNumberForDate(log.date, log.room);
     if (storedSerial) return storedSerial;
 
-    // For today's fresh check-ins, we might need to assign a number
     if (log.date === this.todayDate && this.isFreshCheckin(log)) {
-      // This should already be handled during check-in, but as fallback
       return null;
     }
 
     return null;
   }
 
-  // Check if this is a fresh check-in transaction
   isFreshCheckin(log) {
     if (!log.room || !rooms[log.room]) return false;
 
@@ -181,18 +157,15 @@ class TransactionTracker {
         .split("T")[0];
       const logDate = log.date;
 
-      // Fresh check-in if the log date matches the check-in date
       return checkinDate === logDate;
     } catch (error) {
       return false;
     }
   }
 
-  // Process check-in and assign serial number
   processCheckin(roomNumber, checkinDate = null, isBookingConversion = false) {
     const date = checkinDate || this.todayDate;
 
-    // Assign serial numbers for today's check-ins (both fresh and booking conversions)
     if (date === this.todayDate) {
       const serialNumber = this.getNextSerialNumber();
       this.storeSerialNumber(date, roomNumber, serialNumber);
@@ -209,7 +182,6 @@ class TransactionTracker {
     return null;
   }
 
-  // Initialize the system
   initialize() {
     this.cleanupOldCounters();
     console.log("Transaction Tracker initialized");
@@ -223,7 +195,6 @@ class TransactionLogManager {
     this.transactionTracker = transactionTracker;
   }
 
-  // Render enhanced transaction logs
   renderEnhancedLogs() {
     const transactionLog = document.getElementById("transaction-log");
     if (!transactionLog) {
@@ -231,7 +202,6 @@ class TransactionLogManager {
       return;
     }
 
-    // Get today's date and previous dates
     const today = new Date();
     const yesterday = new Date(today);
     yesterday.setDate(yesterday.getDate() - 1);
@@ -244,10 +214,8 @@ class TransactionLogManager {
       .toISOString()
       .split("T")[0];
 
-    // Filter logs for the past 2 days + today
     const recentDates = [todayStr, yesterdayStr, dayBeforeYesterdayStr];
 
-    // Filter logs for the recent dates with null checks
     const recentCashLogs = (logs.cash || []).filter((log) =>
       recentDates.includes(log.date)
     );
@@ -258,30 +226,25 @@ class TransactionLogManager {
       recentDates.includes(log.date)
     );
 
-    // Add expenses logs - filter to only show transaction expenses
     const expensesLogs = logs.expenses || [];
     const recentExpenseLogs = expensesLogs.filter(
       (log) =>
         recentDates.includes(log.date) && log.expense_type === "transaction"
     );
 
-    // Combine and sort by date and time (most recent first)
     const allRecentLogs = [
       ...recentCashLogs.map((log) => ({ ...log, logType: "cash" })),
       ...recentOnlineLogs.map((log) => ({ ...log, logType: "online" })),
       ...recentRefundLogs.map((log) => ({ ...log, logType: "refunds" })),
       ...recentExpenseLogs.map((log) => ({ ...log, logType: "expenses" })),
     ].sort((a, b) => {
-      // First sort by date
       if (a.date !== b.date) {
         return new Date(b.date) - new Date(a.date);
       }
 
-      // Then sort by time within the same date
       const timeA = a.time || "00:00:00";
       const timeB = b.time || "00:00:00";
 
-      // Convert time to comparable format (HH:MM:SS to seconds)
       const getSeconds = (timeStr) => {
         const [hours, minutes, seconds = 0] = timeStr.split(":").map(Number);
         return hours * 3600 + minutes * 60 + seconds;
@@ -291,17 +254,15 @@ class TransactionLogManager {
       const timeSecondsB = getSeconds(timeB);
 
       if (timeSecondsA !== timeSecondsB) {
-        return timeSecondsB - timeSecondsA; // Most recent time first
+        return timeSecondsB - timeSecondsA;
       }
 
-      // If same date and time, sort by serial number (higher serial = more recent)
       const serialA = a.serial_number || 0;
       const serialB = b.serial_number || 0;
 
-      return serialB - serialA; // Higher serial number first
+      return serialB - serialA;
     });
 
-    // Update totals
     const cashTotal = document.getElementById("cash-total");
     const onlineTotal = document.getElementById("online-total");
     const refundTotal = document.getElementById("refund-total");
@@ -314,7 +275,6 @@ class TransactionLogManager {
       totalRevenue.textContent =
         "₹" + (totals.cash + totals.online - (totals.refunds || 0));
 
-    // Render logs
     if (allRecentLogs.length === 0) {
       transactionLog.innerHTML = `<div class="empty-state" style="padding: 2rem;">
         <i class="fas fa-receipt fa-3x"></i>
@@ -323,7 +283,6 @@ class TransactionLogManager {
       return;
     }
 
-    // Group logs by date
     const logsByDate = {};
     allRecentLogs.forEach((log) => {
       if (!logsByDate[log.date]) {
@@ -334,21 +293,17 @@ class TransactionLogManager {
 
     let logsHTML = "";
 
-    // Format date for display
     function formatDate(dateStr) {
       const date = new Date(dateStr);
       const options = { weekday: "long", month: "short", day: "numeric" };
       return date.toLocaleDateString("en-US", options);
     }
 
-    // Add section for each date
     Object.keys(logsByDate)
-      .sort((a, b) => new Date(b) - new Date(a)) // Sort dates in descending order
+      .sort((a, b) => new Date(b) - new Date(a))
       .forEach((date) => {
-        // Add date header
         let dateDisplay = formatDate(date);
 
-        // Mark today, yesterday
         if (date === todayStr) {
           dateDisplay = "Today (" + dateDisplay + ")";
         } else if (date === yesterdayStr) {
@@ -357,7 +312,6 @@ class TransactionLogManager {
 
         logsHTML += `<div class="log-date-header">${dateDisplay}</div>`;
 
-        // Add logs for this date using enhanced rendering
         logsByDate[date].forEach((log) => {
           logsHTML += this.renderEnhancedLogItem(log, log.logType);
         });
@@ -366,7 +320,6 @@ class TransactionLogManager {
     transactionLog.innerHTML = logsHTML;
   }
 
-  // Render enhanced log item
   renderEnhancedLogItem(log, logType) {
     const tags = this.getTransactionTags(log, logType);
     const serialNumber = this.getLogSerialNumber(log);
@@ -375,7 +328,6 @@ class TransactionLogManager {
     let color = "";
     let additionalInfo = "";
 
-    // Determine log type and styling based on priority
     if (logType === "refunds") {
       type = "Refund";
       color = 'style="color: var(--danger)"';
@@ -400,7 +352,6 @@ class TransactionLogManager {
       type = "Online Payment";
     }
 
-    // Build tags HTML
     let tagsHtml = "";
     if (tags.length > 0) {
       tagsHtml = tags
@@ -411,18 +362,15 @@ class TransactionLogManager {
         .join(" ");
     }
 
-    // Build serial number display
     let serialHtml = "";
     if (serialNumber) {
       serialHtml = `<span class="serial-number">#${serialNumber}</span>`;
     }
 
-    // Add room shift indicator if applicable
     const shiftInfo = log.room_shifted
       ? `<span class="room-shifted-badge">Shifted: ${log.old_room} → ${log.room}</span>`
       : "";
 
-    // Special handling for zero amount transactions and expenses
     let amountDisplay = `₹${log.amount}`;
     if (
       log.amount === 0 &&
@@ -434,7 +382,6 @@ class TransactionLogManager {
       amountDisplay = `<strong>₹${log.amount}</strong>`;
     }
 
-    // For expenses, show simpler format
     let titleContent = "";
     if (logType === "expenses") {
       titleContent = `<strong>${log.description || "Expense"}</strong>`;
@@ -460,11 +407,9 @@ class TransactionLogManager {
     `;
   }
 
-  // Get transaction tags for a log entry
   getTransactionTags(log, logType) {
     const tags = [];
 
-    // PRIORITY 1: Refund (highest priority - overrides everything)
     if (
       logType === "refunds" ||
       log.transaction_type === "refund" ||
@@ -475,25 +420,22 @@ class TransactionLogManager {
         class: "transaction-tag refund-tag",
         color: "#dc3545",
       });
-      return tags; // Return early - refunds don't get other tags
+      return tags;
     }
 
-    // PRIORITY 2: Expenses (but don't add tags for cleaner display)
     if (logType === "expenses") {
-      return tags; // Return empty tags for expenses - cleaner display
+      return tags;
     }
 
-    // PRIORITY 3: Service/Add-on (third priority - overrides continue)
     if (log.item || log.transaction_type === "service") {
       tags.push({
         text: "SERVICE",
         class: "transaction-tag service-tag",
         color: "#ffc107",
       });
-      return tags; // Return early - services don't get other tags
+      return tags;
     }
 
-    // PRIORITY 4: Booking transactions
     if (
       log.booking_id ||
       log.type === "booking_advance" ||
@@ -507,10 +449,9 @@ class TransactionLogManager {
         class: "transaction-tag booking-tag",
         color: "#6f42c1",
       });
-      return tags; // Return early - bookings don't get other tags
+      return tags;
     }
 
-    // PRIORITY 5: Pay Later
     if (
       log.payment_method === "pay_later" ||
       (log.amount === 0 && log.is_fresh_checkin)
@@ -520,18 +461,15 @@ class TransactionLogManager {
         class: "transaction-tag pay-later-tag",
         color: "#fd7e14",
       });
-      return tags; // Return early
+      return tags;
     }
 
-    // PRIORITY 6: Continue/Renewal (only if none of the above)
     let isRenewal = false;
 
-    // Method 1: Direct flags
     if (log.is_renewal === true || log.transaction_type === "renewal_payment") {
       isRenewal = true;
     }
 
-    // Method 2: Date comparison (only for non-service, non-refund transactions)
     if (
       !isRenewal &&
       log.room &&
@@ -551,7 +489,6 @@ class TransactionLogManager {
       }
     }
 
-    // Add CONTINUE tag only if it's a renewal
     if (isRenewal) {
       tags.push({
         text: "CONTINUE",
@@ -563,38 +500,7 @@ class TransactionLogManager {
     return tags;
   }
 
-  // Check if transaction is renewal based on timing
-  isRenewalBasedOnTiming(log) {
-    if (!log.room || !log.date || !rooms[log.room]) {
-      return false;
-    }
-
-    const room = rooms[log.room];
-    if (!room.checkin_time || !room.guest) {
-      return false;
-    }
-
-    try {
-      // Parse check-in date
-      const checkinDate = new Date(room.checkin_time.split(" ")[0]);
-      const logDate = new Date(log.date);
-
-      // If payment is on a different date than check-in, it's likely a renewal
-      const daysDiff = Math.floor(
-        (logDate - checkinDate) / (1000 * 60 * 60 * 24)
-      );
-
-      // If payment is 1 or more days after check-in, it's a renewal
-      return daysDiff >= 1;
-    } catch (error) {
-      console.error("Error checking renewal timing:", error);
-      return false;
-    }
-  }
-
-  // Get log serial number for display
   getLogSerialNumber(log) {
-    // Rule 1: Show serial for fresh check-ins AND booking conversions on the same day
     const isEligibleCheckin =
       log.is_fresh_checkin ||
       log.transaction_type === "fresh_checkin" ||
@@ -605,7 +511,6 @@ class TransactionLogManager {
       return null;
     }
 
-    // Rule 2: Never show serial for services, refunds, or renewals
     if (
       log.item ||
       log.transaction_type === "service" ||
@@ -616,7 +521,6 @@ class TransactionLogManager {
       return null;
     }
 
-    // Rule 3: Only show serial if we have one
     if (log.serial_number) {
       return log.serial_number;
     }
@@ -624,7 +528,6 @@ class TransactionLogManager {
     return null;
   }
 
-  // Update payment logs in checkout modal
   updatePaymentLogs(roomNumber) {
     const paymentLogsContainer = document.getElementById(
       "checkout-payment-logs"
@@ -634,10 +537,8 @@ class TransactionLogManager {
       return;
     }
 
-    // Show loading indicator
     paymentLogsContainer.innerHTML = `<div class="loading-indicator"><span class="loader"></span></div>`;
 
-    // Get all payments for this room and current occupancy only
     const roomInfo = rooms[roomNumber];
     if (!roomInfo || !roomInfo.guest || !roomInfo.checkin_time) {
       paymentLogsContainer.innerHTML =
@@ -646,28 +547,22 @@ class TransactionLogManager {
     }
 
     setTimeout(() => {
-      // Get current check-in time to filter logs for current occupancy only
       const currentCheckinTime = new Date(roomInfo.checkin_time);
 
-      // Filter payments for current guest only, and after current check-in
       const cashPayments = logs.cash.filter((log) => {
-        // Must match room and guest name
         if (log.room !== roomNumber || log.name !== roomInfo.guest.name) {
           return false;
         }
 
-        // If log has date/time information, make sure it's after check-in
         if (log.date && log.time) {
           const logTime = new Date(`${log.date} ${log.time}`);
           return logTime >= currentCheckinTime;
         }
 
-        // If no date/time info, include by default
         return true;
       });
 
       const onlinePayments = logs.online.filter((log) => {
-        // Similar filtering logic as cash payments
         if (log.room !== roomNumber || log.name !== roomInfo.guest.name) {
           return false;
         }
@@ -681,7 +576,6 @@ class TransactionLogManager {
       });
 
       const refundPayments = (logs.refunds || []).filter((log) => {
-        // Similar filtering logic
         if (log.room !== roomNumber || log.name !== roomInfo.guest.name) {
           return false;
         }
@@ -694,9 +588,7 @@ class TransactionLogManager {
         return true;
       });
 
-      // Filter add-ons based on check-in time
       const addOnPayments = (logs.add_ons || []).filter((log) => {
-        // Similar filtering logic
         if (log.room !== roomNumber) {
           return false;
         }
@@ -709,7 +601,6 @@ class TransactionLogManager {
         return true;
       });
 
-      // Add discount logs
       const discountLogs = (logs.discounts || []).filter((log) => {
         if (log.room !== roomNumber || log.name !== roomInfo.guest.name) {
           return false;
@@ -723,10 +614,8 @@ class TransactionLogManager {
         return true;
       });
 
-      // Create a map to track processed transactions to avoid duplicates
       const processedTransactions = new Map();
 
-      // Combine all payments and sort by time (most recent first)
       const allPayments = [
         ...cashPayments,
         ...onlinePayments,
@@ -740,7 +629,7 @@ class TransactionLogManager {
         const dateB = b.date
           ? new Date(`${b.date} ${b.time || "00:00"}`)
           : new Date(0);
-        return dateB - dateA; // Most recent first
+        return dateB - dateA;
       });
 
       if (allPayments.length === 0) {
@@ -756,13 +645,10 @@ class TransactionLogManager {
           amountText = "",
           paymentMethod = "";
 
-        // Create a unique key for this transaction to avoid duplicates
-        // Use timestamp, amount and item (if exists) to identify unique transactions
         const transactionKey = `${payment.date}-${payment.time}-${
           payment.amount || payment.price
         }-${payment.item || ""}-${payment.reason || ""}`;
 
-        // Skip if we've already processed this transaction
         if (processedTransactions.has(transactionKey)) {
           return;
         }
@@ -770,7 +656,6 @@ class TransactionLogManager {
         processedTransactions.set(transactionKey, true);
 
         if (cashPayments.includes(payment)) {
-          // Check if this is a service payment (has an item property)
           if (payment.item) {
             paymentType = `Add-on: ${payment.item}`;
             colorStyle = "style='color: var(--warning)'";
@@ -781,7 +666,6 @@ class TransactionLogManager {
             amountText = `₹${payment.amount}`;
           }
         } else if (onlinePayments.includes(payment)) {
-          // Check if this is a service payment (has an item property)
           if (payment.item) {
             paymentType = `Add-on: ${payment.item}`;
             colorStyle = "style='color: var(--warning)'";
@@ -800,7 +684,6 @@ class TransactionLogManager {
           colorStyle = "style='color: var(--warning)'";
           amountText = `₹${payment.price}`;
 
-          // Add payment method badge for balance add-ons
           if (payment.payment_method) {
             const badgeClass = payment.payment_method;
             paymentMethod = `<span class="service-payment-badge ${badgeClass}">${payment.payment_method}</span>`;
@@ -808,7 +691,6 @@ class TransactionLogManager {
             paymentMethod = `<span class="service-payment-badge balance">balance</span>`;
           }
         } else if (discountLogs.includes(payment)) {
-          // Add discount information
           paymentType = `Discount: ${payment.reason || ""}`;
           colorStyle = "style='color: var(--success)'";
           amountText = `₹${payment.amount}`;
@@ -832,7 +714,6 @@ class TransactionLogManager {
   }
 }
 
-// CSS styles for transaction tags
 const transactionTrackingStyles = `
     .transaction-tag {
         display: inline-block;
@@ -916,7 +797,7 @@ const transactionTrackingStyles = `
     }
 
     .service-payment-badge.cash {
-        background-color: #28a745;
+        background-color: #27ae60;
         color: white;
     }
 
@@ -980,18 +861,15 @@ const transactionTrackingStyles = `
     }
 `;
 
-// Add styles to the page
 function addTransactionTrackingStyles() {
   const styleSheet = document.createElement("style");
   styleSheet.textContent = transactionTrackingStyles;
   document.head.appendChild(styleSheet);
 }
 
-// Global instances
 let transactionTracker;
 let transactionLogManager;
 
-// Initialize when DOM is loaded
 document.addEventListener("DOMContentLoaded", function () {
   transactionTracker = new TransactionTracker();
   transactionLogManager = new TransactionLogManager(transactionTracker);
@@ -1002,7 +880,6 @@ document.addEventListener("DOMContentLoaded", function () {
   console.log("Transaction tracking and log management system initialized");
 });
 
-// Export for use in other files
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     TransactionTracker,
@@ -1012,7 +889,6 @@ if (typeof module !== "undefined" && module.exports) {
   };
 }
 
-// Global functions for backward compatibility
 window.renderEnhancedLogs = function () {
   if (transactionLogManager) {
     transactionLogManager.renderEnhancedLogs();
@@ -1022,5 +898,208 @@ window.renderEnhancedLogs = function () {
 window.updatePaymentLogs = function (roomNumber) {
   if (transactionLogManager) {
     transactionLogManager.updatePaymentLogs(roomNumber);
+  }
+};
+
+// ========== UNIFIED TRANSACTION FILTER MANAGER ==========
+class TransactionFilterManager {
+  constructor() {
+    this.currentFilter = "all";
+    this.initializeFilters();
+  }
+
+  initializeFilters() {
+    const filterButtons = document.querySelectorAll(".transaction-filter-btn");
+    filterButtons.forEach((btn) => {
+      btn.addEventListener("click", () => {
+        this.setFilter(btn.dataset.filter);
+      });
+    });
+    console.log("Transaction filter manager initialized");
+  }
+
+  setFilter(filterType) {
+    this.currentFilter = filterType;
+    document
+      .querySelectorAll(".transaction-filter-btn")
+      .forEach((btn) => btn.classList.remove("active"));
+    const activeBtn = document.querySelector(
+      `[data-filter="${filterType}"].transaction-filter-btn`
+    );
+    if (activeBtn) activeBtn.classList.add("active");
+    this.filterAndDisplayLogs();
+  }
+
+  isSameDayAsCheckin(logDate, checkinTime) {
+    try {
+      if (!checkinTime) return false;
+      const checkinDate = new Date(checkinTime).toISOString().split("T")[0];
+      return checkinDate === logDate;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  categorizeTransaction(log, logType) {
+    // Fresh: Fresh check-ins (serial number or is_fresh_checkin flag)
+    if (log.is_fresh_checkin || log.serial_number) {
+      return "fresh";
+    }
+
+    // Service: Has item (water, bed, etc)
+    if (log.item || log.transaction_type === "service") {
+      return "service";
+    }
+
+    // Expense: Refunds and expenses
+    if (logType === "refunds" || logType === "expenses") {
+      return "expense";
+    }
+
+    // Continue: All other payments (cash, online, add_ons after initial check-in)
+    if (logType === "cash" || logType === "online" || logType === "add_ons") {
+      return "continue";
+    }
+
+    return "all";
+  }
+
+  getAllCategorizedTransactions() {
+    const today = new Date().toISOString().split("T")[0];
+    const todayLogs = { fresh: [], continue: [], service: [], expense: [] };
+
+    (logs.cash || [])
+      .filter((log) => log.date === today)
+      .forEach((log) => {
+        const category = this.categorizeTransaction(log, "cash");
+        log.logType = "cash";
+        if (todayLogs[category]) todayLogs[category].push(log);
+      });
+
+    (logs.online || [])
+      .filter((log) => log.date === today)
+      .forEach((log) => {
+        const category = this.categorizeTransaction(log, "online");
+        log.logType = "online";
+        if (todayLogs[category]) todayLogs[category].push(log);
+      });
+
+    (logs.refunds || [])
+      .filter((log) => log.date === today)
+      .forEach((log) => {
+        const category = this.categorizeTransaction(log, "refunds");
+        log.logType = "refunds";
+        if (todayLogs[category]) todayLogs[category].push(log);
+      });
+
+    (logs.add_ons || [])
+      .filter((log) => log.date === today)
+      .forEach((log) => {
+        const category = this.categorizeTransaction(log, "add_ons");
+        log.logType = "add_ons";
+        if (todayLogs[category]) todayLogs[category].push(log);
+      });
+
+    (logs.expenses || [])
+      .filter((log) => log.date === today && log.expense_type === "transaction")
+      .forEach((log) => {
+        const category = this.categorizeTransaction(log, "expenses");
+        log.logType = "expenses";
+        if (todayLogs[category]) todayLogs[category].push(log);
+      });
+
+    return todayLogs;
+  }
+
+  filterAndDisplayLogs() {
+    const transactionLog = document.getElementById("transaction-log");
+    if (!transactionLog) return;
+
+    const categorizedLogs = this.getAllCategorizedTransactions();
+    this.updateFilterCounts(categorizedLogs);
+
+    // If "all" filter is selected, use the enhanced rendering
+    if (this.currentFilter === "all") {
+      if (transactionLogManager) {
+        transactionLogManager.renderEnhancedLogs();
+      }
+      return;
+    }
+
+    // For filtered views, get the specific category
+    let filteredLogs = categorizedLogs[this.currentFilter] || [];
+
+    // Sort by time (most recent first)
+    filteredLogs.sort((a, b) => {
+      const timeA = a.time || "00:00:00";
+      const timeB = b.time || "00:00:00";
+      const getSeconds = (timeStr) => {
+        const [hours, minutes, seconds = 0] = timeStr.split(":").map(Number);
+        return hours * 3600 + minutes * 60 + seconds;
+      };
+      return getSeconds(timeB) - getSeconds(timeA);
+    });
+
+    // Render filtered logs using the same enhanced rendering
+    let logsHtml = "";
+
+    if (filteredLogs.length === 0) {
+      logsHtml = `<div class="empty-state" style="padding: 2rem; text-align: center;"><i class="fas fa-inbox fa-3x" style="opacity: 0.5; margin-bottom: 1rem;"></i><p>No transactions in this category today</p></div>`;
+    } else {
+      logsHtml = filteredLogs
+        .map((log) =>
+          transactionLogManager.renderEnhancedLogItem(log, log.logType)
+        )
+        .join("");
+    }
+
+    transactionLog.innerHTML = logsHtml;
+  }
+
+  updateFilterCounts(categorizedLogs) {
+    const totalAll =
+      (categorizedLogs.fresh || []).length +
+      (categorizedLogs.continue || []).length +
+      (categorizedLogs.service || []).length +
+      (categorizedLogs.expense || []).length;
+
+    const counts = {
+      all: totalAll,
+      fresh: (categorizedLogs.fresh || []).length,
+      continue: (categorizedLogs.continue || []).length,
+      service: (categorizedLogs.service || []).length,
+      expense: (categorizedLogs.expense || []).length,
+    };
+
+    Object.keys(counts).forEach((filter) => {
+      const countElement = document.getElementById(`count-${filter}`);
+      if (countElement) countElement.textContent = counts[filter];
+    });
+  }
+}
+
+let transactionFilterManagerInstance;
+
+document.addEventListener("DOMContentLoaded", function () {
+  setTimeout(() => {
+    transactionFilterManagerInstance = new TransactionFilterManager();
+    console.log("Transaction filters ready");
+  }, 1000);
+});
+
+const originalRenderEnhancedLogs = window.renderEnhancedLogs;
+
+window.renderEnhancedLogs = function () {
+  if (typeof originalRenderEnhancedLogs === "function") {
+    originalRenderEnhancedLogs.apply(this, arguments);
+  }
+
+  if (
+    transactionFilterManagerInstance &&
+    transactionFilterManagerInstance.currentFilter === "all"
+  ) {
+    const categorizedLogs =
+      transactionFilterManagerInstance.getAllCategorizedTransactions();
+    transactionFilterManagerInstance.updateFilterCounts(categorizedLogs);
   }
 };

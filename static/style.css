@@ -2354,3 +2354,109 @@ input:checked + .toggle-slider:before {
 .cleaned-btn i {
   font-size: 12px;
 }
+.room-status.cleaning {
+  background-color: #f39c12 !important;
+  box-shadow: 0 0 12px rgba(243, 156, 18, 0.5) !important;
+  animation: pulse-yellow 2s infinite;
+}
+
+.transaction-filter-tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 1.5rem;
+  overflow-x: auto;
+  padding: 0.5rem 0;
+  border-bottom: 2px solid var(--border);
+}
+
+.transaction-filter-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0.6rem 1rem;
+  border: none;
+  background: transparent;
+  color: var(--gray);
+  cursor: pointer;
+  font-size: 0.9rem;
+  font-weight: 500;
+  white-space: nowrap;
+  transition: all 0.3s ease;
+  border-bottom: 3px solid transparent;
+  position: relative;
+  margin-bottom: -2px;
+}
+
+.transaction-filter-btn:hover {
+  color: var(--primary);
+  background-color: rgba(0, 0, 0, 0.02);
+}
+
+.transaction-filter-btn.active {
+  color: var(--primary);
+  border-bottom-color: var(--primary);
+  font-weight: 600;
+}
+
+.filter-label {
+  display: inline-block;
+}
+
+.filter-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  height: 24px;
+  padding: 0 6px;
+  background-color: var(--primary);
+  color: white;
+  border-radius: 12px;
+  font-size: 0.75rem;
+  font-weight: bold;
+}
+
+.transaction-filter-btn:hover .filter-count {
+  background-color: #0056b3;
+}
+
+.transaction-filter-btn.active .filter-count {
+  background-color: var(--primary);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+@media (max-width: 768px) {
+  .transaction-filter-tabs {
+    gap: 4px;
+  }
+
+  .transaction-filter-btn {
+    padding: 0.5rem 0.75rem;
+    font-size: 0.85rem;
+  }
+
+  .filter-count {
+    min-width: 20px;
+    height: 20px;
+    padding: 0 4px;
+    font-size: 0.7rem;
+  }
+}
+
+@media (max-width: 480px) {
+  .transaction-filter-tabs {
+    gap: 2px;
+  }
+
+  .transaction-filter-btn {
+    padding: 0.4rem 0.6rem;
+    font-size: 0.8rem;
+  }
+
+  .filter-count {
+    min-width: 18px;
+    height: 18px;
+    padding: 0 3px;
+    font-size: 0.65rem;
+  }
+}

@@ -302,15 +302,15 @@ function renderRooms() {
     }
 
     // Apply filters
-    if (
-      currentFilter === "vacant" &&
-      info.status !== "vacant" &&
-      info.status !== "cleaning"
-    ) {
+    if (currentFilter === "vacant" && info.status !== "vacant") {
       return;
     }
 
     if (currentFilter === "occupied" && info.status !== "occupied") {
+      return;
+    }
+
+    if (currentFilter === "cleaning" && info.status !== "cleaning") {
       return;
     }
 

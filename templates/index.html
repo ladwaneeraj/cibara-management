@@ -136,6 +136,7 @@
             <button class="filter-btn active" data-filter="all">All</button>
             <button class="filter-btn" data-filter="vacant">Vacant</button>
             <button class="filter-btn" data-filter="occupied">Occupied</button>
+            <button class="filter-btn" data-filter="cleaning">Cleaning</button>
             <button class="filter-btn" data-filter="balances">
               Pending Balances
             </button>
@@ -166,6 +167,29 @@
             <h2>Today's Transactions</h2>
             <button id="add-expense-btn" class="action-btn btn-sm btn-danger">
               <i class="fas fa-plus"></i> Add Expense
+            </button>
+          </div>
+
+          <div class="transaction-filter-tabs">
+            <button class="transaction-filter-btn active" data-filter="all">
+              <span class="filter-label">All</span>
+              <span class="filter-count" id="count-all">0</span>
+            </button>
+            <button class="transaction-filter-btn" data-filter="fresh">
+              <span class="filter-label">Fresh</span>
+              <span class="filter-count" id="count-fresh">0</span>
+            </button>
+            <button class="transaction-filter-btn" data-filter="continue">
+              <span class="filter-label">Continue</span>
+              <span class="filter-count" id="count-continue">0</span>
+            </button>
+            <button class="transaction-filter-btn" data-filter="service">
+              <span class="filter-label">Service</span>
+              <span class="filter-count" id="count-service">0</span>
+            </button>
+            <button class="transaction-filter-btn" data-filter="expense">
+              <span class="filter-label">Expense</span>
+              <span class="filter-count" id="count-expense">0</span>
             </button>
           </div>
 

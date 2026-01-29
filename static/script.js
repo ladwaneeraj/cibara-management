@@ -40,7 +40,7 @@ const roomSearch = document.getElementById("room-search");
 const refreshBtn = document.getElementById("refresh-btn");
 const settingsBtn = document.getElementById("settings-btn");
 const paymentOrRefundSection = document.getElementById(
-  "payment-or-refund-section"
+  "payment-or-refund-section",
 );
 const notificationContainer = document.getElementById("notification-container");
 
@@ -57,7 +57,7 @@ const serviceForm = document.getElementById("service-form");
 const serviceName = document.getElementById("service-name");
 const servicePrice = document.getElementById("service-price");
 const servicePaymentMethodInput = document.getElementById(
-  "service-payment-method"
+  "service-payment-method",
 );
 
 // Camera functionality
@@ -68,7 +68,7 @@ function initCamera() {
   const captureBtn = document.getElementById("capture-photo-btn");
   const cancelCameraBtn = document.getElementById("cancel-camera-btn");
   const photoPreviewContainer = document.getElementById(
-    "photo-preview-container"
+    "photo-preview-container",
   );
   const photoPreview = document.getElementById("photo-preview");
   const retakePhotoBtn = document.getElementById("retake-photo-btn");
@@ -122,7 +122,7 @@ function initCamera() {
       console.error("Error accessing camera:", error);
       showNotification(
         "Error accessing camera. Please check permissions.",
-        "error"
+        "error",
       );
     }
   });
@@ -351,7 +351,7 @@ function renderRooms() {
 
     roomCard.setAttribute(
       "aria-label",
-      `Room ${roomNumber} - ${displayStatus}`
+      `Room ${roomNumber} - ${displayStatus}`,
     );
 
     // Create basic room structure
@@ -433,7 +433,7 @@ function renderRooms() {
         roomContent += `<div class="badge" style="background-color:#ff9191;">₹${info.balance}</div>`;
       } else if (info.balance < 0) {
         roomContent += `<div class="badge" style="background-color: var(--success);">₹${Math.abs(
-          info.balance
+          info.balance,
         )}</div>`;
       }
     } else {
@@ -564,7 +564,8 @@ async function fetchData() {
           // Estimate a last renewal time if missing
           const checkinDate = new Date(roomInfo.checkin_time);
           const estimatedLastRenewal = new Date(
-            checkinDate.getTime() + roomInfo.renewal_count * 24 * 60 * 60 * 1000
+            checkinDate.getTime() +
+              roomInfo.renewal_count * 24 * 60 * 60 * 1000,
           );
           roomInfo.last_renewal_time = formatDateTime(estimatedLastRenewal);
         }
@@ -636,17 +637,17 @@ function updateStats() {
   const todayCashLogs = logs.cash.filter((log) => log.date === today);
   const todayOnlineLogs = logs.online.filter((log) => log.date === today);
   const todayRefundLogs = (logs.refunds || []).filter(
-    (log) => log.date === today
+    (log) => log.date === today,
   );
 
   // Calculate totals
   const todayCashTotal = todayCashLogs.reduce(
     (sum, log) => sum + log.amount,
-    0
+    0,
   );
   const todayOnlineTotal = todayOnlineLogs.reduce(
     (sum, log) => sum + log.amount,
-    0
+    0,
   );
 
   // Calculate refunds by payment method
@@ -782,7 +783,7 @@ async function triggerRentRenewal(roomNumber) {
       const hoursMinutesStr = `${renewalStatus.hoursLeft}h ${renewalStatus.minutesLeft}m`;
       showNotification(
         `Cannot renew yet. Please wait ${hoursMinutesStr} more.`,
-        "error"
+        "error",
       );
       return false;
     }
@@ -794,7 +795,7 @@ async function triggerRentRenewal(roomNumber) {
       "Processing renewal for room " +
         roomNumber +
         ", new day: " +
-        (newRenewalCount + 1)
+        (newRenewalCount + 1),
     );
 
     const response = await fetch("/renew_rent", {
@@ -841,7 +842,7 @@ async function triggerRentRenewal(roomNumber) {
 
       showNotification(
         `Room ${roomNumber} rent renewed for Day ${newRenewalCount + 1}!`,
-        "success"
+        "success",
       );
 
       return true;
@@ -923,10 +924,10 @@ function showRenewalModal() {
       dueRooms.forEach(({ room, info, status }) => {
         // Calculate how long ago renewal became due
         const hoursOverdue = Math.floor(
-          status.timeSinceExpiry / (1000 * 60 * 60)
+          status.timeSinceExpiry / (1000 * 60 * 60),
         );
         const minutesOverdue = Math.floor(
-          (status.timeSinceExpiry % (1000 * 60 * 60)) / (1000 * 60)
+          (status.timeSinceExpiry % (1000 * 60 * 60)) / (1000 * 60),
         );
 
         let overdueText;
@@ -943,8 +944,8 @@ function showRenewalModal() {
         renewalItem.innerHTML = `
           <div class="renewal-info">
             <div class="renewal-room">Room ${room} <span class="status-tag renewable">Day ${
-          status.dayNumber
-        }</span></div>
+              status.dayNumber
+            }</span></div>
             <div class="renewal-guest">${info.guest?.name || "Unknown"}</div>
             <div class="renewal-overdue">${overdueText}</div>
           </div>
@@ -1000,7 +1001,7 @@ function filterRoomsByBalance() {
   });
 
   const balancesFilterBtn = document.querySelector(
-    '.filter-btn[data-filter="balances"]'
+    '.filter-btn[data-filter="balances"]',
   );
   if (balancesFilterBtn) {
     balancesFilterBtn.classList.add("active");
@@ -1033,7 +1034,7 @@ function showCheckinModal(roomNumber) {
   }
 
   const photoPreviewContainer = document.getElementById(
-    "photo-preview-container"
+    "photo-preview-container",
   );
   if (photoPreviewContainer) {
     photoPreviewContainer.style.display = "none";
@@ -1085,7 +1086,7 @@ function updateCheckoutModal(roomNumber) {
   }
 
   const checkoutMobileNumber = document.getElementById(
-    "checkout-mobile-number"
+    "checkout-mobile-number",
   );
   if (checkoutMobileNumber) {
     checkoutMobileNumber.textContent = roomInfo.guest.mobile || "N/A";
@@ -1214,7 +1215,7 @@ function showCheckoutModal(roomNumber) {
         this.innerHTML = "Yes, Checkout";
 
         const checkoutConfirmModal = document.getElementById(
-          "checkout-confirm-modal"
+          "checkout-confirm-modal",
         );
         if (checkoutConfirmModal) {
           checkoutConfirmModal.classList.remove("show");
@@ -1228,7 +1229,7 @@ function showCheckoutModal(roomNumber) {
         this.innerHTML = "Yes, Checkout";
 
         const checkoutConfirmModal = document.getElementById(
-          "checkout-confirm-modal"
+          "checkout-confirm-modal",
         );
         if (checkoutConfirmModal) {
           checkoutConfirmModal.classList.remove("show");
@@ -1257,7 +1258,7 @@ function showCheckoutModal(roomNumber) {
 
           // Close modals
           const checkoutConfirmModal = document.getElementById(
-            "checkout-confirm-modal"
+            "checkout-confirm-modal",
           );
           if (checkoutConfirmModal) {
             checkoutConfirmModal.classList.remove("show");
@@ -1273,7 +1274,7 @@ function showCheckoutModal(roomNumber) {
 
           showNotification(
             result.message || "Checkout successful! Room marked for cleaning.",
-            "success"
+            "success",
           );
         } else {
           showNotification(result.message || "Error during checkout", "error");
@@ -1294,10 +1295,10 @@ function showCheckoutModal(roomNumber) {
 function updateRenewalHistory(roomNumber) {
   const roomInfo = rooms[roomNumber];
   const renewalHistoryContainer = document.getElementById(
-    "renewal-history-container"
+    "renewal-history-container",
   );
   const renewalHistoryContent = document.getElementById(
-    "renewal-history-content"
+    "renewal-history-content",
   );
   const nextRenewalTime = document.getElementById("next-renewal-time");
 
@@ -1471,7 +1472,7 @@ function initServiceButtons() {
 
   // Service payment method selection
   const servicePaymentBtns = document.querySelectorAll(
-    "#service-form .payment-btn"
+    "#service-form .payment-btn",
   );
   if (servicePaymentBtns.length === 0) {
     debugLog("No payment buttons found in service form");
@@ -1590,12 +1591,12 @@ async function addService() {
       if (servicePaymentMethod === "balance") {
         showNotification(
           `Added ${serviceWithQuantity} (₹${totalPrice}) to balance`,
-          "success"
+          "success",
         );
       } else {
         showNotification(
           `Added ${serviceWithQuantity} (₹${totalPrice}) - paid by ${servicePaymentMethod}`,
-          "success"
+          "success",
         );
       }
 
@@ -1692,7 +1693,7 @@ function showEditTimeModal(roomNumber, currentCheckInTime) {
 
         // Update the checkout modal with new data
         const checkoutCheckinTime = document.getElementById(
-          "checkout-checkin-time"
+          "checkout-checkin-time",
         );
         if (checkoutCheckinTime) {
           checkoutCheckinTime.textContent = newCheckInTime;
@@ -1702,14 +1703,14 @@ function showEditTimeModal(roomNumber, currentCheckInTime) {
       } else {
         showNotification(
           result.message || "Error updating check-in time",
-          "error"
+          "error",
         );
       }
     } catch (error) {
       console.error("Error updating check-in time:", error);
       showNotification(
         `Error updating check-in time: ${error.message}`,
-        "error"
+        "error",
       );
     } finally {
       // Re-enable submit button
@@ -1789,7 +1790,7 @@ function showRoomDetailsModal(roomNumber) {
       const now = new Date();
       const duration = Math.floor((now - checkinDate) / (1000 * 60 * 60 * 24));
       const hours = Math.floor(
-        ((now - checkinDate) % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60)
+        ((now - checkinDate) % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60),
       );
 
       html = `
@@ -1835,12 +1836,16 @@ function showRoomDetailsModal(roomNumber) {
               info.balance < 0
                 ? "color: var(--success)"
                 : info.balance > 0
-                ? "color: var(--danger)"
-                : ""
+                  ? "color: var(--danger)"
+                  : ""
             }">
               ₹${Math.abs(info.balance)}${
-        info.balance < 0 ? " (refund)" : info.balance > 0 ? " (due)" : ""
-      }
+                info.balance < 0
+                  ? " (refund)"
+                  : info.balance > 0
+                    ? " (due)"
+                    : ""
+              }
             </div>
           </div>
         </div>
@@ -1963,7 +1968,7 @@ function showCheckinModal(selectedRoomNumber) {
     if (dropdown) {
       // Find the option with the matching room number
       const option = Array.from(dropdown.options).find(
-        (opt) => opt.value === selectedRoomNumber
+        (opt) => opt.value === selectedRoomNumber,
       );
 
       if (option) {
@@ -1986,7 +1991,7 @@ function showCheckinModal(selectedRoomNumber) {
     }
 
     const photoPreviewContainer = document.getElementById(
-      "photo-preview-container"
+      "photo-preview-container",
     );
     if (photoPreviewContainer) {
       photoPreviewContainer.style.display = "none";
@@ -2223,7 +2228,7 @@ async function processRefund() {
     if (refundAmount <= 0) {
       showNotification(
         "Please enter a valid refund amount greater than 0",
-        "error"
+        "error",
       );
       return;
     }
@@ -2231,7 +2236,7 @@ async function processRefund() {
     if (refundAmount > maxRefundAmount) {
       showNotification(
         `Refund amount cannot exceed ₹${maxRefundAmount}`,
-        "error"
+        "error",
       );
       return;
     }
@@ -2261,7 +2266,7 @@ async function processRefund() {
     }
 
     debugLog(
-      `Processing refund of ₹${refundAmount} via ${refundMethod} for room ${roomNumber}`
+      `Processing refund of ₹${refundAmount} via ${refundMethod} for room ${roomNumber}`,
     );
 
     // Make API request with all necessary information
@@ -2299,7 +2304,7 @@ async function processRefund() {
       // Show success notification
       showNotification(
         `Refund of ₹${refundAmount} processed successfully via ${refundMethod}!`,
-        "success"
+        "success",
       );
     } else {
       // Show error from server
@@ -2371,7 +2376,7 @@ async function addPayment(mode) {
         '<span class="loader" style="width: 14px; height: 14px;"></span> Processing...';
     } else {
       console.warn(
-        `Button for payment mode ${mode} not found, proceeding anyway`
+        `Button for payment mode ${mode} not found, proceeding anyway`,
       );
     }
 
@@ -2400,7 +2405,7 @@ async function addPayment(mode) {
 
       showNotification(
         result.message || `Payment of ₹${amount} added successfully`,
-        "success"
+        "success",
       );
     } else {
       showNotification(result.message || "Error adding payment", "error");
@@ -2494,23 +2499,31 @@ const roomPricing = {
       else return 500; // For 2 or more guests
     }
 
-    // Second floor premium rooms (non-AC: 200, 201, 206, 207)
-    else if (["200", "201", "206", "207"].includes(roomNumber)) {
-      if (guestCount === 1) return 800;
-      else return 1000 + Math.max(0, guestCount - 2) * 300; // 1000 for 2 guests, +300 for each extra
-    }
-
-    // Second floor premium AC rooms (202-205)
-    else if (roomNumber >= 202 && roomNumber <= 205) {
-      return 1600 + Math.max(0, guestCount - 2) * 300; // 1600 for 2 guests, +300 for each extra
-    }
-
-    // Second floor rooms (208-211, 220-227, 215)
+    // Second floor premium rooms (200-207) - Can be AC or Non-AC
+    // Base price for 2 guests (double occupancy)
+    // 1200 for non-AC, 1800 for AC (will be adjusted in updateRoomPrice based on AC toggle)
     else if (
-      (roomNumber >= 208 && roomNumber <= 211) ||
-      (roomNumber >= 220 && roomNumber <= 227) ||
-      roomNumber === "215"
+      ["200", "201", "202", "203", "204", "205", "206", "207"].includes(
+        roomNumber,
+      )
     ) {
+      return 1200 + Math.max(0, guestCount - 2) * 300; // +300 for each extra guest beyond 2
+    }
+
+    // Second floor rooms (223-227)
+    else if (roomNumber >= 223 && roomNumber <= 227) {
+      // Base price for 2 guests (double occupancy): 900
+      return 900 + Math.max(0, guestCount - 2) * 300; // +300 for each extra guest beyond 2
+    }
+
+    // Second floor rooms (220-222)
+    else if (roomNumber >= 220 && roomNumber <= 222) {
+      if (guestCount === 1) return 450;
+      else return 700 + Math.max(0, guestCount - 2) * 300; // 700 for 2 guests, +300 for each extra
+    }
+
+    // Second floor rooms (208-211, 215)
+    else if ((roomNumber >= 208 && roomNumber <= 211) || roomNumber === "215") {
       if (guestCount === 1) return 450;
       else return 700 + Math.max(0, guestCount - 2) * 300; // 700 for 2 guests, +300 for each extra
     }
@@ -2543,26 +2556,18 @@ const roomPricing = {
       };
     }
 
-    // Premium AC rooms (202-205)
-    else if (roomNumber >= 202 && roomNumber <= 205) {
+    // Premium AC rooms (200-207) - All can have AC toggle
+    else if (
+      ["200", "201", "202", "203", "204", "205", "206", "207"].includes(
+        roomNumber,
+      )
+    ) {
       return {
         category: "premium-ac",
         label: "Premium AC Room",
         analytics: {
           type: "premium",
           isAC: true,
-        },
-      };
-    }
-
-    // Premium rooms (200, 201, 206, 207)
-    else if (["200", "201", "206", "207"].includes(roomNumber)) {
-      return {
-        category: "premium",
-        label: "Premium Room",
-        analytics: {
-          type: "premium",
-          isAC: false,
         },
       };
     }
@@ -2581,8 +2586,30 @@ const roomPricing = {
       };
     }
 
-    // Regular second floor rooms
-    else if (roomNumber >= 208 && roomNumber <= 227) {
+    // Regular second floor rooms (223-227)
+    else if (roomNumber >= 223 && roomNumber <= 227) {
+      return {
+        category: "regular",
+        label: "Regular Room",
+        analytics: {
+          type: "regular",
+        },
+      };
+    }
+
+    // Regular second floor rooms (220-222)
+    else if (roomNumber >= 220 && roomNumber <= 222) {
+      return {
+        category: "regular",
+        label: "Regular Room",
+        analytics: {
+          type: "regular",
+        },
+      };
+    }
+
+    // Regular second floor rooms (208-211)
+    else if (roomNumber >= 208 && roomNumber <= 211) {
       return {
         category: "regular",
         label: "Regular Room",
@@ -2640,9 +2667,13 @@ function initEnhancedCheckinForm() {
       roomCategoryIndicator.className =
         "room-category-indicator room-category-" + category.category;
 
-      // Show AC toggle only for rooms 202-205 (premium AC rooms)
+      // Show AC toggle for rooms 200-207 (all premium rooms)
       if (acToggleContainer) {
-        if (selectedRoom >= 202 && selectedRoom <= 205) {
+        if (
+          ["200", "201", "202", "203", "204", "205", "206", "207"].includes(
+            selectedRoom,
+          )
+        ) {
           acToggleContainer.style.display = "block";
           if (acToggle) {
             acToggle.checked = false; // AC toggle OFF by default
@@ -2667,11 +2698,11 @@ function initEnhancedCheckinForm() {
 
       // Set default guest count based on room number
       if (guestCountInput) {
-        // Set default to 2 guests for specified rooms
+        // Set default to 2 guests for specified rooms (double occupancy)
         if (
           (selectedRoom >= 200 && selectedRoom <= 211) ||
           selectedRoom == 215 ||
-          (selectedRoom >= 220 && selectedRoom <= 227) ||
+          (selectedRoom >= 223 && selectedRoom <= 227) ||
           (selectedRoom >= 23 && selectedRoom <= 27)
         ) {
           guestCountInput.value = 2;
@@ -2695,25 +2726,31 @@ function initEnhancedCheckinForm() {
     if (selectedRoom) {
       let price = roomPricing.calculatePrice(selectedRoom, guestCount);
 
-      // For premium AC rooms (202-205)
-      if (selectedRoom >= 202 && selectedRoom <= 205) {
-        // Apply price adjustment if AC is toggled off
-        if (acToggle && !acToggle.checked) {
-          // Reduce price by 600 if AC is turned off
-          price -= 600;
+      // For premium rooms (200-207)
+      if (
+        ["200", "201", "202", "203", "204", "205", "206", "207"].includes(
+          selectedRoom,
+        )
+      ) {
+        // Apply price adjustment based on AC toggle
+        if (acToggle && acToggle.checked) {
+          // Add 600 if AC is turned ON (1200 + 600 = 1800)
+          price += 600;
+
+          // Update the room category label to "Premium AC Room" when AC is on
+          if (roomCategoryIndicator) {
+            roomCategoryIndicator.textContent = "Premium AC Room";
+            roomCategoryIndicator.className =
+              "room-category-indicator room-category-premium-ac";
+          }
+        } else if (acToggle && !acToggle.checked) {
+          // Keep base price (1200) when AC is off
 
           // Update the room category label to "Premium Room" when AC is off
           if (roomCategoryIndicator) {
             roomCategoryIndicator.textContent = "Premium Room";
             roomCategoryIndicator.className =
               "room-category-indicator room-category-premium";
-          }
-        } else if (acToggle && acToggle.checked) {
-          // Ensure the label is "Premium AC Room" when AC is on
-          if (roomCategoryIndicator) {
-            roomCategoryIndicator.textContent = "Premium AC Room";
-            roomCategoryIndicator.className =
-              "room-category-indicator room-category-premium-ac";
           }
         }
       }
@@ -2756,7 +2793,7 @@ function showEnhancedCheckinModal(roomNumber) {
     if (dropdown) {
       // Find the option with the matching room number
       const option = Array.from(dropdown.options).find(
-        (opt) => opt.value === roomNumber
+        (opt) => opt.value === roomNumber,
       );
 
       if (option) {
@@ -2775,7 +2812,7 @@ function showEnhancedCheckinModal(roomNumber) {
 
     // Reset photo elements
     const photoPreviewContainer = document.getElementById(
-      "photo-preview-container"
+      "photo-preview-container",
     );
     if (photoPreviewContainer) {
       photoPreviewContainer.style.display = "none";
@@ -3104,7 +3141,7 @@ function showReportsTab() {
   });
 
   const reportsNavItem = document.querySelector(
-    '.nav-item[data-tab="reports"]'
+    '.nav-item[data-tab="reports"]',
   );
   if (reportsNavItem) {
     reportsNavItem.classList.add("active");
@@ -3114,7 +3151,7 @@ function showReportsTab() {
 // Add discount field to checkout modal for existing stays
 function addDiscountToCheckoutModal() {
   const balanceRow = document.querySelector(
-    "#checkout-modal .detail-row:nth-child(5)"
+    "#checkout-modal .detail-row:nth-child(5)",
   );
   if (!balanceRow) return;
 
@@ -3195,7 +3232,7 @@ function createDiscountDialog() {
 // Apply discount function
 async function applyDiscount() {
   const roomNumber = document.getElementById(
-    "checkout-room-number"
+    "checkout-room-number",
   ).textContent;
   const discountAmount =
     parseInt(document.getElementById("discount-amount").value) || 0;
@@ -3246,7 +3283,7 @@ async function applyDiscount() {
 
       showNotification(
         `Discount of ₹${discountAmount} applied successfully`,
-        "success"
+        "success",
       );
     } else {
       showNotification(result.message || "Failed to apply discount", "error");
@@ -3277,7 +3314,7 @@ function updateCheckoutModalWithDiscount(roomNumber) {
     if (roomInfo.discounts && Array.isArray(roomInfo.discounts)) {
       totalDiscount = roomInfo.discounts.reduce(
         (sum, discount) => sum + discount.amount,
-        0
+        0,
       );
     }
 
@@ -3375,7 +3412,7 @@ function setupCheckoutConfirmation() {
     // Set the room and guest name in the confirmation modal
     const confirmRoomElement = document.getElementById("confirm-checkout-room");
     const confirmGuestElement = document.getElementById(
-      "confirm-checkout-guest"
+      "confirm-checkout-guest",
     );
 
     if (confirmRoomElement) confirmRoomElement.textContent = roomNumber;
@@ -3383,7 +3420,7 @@ function setupCheckoutConfirmation() {
 
     // Show the confirmation modal
     const checkoutConfirmModal = document.getElementById(
-      "checkout-confirm-modal"
+      "checkout-confirm-modal",
     );
     if (checkoutConfirmModal) {
       checkoutConfirmModal.classList.add("show");
@@ -3436,7 +3473,7 @@ function setupCheckoutConfirmation() {
 
         // Close the confirmation modal
         const checkoutConfirmModal = document.getElementById(
-          "checkout-confirm-modal"
+          "checkout-confirm-modal",
         );
         if (checkoutConfirmModal) {
           checkoutConfirmModal.classList.remove("show");
@@ -3452,7 +3489,7 @@ function setupCheckoutConfirmation() {
 
         // Close the confirmation modal
         const checkoutConfirmModal = document.getElementById(
-          "checkout-confirm-modal"
+          "checkout-confirm-modal",
         );
         if (checkoutConfirmModal) {
           checkoutConfirmModal.classList.remove("show");
@@ -3483,7 +3520,7 @@ function setupCheckoutConfirmation() {
 
           // Close both modals
           const checkoutConfirmModal = document.getElementById(
-            "checkout-confirm-modal"
+            "checkout-confirm-modal",
           );
           if (checkoutConfirmModal) {
             checkoutConfirmModal.classList.remove("show");
@@ -3520,13 +3557,13 @@ function setupCheckoutConfirmation() {
 
   // Handle cancel and close buttons
   const cancelConfirmBtn = document.getElementById(
-    "cancel-confirm-checkout-btn"
+    "cancel-confirm-checkout-btn",
   );
   if (cancelConfirmBtn) {
     cancelConfirmBtn.addEventListener("click", function () {
       console.log("Cancel confirmation clicked");
       const checkoutConfirmModal = document.getElementById(
-        "checkout-confirm-modal"
+        "checkout-confirm-modal",
       );
       if (checkoutConfirmModal) {
         checkoutConfirmModal.classList.remove("show");
@@ -3536,13 +3573,13 @@ function setupCheckoutConfirmation() {
   }
 
   const confirmModalCloseBtn = document.querySelector(
-    "#checkout-confirm-modal .close-btn"
+    "#checkout-confirm-modal .close-btn",
   );
   if (confirmModalCloseBtn) {
     confirmModalCloseBtn.addEventListener("click", function () {
       console.log("Close confirmation modal clicked");
       const checkoutConfirmModal = document.getElementById(
-        "checkout-confirm-modal"
+        "checkout-confirm-modal",
       );
       if (checkoutConfirmModal) {
         checkoutConfirmModal.classList.remove("show");
@@ -3728,7 +3765,7 @@ document.addEventListener("DOMContentLoaded", function () {
         roomNumber = roomDropdown.value;
       } else {
         const roomNumberElement = document.getElementById(
-          "checkin-room-number"
+          "checkin-room-number",
         );
         if (roomNumberElement) {
           roomNumber = roomNumberElement.textContent;
@@ -3780,7 +3817,7 @@ document.addEventListener("DOMContentLoaded", function () {
       if (amountPaid > 0 && paymentMethod === "balance") {
         showNotification(
           'Cannot select "Pay Later" when amount is provided. Please select Cash or Online payment method.',
-          "error"
+          "error",
         );
         return;
       }
@@ -3858,10 +3895,10 @@ document.addEventListener("DOMContentLoaded", function () {
   if (editCheckinTimeBtn) {
     editCheckinTimeBtn.addEventListener("click", () => {
       const roomNumber = document.getElementById(
-        "checkout-room-number"
+        "checkout-room-number",
       )?.textContent;
       const currentTime = document.getElementById(
-        "checkout-checkin-time"
+        "checkout-checkin-time",
       )?.textContent;
       if (roomNumber) {
         showEditTimeModal(roomNumber, currentTime);
@@ -3894,7 +3931,7 @@ document.addEventListener("DOMContentLoaded", function () {
       for (const room of dueRooms) {
         try {
           const roomElement = document.querySelector(
-            `.renewal-item[data-room="${room}"]`
+            `.renewal-item[data-room="${room}"]`,
           );
           if (!roomElement) continue;
 
@@ -3938,14 +3975,14 @@ document.addEventListener("DOMContentLoaded", function () {
           `Successfully renewed ${successCount} room${
             successCount !== 1 ? "s" : ""
           }`,
-          "success"
+          "success",
         );
       }
 
       if (failCount > 0) {
         showNotification(
           `Failed to renew ${failCount} room${failCount !== 1 ? "s" : ""}`,
-          "warning"
+          "warning",
         );
       }
 
@@ -4026,7 +4063,7 @@ document.addEventListener("DOMContentLoaded", function () {
 
   // Override reports tab click handler
   const reportsNavItem = document.querySelector(
-    '.nav-item[data-tab="reports"]'
+    '.nav-item[data-tab="reports"]',
   );
   if (reportsNavItem) {
     // Remove any existing listeners first

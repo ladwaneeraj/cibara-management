@@ -1325,7 +1325,7 @@ def create_booking():
     try:
         booking_data = request.json
         
-        required_fields = ["room", "guest_name", "guest_mobile", "check_in_date", "check_out_date", "total_amount"]
+        required_fields = ["room", "guest_name", "guest_mobile", "check_in_date", "check_in_time", "check_out_date", "total_amount"]
         for field in required_fields:
             if field not in booking_data:
                 return jsonify(success=False, message=f"Missing required field: {field}")
@@ -1338,6 +1338,7 @@ def create_booking():
             "guest_mobile": booking_data["guest_mobile"],
             "booking_date": datetime.now(IST).strftime("%Y-%m-%d"),
             "check_in_date": booking_data["check_in_date"],
+            "check_in_time": booking_data["check_in_time"],
             "check_out_date": booking_data["check_out_date"],
             "status": "confirmed",
             "total_amount": int(booking_data["total_amount"]),
@@ -1456,7 +1457,7 @@ def update_booking():
             booking["balance"] = booking["total_amount"] - booking["paid_amount"]
         
         updatable_fields = [
-            "guest_name", "guest_mobile", "check_in_date", "check_out_date",
+            "guest_name", "guest_mobile", "check_in_date", "check_in_time", "check_out_date",
             "room", "notes", "guest_count", "total_amount", "status"
         ]
         
@@ -1563,7 +1564,31 @@ def convert_booking_to_checkin():
         balance_after_payment = booking["balance"] - remaining_payment
         
         current_date = datetime.now(IST).strftime("%Y-%m-%d")
+        current_time = datetime.now(IST).strftime("%H:%M")
         serial_number = get_next_serial_number(current_date)
+        
+        # Determine check-in time
+        # Use expected check-in time if guest arrives on or after expected time
+        # Otherwise use current time (early arrival)
+        expected_time = booking.get("check_in_time", "14:00")  # Default to 2 PM if not set
+        expected_datetime_str = f"{current_date} {expected_time}"
+        current_datetime = datetime.now(IST)
+        
+        try:
+            expected_datetime = datetime.strptime(expected_datetime_str, "%Y-%m-%d %H:%M")
+            expected_datetime = IST.localize(expected_datetime)
+            
+            # If current time is before expected time, use expected time
+            # Otherwise use actual arrival time
+            if current_datetime < expected_datetime:
+                checkin_datetime_str = expected_datetime_str
+                logger.info(f"Guest arriving early. Using expected check-in time: {expected_datetime_str}")
+            else:
+                checkin_datetime_str = current_datetime.strftime("%Y-%m-%d %H:%M")
+                logger.info(f"Guest arriving on time or late. Using current time: {checkin_datetime_str}")
+        except Exception as e:
+            logger.error(f"Error parsing expected time, using current time: {str(e)}")
+            checkin_datetime_str = current_datetime.strftime("%Y-%m-%d %H:%M")
         
         store_transaction_metadata(room_number, current_date, serial_number, "booking_conversion")
         
@@ -1576,7 +1601,7 @@ def convert_booking_to_checkin():
                 "room": booking["room"],
                 "name": booking["guest_name"],
                 "amount": remaining_payment,
-                "time": datetime.now(IST).strftime("%H:%M"),
+                "time": current_time,
                 "date": current_date,
                 "type": "booking_final_payment",
                 "serial_number": serial_number,
@@ -1595,7 +1620,7 @@ def convert_booking_to_checkin():
                 "room": booking["room"],
                 "name": booking["guest_name"],
                 "amount": 0,
-                "time": datetime.now(IST).strftime("%H:%M"),
+                "time": current_time,
                 "date": current_date,
                 "type": "booking_conversion_zero_payment",
                 "serial_number": serial_number,
@@ -1614,7 +1639,7 @@ def convert_booking_to_checkin():
             "name": booking["guest_name"],
             "amount": remaining_payment,
             "payment_method": payment_method if remaining_payment > 0 else "already_paid",
-            "time": datetime.now(IST).strftime("%H:%M"),
+            "time": current_time,
             "date": current_date,
             "type": "final_payment" if remaining_payment > 0 else "conversion_no_payment",
             "serial_number": serial_number,
@@ -1626,20 +1651,34 @@ def convert_booking_to_checkin():
             "entries": firestore.ArrayUnion([booking_payment])
         })
         
+        # Determine room price and AC status
+        room_price = int(booking_data.get("room_price", booking["total_amount"]))
+        is_ac = False
+        
+        # Check if it's a premium AC room (202-205)
+        if room_number in ["202", "203", "204", "205"]:
+            # Check if there's existing guest info with AC preference
+            if "is_ac" in booking:
+                is_ac = booking["is_ac"]
+            else:
+                # Default AC rooms to AC enabled
+                is_ac = True
+        
         guest = {
             "name": booking["guest_name"],
             "mobile": booking["guest_mobile"],
-            "price": int(booking_data.get("room_price", booking["total_amount"])),
+            "price": room_price,
             "guests": booking["guest_count"],
             "payment": payment_method,
             "balance": balance_after_payment if balance_after_payment > 0 else 0,
-            "photo": booking.get("photo_path")
+            "photo": booking.get("photo_path"),
+            "isAC": is_ac
         }
         
         batch.update(rooms_ref.document(room_number), {
             "status": "occupied",
             "guest": guest,
-            "checkin_time": datetime.now(IST).strftime("%Y-%m-%d %H:%M"),
+            "checkin_time": checkin_datetime_str,  # Use the determined check-in time
             "balance": balance_after_payment if balance_after_payment > 0 else 0,
             "add_ons": [],
             "renewal_count": 0,
@@ -1652,7 +1691,7 @@ def convert_booking_to_checkin():
                 "name": guest["name"],
                 "amount": balance_after_payment,
                 "date": current_date,
-                "time": datetime.now(IST).strftime("%H:%M"),
+                "time": current_time,
                 "note": "Remaining balance from booking",
                 "serial_number": serial_number,
                 "transaction_type": "booking_conversion",
@@ -1666,7 +1705,8 @@ def convert_booking_to_checkin():
             totals["balance"] += balance_after_payment
         
         booking["status"] = "checked_in"
-        booking["check_in_time"] = datetime.now(IST).strftime("%Y-%m-%d %H:%M")
+        booking["check_in_time"] = checkin_datetime_str
+        booking["actual_checkin_time"] = current_datetime.strftime("%Y-%m-%d %H:%M")
         
         batch.set(bookings_ref.document(booking_id), booking)
         batch.set(totals_ref.document('current_totals'), totals)
@@ -1674,18 +1714,27 @@ def convert_booking_to_checkin():
         
         invalidate_cache()
         
-        logger.info(f"Booking {booking_id} converted to check-in for room {room_number} with serial #{serial_number}")
+        # Determine if guest arrived early or on time
+        arrival_status = "early" if current_datetime < expected_datetime else "on time"
+        
+        logger.info(
+            f"Booking {booking_id} converted to check-in for room {room_number} "
+            f"with serial #{serial_number}. Guest arrived {arrival_status}. "
+            f"Check-in time: {checkin_datetime_str}"
+        )
         
         return jsonify(
             success=True,
-            message=f"Guest checked in to Room {room_number} (#{serial_number})",
-            serial_number=serial_number
+            message=f"Guest checked in to Room {room_number}",
+            serial_number=serial_number,
+            checkin_time=checkin_datetime_str,
+            arrival_status=arrival_status
         )
         
     except Exception as e:
         logger.error(f"Error converting booking to check-in: {str(e)}", exc_info=True)
         return jsonify(success=False, message=f"Error converting booking to check-in: {str(e)}")
-
+    
 @app.route("/check_availability", methods=["POST"])
 def check_availability():
     try:

@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
@@ -1365,6 +1365,17 @@
             />
           </div>
           <div class="form-group">
+            <label class="form-label" for="booking-check-in-time"
+              >Expected Check-in Time</label
+            >
+            <input
+              type="time"
+              class="form-control"
+              id="booking-check-in-time"
+              required
+            />
+          </div>
+          <div class="form-group">
             <label class="form-label" for="booking-check-out"
               >Check-out Date</label
             >
@@ -1593,6 +1604,10 @@
           <div class="detail-row">
             <div class="detail-label">Check-in Date</div>
             <div class="detail-value" id="details-check-in"></div>
+          </div>
+          <div class="detail-row">
+            <div class="detail-label">Expected Check-in Time</div>
+            <div class="detail-value" id="details-check-in-time"></div>
           </div>
           <div class="detail-row">
             <div class="detail-label">Check-out Date</div>
@@ -1976,6 +1991,17 @@
               type="date"
               class="form-control"
               id="update-check-in"
+              required
+            />
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="update-check-in-time"
+              >Expected Check-in Time</label
+            >
+            <input
+              type="time"
+              class="form-control"
+              id="update-check-in-time"
               required
             />
           </div>

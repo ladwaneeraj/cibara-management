@@ -7,7 +7,7 @@ let currentBookingFilter = "upcoming";
 document.addEventListener("DOMContentLoaded", function () {
   // Initialize booking tab
   const bookingNavItem = document.querySelector(
-    '.nav-item[data-tab="bookings"]'
+    '.nav-item[data-tab="bookings"]',
   );
   if (bookingNavItem) {
     bookingNavItem.addEventListener("click", function () {
@@ -128,7 +128,7 @@ function initializeBookingForm() {
       // Validate partial payment is not greater than total
       if (partial > total) {
         partialPayment.setCustomValidity(
-          "Partial payment cannot exceed total amount"
+          "Partial payment cannot exceed total amount",
         );
       } else {
         partialPayment.setCustomValidity("");
@@ -152,16 +152,17 @@ async function createBooking(event) {
   const guestName = document.getElementById("booking-guest-name").value;
   const guestMobile = document.getElementById("booking-guest-mobile").value;
   const checkInDate = document.getElementById("booking-check-in").value;
+  const checkInTime = document.getElementById("booking-check-in-time").value; // Get the time
   const checkOutDate = document.getElementById("booking-check-out").value;
   const totalAmount = parseInt(
-    document.getElementById("booking-total-amount").value
+    document.getElementById("booking-total-amount").value,
   );
   const partialPayment = parseInt(
-    document.getElementById("booking-partial-payment").value || 0
+    document.getElementById("booking-partial-payment").value || 0,
   );
   const paymentMethod = document.getElementById("booking-payment-method").value;
   const guestCount = parseInt(
-    document.getElementById("booking-guest-count").value
+    document.getElementById("booking-guest-count").value,
   );
   const notes = document.getElementById("booking-notes").value;
 
@@ -171,6 +172,7 @@ async function createBooking(event) {
     !guestName ||
     !guestMobile ||
     !checkInDate ||
+    !checkInTime || // Validate time is present
     !checkOutDate ||
     !totalAmount
   ) {
@@ -193,7 +195,7 @@ async function createBooking(event) {
   const checkOut = new Date(checkOutDate);
   checkOut.setHours(0, 0, 0, 0);
 
-  if (checkOut < checkIn) {
+  if (checkOut <= checkIn) {
     showNotification("Check-out date must be after check-in date", "error");
     return;
   }
@@ -214,6 +216,7 @@ async function createBooking(event) {
       guest_name: guestName,
       guest_mobile: guestMobile,
       check_in_date: checkInDate,
+      check_in_time: checkInTime, // Include the time
       check_out_date: checkOutDate,
       total_amount: totalAmount,
       paid_amount: partialPayment,
@@ -222,6 +225,8 @@ async function createBooking(event) {
       notes,
       photo_path: uploadedPhotoUrl,
     };
+
+    console.log("Creating booking with data:", bookingData); // Debug log
 
     // Send request to create booking
     const response = await fetch("/create_booking", {
@@ -249,7 +254,7 @@ async function createBooking(event) {
       // Reset photo
       uploadedPhotoUrl = null;
       const photoPreviewContainer = document.getElementById(
-        "booking-photo-preview-container"
+        "booking-photo-preview-container",
       );
       if (photoPreviewContainer) {
         photoPreviewContainer.style.display = "none";
@@ -260,6 +265,11 @@ async function createBooking(event) {
 
       // Refresh bookings
       fetchBookings();
+
+      // If we're in calendar view, refresh the calendar
+      if (currentCalendarView === "calendar") {
+        renderCalendar();
+      }
     } else {
       showNotification(result.message || "Error creating booking", "error");
     }
@@ -339,7 +349,7 @@ function renderBookings() {
     return true;
   });
 
-  // Sort bookings by check-in date (most recent first for past bookings, soonest first for upcoming)
+  // Sort bookings by check-in date AND time
   filteredBookings.sort((a, b) => {
     const dateA = new Date(a.check_in_date);
     const dateB = new Date(b.check_in_date);
@@ -348,20 +358,34 @@ function renderBookings() {
       currentBookingFilter === "completed" ||
       currentBookingFilter === "cancelled"
     ) {
-      return dateB - dateA; // Most recent first for past bookings
+      // Most recent first for past bookings
+      if (dateB.getTime() !== dateA.getTime()) {
+        return dateB - dateA;
+      }
+      // If same date, sort by time (most recent first)
+      const timeA = a.check_in_time || "23:59";
+      const timeB = b.check_in_time || "23:59";
+      return timeB.localeCompare(timeA);
     } else {
-      return dateA - dateB; // Soonest first for upcoming bookings
+      // Soonest first for upcoming bookings
+      if (dateA.getTime() !== dateB.getTime()) {
+        return dateA - dateB;
+      }
+      // If same date, sort by time (earliest first)
+      const timeA = a.check_in_time || "00:00";
+      const timeB = b.check_in_time || "00:00";
+      return timeA.localeCompare(timeB);
     }
   });
 
   // Show empty state if no bookings
   if (filteredBookings.length === 0) {
     bookingsList.innerHTML = `
-            <div class="empty-state">
-                <i class="fas fa-calendar-alt fa-3x"></i>
-                <p>No ${currentBookingFilter} bookings found</p>
-            </div>
-        `;
+      <div class="empty-state">
+        <i class="fas fa-calendar-alt fa-3x"></i>
+        <p>No ${currentBookingFilter} bookings found</p>
+      </div>
+    `;
     return;
   }
 
@@ -375,9 +399,13 @@ function renderBookings() {
     const formattedCheckIn = formatDate(checkInDate);
     const formattedCheckOut = formatDate(checkOutDate);
 
+    // Format check-in time - ALWAYS SHOW IT
+    const checkInTime = booking.check_in_time || "14:00"; // Default to 2 PM if not set
+    const formattedTime = formatTime(checkInTime);
+
     // Calculate nights
     const nights = Math.round(
-      (checkOutDate - checkInDate) / (1000 * 60 * 60 * 24)
+      (checkOutDate - checkInDate) / (1000 * 60 * 60 * 24),
     );
 
     // Determine status badge color
@@ -407,43 +435,48 @@ function renderBookings() {
       booking.paid_amount === booking.total_amount
         ? '<span class="payment-badge paid">Fully Paid</span>'
         : booking.paid_amount > 0
-        ? '<span class="payment-badge partial">Partially Paid</span>'
-        : '<span class="payment-badge unpaid">Unpaid</span>';
+          ? '<span class="payment-badge partial">Partially Paid</span>'
+          : '<span class="payment-badge unpaid">Unpaid</span>';
 
     html += `
-            <div class="booking-item" data-id="${booking.booking_id}">
-                <div class="booking-header">
-                    <div class="booking-room">Room ${booking.room}</div>
-                    <div class="booking-badges">
-                        ${statusBadge}
-                        ${todayBadge}
-                    </div>
-                </div>
-                <div class="booking-guest">${booking.guest_name}</div>
-                <div class="booking-dates">
-                    <div><i class="fas fa-calendar-check"></i> ${formattedCheckIn}</div>
-                    <div><i class="fas fa-calendar-times"></i> ${formattedCheckOut}</div>
-                    <div><i class="fas fa-moon"></i> ${nights} night${
-      nights !== 1 ? "s" : ""
-    }</div>
-                </div>
-                <div class="booking-footer">
-                    <div class="booking-payment">
-                        ${paymentStatus}
-                        <div class="booking-amount">₹${
-                          booking.total_amount
-                        }</div>
-                    </div>
-                    <div class="booking-actions">
-                        <button class="action-btn btn-sm btn-primary view-booking-btn" data-id="${
-                          booking.booking_id
-                        }">
-                            <i class="fas fa-eye"></i>
-                        </button>
-                    </div>
-                </div>
+      <div class="booking-item" data-id="${booking.booking_id}">
+        <div class="booking-header">
+          <div class="booking-room">Room ${booking.room}</div>
+          <div class="booking-badges">
+            ${statusBadge}
+            ${todayBadge}
+          </div>
+        </div>
+        <div class="booking-guest">${booking.guest_name}</div>
+        <div class="booking-dates">
+          <div class="booking-date-row">
+            <div class="date-info">
+              <i class="fas fa-calendar-check"></i> ${formattedCheckIn}
             </div>
-        `;
+            <div class="time-info">
+              <i class="fas fa-clock"></i> ${formattedTime}
+            </div>
+          </div>
+          <div><i class="fas fa-calendar-times"></i> ${formattedCheckOut}</div>
+          <div><i class="fas fa-moon"></i> ${nights} night${
+            nights !== 1 ? "s" : ""
+          }</div>
+        </div>
+        <div class="booking-footer">
+          <div class="booking-payment">
+            ${paymentStatus}
+            <div class="booking-amount">₹${booking.total_amount}</div>
+          </div>
+          <div class="booking-actions">
+            <button class="action-btn btn-sm btn-primary view-booking-btn" data-id="${
+              booking.booking_id
+            }">
+              <i class="fas fa-eye"></i>
+            </button>
+          </div>
+        </div>
+      </div>
+    `;
   });
 
   bookingsList.innerHTML = html;
@@ -455,6 +488,19 @@ function renderBookings() {
       showBookingDetails(bookingId);
     });
   });
+}
+
+// Helper function to format time
+function formatTime(timeStr) {
+  if (!timeStr) return "2:00 PM"; // Default display
+
+  // timeStr is in HH:MM format
+  const [hours, minutes] = timeStr.split(":");
+  const hour = parseInt(hours);
+  const ampm = hour >= 12 ? "PM" : "AM";
+  const displayHour = hour % 12 || 12;
+
+  return `${displayHour}:${minutes} ${ampm}`;
 }
 
 // Format date for display
@@ -484,7 +530,7 @@ function formatDateTime(dateStr) {
   return date.toLocaleDateString("en-US", options);
 }
 
-// Show booking details modal
+// Show booking details modal - Updated
 function showBookingDetails(bookingId) {
   const booking = bookings.find((b) => b.booking_id === bookingId);
   if (!booking) return;
@@ -496,13 +542,17 @@ function showBookingDetails(bookingId) {
   const checkInDate = new Date(booking.check_in_date);
   const checkOutDate = new Date(booking.check_out_date);
   const nights = Math.round(
-    (checkOutDate - checkInDate) / (1000 * 60 * 60 * 24)
+    (checkOutDate - checkInDate) / (1000 * 60 * 60 * 24),
   );
 
   // Format dates
   const formattedCheckIn = formatDate(checkInDate);
   const formattedCheckOut = formatDate(checkOutDate);
   const bookingDate = formatDateTime(booking.booking_date);
+
+  // Format check-in time with default
+  const checkInTime = booking.check_in_time || "14:00";
+  const formattedTime = formatTime(checkInTime);
 
   // Set booking details
   document.getElementById("details-booking-id").textContent = bookingId;
@@ -511,10 +561,10 @@ function showBookingDetails(bookingId) {
     booking.guest_name;
   document.getElementById("details-guest-mobile").textContent =
     booking.guest_mobile;
-  document.getElementById(
-    "details-guest-mobile-link"
-  ).href = `tel:${booking.guest_mobile}`;
+  document.getElementById("details-guest-mobile-link").href =
+    `tel:${booking.guest_mobile}`;
   document.getElementById("details-check-in").textContent = formattedCheckIn;
+  document.getElementById("details-check-in-time").textContent = formattedTime;
   document.getElementById("details-check-out").textContent = formattedCheckOut;
   document.getElementById("details-booking-date").textContent = bookingDate;
   document.getElementById("details-nights").textContent = `${nights} night${
@@ -522,15 +572,12 @@ function showBookingDetails(bookingId) {
   }`;
   document.getElementById("details-guests").textContent =
     booking.guest_count || 1;
-  document.getElementById(
-    "details-total-amount"
-  ).textContent = `₹${booking.total_amount}`;
-  document.getElementById(
-    "details-paid-amount"
-  ).textContent = `₹${booking.paid_amount}`;
-  document.getElementById(
-    "details-balance"
-  ).textContent = `₹${booking.balance}`;
+  document.getElementById("details-total-amount").textContent =
+    `₹${booking.total_amount}`;
+  document.getElementById("details-paid-amount").textContent =
+    `₹${booking.paid_amount}`;
+  document.getElementById("details-balance").textContent =
+    `₹${booking.balance}`;
   document.getElementById("details-status").textContent =
     booking.status.charAt(0).toUpperCase() + booking.status.slice(1);
   document.getElementById("details-notes").textContent =
@@ -649,17 +696,17 @@ async function checkAvailability() {
         roomSelect.innerHTML = '<option value="">No rooms available</option>';
         showNotification(
           "No rooms available for the selected dates",
-          "warning"
+          "warning",
         );
       } else {
         roomSelect.innerHTML = '<option value="">Select a room</option>';
 
         // Group rooms by floor
         const firstFloor = availableRooms.filter(
-          (room) => !room.startsWith("2")
+          (room) => !room.startsWith("2"),
         );
         const secondFloor = availableRooms.filter((room) =>
-          room.startsWith("2")
+          room.startsWith("2"),
         );
 
         // Sort rooms numerically within each floor
@@ -698,7 +745,7 @@ async function checkAvailability() {
 
         // Log for debugging
         console.log(
-          `Found ${availableRooms.length} available rooms for dates ${checkInDate} to ${checkOutDate}`
+          `Found ${availableRooms.length} available rooms for dates ${checkInDate} to ${checkOutDate}`,
         );
       }
     } else {
@@ -706,7 +753,7 @@ async function checkAvailability() {
         '<option value="">Error checking availability</option>';
       showNotification(
         result.message || "Error checking availability",
-        "error"
+        "error",
       );
     }
   } catch (error) {
@@ -729,6 +776,7 @@ function isToday(dateStr) {
   );
 }
 
+// Show new booking modal
 // Show new booking modal
 function showNewBookingModal() {
   const modal = document.getElementById("new-booking-modal");
@@ -755,6 +803,12 @@ function showNewBookingModal() {
   if (checkInDate) checkInDate.value = today.toISOString().split("T")[0];
   if (checkOutDate) checkOutDate.value = tomorrow.toISOString().split("T")[0];
 
+  // Set default check-in time to 2:00 PM
+  const checkInTimeInput = document.getElementById("booking-check-in-time");
+  if (checkInTimeInput) {
+    checkInTimeInput.value = "14:00"; // 2:00 PM
+  }
+
   // Reset payment method
   document.querySelectorAll("#booking-form .payment-btn").forEach((btn) => {
     btn.classList.remove("active");
@@ -768,7 +822,7 @@ function showNewBookingModal() {
 
   // Reset photo preview
   const photoPreviewContainer = document.getElementById(
-    "booking-photo-preview-container"
+    "booking-photo-preview-container",
   );
   if (photoPreviewContainer) photoPreviewContainer.style.display = "none";
 
@@ -794,7 +848,7 @@ function showCancelBookingModal(bookingId) {
   document.getElementById("cancel-room-number").textContent = booking.room;
   document.getElementById("cancel-guest-name").textContent = booking.guest_name;
   document.getElementById("cancel-check-in").textContent = formatDate(
-    new Date(booking.check_in_date)
+    new Date(booking.check_in_date),
   );
 
   // Set refund amount to what was paid
@@ -835,7 +889,7 @@ function initializeCancelBookingForm() {
 
     const bookingId = document.getElementById("cancel-booking-id").value;
     const refundAmount = parseInt(
-      document.getElementById("cancel-refund-amount").value || 0
+      document.getElementById("cancel-refund-amount").value || 0,
     );
     const refundMethod = document.getElementById("cancel-refund-method").value;
     const reason = document.getElementById("cancel-reason").value;
@@ -913,7 +967,7 @@ function initializeCancelBookingForm() {
   });
 }
 
-// Show convert booking modal
+// Show convert booking modal - Updated with time
 function showConvertBookingModal(bookingId) {
   const booking = bookings.find((b) => b.booking_id === bookingId);
   if (!booking) return;
@@ -921,23 +975,27 @@ function showConvertBookingModal(bookingId) {
   const modal = document.getElementById("convert-booking-modal");
   if (!modal) return;
 
+  // Format check-in time
+  const checkInTime = booking.check_in_time || "14:00";
+  const formattedTime = formatTime(checkInTime);
+  const formattedDate = formatDate(new Date(booking.check_in_date));
+
   // Set booking details
   document.getElementById("convert-booking-id").value = bookingId;
   document.getElementById("convert-room-number").textContent = booking.room;
   document.getElementById("convert-guest-name").textContent =
     booking.guest_name;
-  document.getElementById("convert-check-in").textContent = formatDate(
-    new Date(booking.check_in_date)
-  );
-  document.getElementById(
-    "convert-total-amount"
-  ).textContent = `₹${booking.total_amount}`;
-  document.getElementById(
-    "convert-paid-amount"
-  ).textContent = `₹${booking.paid_amount}`;
-  document.getElementById(
-    "convert-balance"
-  ).textContent = `₹${booking.balance}`;
+
+  // Show date and time together
+  document.getElementById("convert-check-in").textContent =
+    `${formattedDate} at ${formattedTime}`;
+
+  document.getElementById("convert-total-amount").textContent =
+    `₹${booking.total_amount}`;
+  document.getElementById("convert-paid-amount").textContent =
+    `₹${booking.paid_amount}`;
+  document.getElementById("convert-balance").textContent =
+    `₹${booking.balance}`;
 
   // Set remaining payment input to the balance amount
   const remainingPayment = document.getElementById("convert-remaining-payment");
@@ -945,6 +1003,21 @@ function showConvertBookingModal(bookingId) {
     remainingPayment.max = booking.balance;
     remainingPayment.value = booking.balance > 0 ? booking.balance : 0;
   }
+
+  // Reset payment method to cash
+  document
+    .querySelectorAll("#convert-booking-form .payment-btn")
+    .forEach((btn) => {
+      btn.classList.remove("active");
+    });
+
+  const cashBtn = document.querySelector(
+    "#convert-booking-form .payment-btn.cash",
+  );
+  if (cashBtn) cashBtn.classList.add("active");
+
+  const paymentMethodInput = document.getElementById("convert-payment-method");
+  if (paymentMethodInput) paymentMethodInput.value = "cash";
 
   // Show modal
   modal.classList.add("show");
@@ -977,10 +1050,10 @@ function initializeConvertBookingForm() {
 
     const bookingId = document.getElementById("convert-booking-id").value;
     const remainingPayment = parseInt(
-      document.getElementById("convert-remaining-payment").value || 0
+      document.getElementById("convert-remaining-payment").value || 0,
     );
     const paymentMethod = document.getElementById(
-      "convert-payment-method"
+      "convert-payment-method",
     ).value;
 
     // Validation
@@ -1032,10 +1105,10 @@ function initializeConvertBookingForm() {
           const serialNumber = transactionTracker.processCheckin(
             booking.room,
             null,
-            true
+            true,
           );
           console.log(
-            `Assigned serial number ${serialNumber} to booking check-in for room ${booking.room}`
+            `Assigned serial number ${serialNumber} to booking check-in for room ${booking.room}`,
           );
         }
 
@@ -1051,7 +1124,7 @@ function initializeConvertBookingForm() {
         // Show success notification
         showNotification(
           result.message || "Booking converted to check-in successfully!",
-          "success"
+          "success",
         );
 
         // Refresh bookings and rooms
@@ -1084,15 +1157,12 @@ function showAddPaymentModal(bookingId) {
   document.getElementById("payment-room-number").textContent = booking.room;
   document.getElementById("payment-guest-name").textContent =
     booking.guest_name;
-  document.getElementById(
-    "payment-total-amount"
-  ).textContent = `₹${booking.total_amount}`;
-  document.getElementById(
-    "payment-paid-amount"
-  ).textContent = `₹${booking.paid_amount}`;
-  document.getElementById(
-    "payment-balance"
-  ).textContent = `₹${booking.balance}`;
+  document.getElementById("payment-total-amount").textContent =
+    `₹${booking.total_amount}`;
+  document.getElementById("payment-paid-amount").textContent =
+    `₹${booking.paid_amount}`;
+  document.getElementById("payment-balance").textContent =
+    `₹${booking.balance}`;
 
   // Set payment amount input to the balance amount
   const paymentAmount = document.getElementById("payment-amount");
@@ -1130,7 +1200,7 @@ function initializeAddPaymentForm() {
 
     const bookingId = document.getElementById("payment-booking-id").value;
     const paymentAmount = parseInt(
-      document.getElementById("payment-amount").value || 0
+      document.getElementById("payment-amount").value || 0,
     );
     const paymentMethod = document.getElementById("payment-method").value;
 
@@ -1195,7 +1265,7 @@ function initializeAddPaymentForm() {
         // Show success notification
         showNotification(
           `Payment of ₹${paymentAmount} added successfully!`,
-          "success"
+          "success",
         );
 
         // Refresh bookings
@@ -1215,6 +1285,7 @@ function initializeAddPaymentForm() {
 }
 
 // Show update booking modal
+// Show update booking modal
 function showUpdateBookingModal(bookingId) {
   const booking = bookings.find((b) => b.booking_id === bookingId);
   if (!booking) return;
@@ -1227,6 +1298,8 @@ function showUpdateBookingModal(bookingId) {
   document.getElementById("update-guest-name").value = booking.guest_name;
   document.getElementById("update-guest-mobile").value = booking.guest_mobile;
   document.getElementById("update-check-in").value = booking.check_in_date;
+  document.getElementById("update-check-in-time").value =
+    booking.check_in_time || "14:00"; // Default to 2 PM if not set
   document.getElementById("update-check-out").value = booking.check_out_date;
   document.getElementById("update-guest-count").value =
     booking.guest_count || 1;
@@ -1237,13 +1310,14 @@ function showUpdateBookingModal(bookingId) {
   updateRoomOptions(
     booking.room,
     booking.check_in_date,
-    booking.check_out_date
+    booking.check_out_date,
   );
 
   // Show modal
   modal.classList.add("show");
 }
 
+// Initialize update booking form
 // Initialize update booking form
 function initializeUpdateBookingForm() {
   const form = document.getElementById("update-booking-form");
@@ -1290,13 +1364,14 @@ function initializeUpdateBookingForm() {
     const guestName = document.getElementById("update-guest-name").value;
     const guestMobile = document.getElementById("update-guest-mobile").value;
     const checkInDate = document.getElementById("update-check-in").value;
+    const checkInTime = document.getElementById("update-check-in-time").value;
     const checkOutDate = document.getElementById("update-check-out").value;
     const room = document.getElementById("update-room").value;
     const guestCount = parseInt(
-      document.getElementById("update-guest-count").value
+      document.getElementById("update-guest-count").value,
     );
     const totalAmount = parseInt(
-      document.getElementById("update-total-amount").value
+      document.getElementById("update-total-amount").value,
     );
     const notes = document.getElementById("update-notes").value;
 
@@ -1306,6 +1381,7 @@ function initializeUpdateBookingForm() {
       !guestName ||
       !guestMobile ||
       !checkInDate ||
+      !checkInTime ||
       !checkOutDate ||
       !room ||
       !totalAmount
@@ -1359,6 +1435,7 @@ function initializeUpdateBookingForm() {
           guest_name: guestName,
           guest_mobile: guestMobile,
           check_in_date: checkInDate,
+          check_in_time: checkInTime,
           check_out_date: checkOutDate,
           room: room,
           guest_count: guestCount,
@@ -1446,10 +1523,10 @@ async function updateRoomOptions(currentRoom, checkInDate, checkOutDate) {
 
         // Group rooms by floor
         const firstFloor = availableRooms.filter(
-          (room) => !room.startsWith("2")
+          (room) => !room.startsWith("2"),
         );
         const secondFloor = availableRooms.filter((room) =>
-          room.startsWith("2")
+          room.startsWith("2"),
         );
 
         // Add first floor rooms
@@ -1493,7 +1570,7 @@ async function updateRoomOptions(currentRoom, checkInDate, checkOutDate) {
         '<option value="">Error checking availability</option>';
       showNotification(
         result.message || "Error checking availability",
-        "error"
+        "error",
       );
     }
   } catch (error) {
@@ -1522,7 +1599,7 @@ function initBookingCamera() {
   const captureBtn = document.getElementById("booking-capture-photo-btn");
   const cancelCameraBtn = document.getElementById("booking-cancel-camera-btn");
   const photoPreviewContainer = document.getElementById(
-    "booking-photo-preview-container"
+    "booking-photo-preview-container",
   );
   const photoPreview = document.getElementById("booking-photo-preview");
   const retakePhotoBtn = document.getElementById("booking-retake-photo-btn");
@@ -1576,7 +1653,7 @@ function initBookingCamera() {
       console.error("Error accessing camera:", error);
       showNotification(
         "Error accessing camera. Please check permissions.",
-        "error"
+        "error",
       );
     }
   });
@@ -1719,7 +1796,7 @@ document.addEventListener("DOMContentLoaded", function () {
 
     // New booking for specific day button
     const newBookingForDayBtn = document.getElementById(
-      "new-booking-for-day-btn"
+      "new-booking-for-day-btn",
     );
     if (newBookingForDayBtn) {
       newBookingForDayBtn.addEventListener("click", function () {
@@ -1792,12 +1869,12 @@ function renderCalendar() {
   const firstDay = new Date(
     currentCalendarDate.getFullYear(),
     currentCalendarDate.getMonth(),
-    1
+    1,
   );
   const lastDay = new Date(
     currentCalendarDate.getFullYear(),
     currentCalendarDate.getMonth() + 1,
-    0
+    0,
   );
 
   // Get the day of the week for the first day (0 = Sunday, 1 = Monday, etc.)
@@ -1807,7 +1884,7 @@ function renderCalendar() {
   const prevMonthLastDay = new Date(
     currentCalendarDate.getFullYear(),
     currentCalendarDate.getMonth(),
-    0
+    0,
   ).getDate();
 
   // Filter bookings for the current month and adjacent days
@@ -1825,7 +1902,7 @@ function renderCalendar() {
     const date = new Date(
       currentCalendarDate.getFullYear(),
       currentCalendarDate.getMonth() - 1,
-      day
+      day,
     );
     const dateStr = formatDateForAPI(date);
 
@@ -1834,12 +1911,12 @@ function renderCalendar() {
       isDateInBookingRange(
         dateStr,
         booking.check_in_date,
-        booking.check_out_date
-      )
+        booking.check_out_date,
+      ),
     );
 
     calendarDaysGrid.appendChild(
-      createDayElement(day, dayBookings, "different-month", dateStr)
+      createDayElement(day, dayBookings, "different-month", dateStr),
     );
   }
 
@@ -1848,7 +1925,7 @@ function renderCalendar() {
     const date = new Date(
       currentCalendarDate.getFullYear(),
       currentCalendarDate.getMonth(),
-      day
+      day,
     );
     const dateStr = formatDateForAPI(date);
 
@@ -1857,8 +1934,8 @@ function renderCalendar() {
       isDateInBookingRange(
         dateStr,
         booking.check_in_date,
-        booking.check_out_date
-      )
+        booking.check_out_date,
+      ),
     );
 
     // Check if this is today
@@ -1868,7 +1945,7 @@ function renderCalendar() {
       currentCalendarDate.getFullYear() === todayYear;
 
     calendarDaysGrid.appendChild(
-      createDayElement(day, dayBookings, isToday ? "today" : "", dateStr)
+      createDayElement(day, dayBookings, isToday ? "today" : "", dateStr),
     );
   }
 
@@ -1884,7 +1961,7 @@ function renderCalendar() {
       const date = new Date(
         currentCalendarDate.getFullYear(),
         currentCalendarDate.getMonth() + 1,
-        day
+        day,
       );
       const dateStr = formatDateForAPI(date);
 
@@ -1893,12 +1970,12 @@ function renderCalendar() {
         isDateInBookingRange(
           dateStr,
           booking.check_in_date,
-          booking.check_out_date
-        )
+          booking.check_out_date,
+        ),
       );
 
       calendarDaysGrid.appendChild(
-        createDayElement(day, dayBookings, "different-month", dateStr)
+        createDayElement(day, dayBookings, "different-month", dateStr),
       );
     }
   }
@@ -1915,10 +1992,10 @@ function createDayElement(dayNumber, bookings, extraClass, dateStr) {
   // Filter active bookings (not cancelled)
   const activeBookings = bookings.filter((b) => b.status !== "cancelled");
   const confirmedBookings = activeBookings.filter(
-    (b) => b.status === "confirmed"
+    (b) => b.status === "confirmed",
   );
   const checkedInBookings = activeBookings.filter(
-    (b) => b.status === "checked_in"
+    (b) => b.status === "checked_in",
   );
 
   // Add classes for styling based on bookings
@@ -2002,14 +2079,22 @@ function showDayDetails(dateStr, bookings) {
   // Add bookings or show empty state
   if (bookings.length === 0) {
     bookingsList.innerHTML = `
-            <div class="empty-state" style="padding: 2rem;">
-                <i class="fas fa-calendar-day fa-3x"></i>
-                <p>No bookings for this date</p>
-            </div>
-        `;
+      <div class="empty-state" style="padding: 2rem;">
+        <i class="fas fa-calendar-day fa-3x"></i>
+        <p>No bookings for this date</p>
+      </div>
+    `;
   } else {
-    // Sort bookings by room number
+    // Sort bookings by room number AND check-in time
     bookings.sort((a, b) => {
+      const timeA = a.check_in_time || "14:00";
+      const timeB = b.check_in_time || "14:00";
+
+      // First sort by time
+      const timeCompare = timeA.localeCompare(timeB);
+      if (timeCompare !== 0) return timeCompare;
+
+      // If same time, sort by room number
       return parseInt(a.room) - parseInt(b.room);
     });
 
@@ -2024,6 +2109,10 @@ function showDayDetails(dateStr, bookings) {
       const isCheckIn = formatDateForAPI(checkInDate) === dateStr;
       const isCheckOut = formatDateForAPI(checkOutDate) === dateStr;
 
+      // Format check-in time
+      const checkInTime = booking.check_in_time || "14:00";
+      const formattedTime = formatTime(checkInTime);
+
       // Calculate status badge text
       let statusText =
         booking.status.charAt(0).toUpperCase() + booking.status.slice(1);
@@ -2036,29 +2125,35 @@ function showDayDetails(dateStr, bookings) {
         statusText = "Check-out Day";
       }
 
+      // Determine what to show in the time section
+      let timeDisplay = "";
+      if (isCheckIn) {
+        timeDisplay = `<div class="day-booking-time-info">
+          <i class="fas fa-clock"></i> Expected: ${formattedTime}
+        </div>`;
+      } else if (isCheckOut) {
+        timeDisplay = `<div class="day-booking-time-info checkout">
+          <i class="fas fa-door-open"></i> Check-out
+        </div>`;
+      } else {
+        timeDisplay = `<div class="day-booking-time-info staying">
+          <i class="fas fa-bed"></i> Staying
+        </div>`;
+      }
+
       bookingItem.innerHTML = `
-                <div class="day-booking-header">
-                    <div class="day-booking-room">Room ${booking.room}</div>
-                    <div class="day-booking-time">
-                        ${
-                          isCheckIn
-                            ? "Check-in"
-                            : isCheckOut
-                            ? "Check-out"
-                            : "Stay"
-                        }
-                    </div>
-                </div>
-                <div class="day-booking-guest">${booking.guest_name}</div>
-                <div class="day-booking-status">
-                    <div class="day-booking-status-badge ${booking.status}">
-                        ${statusText}
-                    </div>
-                    <div class="day-booking-price">₹${
-                      booking.total_amount
-                    }</div>
-                </div>
-            `;
+        <div class="day-booking-header">
+          <div class="day-booking-room">Room ${booking.room}</div>
+          ${timeDisplay}
+        </div>
+        <div class="day-booking-guest">${booking.guest_name}</div>
+        <div class="day-booking-status">
+          <div class="day-booking-status-badge ${booking.status}">
+            ${statusText}
+          </div>
+          <div class="day-booking-price">₹${booking.total_amount}</div>
+        </div>
+      `;
 
       // Add click event to show booking details
       bookingItem.addEventListener("click", function () {
@@ -2086,8 +2181,11 @@ function showNewBookingModalForDate(dateStr) {
   // Set the selected date
   const checkInDate = document.getElementById("booking-check-in");
   const checkOutDate = document.getElementById("booking-check-out");
+  const checkInTimeInput = document.getElementById("booking-check-in-time");
 
-  if (checkInDate) checkInDate.value = dateStr;
+  if (checkInDate) {
+    checkInDate.value = dateStr;
+  }
 
   // Set check-out date to the next day by default
   if (checkOutDate) {
@@ -2095,6 +2193,16 @@ function showNewBookingModalForDate(dateStr) {
     nextDay.setDate(nextDay.getDate() + 1);
     checkOutDate.value = formatDateForAPI(nextDay);
   }
+
+  // Set default check-in time to 2:00 PM
+  if (checkInTimeInput) {
+    checkInTimeInput.value = "14:00"; // 2:00 PM
+  }
+
+  // Reset room select
+  const roomSelect = document.getElementById("booking-room");
+  if (roomSelect)
+    roomSelect.innerHTML = '<option value="">Checking availability...</option>';
 
   // Reset payment method
   document.querySelectorAll("#booking-form .payment-btn").forEach((btn) => {
@@ -2109,7 +2217,7 @@ function showNewBookingModalForDate(dateStr) {
 
   // Reset photo preview
   const photoPreviewContainer = document.getElementById(
-    "booking-photo-preview-container"
+    "booking-photo-preview-container",
   );
   if (photoPreviewContainer) photoPreviewContainer.style.display = "none";
 
@@ -2128,14 +2236,14 @@ function getCurrentMonthBookings() {
   const startDate = new Date(
     currentCalendarDate.getFullYear(),
     currentCalendarDate.getMonth(),
-    1
+    1,
   );
   startDate.setDate(1 - startDate.getDay()); // Go back to the first day shown on the calendar
 
   const endDate = new Date(
     currentCalendarDate.getFullYear(),
     currentCalendarDate.getMonth() + 1,
-    0
+    0,
   );
   const daysAfter = 6 - endDate.getDay();
   endDate.setDate(endDate.getDate() + daysAfter); // Go forward to the last day shown on the calendar
@@ -2252,31 +2360,31 @@ function optimizeCalendarForScreenSize() {
     // For standard laptops (1366x768 is common)
     document.documentElement.style.setProperty(
       "--calendar-day-min-height",
-      "55px"
+      "55px",
     );
     document.documentElement.style.setProperty(
       "--calendar-day-aspect-ratio",
-      "1/0.75"
+      "1/0.75",
     );
   } else if (viewportWidth < 1600) {
     // For larger laptops
     document.documentElement.style.setProperty(
       "--calendar-day-min-height",
-      "65px"
+      "65px",
     );
     document.documentElement.style.setProperty(
       "--calendar-day-aspect-ratio",
-      "1/0.8"
+      "1/0.8",
     );
   } else {
     // For desktops or large screens
     document.documentElement.style.setProperty(
       "--calendar-day-min-height",
-      "70px"
+      "70px",
     );
     document.documentElement.style.setProperty(
       "--calendar-day-aspect-ratio",
-      "1/0.85"
+      "1/0.85",
     );
   }
 
@@ -2357,11 +2465,11 @@ function optimizeCalendarForScreenSize() {
   // Set CSS variables
   document.documentElement.style.setProperty(
     "--calendar-day-min-height",
-    minHeight
+    minHeight,
   );
   document.documentElement.style.setProperty(
     "--calendar-day-aspect-ratio",
-    aspectRatio
+    aspectRatio,
   );
 
   // Adjust visible previews
@@ -2369,7 +2477,7 @@ function optimizeCalendarForScreenSize() {
 
   dayElements.forEach((day) => {
     const previews = day.querySelectorAll(
-      ".day-booking-preview:not(.more-indicator)"
+      ".day-booking-preview:not(.more-indicator)",
     );
     const moreIndicator = day.querySelector(".more-indicator");
 
@@ -2408,16 +2516,16 @@ function sendWhatsAppBookingConfirmation() {
     const bookingId = document.getElementById("details-booking-id").textContent;
     const guestName = document.getElementById("details-guest-name").textContent;
     const guestMobile = document.getElementById(
-      "details-guest-mobile"
+      "details-guest-mobile",
     ).textContent;
     const room = document.getElementById("details-room-number").textContent;
     const checkIn = document.getElementById("details-check-in").textContent;
     const checkOut = document.getElementById("details-check-out").textContent;
     const totalAmount = document.getElementById(
-      "details-total-amount"
+      "details-total-amount",
     ).textContent;
     const paidAmount = document.getElementById(
-      "details-paid-amount"
+      "details-paid-amount",
     ).textContent;
     const balance = document.getElementById("details-balance").textContent;
     const nights = document.getElementById("details-nights").textContent;

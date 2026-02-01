@@ -544,3 +544,145 @@
 #send-whatsapp-btn i {
   margin-right: 4px;
 }
+
+/* Add to booking.css */
+.booking-dates {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.85rem;
+  color: var(--gray);
+  margin: 0.5rem 0;
+}
+
+.booking-dates div {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.booking-dates i {
+  width: 16px;
+  color: var(--primary);
+}
+
+/* Booking dates styling - Updated */
+.booking-dates {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  font-size: 0.85rem;
+  color: var(--gray);
+  margin: 0.5rem 0;
+}
+
+.booking-dates > div {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.booking-dates i {
+  width: 16px;
+  color: var(--primary);
+  flex-shrink: 0;
+}
+
+/* New: Date and time row */
+.booking-date-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  gap: 0.5rem;
+}
+
+.date-info {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex: 1;
+}
+
+.time-info {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  background-color: rgba(67, 97, 238, 0.1);
+  padding: 0.2rem 0.5rem;
+  border-radius: 4px;
+  font-weight: 500;
+  color: var(--primary);
+  white-space: nowrap;
+}
+
+.time-info i {
+  color: var(--primary);
+}
+
+/* Responsive adjustments */
+@media (max-width: 576px) {
+  .booking-date-row {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .time-info {
+    margin-left: 20px; /* Align with date text */
+  }
+}
+
+/* Day booking item time info */
+.day-booking-time-info {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.8rem;
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+  background-color: rgba(67, 97, 238, 0.1);
+  color: var(--primary);
+  font-weight: 500;
+}
+
+.day-booking-time-info i {
+  font-size: 0.75rem;
+}
+
+.day-booking-time-info.checkout {
+  background-color: rgba(255, 152, 0, 0.1);
+  color: var(--warning);
+}
+
+.day-booking-time-info.staying {
+  background-color: rgba(46, 196, 182, 0.1);
+  color: var(--success);
+}
+
+/* Adjust day booking header to accommodate time */
+.day-booking-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.5rem;
+  gap: 0.5rem;
+}
+
+.day-booking-room {
+  font-weight: 600;
+  color: var(--primary);
+  flex-shrink: 0;
+}
+
+/* Responsive adjustments */
+@media (max-width: 576px) {
+  .day-booking-header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .day-booking-time-info {
+    font-size: 0.75rem;
+    padding: 0.2rem 0.4rem;
+  }
+}

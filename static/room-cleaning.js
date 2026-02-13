@@ -8,9 +8,11 @@ function initializeCleaningFeature() {
 
 // Create quality check modals (only created once)
 function createQualityCheckModals() {
-  // Premium room modal (3 items)
+  // Premium room modal (3 items for 200-206)
   createPremiumCheckModal();
-  // Regular room modal (1 item)
+  // Standard room modal (3 items for 207-228)
+  createStandardCheckModal();
+  // Regular room modal (1 item for others)
   createRegularCheckModal();
 }
 
@@ -32,19 +34,19 @@ function createPremiumCheckModal() {
             <label class="quality-check-item compact">
               <input type="checkbox" class="quality-checkbox premium-checkbox">
               <span class="checkmark"></span>
-              <span class="check-label">Washroom is clean</span>
+              <span class="check-label">🚿 Washroom is clean</span>
             </label>
             
             <label class="quality-check-item compact">
               <input type="checkbox" class="quality-checkbox premium-checkbox">
               <span class="checkmark"></span>
-              <span class="check-label">Coffee maker ready</span>
+              <span class="check-label">☕ Coffee maker ready</span>
             </label>
             
             <label class="quality-check-item compact">
               <input type="checkbox" class="quality-checkbox premium-checkbox">
               <span class="checkmark"></span>
-              <span class="check-label">Towels placed (3 sets)</span>
+              <span class="check-label">🧺 Towels placed (3 sets)</span>
             </label>
           </div>
         </div>
@@ -62,6 +64,56 @@ function createPremiumCheckModal() {
 
   document.body.insertAdjacentHTML("beforeend", modalHTML);
   setupPremiumModalListeners();
+}
+
+// Create standard room quality check modal (3 items for rooms 207-228)
+function createStandardCheckModal() {
+  if (document.getElementById("standard-check-modal")) {
+    return;
+  }
+
+  const modalHTML = `
+    <div class="modal-backdrop" id="standard-check-modal">
+      <div class="modal-content" style="max-width: 400px;">
+        <div class="modal-header" style="padding: 1rem 1.5rem;">
+          <h2 style="font-size: 1.1rem;">Room <span id="standard-room-number"></span> - Quality Check</h2>
+          <button class="close-btn" aria-label="Close">&times;</button>
+        </div>
+        <div class="modal-body" style="padding: 1rem 1.5rem;">
+          <div class="quality-checklist">
+            <label class="quality-check-item compact">
+              <input type="checkbox" class="quality-checkbox standard-checkbox">
+              <span class="checkmark"></span>
+              <span class="check-label">🚿 Washroom is clean</span>
+            </label>
+            
+            <label class="quality-check-item compact">
+              <input type="checkbox" class="quality-checkbox standard-checkbox">
+              <span class="checkmark"></span>
+              <span class="check-label">🗑️ Dustbin cleaned</span>
+            </label>
+            
+            <label class="quality-check-item compact">
+              <input type="checkbox" class="quality-checkbox standard-checkbox">
+              <span class="checkmark"></span>
+              <span class="check-label">🧺 Towels placed</span>
+            </label>
+          </div>
+        </div>
+        <div class="modal-footer" style="padding: 1rem 1.5rem; gap: 0.5rem;">
+          <button class="standard-cancel-btn action-btn btn-secondary" style="flex: 1;">
+            Cancel
+          </button>
+          <button id="standard-approve-btn" class="action-btn btn-success" style="flex: 1;" disabled>
+            Mark as Clean ✓
+          </button>
+        </div>
+      </div>
+    </div>
+  `;
+
+  document.body.insertAdjacentHTML("beforeend", modalHTML);
+  setupStandardModalListeners();
 }
 
 // Create regular room quick check modal (1 item for other rooms)
@@ -82,7 +134,7 @@ function createRegularCheckModal() {
             <label class="quality-check-item compact">
               <input type="checkbox" id="regular-checkbox" class="quality-checkbox">
               <span class="checkmark"></span>
-              <span class="check-label">Room is cleaned and ready</span>
+              <span class="check-label">✨ Room is cleaned and ready</span>
             </label>
           </div>
         </div>
@@ -230,6 +282,37 @@ function setupPremiumModalListeners() {
   });
 }
 
+// Setup standard modal listeners
+function setupStandardModalListeners() {
+  const modal = document.getElementById("standard-check-modal");
+  const closeBtn = modal.querySelector(".close-btn");
+  const cancelBtn = modal.querySelector(".standard-cancel-btn");
+  const approveBtn = document.getElementById("standard-approve-btn");
+  const checkboxes = modal.querySelectorAll(".standard-checkbox");
+
+  // Close modal handlers
+  const closeModal = () => {
+    modal.classList.remove("show");
+    resetStandardModal();
+  };
+
+  closeBtn.addEventListener("click", closeModal);
+  cancelBtn.addEventListener("click", closeModal);
+
+  // Update button state when checkboxes change
+  checkboxes.forEach((checkbox) => {
+    checkbox.addEventListener("change", updateStandardButton);
+  });
+
+  // Approve button click
+  approveBtn.addEventListener("click", async () => {
+    const roomNumber = document.getElementById(
+      "standard-room-number",
+    ).textContent;
+    await completeRoomCleaning(roomNumber);
+  });
+}
+
 // Setup regular modal listeners
 function setupRegularModalListeners() {
   const modal = document.getElementById("regular-check-modal");
@@ -270,6 +353,17 @@ function updatePremiumButton() {
   }
 }
 
+// Update standard modal button state
+function updateStandardButton() {
+  const checkboxes = document.querySelectorAll(".standard-checkbox");
+  const checkedCount = Array.from(checkboxes).filter((cb) => cb.checked).length;
+  const approveBtn = document.getElementById("standard-approve-btn");
+
+  if (approveBtn) {
+    approveBtn.disabled = checkedCount !== checkboxes.length;
+  }
+}
+
 // Update regular modal button state
 function updateRegularButton() {
   const checkbox = document.getElementById("regular-checkbox");
@@ -287,6 +381,15 @@ function resetPremiumModal() {
     cb.checked = false;
   });
   updatePremiumButton();
+}
+
+// Reset standard modal
+function resetStandardModal() {
+  const checkboxes = document.querySelectorAll(".standard-checkbox");
+  checkboxes.forEach((cb) => {
+    cb.checked = false;
+  });
+  updateStandardButton();
 }
 
 // Reset regular modal
@@ -314,6 +417,22 @@ function showPremiumCheckModal(roomNumber) {
   modal.classList.add("show");
 }
 
+// Show standard quality check modal
+function showStandardCheckModal(roomNumber) {
+  addQualityCheckStyles();
+  const modal = document.getElementById("standard-check-modal");
+  const roomNumberSpan = document.getElementById("standard-room-number");
+
+  if (!modal || !roomNumberSpan) {
+    console.error("Standard check modal elements not found");
+    return;
+  }
+
+  roomNumberSpan.textContent = roomNumber;
+  resetStandardModal();
+  modal.classList.add("show");
+}
+
 // Show regular quick check modal
 function showRegularCheckModal(roomNumber) {
   addQualityCheckStyles();
@@ -336,6 +455,12 @@ function isPremiumRoom(roomNumber) {
   return num >= 200 && num <= 206;
 }
 
+// Check if room is standard (requires 3-item check)
+function isStandardRoom(roomNumber) {
+  const num = parseInt(roomNumber);
+  return num >= 207 && num <= 228;
+}
+
 // Mark room as cleaned - shows appropriate modal based on room type
 async function markRoomAsCleaned(roomNumber) {
   try {
@@ -354,6 +479,12 @@ async function markRoomAsCleaned(roomNumber) {
     // For premium rooms (200-206), show 3-item quality check modal
     if (isPremiumRoom(roomNumber)) {
       showPremiumCheckModal(roomNumber);
+      return false; // Don't mark as cleaned yet, wait for quality check
+    }
+
+    // For standard rooms (207-228), show 3-item standard check modal
+    if (isStandardRoom(roomNumber)) {
+      showStandardCheckModal(roomNumber);
       return false; // Don't mark as cleaned yet, wait for quality check
     }
 
@@ -393,12 +524,16 @@ async function completeRoomCleaning(roomNumber) {
         roomInfo.cleaning_start_time = null;
       }
 
-      // Close both modals if they're open
+      // Close all modals if they're open
       const premiumModal = document.getElementById("premium-check-modal");
+      const standardModal = document.getElementById("standard-check-modal");
       const regularModal = document.getElementById("regular-check-modal");
 
       if (premiumModal) {
         premiumModal.classList.remove("show");
+      }
+      if (standardModal) {
+        standardModal.classList.remove("show");
       }
       if (regularModal) {
         regularModal.classList.remove("show");

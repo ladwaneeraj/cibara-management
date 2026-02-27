@@ -11,6 +11,8 @@ import tempfile
 import pytz
 import base64
 from functools import wraps
+from collections import defaultdict
+from decimal import Decimal
 import threading
 
 # Configure logging
@@ -59,6 +61,7 @@ settings_ref = db.collection('settings')
 settlements_ref = db.collection('settlements')
 counters_ref = db.collection('daily_counters')
 metadata_ref = db.collection('transaction_metadata')
+bills_ref = db.collection('bills')
 
 # Upload folder
 UPLOAD_FOLDER = 'uploads'
@@ -451,6 +454,7 @@ def checkout():
         totals = get_totals()
         batch = db.batch()
         
+        # Handle payment additions (not final checkout)
         if amount > 0 and payment_mode and not is_refund and not process_refund:
             current_balance = room_data["balance"]
             
@@ -508,6 +512,7 @@ def checkout():
             logger.info(f"Payment of ₹{amount} recorded for room {room}")
             return jsonify(success=True, message=message)
         
+        # Handle refund processing
         elif process_refund and is_refund and amount > 0:
             current_balance = room_data["balance"]
             
@@ -547,13 +552,15 @@ def checkout():
             logger.info(f"Manual refund of ₹{amount} processed for room {room}")
             return jsonify(success=True, message=f"Refund of ₹{amount} processed successfully")
         
+        # Handle final checkout - THIS IS THE KEY CHANGE
         elif is_final_checkout:
             balance = room_data["balance"]
-            guest_name = room_data["guest"]["name"] if room_data["guest"] else "Unknown"
+            guest_info = room_data["guest"]
+            guest_name = guest_info["name"] if guest_info else "Unknown"
             
+            # Handle settle later
             if balance > 0 and settle_later:
                 settlement_id = str(uuid.uuid4())
-                guest_info = room_data["guest"]
                 settlement_amount = balance
                 
                 settlement = {
@@ -570,7 +577,6 @@ def checkout():
                 }
                 
                 batch.set(settlements_ref.document(settlement_id), settlement)
-                
                 totals["balance"] -= settlement_amount
                 
                 balance_log = {
@@ -593,6 +599,7 @@ def checkout():
             elif balance > 0 and not settle_later:
                 return jsonify(success=False, message="Please clear the balance before checkout")
             
+            # Handle refund for negative balance
             refund_processed = False
             if balance < 0 and data_json.get("refund_method"):
                 refund_amount = abs(balance)
@@ -618,6 +625,22 @@ def checkout():
                 
                 logger.info(f"Checkout refund of ₹{refund_amount} processed for room {room}")
             
+            # ============================================
+            # CRITICAL: SAVE TO BILLS COLLECTION
+            # ============================================
+            checkout_time = datetime.now(IST).strftime("%Y-%m-%d %H:%M")
+            
+            # Create bill record
+            bill_id = f"{room}_{int(datetime.now(IST).timestamp())}"
+            bill_record = create_bill_record(room, room_data, checkout_time, batch)
+            
+            if bill_record:
+                batch.set(bills_ref.document(bill_id), bill_record)
+                logger.info(f"Bill saved for room {room}: {bill_record.get('bill_number')}")
+            
+            # ============================================
+            
+            # Mark room as cleaning
             batch.update(rooms_ref.document(room), {
                 "status": "cleaning",
                 "guest": None,
@@ -626,9 +649,8 @@ def checkout():
                 "add_ons": [],
                 "renewal_count": 0,
                 "last_renewal_time": None,
-                "cleaning_status": "in_progress",  # Add cleaning status
+                "cleaning_status": "in_progress",
                 "cleaning_start_time": datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S")
-
             })
             
             batch.set(totals_ref.document('current_totals'), totals)
@@ -650,6 +672,168 @@ def checkout():
     except Exception as e:
         logger.error(f"Error during checkout: {str(e)}")
         return jsonify(success=False, message=f"Error during checkout: {str(e)}")
+    
+def create_bill_record(room, room_data, checkout_time, batch=None):
+    """
+    Create bill record with original check-in serial number
+    """
+    try:
+        guest = room_data.get("guest")
+        if not guest:
+            return None
+        
+        checkin_time = room_data.get("checkin_time")
+        if not checkin_time:
+            return None
+        
+        all_logs = get_all_logs()
+        checkin_dt = datetime.strptime(checkin_time, "%Y-%m-%d %H:%M")
+        checkout_dt = datetime.strptime(checkout_time, "%Y-%m-%d %H:%M")
+        
+        # Get serial number using helper function
+        serial_number = find_serial_number_for_checkin(
+            room, 
+            guest["name"], 
+            checkin_dt, 
+            all_logs
+        )
+        
+        # ... rest of the function stays the same ...
+        # (Keep all the payment calculations, services, etc.)
+        
+        cash_logs = all_logs.get("cash", [])
+        payment_cash = sum(
+            log.get("amount", 0) 
+            for log in cash_logs 
+            if (log.get("room") == room and 
+                log.get("name") == guest["name"] and
+                is_log_from_current_stay(log, checkin_dt))
+        )
+        
+        online_logs = all_logs.get("online", [])
+        payment_online = sum(
+            log.get("amount", 0) 
+            for log in online_logs 
+            if (log.get("room") == room and 
+                log.get("name") == guest["name"] and
+                is_log_from_current_stay(log, checkin_dt))
+        )
+        
+        addon_logs = all_logs.get("add_ons", [])
+        services = []
+        services_total = 0
+        for addon in addon_logs:
+            if (addon.get("room") == room and
+                is_log_from_current_stay(addon, checkin_dt)):
+                services.append({
+                    "item": addon.get("item", "Service"),
+                    "quantity": addon.get("quantity", 1),
+                    "unit_price": addon.get("unit_price", addon.get("price", 0)),
+                    "price": addon.get("price", 0)
+                })
+                services_total += addon.get("price", 0)
+        
+        refund_logs = all_logs.get("refunds", [])
+        total_refunds = sum(
+            log.get("amount", 0) 
+            for log in refund_logs 
+            if (log.get("room") == room and 
+                log.get("name") == guest["name"] and
+                is_log_from_current_stay(log, checkin_dt))
+        )
+        
+        discount_logs = all_logs.get("discounts", [])
+        total_discounts = sum(
+            log.get("amount", 0) 
+            for log in discount_logs 
+            if (log.get("room") == room and 
+                log.get("name") == guest["name"] and
+                is_log_from_current_stay(log, checkin_dt))
+        )
+        
+        room_price_per_night = guest.get("price", 0)
+        renewal_count = room_data.get("renewal_count", 0)
+        days_stayed = renewal_count + 1
+        room_charges_total = room_price_per_night * days_stayed
+        
+        total_amount = room_charges_total + services_total - total_discounts
+        balance = total_amount - payment_cash - payment_online + total_refunds
+        
+        bill_number = generate_sequential_bill_number(checkout_dt)
+        
+        bill_record = {
+            "bill_number": bill_number,
+            "room": room,
+            "guest_name": guest["name"],
+            "guest_mobile": guest.get("mobile", ""),
+            "guest_count": guest.get("guests", 1),
+            "is_ac": guest.get("isAC", False),
+            "checkin_time": checkin_time,
+            "checkout_time": checkout_time,
+            "days_stayed": days_stayed,
+            "room_price_per_night": room_price_per_night,
+            "room_charges_total": room_charges_total,
+            "services": services,
+            "services_total": services_total,
+            "discounts": total_discounts,
+            "refunds": total_refunds,
+            "total_amount": total_amount,
+            "payment_cash": payment_cash,
+            "payment_online": payment_online,
+            "balance": balance,
+            "status": "completed",
+            "created_at": checkout_time,
+            "print_count": 0,
+            "serial_number": serial_number
+        }
+        
+        return bill_record
+        
+    except Exception as e:
+        logger.error(f"Error creating bill record: {str(e)}")
+        return None
+           
+def generate_sequential_bill_number(checkout_date):
+    """
+    Generate sequential bill number based on checkout date
+    Format: CC/YYYY/MM/XXXXX
+    """
+    try:
+        year = checkout_date.year
+        month = str(checkout_date.month).zfill(2)
+        
+        # Get count of bills for this month
+        month_start = datetime(year, checkout_date.month, 1)
+        if checkout_date.month == 12:
+            month_end = datetime(year + 1, 1, 1)
+        else:
+            month_end = datetime(year, checkout_date.month + 1, 1)
+        
+        # Count existing bills in this month
+        bills_query = bills_ref.where('status', '==', 'completed').stream()
+        
+        count = 0
+        for bill in bills_query:
+            bill_data = bill.to_dict()
+            bill_checkout = bill_data.get("checkout_time")
+            if bill_checkout:
+                try:
+                    bill_checkout_dt = datetime.strptime(bill_checkout, "%Y-%m-%d %H:%M")
+                    if month_start <= bill_checkout_dt < month_end:
+                        count += 1
+                except:
+                    pass
+        
+        # Next serial number
+        serial = str(count + 1).zfill(5)
+        
+        return f"CC/{year}/{month}/{serial}"
+        
+    except Exception as e:
+        logger.error(f"Error generating bill number: {str(e)}")
+        # Fallback to timestamp-based
+        return f"CC/{checkout_date.year}/{int(checkout_date.timestamp()) % 100000}"
+
 
 @app.route("/add_on", methods=["POST"])
 def add_on():
@@ -2145,6 +2329,562 @@ def mark_room_cleaned():
     except Exception as e:
         logger.error(f"Error marking room as cleaned: {str(e)}")
         return jsonify(success=False, message=f"Error marking room as cleaned: {str(e)}")
+
+@app.route("/get_register_data", methods=["POST"])
+def get_register_data():
+    """
+    Fetch register data with ACTUAL serial numbers
+    Sort: Within each date, serial 1 at BOTTOM, higher at TOP
+    """
+    try:
+        data_json = request.json
+        start_date = data_json.get("start_date")
+        end_date = data_json.get("end_date")
+        
+        if not start_date or not end_date:
+            return jsonify(success=False, message="Start and end dates are required")
+        
+        start = datetime.strptime(start_date, "%Y-%m-%d")
+        end = datetime.strptime(end_date, "%Y-%m-%d") + timedelta(days=1)
+        
+        logger.info(f"=== REGISTER DATA REQUEST: {start_date} to {end_date} ===")
+        
+        register_entries = []
+        processed_ids = set()
+        
+        # Get fresh data (no cache)
+        invalidate_cache()
+        all_logs = get_all_logs()
+        rooms_data = get_all_rooms()
+        
+        logger.info(f"Total rooms in system: {len(rooms_data)}")
+        
+        # ===================================
+        # STEP 1: Get ALL ACTIVE ROOMS
+        # ===================================
+        active_count = 0
+        for room_number, room_data in rooms_data.items():
+            if room_data.get("status") == "occupied":
+                checkin_time = room_data.get("checkin_time")
+                
+                if not checkin_time:
+                    logger.warning(f"Active room {room_number} has no check-in time")
+                    continue
+                
+                try:
+                    checkin_dt = datetime.strptime(checkin_time, "%Y-%m-%d %H:%M")
+                    
+                    # Check if within date range
+                    if start <= checkin_dt < end:
+                        entry_id = f"active_{room_number}_{int(checkin_dt.timestamp())}"
+                        
+                        if entry_id not in processed_ids:
+                            entry = build_active_room_entry(room_number, room_data, all_logs, checkin_dt)
+                            if entry:
+                                register_entries.append(entry)
+                                processed_ids.add(entry_id)
+                                active_count += 1
+                                logger.info(f"✓ Active Room {room_number}: Serial #{entry.get('serial_number', 'N/A')}, Guest: {entry.get('guest_name')}")
+                            else:
+                                logger.warning(f"Failed to build entry for active room {room_number}")
+                    else:
+                        logger.debug(f"Room {room_number} check-in {checkin_time} outside date range")
+                        
+                except Exception as e:
+                    logger.error(f"Error processing active room {room_number}: {str(e)}")
+        
+        logger.info(f"Found {active_count} active rooms in date range")
+        
+        # ===================================
+        # STEP 2: Get ALL COMPLETED BILLS
+        # ===================================
+        completed_count = 0
+        skipped_count = 0
+        
+        try:
+            # Fetch ALL completed bills (no date filter at Firestore level)
+            bills_query = bills_ref.where('status', '==', 'completed').stream()
+            
+            for bill_doc in bills_query:
+                bill_data = bill_doc.to_dict()
+                checkin_time = bill_data.get("checkin_time")
+                checkout_time = bill_data.get("checkout_time")
+                
+                if not checkin_time:
+                    skipped_count += 1
+                    continue
+                
+                try:
+                    checkin_dt = datetime.strptime(checkin_time, "%Y-%m-%d %H:%M")
+                    
+                    # Check if should include
+                    include_entry = False
+                    reason = ""
+                    
+                    # Include if checked IN during date range
+                    if start <= checkin_dt < end:
+                        include_entry = True
+                        reason = f"checked in {checkin_time}"
+                    
+                    # Also include if checked OUT during date range
+                    if checkout_time and not include_entry:
+                        try:
+                            checkout_dt = datetime.strptime(checkout_time, "%Y-%m-%d %H:%M")
+                            if start <= checkout_dt < end:
+                                include_entry = True
+                                reason = f"checked out {checkout_time}"
+                        except:
+                            pass
+                    
+                    if include_entry and bill_doc.id not in processed_ids:
+                        serial_num = bill_data.get("serial_number")
+                        
+                        entry = {
+                            "id": bill_doc.id,
+                            "bill_number": bill_data.get("bill_number", "-"),
+                            "guest_name": bill_data.get("guest_name", "Unknown"),
+                            "guest_mobile": bill_data.get("guest_mobile", ""),
+                            "room": str(bill_data.get("room", "")),
+                            "checkin_time": checkin_time,
+                            "checkout_time": checkout_time,
+                            "days_stayed": bill_data.get("days_stayed", 1),
+                            "room_rent": bill_data.get("room_price_per_night", 0),
+                            "room_charges": bill_data.get("room_charges_total", 0),
+                            "services_total": bill_data.get("services_total", 0),
+                            "total_amount": bill_data.get("total_amount", 0),
+                            "payment_cash": bill_data.get("payment_cash", 0),
+                            "payment_online": bill_data.get("payment_online", 0),
+                            "balance": bill_data.get("balance", 0),
+                            "status": "completed",
+                            "serial_number": serial_num
+                        }
+                        register_entries.append(entry)
+                        processed_ids.add(bill_doc.id)
+                        completed_count += 1
+                        logger.info(f"✓ Bill {bill_doc.id}: Room {bill_data.get('room')}, Serial #{serial_num}, {reason}")
+                    else:
+                        skipped_count += 1
+                        
+                except Exception as e:
+                    logger.error(f"Error processing bill {bill_doc.id}: {str(e)}")
+                    skipped_count += 1
+                    
+        except Exception as e:
+            logger.error(f"Error fetching bills: {str(e)}", exc_info=True)
+        
+        logger.info(f"Found {completed_count} completed bills, skipped {skipped_count}")
+        
+        # ===================================
+        # STEP 3: Group by date and sort
+        # Within each date: Serial 1 at BOTTOM, higher at TOP
+        # ===================================
+        entries_by_date = {}
+        for entry in register_entries:
+            checkin_time = entry.get("checkin_time")
+            if checkin_time:
+                checkin_date = checkin_time.split(" ")[0]
+                if checkin_date not in entries_by_date:
+                    entries_by_date[checkin_date] = []
+                entries_by_date[checkin_date].append(entry)
+        
+        # Sort each date's entries
+        for date, entries in entries_by_date.items():
+            # Sort by serial number DESCENDING (higher numbers first)
+            # Entries without serial go to bottom
+            entries.sort(key=lambda x: (
+                x.get("serial_number") if x.get("serial_number") else -1,  # -1 puts nulls at bottom
+            ), reverse=True)  # REVERSE = higher serials at top
+        
+        # Flatten - dates in reverse order (newest first)
+        all_entries = []
+        for date in sorted(entries_by_date.keys(), reverse=True):
+            all_entries.extend(entries_by_date[date])
+        
+        logger.info(f"=== RETURNING {len(all_entries)} TOTAL ENTRIES ===")
+        
+        return jsonify(success=True, entries=all_entries)
+        
+    except Exception as e:
+        logger.error(f"ERROR in get_register_data: {str(e)}", exc_info=True)
+        return jsonify(success=False, message=f"Error: {str(e)}")   
+
+def generate_bill_number(checkin_date, counter):
+    """
+    Generate bill number in format CC/YYYY/XXXXX
+    """
+    year = checkin_date.year
+    month = str(checkin_date.month).zfill(2)
+    serial = str(counter).zfill(5)
+    return f"CC/{year}/{month}/{serial}"
+
+
+@app.route("/generate_bill/<entry_id>", methods=["GET"])
+def generate_bill(entry_id):
+    """
+    Generate bill from bills collection
+    """
+    try:
+        # Fetch from bills collection
+        bill_doc = bills_ref.document(entry_id).get()
+        
+        if not bill_doc.exists:
+            return jsonify(success=False, message="Bill not found")
+        
+        bill_data = bill_doc.to_dict()
+        
+        return jsonify(success=True, bill=bill_data)
+        
+    except Exception as e:
+        logger.error(f"Error generating bill: {str(e)}", exc_info=True)
+        return jsonify(success=False, message=f"Error: {str(e)}")
+    
+
+def store_bill_record(bill_data):
+    """
+    Store bill record in Firestore for future reference
+    """
+    try:
+        bills_ref = db.collection('bills')
+        bill_id = bill_data.get("id")
+        
+        bill_record = {
+            "bill_number": bill_data.get("bill_number"),
+            "guest_name": bill_data.get("guest_name"),
+            "guest_mobile": bill_data.get("guest_mobile"),
+            "room": bill_data.get("room"),
+            "checkin_time": bill_data.get("checkin_time"),
+            "checkout_time": bill_data.get("checkout_time"),
+            "days_stayed": bill_data.get("days_stayed"),
+            "room_charges": bill_data.get("room_charges"),
+            "services_total": bill_data.get("services_total"),
+            "total_amount": bill_data.get("total_amount"),
+            "payment_cash": bill_data.get("payment_cash"),
+            "payment_online": bill_data.get("payment_online"),
+            "balance": bill_data.get("balance"),
+            "services": bill_data.get("services", []),
+            "generated_at": datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S"),
+            "status": bill_data.get("status")
+        }
+        
+        bills_ref.document(bill_id).set(bill_record)
+        logger.info(f"Bill record stored: {bill_data.get('bill_number')}")
+        
+    except Exception as e:
+        logger.error(f"Error storing bill record: {str(e)}")
+        # Don't fail the request if bill storage fails
+
+
+@app.route("/get_bill/<bill_number>", methods=["GET"])
+def get_bill_by_number(bill_number):
+    """
+    Retrieve a previously generated bill by bill number
+    """
+    try:
+        bills_ref = db.collection('bills')
+        bills_query = bills_ref.where('bill_number', '==', bill_number).limit(1).stream()
+        
+        bills = list(bills_query)
+        if not bills:
+            return jsonify(success=False, message="Bill not found")
+        
+        bill_data = bills[0].to_dict()
+        return jsonify(success=True, bill=bill_data)
+        
+    except Exception as e:
+        logger.error(f"Error retrieving bill: {str(e)}")
+        return jsonify(success=False, message=f"Error retrieving bill: {str(e)}")
+
+
+@app.route("/search_bills", methods=["POST"])
+def search_bills():
+    """
+    Search bills by guest name, mobile, or bill number
+    """
+    try:
+        data_json = request.json
+        search_term = data_json.get("search_term", "").strip()
+        
+        if not search_term:
+            return jsonify(success=False, message="Search term is required")
+        
+        bills_ref = db.collection('bills')
+        
+        # Search by bill number (exact match)
+        bills_query = bills_ref.where('bill_number', '==', search_term).limit(10).stream()
+        results = [doc.to_dict() for doc in bills_query]
+        
+        # If no results, search by guest name (partial match)
+        if not results:
+            all_bills = bills_ref.limit(100).stream()
+            results = [
+                doc.to_dict() 
+                for doc in all_bills 
+                if (search_term.lower() in doc.to_dict().get('guest_name', '').lower() or
+                    search_term in doc.to_dict().get('guest_mobile', ''))
+            ]
+        
+        return jsonify(success=True, bills=results[:10])  # Limit to 10 results
+        
+    except Exception as e:
+        logger.error(f"Error searching bills: {str(e)}")
+        return jsonify(success=False, message=f"Error searching bills: {str(e)}")
+
+
+@app.route("/print_bill/<bill_id>", methods=["POST"])
+def print_bill(bill_id):
+    """
+    Mark a bill as printed and update print count
+    """
+    try:
+        bills_ref = db.collection('bills')
+        bill_doc = bills_ref.document(bill_id).get()
+        
+        if not bill_doc.exists:
+            return jsonify(success=False, message="Bill not found")
+        
+        bill_data = bill_doc.to_dict()
+        print_count = bill_data.get("print_count", 0) + 1
+        
+        bills_ref.document(bill_id).update({
+            "print_count": print_count,
+            "last_printed_at": datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S")
+        })
+        
+        return jsonify(success=True, message=f"Bill printed (Count: {print_count})")
+        
+    except Exception as e:
+        logger.error(f"Error recording bill print: {str(e)}")
+        return jsonify(success=False, message=f"Error: {str(e)}")
+
+
+@app.route("/get_register_stats", methods=["POST"])
+def get_register_stats():
+    """
+    Get statistics for register data (optional - for future dashboard)
+    """
+    try:
+        data_json = request.json
+        start_date = data_json.get("start_date")
+        end_date = data_json.get("end_date")
+        
+        if not start_date or not end_date:
+            return jsonify(success=False, message="Date range required")
+        
+        start = datetime.strptime(start_date, "%Y-%m-%d")
+        end = datetime.strptime(end_date, "%Y-%m-%d") + timedelta(days=1)
+        
+        # Get register entries
+        rooms_data = get_all_rooms()
+        all_logs = get_all_logs()
+        entries = build_register_entries(rooms_data, all_logs, start, end)
+        
+        # Calculate statistics
+        stats = {
+            "total_entries": len(entries),
+            "active_guests": len([e for e in entries if e["status"] == "active"]),
+            "completed_checkouts": len([e for e in entries if e["status"] == "completed"]),
+            "total_revenue": sum(e["total_amount"] for e in entries),
+            "cash_collected": sum(e["payment_cash"] for e in entries),
+            "online_collected": sum(e["payment_online"] for e in entries),
+            "pending_balance": sum(e["balance"] for e in entries if e["balance"] > 0),
+            "total_room_charges": sum(e["room_charges"] for e in entries),
+            "total_services": sum(e["services_total"] for e in entries),
+            "average_stay": sum(e["days_stayed"] for e in entries) / len(entries) if entries else 0
+        }
+        
+        return jsonify(success=True, stats=stats)
+        
+    except Exception as e:
+        logger.error(f"Error calculating register stats: {str(e)}")
+        return jsonify(success=False, message=f"Error: {str(e)}")
+
+@app.route("/debug_bills", methods=["GET"])
+def debug_bills():
+    """Debug endpoint to see all bills"""
+    try:
+        bills_query = bills_ref.where('status', '==', 'completed').stream()
+        
+        bills_list = []
+        for bill_doc in bills_query:
+            bill_data = bill_doc.to_dict()
+            bills_list.append({
+                "id": bill_doc.id,
+                "guest": bill_data.get("guest_name"),
+                "room": bill_data.get("room"),
+                "checkin": bill_data.get("checkin_time"),
+                "checkout": bill_data.get("checkout_time"),
+                "bill_number": bill_data.get("bill_number")
+            })
+        
+        # Sort by checkout time
+        bills_list.sort(key=lambda x: x.get("checkout", ""), reverse=True)
+        
+        return jsonify(success=True, count=len(bills_list), bills=bills_list)
+        
+    except Exception as e:
+        logger.error(f"Error in debug: {str(e)}")
+        return jsonify(success=False, message=str(e))
+
+# Helper function to check if log is from current stay
+def is_log_from_current_stay(log, checkin_time):
+    """
+    Check if a log entry is from the current guest stay
+    Enhanced version with better date parsing
+    """
+    try:
+        log_date = log.get("date")
+        log_time = log.get("time", "00:00")
+        
+        if not log_date:
+            return True
+        
+        # Handle different time formats
+        if len(log_time) == 5:  # HH:MM
+            log_datetime_str = f"{log_date} {log_time}"
+            log_datetime = datetime.strptime(log_datetime_str, "%Y-%m-%d %H:%M")
+        else:
+            log_datetime = datetime.strptime(log_date, "%Y-%m-%d")
+        
+        return log_datetime >= checkin_time
+        
+    except Exception as e:
+        logger.error(f"Error parsing log datetime: {str(e)}")
+        return True  # Include by default if parsing fails
+
+def build_active_room_entry(room_number, room_data, all_logs, checkin_dt):
+    """
+    Build entry for an active room with ACTUAL serial number
+    """
+    try:
+        guest = room_data.get("guest", {})
+        guest_name = guest.get("name", "Unknown")
+        guest_mobile = guest.get("mobile", "")
+        checkin_time = room_data.get("checkin_time")
+        
+        if not guest_name or guest_name == "Unknown":
+            logger.warning(f"Room {room_number} has no valid guest")
+            return None
+        
+        # ===================================
+        # GET ACTUAL SERIAL NUMBER - comprehensive search
+        # ===================================
+        serial_number = find_serial_number_for_checkin(
+            room_number, 
+            guest_name, 
+            checkin_dt, 
+            all_logs
+        )
+        
+        if not serial_number:
+            logger.warning(f"No serial number found for Room {room_number}, Guest {guest_name}")
+        
+        # Calculate room details
+        room_price_per_night = guest.get("price", 0)
+        days_stayed = room_data.get("renewal_count", 0) + 1
+        room_charges_total = room_price_per_night * days_stayed
+        
+        # Get services
+        services_total = sum(addon.get("price", 0) for addon in room_data.get("add_ons", []))
+        
+        # Calculate total
+        total_amount = room_charges_total + services_total
+        
+        # Get payments
+        cash_logs = all_logs.get("cash", [])
+        payment_cash = sum(
+            log.get("amount", 0) 
+            for log in cash_logs 
+            if (log.get("room") == room_number and 
+                log.get("name") == guest_name and
+                is_log_from_current_stay(log, checkin_dt))
+        )
+        
+        online_logs = all_logs.get("online", [])
+        payment_online = sum(
+            log.get("amount", 0) 
+            for log in online_logs 
+            if (log.get("room") == room_number and 
+                log.get("name") == guest_name and
+                is_log_from_current_stay(log, checkin_dt))
+        )
+        
+        balance = room_data.get("balance", 0)
+        
+        entry = {
+            "id": f"active_{room_number}_{int(checkin_dt.timestamp())}",
+            "bill_number": "-",
+            "guest_name": guest_name,
+            "guest_mobile": guest_mobile,
+            "room": room_number,
+            "checkin_time": checkin_time,
+            "checkout_time": None,
+            "days_stayed": days_stayed,
+            "room_rent": room_price_per_night,
+            "room_charges": room_charges_total,
+            "services_total": services_total,
+            "total_amount": total_amount,
+            "payment_cash": payment_cash,
+            "payment_online": payment_online,
+            "balance": balance,
+            "status": "active",
+            "serial_number": serial_number
+        }
+        
+        return entry
+        
+    except Exception as e:
+        logger.error(f"Error building active room entry for room {room_number}: {str(e)}")
+        return None  
+
+def find_serial_number_for_checkin(room_number, guest_name, checkin_dt, all_logs):
+    """
+    Comprehensive search for serial number from check-in transaction
+    Searches cash, online, and booking payment logs
+    """
+    try:
+        # Search in cash logs
+        cash_logs = all_logs.get("cash", [])
+        for log in cash_logs:
+            if (str(log.get("room")) == str(room_number) and 
+                log.get("name") == guest_name and
+                is_log_from_current_stay(log, checkin_dt)):
+                
+                # Check for serial number
+                if log.get("serial_number"):
+                    logger.info(f"Found serial {log.get('serial_number')} in cash logs for Room {room_number}")
+                    return log.get("serial_number")
+        
+        # Search in online logs
+        online_logs = all_logs.get("online", [])
+        for log in online_logs:
+            if (str(log.get("room")) == str(room_number) and 
+                log.get("name") == guest_name and
+                is_log_from_current_stay(log, checkin_dt)):
+                
+                if log.get("serial_number"):
+                    logger.info(f"Found serial {log.get('serial_number')} in online logs for Room {room_number}")
+                    return log.get("serial_number")
+        
+        # Search in booking payments
+        booking_logs = all_logs.get("booking_payments", [])
+        for log in booking_logs:
+            if (str(log.get("room")) == str(room_number) and 
+                log.get("name") == guest_name and
+                is_log_from_current_stay(log, checkin_dt)):
+                
+                if log.get("serial_number"):
+                    logger.info(f"Found serial {log.get('serial_number')} in booking logs for Room {room_number}")
+                    return log.get("serial_number")
+        
+        logger.warning(f"No serial number found in any logs for Room {room_number}, Guest {guest_name}")
+        return None
+        
+    except Exception as e:
+        logger.error(f"Error finding serial number: {str(e)}")
+        return None     
+# ==========================================
+# END OF REGISTER MODULE ROUTES
+# ==========================================
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))

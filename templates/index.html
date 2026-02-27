@@ -11,6 +11,7 @@
     <link rel="stylesheet" href="/static/style.css" />
     <link rel="stylesheet" href="/static/booking.css" />
     <link rel="stylesheet" href="/static/settle-later.css" />
+    <link rel="stylesheet" href="/static/register.css" />
   </head>
   <body>
     <div class="app-container">
@@ -37,91 +38,10 @@
 
       <!-- Dashboard -->
       <main class="dashboard">
-        <!-- Stats Row -->
-        <!-- Updated Dashboard Stats with Cash/Online Split -->
-        <!-- Replace your current stats-container with this collapsible version -->
-
-        <div class="collapsible-section">
-          <button class="collapse-toggle" id="stats-toggle">
-            <i class="fas fa-chart-bar"></i> Dashboard Stats
-            <i class="fas fa-chevron-down toggle-icon"></i>
-          </button>
-          <div
-            class="collapsible-content stats-container hidden"
-            id="stats-container"
-          >
-            <!-- Your existing stat cards -->
-            <div class="stat-card">
-              <div class="stat-icon" style="background-color: var(--success)">
-                <i class="fas fa-door-open"></i>
-              </div>
-              <div class="stat-info">
-                <h3>Vacant Rooms</h3>
-                <p id="vacant-count">0</p>
-              </div>
-            </div>
-            <div class="stat-card">
-              <div class="stat-icon" style="background-color: var(--danger)">
-                <i class="fas fa-bed"></i>
-              </div>
-              <div class="stat-info">
-                <h3>Occupied</h3>
-                <p id="occupied-count">0</p>
-              </div>
-            </div>
-            <div class="stat-card">
-              <div class="stat-icon" style="background-color: #27ae60">
-                <i class="fas fa-money-bill-wave"></i>
-              </div>
-              <div class="stat-info">
-                <h3>Today's Cash</h3>
-                <p id="today-cash">₹0</p>
-              </div>
-            </div>
-            <div class="stat-card">
-              <div class="stat-icon" style="background-color: #2980b9">
-                <i class="fas fa-mobile-alt"></i>
-              </div>
-              <div class="stat-info">
-                <h3>Today's Online</h3>
-                <p id="today-online">₹0</p>
-              </div>
-            </div>
-            <div class="stat-card">
-              <div class="stat-icon" style="background-color: var(--primary)">
-                <i class="fas fa-chart-line"></i>
-              </div>
-              <div class="stat-info">
-                <h3>Total Revenue</h3>
-                <p id="today-revenue">₹0</p>
-              </div>
-            </div>
-            <div class="stat-card">
-              <div class="stat-icon" style="background-color: var(--warning)">
-                <i class="fas fa-exclamation-circle"></i>
-              </div>
-              <div class="stat-info">
-                <h3>Pending Balance</h3>
-                <p id="pending-balance">₹0</p>
-              </div>
-            </div>
-            <div class="stat-card">
-              <div class="stat-icon" style="background-color: var(--danger)">
-                <i class="fas fa-money-bill-wave-alt"></i>
-              </div>
-              <div class="stat-info">
-                <h3>Daily Expenses</h3>
-                <p id="today-expense">₹0</p>
-              </div>
-            </div>
-          </div>
-        </div>
-
         <!-- Rooms Tab Content -->
         <div class="tab-content active" id="rooms-tab">
           <!-- Search -->
           <div class="search-container">
-            <i class="fas fa-search search-icon"></i>
             <input
               type="text"
               id="room-search"
@@ -132,13 +52,22 @@
           </div>
 
           <!-- Filters -->
-          <div class="filter-container">
+          <div
+            class="filter-container"
+            style="margin-top: 1rem; flex-wrap: wrap"
+          >
             <button class="filter-btn active" data-filter="all">All</button>
-            <button class="filter-btn" data-filter="vacant">Vacant</button>
-            <button class="filter-btn" data-filter="occupied">Occupied</button>
-            <button class="filter-btn" data-filter="cleaning">Cleaning</button>
+            <button class="filter-btn" data-filter="vacant">
+              Vacant (<span id="count-filter-vacant">0</span>)
+            </button>
+            <button class="filter-btn" data-filter="occupied">
+              Occupied (<span id="count-filter-occupied">0</span>)
+            </button>
+            <button class="filter-btn" data-filter="cleaning">
+              Cleaning (<span id="count-filter-cleaning">0</span>)
+            </button>
             <button class="filter-btn" data-filter="balances">
-              Pending Balances
+              Pending Balances (<span id="count-filter-balances">0</span>)
             </button>
           </div>
 
@@ -452,6 +381,117 @@
             </div>
           </div>
         </div>
+
+        <!-- Register Tab Content -->
+        <div class="tab-content hidden" id="register-tab">
+          <div class="register-container">
+            <!-- Header -->
+            <div class="register-header">
+              <h1><i class="fas fa-book"></i> Daily Register</h1>
+              <div class="header-actions">
+                <button class="action-btn btn-primary" id="export-excel-btn">
+                  <i class="fas fa-file-excel"></i> Export
+                </button>
+                <button
+                  class="action-btn btn-secondary"
+                  id="refresh-register-btn"
+                >
+                  <i class="fas fa-sync-alt"></i> Refresh
+                </button>
+              </div>
+            </div>
+
+            <!-- Filters -->
+            <div class="filters-section">
+              <div class="filter-group">
+                <label for="start-date">From Date:</label>
+                <input type="date" id="start-date" class="date-input" />
+              </div>
+              <div class="filter-group">
+                <label for="end-date">To Date:</label>
+                <input type="date" id="end-date" class="date-input" />
+              </div>
+              <div class="filter-group">
+                <label for="search-register">Search:</label>
+                <input
+                  type="text"
+                  id="search-register"
+                  class="search-input"
+                  placeholder="Name, Mobile, Room, Bill No..."
+                />
+              </div>
+              <div class="filter-group">
+                <label for="payment-filter">Payment:</label>
+                <select id="payment-filter" class="filter-select">
+                  <option value="all">All</option>
+                  <option value="cash">Cash Only</option>
+                  <option value="online">Online Only</option>
+                  <option value="split">Split Payment</option>
+                  <option value="pending">Pending Balance</option>
+                </select>
+              </div>
+              <div class="filter-group">
+                <label for="status-filter">Status:</label>
+                <select id="status-filter" class="filter-select">
+                  <option value="all">All</option>
+                  <option value="active">Active</option>
+                  <option value="completed">Checked Out</option>
+                </select>
+              </div>
+            </div>
+
+            <!-- Register Table -->
+            <div class="register-table-container">
+              <table class="register-table">
+                <thead>
+                  <tr>
+                    <th>Sr. No</th>
+                    <th>Bill No</th>
+                    <th>Guest Name</th>
+                    <th>Contact</th>
+                    <th>Room</th>
+                    <th>Check-in</th>
+                    <th>Check-out</th>
+                    <th>Days</th>
+                    <th>Room Charges</th>
+                    <th>Services</th>
+                    <th>Total</th>
+                    <th>Payment</th>
+                    <th>Status</th>
+                    <th>Action</th>
+                  </tr>
+                </thead>
+                <tbody id="register-table-body">
+                  <!-- Will be populated by JavaScript -->
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- Bill Modal -->
+        <div class="bill-modal" id="bill-modal">
+          <div class="bill-content">
+            <div class="bill-header">
+              <h2>Tax Invoice</h2>
+              <button class="bill-close">&times;</button>
+            </div>
+            <div id="bill-print-area" class="bill-print-area">
+              <!-- Bill content will be dynamically generated -->
+            </div>
+            <div class="bill-actions">
+              <button
+                class="action-btn btn-secondary"
+                onclick="closeBillModal()"
+              >
+                Close
+              </button>
+              <button class="action-btn btn-primary" onclick="printBill()">
+                <i class="fas fa-print"></i> Print Bill
+              </button>
+            </div>
+          </div>
+        </div>
       </main>
 
       <!-- Bottom Navigation -->
@@ -467,6 +507,10 @@
         <div class="nav-item" data-tab="bookings">
           <div class="nav-icon"><i class="fas fa-calendar-alt"></i></div>
           <div class="nav-label">Bookings</div>
+        </div>
+        <div class="nav-item" data-tab="register">
+          <div class="nav-icon"><i class="fas fa-book"></i></div>
+          <div class="nav-label">Register</div>
         </div>
         <div class="nav-item" data-tab="reports">
           <div class="nav-icon"><i class="fas fa-chart-bar"></i></div>
@@ -2068,6 +2112,8 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <script src="/static/register.js"></script>
     <script src="/static/script.js"></script>
     <script src="/static/shift.js"></script>
     <script src="/static/analytics.js"></script>
@@ -2078,7 +2124,7 @@
     <script src="/static/revenue-protection.js"></script>
     <script src="/static/transaction-tracking.js"></script>
     <script src="/static/room-cleaning.js"></script>
-    <script src="/static/realtime-sync.js"></script>
+    <!-- <script src="/static/realtime-sync.js"></script> -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
   </body>
 </html>

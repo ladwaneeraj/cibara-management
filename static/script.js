@@ -603,87 +603,78 @@ async function fetchData() {
   }
 }
 
-function updateStats() {
-  let vacant = 0;
-  let occupied = 0;
-  let balance = 0;
-  let renewalsDue = 0;
+function updateFilterCounts() {
+  let counts = {
+    vacant: 0,
+    occupied: 0,
+    cleaning: 0,
+    balances: 0,
+  };
 
+  // Iterate through the rooms object
   Object.values(rooms).forEach((room) => {
-    if (room.status === "vacant") {
-      vacant++;
-    } else if (room.status === "occupied") {
-      occupied++;
-      if (room.balance > 0) {
-        balance += room.balance;
-      }
+    // Count by Status
+    if (room.status === "vacant") counts.vacant++;
+    else if (room.status === "occupied") counts.occupied++;
+    else if (room.status === "cleaning") counts.cleaning++;
 
-      // Check if room is due for renewal
-      const renewalStatus = getRoomRenewalStatus(room);
-      if (renewalStatus.canRenew) {
-        renewalsDue++;
-      }
+    // Count specifically for Pending Balances (Occupied + Balance > 0)
+    if (room.status === "occupied" && room.balance > 0) {
+      counts.balances++;
     }
   });
 
-  if (vacantCount) vacantCount.textContent = vacant;
-  if (occupiedCount) occupiedCount.textContent = occupied;
-  if (pendingBalance) pendingBalance.textContent = "₹" + balance;
+  // Update the DOM elements
+  const elVacant = document.getElementById("count-filter-vacant");
+  const elOccupied = document.getElementById("count-filter-occupied");
+  const elCleaning = document.getElementById("count-filter-cleaning");
+  const elBalances = document.getElementById("count-filter-balances");
 
-  // Calculate today's revenue with cash/online split and subtract refunds by payment method
-  const today = new Date().toISOString().split("T")[0];
+  if (elVacant) elVacant.textContent = counts.vacant;
+  if (elOccupied) elOccupied.textContent = counts.occupied;
+  if (elCleaning) elCleaning.textContent = counts.cleaning;
+  if (elBalances) elBalances.textContent = counts.balances;
+}
 
-  // Get today's transactions
-  const todayCashLogs = logs.cash.filter((log) => log.date === today);
-  const todayOnlineLogs = logs.online.filter((log) => log.date === today);
-  const todayRefundLogs = (logs.refunds || []).filter(
-    (log) => log.date === today,
-  );
+function updateStats() {
+  let counts = {
+    vacant: 0,
+    occupied: 0,
+    cleaning: 0,
+    balances: 0,
+  };
 
-  // Calculate totals
-  const todayCashTotal = todayCashLogs.reduce(
-    (sum, log) => sum + log.amount,
-    0,
-  );
-  const todayOnlineTotal = todayOnlineLogs.reduce(
-    (sum, log) => sum + log.amount,
-    0,
-  );
+  // Calculate counts from the rooms object
+  Object.values(rooms).forEach((room) => {
+    if (room.status === "vacant") counts.vacant++;
+    else if (room.status === "occupied") {
+      counts.occupied++;
+      if (room.balance > 0) counts.balances++;
+    } else if (room.status === "cleaning") counts.cleaning++;
+  });
 
-  // Calculate refunds by payment method
-  const todayCashRefunds = todayRefundLogs
-    .filter((log) => log.payment_mode === "cash")
-    .reduce((sum, log) => sum + log.amount, 0);
+  // Update the filter button spans
+  const elVacant = document.getElementById("count-filter-vacant");
+  const elOccupied = document.getElementById("count-filter-occupied");
+  const elCleaning = document.getElementById("count-filter-cleaning");
+  const elBalances = document.getElementById("count-filter-balances");
 
-  const todayOnlineRefunds = todayRefundLogs
-    .filter((log) => log.payment_mode === "online")
-    .reduce((sum, log) => sum + log.amount, 0);
+  if (elVacant) elVacant.textContent = counts.vacant;
+  if (elOccupied) elOccupied.textContent = counts.occupied;
+  if (elCleaning) elCleaning.textContent = counts.cleaning;
+  if (elBalances) elBalances.textContent = counts.balances;
 
-  // Calculate net amounts (subtracting refunds)
-  const netCashTotal = todayCashTotal - todayCashRefunds;
-  const netOnlineTotal = todayOnlineTotal - todayOnlineRefunds;
-  const todayTotal = netCashTotal + netOnlineTotal;
+  // Keep the quick action badge logic if you still use the floating bolt menu
+  const renewalsDue = Object.values(rooms).filter(
+    (r) => r.status === "occupied" && getRoomRenewalStatus(r).canRenew,
+  ).length;
 
-  // Update the dashboard with separate cash/online totals
-  const todayCashElement = document.getElementById("today-cash");
-  const todayOnlineElement = document.getElementById("today-online");
-
-  if (todayCashElement) todayCashElement.textContent = "₹" + netCashTotal;
-  if (todayOnlineElement) todayOnlineElement.textContent = "₹" + netOnlineTotal;
-  if (todayRevenue) todayRevenue.textContent = "₹" + todayTotal;
-
-  // Update quick action renewal badge if there are rooms due for renewal
   const quickRenewBtn = document.getElementById("quick-renew-btn");
-  if (quickRenewBtn && renewalsDue > 0) {
-    quickRenewBtn.innerHTML = `
-      <i class="fas fa-sync-alt"></i>
-      <span>Renewals Due <span style="background-color: var(--danger); padding: 2px 6px; border-radius: 50%; margin-left: 5px; font-size: 0.7rem;">${renewalsDue}</span></span>
-    `;
-  } else if (quickRenewBtn) {
-    quickRenewBtn.innerHTML = `
-      <i class="fas fa-sync-alt"></i>
-      <span>Renewals Due</span>
-    `;
+  if (quickRenewBtn) {
+    quickRenewBtn.innerHTML =
+      renewalsDue > 0
+        ? `<i class="fas fa-sync-alt"></i> <span>Renewals Due <span class="badge-mini">${renewalsDue}</span></span>`
+        : `<i class="fas fa-sync-alt"></i> <span>Renewals Due</span>`;
   }
 }
 

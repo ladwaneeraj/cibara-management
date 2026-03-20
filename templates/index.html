@@ -99,13 +99,13 @@
       @media (max-width: 600px) {
         #doc-camera-modal {
           align-items: flex-end !important;
-          padding: 0 !important;
+          padding: 0 0 1.5rem 0 !important;
         }
         #doc-camera-modal .modal-content {
-          border-radius: 1.1rem 1.1rem 0 0 !important;
+          border-radius: 1.1rem 1.1rem 0.7rem 0.7rem !important;
           max-width: 100% !important;
           width: 100% !important;
-          max-height: 96vh !important;
+          max-height: 88vh !important;
           margin: 0 !important;
         }
         #doc-camera-feed {
@@ -1076,6 +1076,32 @@
                 pointer-events: none;
               "
             ></canvas>
+            <!-- Floating shutter button — quick fallback if auto-scan is slow -->
+            <button
+              type="button"
+              id="doc-capture-btn"
+              title="Tap to capture"
+              style="
+                position: absolute;
+                bottom: 16px;
+                right: 16px;
+                width: 52px;
+                height: 52px;
+                border-radius: 50%;
+                background: rgba(255,255,255,0.92);
+                border: 3px solid #1565c0;
+                color: #1565c0;
+                font-size: 1.3rem;
+                cursor: pointer;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                box-shadow: 0 2px 8px rgba(0,0,0,0.35);
+                z-index: 10;
+              "
+            >
+              <i class="fas fa-camera"></i>
+            </button>
             <!-- Status badge -->
             <div
               id="doc-scan-status"
@@ -1100,13 +1126,13 @@
             </div>
           </div>
 
-          <!-- Capture bar -->
+          <!-- Bottom bar: just Cancel (shutter is the floating button on the video) -->
           <div
             style="
               display: flex;
               align-items: center;
-              gap: 0.6rem;
-              padding: 0.65rem 0.85rem;
+              justify-content: center;
+              padding: 0.55rem 0.85rem 0.7rem;
               background: #fff;
               flex-shrink: 0;
             "
@@ -1115,42 +1141,9 @@
               type="button"
               id="doc-cancel-camera-btn"
               class="action-btn btn-secondary"
-              style="flex: 0 0 auto; padding: 0.55rem 1rem"
+              style="width: 100%; padding: 0.55rem 1rem"
             >
               Cancel
-            </button>
-            <!-- Big shutter button in centre -->
-            <button
-              type="button"
-              id="doc-capture-btn"
-              style="
-                flex: 1;
-                height: 52px;
-                border-radius: 26px;
-                background: #1565c0;
-                color: white;
-                border: none;
-                font-size: 1rem;
-                font-weight: 600;
-                cursor: pointer;
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                gap: 0.5rem;
-                box-shadow: 0 2px 8px rgba(21,101,192,0.35);
-                transition: background 0.15s;
-              "
-            >
-              <span
-                style="
-                  width: 20px;
-                  height: 20px;
-                  border-radius: 50%;
-                  background: white;
-                  display: inline-block;
-                "
-              ></span>
-              Capture
             </button>
           </div>
         </div>

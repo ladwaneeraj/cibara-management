@@ -35,7 +35,7 @@ let _autoScanActive   = false;
 let _scanLineY        = 0;       // for the sweep animation
 let _docType          = 'card';  // 'card' | 'page'
 
-const STABLE_NEEDED    = 7;
+const STABLE_NEEDED    = 5;   // ~1s at 200ms — relaxed for mobile
 const SCAN_INTERVAL_MS = 200;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -387,27 +387,37 @@ async function openDocCameraModal() {
   const modal = document.getElementById('doc-camera-modal');
   if (modal) modal.classList.add('show');
 
-  try {
-    _docStream = await navigator.mediaDevices.getUserMedia({
-      video: {
-        facingMode: { ideal: 'environment' },
-        width:  { ideal: 1920 },
-        height: { ideal: 1080 },
-      },
-      audio: false,
-    });
+  // Helper to attach stream to feed once acquired
+  async function _attachStream(stream) {
+    _docStream = stream;
     const feed = document.getElementById('doc-camera-feed');
     if (feed) {
-      feed.srcObject = _docStream;
+      feed.srcObject = stream;
       feed.addEventListener('loadedmetadata', () => {
-        _resizeScanOverlay();
-        startAutoScan();
+        setTimeout(() => { _resizeScanOverlay(); startAutoScan(); }, 80);
       }, { once: true });
     }
-  } catch (err) {
-    console.warn('[customer-docs] Camera unavailable, using file picker:', err);
-    closeDocCameraModal();
-    document.getElementById('doc-file-input')?.click();
+  }
+
+  try {
+    // Force rear camera with exact; if device has no environment camera (e.g. desktop)
+    // the OverconstrainedError fallback below opens any available camera instead.
+    await _attachStream(await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { exact: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } },
+      audio: false,
+    }));
+  } catch (envErr) {
+    // Rear camera not available — try without facing constraint (desktop / single-camera)
+    try {
+      await _attachStream(await navigator.mediaDevices.getUserMedia({
+        video: { width: { ideal: 1920 }, height: { ideal: 1080 } },
+        audio: false,
+      }));
+    } catch (err) {
+      console.warn('[customer-docs] Camera unavailable, using file picker:', err);
+      closeDocCameraModal();
+      document.getElementById('doc-file-input')?.click();
+    }
   }
 }
 
@@ -429,20 +439,28 @@ async function _retakeDocPhoto() {
   _showCameraFeedSection();
   try {
     _docStream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } },
+      video: { facingMode: { exact: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } },
       audio: false,
     });
+  } catch (_) {
+    // Fallback for desktop / single-camera devices
+    _docStream = await navigator.mediaDevices.getUserMedia({
+      video: { width: { ideal: 1920 }, height: { ideal: 1080 } },
+      audio: false,
+    }).catch(err => {
+      console.warn('[customer-docs] Camera unavailable on retake:', err);
+      document.getElementById('doc-file-input')?.click();
+      return null;
+    });
+  }
+  if (_docStream) {
     const feed = document.getElementById('doc-camera-feed');
     if (feed) {
       feed.srcObject = _docStream;
       feed.addEventListener('loadedmetadata', () => {
-        _resizeScanOverlay();
-        startAutoScan();
+        setTimeout(() => { _resizeScanOverlay(); startAutoScan(); }, 80);
       }, { once: true });
     }
-  } catch (err) {
-    console.warn('[customer-docs] Camera unavailable on retake:', err);
-    document.getElementById('doc-file-input')?.click();
   }
 }
 
@@ -487,8 +505,11 @@ function _resizeScanOverlay() {
   const feed    = document.getElementById('doc-camera-feed');
   const overlay = document.getElementById('doc-scan-overlay');
   if (!feed || !overlay) return;
-  const w = feed.videoWidth  || feed.clientWidth  || 640;
-  const h = feed.videoHeight || feed.clientHeight || 360;
+  // Use CSS display dimensions (not native video resolution) so the guide
+  // draws in the same coordinate space as what the user actually sees.
+  const rect = feed.getBoundingClientRect();
+  const w = Math.round(rect.width)  || feed.clientWidth  || 320;
+  const h = Math.round(rect.height) || feed.clientHeight || 240;
   overlay.width  = w;
   overlay.height = h;
   _drawGuide(0);
@@ -535,9 +556,11 @@ function _scanLoop() {
     motion /= total;
     brightness /= total;
 
-    if (motion < 6 && brightness > 90) {
+    // Relaxed thresholds for mobile: less strict on brightness (indoor light)
+    // and more tolerant of minor hand shake
+    if (motion < 12 && brightness > 55) {
       _stableFrameCount = Math.min(_stableFrameCount + 1, STABLE_NEEDED);
-    } else if (motion < 10) {
+    } else if (motion < 20) {
       _stableFrameCount = Math.max(0, _stableFrameCount - 1);
     } else {
       _stableFrameCount = 0;
@@ -586,18 +609,29 @@ function _drawGuide(progress) {
 
   ctx.clearRect(0, 0, W, H);
 
-  // Guide rectangle dimensions based on doc type
+  // Guide rectangle — computed so it always fits and keeps the correct shape.
+  // On a portrait phone frame (W < H) cards get their width from W; pages from H.
   let gW, gH;
   if (_docType === 'card') {
-    // ID / Aadhaar card: landscape ~1.59:1  (credit card ratio)
-    gW = W * 0.88;
+    // ID / Aadhaar card: landscape credit-card ratio 85.6 × 53.98 mm = 1.586 : 1
+    // Try width-led first
+    gW = W * 0.86;
     gH = gW / 1.586;
-    if (gH > H * 0.80) { gH = H * 0.80; gW = gH * 1.586; }
+    // If card is taller than 78% of frame, shrink height-led instead
+    if (gH > H * 0.78) {
+      gH = H * 0.78;
+      gW = gH * 1.586;
+    }
   } else {
-    // A4 / passport portrait: ~0.707:1
-    gW = W * 0.75;
-    gH = gW / 0.707;
-    if (gH > H * 0.90) { gH = H * 0.90; gW = gH * 0.707; }
+    // A4 / long document: portrait 0.707 : 1  (width : height)
+    // Try height-led first so it fills the vertical space
+    gH = H * 0.88;
+    gW = gH * 0.707;
+    // If wider than 80% of frame, shrink width-led
+    if (gW > W * 0.80) {
+      gW = W * 0.80;
+      gH = gW / 0.707;
+    }
   }
 
   const gX = (W - gW) / 2;

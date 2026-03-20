@@ -43,7 +43,7 @@ try:
         firebase_admin.initialize_app(cred, {'storageBucket': storage_bucket})
     else:
         cred = credentials.Certificate('service-account.json')
-        firebase_admin.initialize_app(cred, {'storageBucket': 'your-project-id.appspot.com'})
+        firebase_admin.initialize_app(cred, {'storageBucket': 'cibara-software-61512.firebasestorage.app'})
 
     db = firestore.client()
     bucket = storage.bucket()

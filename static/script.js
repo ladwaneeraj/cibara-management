@@ -39,6 +39,7 @@ const transactionLog = document.getElementById("transaction-log");
 const roomSearch = document.getElementById("room-search");
 const refreshBtn = document.getElementById("refresh-btn");
 const settingsBtn = document.getElementById("settings-btn");
+const fullscreenBtn = document.getElementById("fullscreen-btn");
 const paymentOrRefundSection = document.getElementById(
   "payment-or-refund-section",
 );
@@ -1196,7 +1197,7 @@ function showCheckoutModal(roomNumber) {
         return;
       }
 
-      const currentRoomNumber = roomNumberElement.textContent;
+      const currentRoomNumber = roomNumberElement.textContent.trim();
       const balance = rooms[currentRoomNumber].balance;
 
       if (balance > 0) {
@@ -3705,6 +3706,39 @@ document.addEventListener("DOMContentLoaded", function () {
     });
   }
 
+  // Fullscreen toggle button
+  if (fullscreenBtn) {
+    function updateFullscreenIcon() {
+      const isFs = !!(
+        document.fullscreenElement ||
+        document.webkitFullscreenElement ||
+        document.mozFullScreenElement
+      );
+      fullscreenBtn.innerHTML = isFs
+        ? '<i class="fas fa-compress"></i>'
+        : '<i class="fas fa-expand"></i>';
+      fullscreenBtn.title = isFs ? "Exit fullscreen" : "Enter fullscreen";
+    }
+
+    fullscreenBtn.addEventListener("click", () => {
+      const isFs = !!(
+        document.fullscreenElement ||
+        document.webkitFullscreenElement ||
+        document.mozFullScreenElement
+      );
+      if (!isFs) {
+        const el = document.documentElement;
+        (el.requestFullscreen || el.webkitRequestFullscreen || el.mozRequestFullScreen).call(el);
+      } else {
+        (document.exitFullscreen || document.webkitExitFullscreen || document.mozCancelFullScreen).call(document);
+      }
+    });
+
+    document.addEventListener("fullscreenchange", updateFullscreenIcon);
+    document.addEventListener("webkitfullscreenchange", updateFullscreenIcon);
+    document.addEventListener("mozfullscreenchange", updateFullscreenIcon);
+  }
+
   // Handle payment method selection for check-in
   document.querySelectorAll(".payment-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
@@ -3826,6 +3860,9 @@ document.addEventListener("DOMContentLoaded", function () {
         '<span class="loader" style="width: 20px; height: 20px;"></span> Processing...';
 
       try {
+        const guestAddressInput = document.getElementById("guest-address");
+        const guestAddress = guestAddressInput ? guestAddressInput.value.trim() : "";
+
         const response = await fetch("/checkin", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -3833,6 +3870,7 @@ document.addEventListener("DOMContentLoaded", function () {
             room: roomNumber,
             name: guestName,
             mobile: guestMobile,
+            address: guestAddress,
             price: roomPrice,
             guests: guestCount,
             payment: paymentMethod,

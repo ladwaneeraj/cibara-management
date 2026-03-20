@@ -3,11 +3,36 @@ Customer search routes.
 Reads from the `customers` collection (managed by customer_service).
 """
 
+import uuid
+from datetime import datetime
 from flask import Blueprint, request, jsonify
 from config import logger
 from services import customer_service
+from services.customer_service import search_by_mobile_prefix
 
 customers_bp = Blueprint('customers', __name__)
+
+
+def _format_customer(c: dict) -> dict:
+    """Serialise a customer dict for API responses (shared by search and get)."""
+    return {
+        "name": c.get("name", ""),
+        "mobile": c.get("mobile", ""),
+        "address": c.get("address", ""),
+        "id_type": c.get("id_type", ""),
+        "id_number": c.get("id_number", ""),
+        "id_doc_urls": c.get("id_doc_urls", []),
+        "total_stays": c.get("total_stays", 0),
+        "total_spent": c.get("total_spent", 0),
+        "first_visit": c.get("first_visit", ""),
+        "last_stay_date": c.get("last_stay_date", ""),
+        # Flag fields — included so frontend can show warning without a second request
+        "is_flagged": c.get("is_flagged", False),
+        "flag_reason": c.get("flag_reason", ""),
+        "flag_notes": c.get("flag_notes", ""),
+        "flagged_at": c.get("flagged_at", ""),
+        "flagged_by": c.get("flagged_by", ""),
+    }
 
 
 @customers_bp.route("/search_customers", methods=["POST"])
@@ -23,22 +48,7 @@ def search_customers_route():
             return jsonify(success=True, customers=[])
 
         results = customer_service.search_customers(query_str, limit=10)
-
-        customers = []
-        for c in results:
-            customers.append({
-                "name": c.get("name", ""),
-                "mobile": c.get("mobile", ""),
-                "id_type": c.get("id_type", ""),
-                "id_number": c.get("id_number", ""),
-                "address": c.get("address", ""),
-                "id_doc_urls": c.get("id_doc_urls", []),
-                "total_stays": c.get("total_stays", 0),
-                "total_spent": c.get("total_spent", 0),
-                "first_visit": c.get("first_visit", ""),
-                "last_stay_date": c.get("last_stay_date", ""),
-            })
-
+        customers = [_format_customer(c) for c in results]
         return jsonify(success=True, customers=customers)
     except Exception as e:
         logger.error(f"Error searching customers: {str(e)}")
@@ -52,8 +62,81 @@ def get_customer_route(mobile):
         customer = customer_service.get_customer(mobile)
         if customer:
             customer.pop("_id", None)
-            return jsonify(success=True, customer=customer)
+            return jsonify(success=True, customer=_format_customer(customer))
         return jsonify(success=False, message="Customer not found")
     except Exception as e:
         logger.error(f"Error getting customer: {str(e)}")
         return jsonify(success=False, message=f"Error: {str(e)}")
+
+
+@customers_bp.route("/search_customers_mobile", methods=["POST"])
+def search_customers_by_mobile_route():
+    """
+    Search customers by partial mobile prefix (4+ digits).
+    Used by the check-in form to show suggestions while typing.
+
+    JSON body:  { "prefix": "9876" }
+    Returns:    { success, customers[] }
+    """
+    try:
+        body   = request.get_json(silent=True) or {}
+        prefix = "".join(c for c in str(body.get("prefix", "")) if c.isdigit())
+
+        if len(prefix) < 4:
+            return jsonify(success=True, customers=[])
+
+        results   = search_by_mobile_prefix(prefix)
+        customers = [_format_customer(c) for c in results]
+        return jsonify(success=True, customers=customers)
+    except Exception as e:
+        logger.error(f"Error searching customers by mobile: {str(e)}")
+        return jsonify(success=False, message=f"Error: {str(e)}", customers=[])
+
+
+@customers_bp.route("/upload_customer_document", methods=["POST"])
+def upload_customer_document():
+    """
+    Upload a document image and attach it to a customer by mobile number.
+
+    Form fields:
+        mobile    – 10-digit mobile number (customer key)
+        document  – image file (JPEG / PNG)
+
+    Returns JSON: { success, url, message }
+    """
+    try:
+        mobile = request.form.get("mobile", "").strip()
+        if not mobile:
+            return jsonify(success=False, message="Mobile number is required")
+
+        if "document" not in request.files:
+            return jsonify(success=False, message="No document file provided")
+
+        file = request.files["document"]
+        if not file or file.filename == "":
+            return jsonify(success=False, message="Empty file")
+
+        # Check the customer already has the maximum number of docs
+        customer = customer_service.get_customer(mobile)
+        if customer:
+            existing_urls = customer.get("id_doc_urls", [])
+            if len(existing_urls) >= 3:
+                return jsonify(
+                    success=False,
+                    message="Maximum 3 documents already uploaded for this customer",
+                    doc_count=len(existing_urls),
+                )
+
+        image_bytes = file.read()
+        filename = f"doc_{uuid.uuid4().hex[:10]}_{datetime.now().strftime('%Y%m%d%H%M%S')}.jpg"
+
+        url = customer_service.upload_document(mobile, image_bytes, filename)
+        if url:
+            return jsonify(success=True, url=url, message="Document uploaded successfully")
+        return jsonify(success=False, message="Failed to store document — check server logs")
+
+    except Exception as e:
+        logger.error(f"Error uploading customer document: {str(e)}")
+        return jsonify(success=False, message=f"Error: {str(e)}")
+
+

@@ -11,6 +11,90 @@
     <link rel="stylesheet" href="/static/style.css" />
     <link rel="stylesheet" href="/static/booking.css" />
     <link rel="stylesheet" href="/static/settle-later.css" />
+    <style>
+      /* ── Document-camera / view-photos buttons in check-in modal header ── */
+      .doc-cam-btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 34px;
+        height: 34px;
+        border-radius: 6px;
+        border: 1.5px solid #aaa;
+        background: transparent;
+        color: #555; /* dark enough to show on white modal header */
+        font-size: 0.95rem;
+        cursor: pointer;
+        transition:
+          background 0.15s,
+          color 0.15s,
+          border-color 0.15s;
+        flex-shrink: 0;
+      }
+      .doc-cam-btn:not(:disabled):hover {
+        background: #f0f0f0;
+        border-color: #777;
+        color: #222;
+      }
+      .doc-cam-btn.doc-cam-disabled,
+      .doc-cam-btn:disabled {
+        opacity: 0.35;
+        cursor: not-allowed;
+      }
+      /* active / enabled state — draw attention */
+      .doc-cam-btn.doc-cam-enabled {
+        border-color: var(--primary, #2196f3);
+        color: var(--primary, #2196f3);
+      }
+      /* ── Address toggle ── */
+      #toggle-address-link {
+        font-size: 0.82rem;
+        color: var(--primary, #2196f3);
+        text-decoration: none;
+        display: inline-flex;
+        align-items: center;
+        gap: 0.3rem;
+        margin-top: 0.1rem;
+      }
+      #toggle-address-link:hover {
+        text-decoration: underline;
+      }
+      /* ── Photo viewer overlay ── */
+      #doc-photo-viewer {
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.88);
+        z-index: 99999;
+        display: none; /* toggled to flex by JS */
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        padding: 1rem;
+      }
+      /* Thumbnail in viewer */
+      .doc-thumb {
+        width: 56px;
+        height: 56px;
+        border-radius: 6px;
+        object-fit: cover;
+        cursor: pointer;
+        border: 2px solid transparent;
+        flex-shrink: 0;
+        transition:
+          border-color 0.15s,
+          opacity 0.15s;
+        opacity: 0.65;
+      }
+      .doc-thumb.active {
+        border-color: #64b5f6;
+        opacity: 1;
+      }
+
+      /* ── Name suggestion dropdown ── */
+      #name-suggestions > div:last-child {
+        border-bottom: none !important;
+      }
+    </style>
   </head>
   <body>
     <div class="app-container">
@@ -20,17 +104,25 @@
         <div class="header-actions">
           <button
             id="refresh-btn"
-            class="action-btn"
-            style="background: transparent; color: white; padding: 0.5rem"
+            class="header-icon-btn"
             aria-label="Refresh Data"
+            title="Refresh"
           >
             <i class="fas fa-sync-alt"></i>
           </button>
           <button
+            id="fullscreen-btn"
+            class="header-icon-btn"
+            aria-label="Toggle Fullscreen"
+            title="Enter fullscreen"
+          >
+            <i class="fas fa-expand"></i>
+          </button>
+          <button
             id="settings-btn"
-            class="action-btn"
-            style="background: transparent; color: white; padding: 0.5rem"
+            class="header-icon-btn"
             aria-label="Settings"
+            title="Settings"
           ></button>
         </div>
       </header>
@@ -528,22 +620,94 @@
               <!-- Room numbers will be dynamically populated here -->
             </select>
           </h2>
-          <button class="close-btn" aria-label="Close">&times;</button>
+          <div style="display: flex; align-items: center; gap: 0.4rem">
+            <!-- View existing photos — hidden until docs are on file -->
+            <button
+              id="doc-view-btn"
+              type="button"
+              class="doc-cam-btn"
+              title="View ID documents"
+              aria-label="View ID documents"
+              style="display: none"
+            >
+              <i class="fas fa-images"></i>
+            </button>
+            <!-- Camera button: enabled/disabled based on customer doc state -->
+            <button
+              id="doc-camera-btn"
+              type="button"
+              class="doc-cam-btn doc-cam-disabled"
+              title="Enter mobile number first"
+              aria-label="Capture ID document"
+              disabled
+            >
+              <i class="fas fa-camera"></i>
+            </button>
+            <button class="close-btn" aria-label="Close">&times;</button>
+          </div>
         </div>
         <form id="checkin-form">
+          <!-- Doc-missing reminder (shown by customer-docs.js when no ID photo on file) -->
+          <div
+            id="doc-missing-hint"
+            style="
+              display: none;
+              background: #fff8e1;
+              border-left: 3px solid #f9a825;
+              border-radius: 4px;
+              padding: 0.45rem 0.7rem;
+              margin-bottom: 0.75rem;
+              font-size: 0.82rem;
+              color: #795548;
+              align-items: center;
+              gap: 0.4rem;
+            "
+          >
+            <i class="fas fa-camera" style="color: #f9a825"></i>
+            No ID document on file — tap the camera button to add one
+          </div>
           <!-- Guest Details Section -->
           <div class="form-section">
-            <div class="form-group">
+            <div class="form-group" style="position: relative">
               <label class="form-label" for="guest-name">Guest Name</label>
               <input
                 type="text"
                 class="form-control"
                 id="guest-name"
                 placeholder="Full name"
+                autocomplete="off"
                 required
               />
+              <!-- Name-mismatch warning (shown when typed name differs from record on file) -->
+              <span
+                id="name-mismatch-warn"
+                style="
+                  display: none;
+                  font-size: 0.76rem;
+                  color: #e65100;
+                  margin-top: 0.15rem;
+                "
+              ></span>
+              <!-- Name suggestion dropdown (populated by customer-docs.js) -->
+              <div
+                id="name-suggestions"
+                style="
+                  display: none;
+                  position: absolute;
+                  top: 100%;
+                  left: 0;
+                  right: 0;
+                  background: white;
+                  border: 1px solid #ddd;
+                  border-radius: 6px;
+                  z-index: 9999;
+                  max-height: 200px;
+                  overflow-y: auto;
+                  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+                "
+              ></div>
             </div>
-            <div class="form-group">
+            <div class="form-group" style="position: relative">
               <label class="form-label" for="guest-mobile">Mobile Number</label>
               <input
                 type="tel"
@@ -553,6 +717,241 @@
                 required
                 pattern="[0-9]{10}"
                 title="Please enter a valid 10-digit mobile number"
+              />
+              <!-- Mobile suggestion dropdown (populated by customer-docs.js) -->
+              <div
+                id="mobile-suggestions"
+                style="
+                  display: none;
+                  position: absolute;
+                  top: 100%;
+                  left: 0;
+                  right: 0;
+                  background: white;
+                  border: 1px solid #ddd;
+                  border-radius: 6px;
+                  z-index: 9999;
+                  max-height: 200px;
+                  overflow-y: auto;
+                  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+                "
+              ></div>
+            </div>
+
+            <!-- ── Returning Guest panel (shown immediately on mobile lookup match) ── -->
+            <div
+              id="returning-guest-panel"
+              style="
+                display: none;
+                margin-top: 0.5rem;
+                border-radius: 10px;
+                overflow: hidden;
+                border: 1.5px solid #2e7d32;
+                background: #fff;
+              "
+            >
+              <!-- Header -->
+              <div
+                style="
+                  background: linear-gradient(135deg, #2e7d32, #388e3c);
+                  padding: 0.5rem 0.9rem;
+                  display: flex;
+                  align-items: center;
+                  justify-content: space-between;
+                "
+              >
+                <span
+                  style="color: white; font-weight: 600; font-size: 0.85rem"
+                >
+                  <i class="fas fa-history"></i>&nbsp;Returning Guest
+                </span>
+                <span
+                  id="rg-first-stay-label"
+                  style="color: rgba(255, 255, 255, 0.75); font-size: 0.75rem"
+                ></span>
+              </div>
+
+              <!-- Stats grid -->
+              <div style="display: grid; grid-template-columns: repeat(3, 1fr)">
+                <div
+                  style="
+                    padding: 0.65rem 0;
+                    text-align: center;
+                    border-right: 1px solid #e8f5e9;
+                  "
+                >
+                  <div
+                    style="font-size: 1.3rem; font-weight: 700; color: #2e7d32"
+                    id="rg-stays"
+                  >
+                    0
+                  </div>
+                  <div
+                    style="
+                      font-size: 0.68rem;
+                      color: #888;
+                      text-transform: uppercase;
+                      letter-spacing: 0.04em;
+                    "
+                  >
+                    Stays
+                  </div>
+                </div>
+                <div
+                  style="
+                    padding: 0.65rem 0;
+                    text-align: center;
+                    border-right: 1px solid #e8f5e9;
+                  "
+                >
+                  <div
+                    style="font-size: 1.1rem; font-weight: 700; color: #2e7d32"
+                    id="rg-spent"
+                  >
+                    ₹0
+                  </div>
+                  <div
+                    style="
+                      font-size: 0.68rem;
+                      color: #888;
+                      text-transform: uppercase;
+                      letter-spacing: 0.04em;
+                    "
+                  >
+                    Spent
+                  </div>
+                </div>
+                <div style="padding: 0.65rem 0; text-align: center">
+                  <div
+                    style="
+                      font-size: 0.82rem;
+                      font-weight: 600;
+                      color: #444;
+                      line-height: 1.2;
+                    "
+                    id="rg-last-stay"
+                  >
+                    —
+                  </div>
+                  <div
+                    style="
+                      font-size: 0.68rem;
+                      color: #888;
+                      text-transform: uppercase;
+                      letter-spacing: 0.04em;
+                    "
+                  >
+                    Last Stay
+                  </div>
+                </div>
+              </div>
+
+              <!-- Address row (only shown when address is known) -->
+              <div
+                id="rg-address-row"
+                style="
+                  display: none;
+                  padding: 0.4rem 0.9rem;
+                  border-top: 1px solid #e8f5e9;
+                  font-size: 0.8rem;
+                  color: #555;
+                "
+              >
+                <i
+                  class="fas fa-map-marker-alt"
+                  style="color: #2e7d32; margin-right: 0.35rem"
+                ></i>
+                <span id="rg-address"></span>
+              </div>
+            </div>
+
+            <!-- Document capture section -->
+            <div id="doc-capture-section" style="margin-top: 0.5rem">
+              <!-- Live camera feed -->
+              <div
+                id="doc-camera-container"
+                style="
+                  display: none;
+                  background: #000;
+                  border-radius: 8px;
+                  padding: 0.5rem;
+                  margin-bottom: 0.5rem;
+                "
+              >
+                <video
+                  id="doc-camera-feed"
+                  autoplay
+                  playsinline
+                  style="
+                    width: 100%;
+                    border-radius: 6px;
+                    max-height: 220px;
+                    object-fit: cover;
+                    display: block;
+                  "
+                ></video>
+                <div style="display: flex; gap: 0.5rem; margin-top: 0.5rem">
+                  <button
+                    type="button"
+                    id="doc-capture-btn"
+                    class="action-btn btn-primary"
+                    style="flex: 1; padding: 0.5rem"
+                  >
+                    <i class="fas fa-circle"></i> Capture
+                  </button>
+                  <button
+                    type="button"
+                    id="doc-cancel-camera-btn"
+                    class="action-btn btn-secondary"
+                    style="flex: 1; padding: 0.5rem"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+              <!-- Preview after capture -->
+              <div
+                id="doc-preview-container"
+                style="display: none; border-radius: 8px; margin-bottom: 0.5rem"
+              >
+                <img
+                  id="doc-preview-img"
+                  style="
+                    width: 100%;
+                    border-radius: 8px;
+                    max-height: 220px;
+                    object-fit: cover;
+                    display: block;
+                    border: 1px solid #eee;
+                  "
+                  alt="Document preview"
+                />
+                <div style="display: flex; gap: 0.5rem; margin-top: 0.5rem">
+                  <button
+                    type="button"
+                    id="doc-upload-btn"
+                    class="action-btn btn-success"
+                    style="flex: 1; padding: 0.5rem"
+                  >
+                    <i class="fas fa-upload"></i> Save Document
+                  </button>
+                  <button
+                    type="button"
+                    id="doc-retake-btn"
+                    class="action-btn btn-secondary"
+                    style="flex: 1; padding: 0.5rem"
+                  >
+                    <i class="fas fa-redo"></i> Retake
+                  </button>
+                </div>
+              </div>
+              <!-- Hidden file-input fallback (used when camera permission is denied) -->
+              <input
+                type="file"
+                id="doc-file-input"
+                accept="image/*"
+                capture="environment"
+                style="display: none"
               />
             </div>
           </div>
@@ -1046,7 +1445,8 @@
             </div>
           </div>
         </div>
-        <div class="action-row">
+
+        <div class="action-row" style="margin-top: 1rem">
           <button
             class="action-btn btn-secondary"
             id="cancel-confirm-checkout-btn"
@@ -2123,11 +2523,193 @@
     <script src="/static/revenue-protection.js"></script>
     <script src="/static/transaction-tracking.js"></script>
     <script src="/static/room-cleaning.js"></script>
+    <!-- Enhanced check-in: document capture + customer flagging -->
+    <script src="/static/customer-docs.js"></script>
     <script
       type="module"
       src="{{ url_for('static', filename='google_sync.js') }}"
     ></script>
     <!-- <script src="/static/realtime-sync.js"></script> -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+
+    <!-- ── Document photo viewer overlay ─────────────────────────────── -->
+    <div id="doc-photo-viewer">
+      <!-- Card -->
+      <div
+        style="
+          width: 100%;
+          max-width: 400px;
+          background: #1a1a2e;
+          border-radius: 16px;
+          overflow: hidden;
+          box-shadow: 0 24px 60px rgba(0, 0, 0, 0.6);
+        "
+      >
+        <!-- Header -->
+        <div
+          style="
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0.85rem 1.1rem;
+            background: rgba(255, 255, 255, 0.07);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+          "
+        >
+          <div style="display: flex; align-items: center; gap: 0.6rem">
+            <div
+              style="
+                width: 32px;
+                height: 32px;
+                background: #1976d2;
+                border-radius: 8px;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+              "
+            >
+              <i
+                class="fas fa-id-card"
+                style="color: white; font-size: 0.9rem"
+              ></i>
+            </div>
+            <div>
+              <div style="color: white; font-weight: 600; font-size: 0.95rem">
+                ID Documents
+              </div>
+              <div
+                id="doc-viewer-count"
+                style="color: rgba(255, 255, 255, 0.5); font-size: 0.72rem"
+              ></div>
+            </div>
+          </div>
+          <button
+            id="doc-viewer-close"
+            style="
+              background: rgba(255, 255, 255, 0.1);
+              border: none;
+              color: white;
+              width: 30px;
+              height: 30px;
+              border-radius: 50%;
+              cursor: pointer;
+              font-size: 1rem;
+              display: flex;
+              align-items: center;
+              justify-content: center;
+              transition: background 0.15s;
+            "
+            onmouseover="this.style.background = 'rgba(255,255,255,0.2)'"
+            onmouseout="this.style.background = 'rgba(255,255,255,0.1)'"
+            aria-label="Close"
+          >
+            &times;
+          </button>
+        </div>
+
+        <!-- Photo strip (single photo shown at a time, navigate with arrows) -->
+        <div
+          style="
+            position: relative;
+            background: #000;
+            min-height: 260px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+          "
+        >
+          <img
+            id="doc-viewer-main-img"
+            style="
+              width: 100%;
+              max-height: 320px;
+              object-fit: contain;
+              display: block;
+            "
+            alt="ID Document"
+          />
+
+          <!-- Prev / Next -->
+          <button
+            id="doc-viewer-prev"
+            style="
+              position: absolute;
+              left: 0.5rem;
+              top: 50%;
+              transform: translateY(-50%);
+              background: rgba(0, 0, 0, 0.55);
+              border: none;
+              color: white;
+              width: 34px;
+              height: 34px;
+              border-radius: 50%;
+              cursor: pointer;
+              font-size: 1rem;
+              display: none;
+              align-items: center;
+              justify-content: center;
+            "
+          >
+            <i class="fas fa-chevron-left"></i>
+          </button>
+          <button
+            id="doc-viewer-next"
+            style="
+              position: absolute;
+              right: 0.5rem;
+              top: 50%;
+              transform: translateY(-50%);
+              background: rgba(0, 0, 0, 0.55);
+              border: none;
+              color: white;
+              width: 34px;
+              height: 34px;
+              border-radius: 50%;
+              cursor: pointer;
+              font-size: 1rem;
+              display: none;
+              align-items: center;
+              justify-content: center;
+            "
+          >
+            <i class="fas fa-chevron-right"></i>
+          </button>
+        </div>
+
+        <!-- Thumbnail strip -->
+        <div
+          id="doc-viewer-thumbs"
+          style="
+            display: flex;
+            gap: 0.5rem;
+            padding: 0.75rem 1rem;
+            background: rgba(0, 0, 0, 0.3);
+            overflow-x: auto;
+          "
+        >
+          <!-- Thumbnails injected by JS -->
+        </div>
+
+        <!-- Footer: open full-size link -->
+        <div
+          style="
+            padding: 0.6rem 1rem;
+            border-top: 1px solid rgba(255, 255, 255, 0.08);
+            display: flex;
+            justify-content: flex-end;
+          "
+        >
+          <a
+            id="doc-viewer-open-link"
+            href="#"
+            target="_blank"
+            rel="noopener noreferrer"
+            style="color: #64b5f6; font-size: 0.82rem; text-decoration: none"
+          >
+            <i class="fas fa-external-link-alt"></i>&nbsp;Open full size
+          </a>
+        </div>
+      </div>
+    </div>
   </body>
 </html>

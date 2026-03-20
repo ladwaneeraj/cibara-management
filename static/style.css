@@ -60,7 +60,38 @@ body {
 
 .header-actions {
   display: flex;
-  gap: 10px;
+  gap: 6px;
+  align-items: center;
+}
+
+/* Touch-friendly icon buttons in the header */
+.header-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 40px;
+  min-height: 40px;
+  padding: 0;
+  background: transparent;
+  color: white;
+  border: none;
+  border-radius: 8px;
+  font-size: 1.05rem;
+  cursor: pointer;
+  transition: background 0.15s;
+  -webkit-tap-highlight-color: transparent;
+}
+.header-icon-btn:hover,
+.header-icon-btn:active {
+  background: rgba(255, 255, 255, 0.15);
+}
+
+@media (max-width: 576px) {
+  .header-icon-btn {
+    min-width: 44px;
+    min-height: 44px;
+    font-size: 1.1rem;
+  }
 }
 
 /* Dashboard Styles */

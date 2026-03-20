@@ -1,28 +1,98 @@
 /**
- * customer-docs.js  (v4)
+ * customer-docs.js  (v6)
  *
- * Check-in and checkout enhancements:
- *   1.  Mobile partial-input suggestions  (4+ digits → dropdown)
- *   2.  Direct auto-fill on mobile match  (no confirm-card step)
- *   3.  Name autocomplete  (case-insensitive, 1-char min, 180ms debounce)
- *   4.  Name mismatch warning  (inline, when typed name ≠ record on file)
- *   5.  Returning-guest panel with rich stats (shown immediately on match)
- *   6.  Collapsible address field
- *   7.  Smart camera enable/disable  +  view-photos button in header
- *   8.  Document camera capture + upload  (max 3 photos)
- *   9.  Photo lightbox with thumbnail strip + prev/next navigation
- *  10.  Flagged customer warning modal
- *  11.  Flag-on-checkout  (writes to /flag_customer after successful checkout)
+ * Check-in enhancements:
+ *   1.  Mobile partial-input suggestions with stay-count badge
+ *   2.  Name autocomplete with stay-count badge
+ *   3.  Name mismatch warning
+ *   4.  Collapsible address field
+ *   5.  ID indicator dot (green=has docs, yellow=no docs, grey=unknown)
+ *   6.  Camera always enabled — separate modal, bottom-sheet on mobile
+ *   7.  Multiple photos (up to 3) — thumbnail strip; deferred cloud upload
+ *   8.  Photo lightbox for existing + newly-captured docs
+ *   9.  Flagged customer warning
+ *  10.  Checkout modal: ID doc viewer in header
  */
 
+const MAX_DOC_PHOTOS = 3;
+
 // ── Module state ─────────────────────────────────────────────────────────────
-let _currentCheckinCustomer = null;  // full customer object once a match is found
+let _currentCheckinCustomer = null;
 let _docStream               = null;
-let _docCapturedBlob         = null;
+let _docCapturedBlobs        = [];   // [{blob, url}, …] — committed on check-in submit
 let _mobileDebounceTimer     = null;
 let _nameDebounceTimer       = null;
 let _viewerCurrentIdx        = 0;
 let _viewerUrls              = [];
+
+// Auto-scan state
+let _scanTimer        = null;
+let _scanCanvas       = null;
+let _scanCtx          = null;
+let _lastFramePixels  = null;
+let _stableFrameCount = 0;
+let _autoScanActive   = false;
+let _scanLineY        = 0;       // for the sweep animation
+let _docType          = 'card';  // 'card' | 'page'
+
+const STABLE_NEEDED    = 7;
+const SCAN_INTERVAL_MS = 200;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Public API — called by script.js check-in submit
+// ─────────────────────────────────────────────────────────────────────────────
+
+window.uploadPendingDocIfAny = async function (mobile) {
+  if (!_docCapturedBlobs.length) return true;
+  const digits = (mobile || '').replace(/\D/g, '');
+  if (digits.length !== 10) return true;
+
+  try {
+    for (const item of _docCapturedBlobs) {
+      const form = new FormData();
+      form.append('mobile',   digits);
+      form.append('document', item.blob, `doc_${Date.now()}.jpg`);
+      const res  = await fetch('/upload_customer_document', { method: 'POST', body: form });
+      const data = await res.json();
+      if (!data.success) {
+        _notify('ID document upload failed: ' + (data.message || 'unknown'), 'error');
+        return false;
+      }
+    }
+    _docCapturedBlobs = [];
+    return true;
+  } catch (err) {
+    _notify('ID document upload error: ' + err.message, 'error');
+    return false;
+  }
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Public API — called by script.js when checkout modal opens
+// ─────────────────────────────────────────────────────────────────────────────
+
+window.populateCheckoutDocView = async function (mobile) {
+  const btn = document.getElementById('checkout-doc-view-btn');
+  if (!btn) return;
+  btn.style.display = 'none';
+  btn._docUrls = [];
+
+  const digits = (mobile || '').replace(/\D/g, '');
+  if (digits.length !== 10) return;
+
+  try {
+    const res  = await fetch(`/get_customer/${digits}`);
+    const data = await res.json();
+    if (data.success && data.customer) {
+      const urls = data.customer.id_doc_urls || [];
+      if (urls.length > 0) {
+        btn._docUrls      = urls;
+        btn.style.display = 'inline-flex';
+        btn.title         = `View ${urls.length} ID document${urls.length !== 1 ? 's' : ''}`;
+      }
+    }
+  } catch (_) {}
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 1.  Mobile partial-input lookup
@@ -36,64 +106,47 @@ function initMobileLookup() {
     clearTimeout(_mobileDebounceTimer);
     const digits = this.value.replace(/\D/g, '');
 
-    // Fully cleared → reset everything
     if (digits.length === 0) {
       hideMobileSuggestions();
       _currentCheckinCustomer = null;
-      clearReturningGuestInfo();
-      resetDocCaptureUI();
-      disableDocCamera('Enter mobile number first');
-      hideDocViewBtn();
+      _setIndicator('grey');
       clearNameMismatch();
       return;
     }
 
-    // Too short for a useful search
-    if (digits.length < 4) {
-      hideMobileSuggestions();
-      return;
-    }
+    if (digits.length < 4) { hideMobileSuggestions(); return; }
 
     _mobileDebounceTimer = setTimeout(async () => {
       if (digits.length >= 10) {
-        // Full mobile entered — direct lookup, no dropdown
         hideMobileSuggestions();
         await lookupAndFillCustomer(digits.slice(0, 10));
       } else {
-        // Partial — show dropdown suggestions
         fetchMobileSuggestions(digits);
       }
     }, 180);
   });
 
-  // Dismiss dropdown when clicking outside
   document.addEventListener('click', e => {
     const inp = document.getElementById('guest-mobile');
     const sug = document.getElementById('mobile-suggestions');
-    if (inp && sug && !inp.contains(e.target) && !sug.contains(e.target)) {
-      hideMobileSuggestions();
-    }
+    if (inp && sug && !inp.contains(e.target) && !sug.contains(e.target)) hideMobileSuggestions();
   });
 }
 
 async function fetchMobileSuggestions(prefix) {
   try {
     const res  = await fetch('/search_customers_mobile', {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ prefix }),
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prefix }),
     });
     const data = await res.json();
     renderMobileSuggestions(data.success ? (data.customers || []) : []);
-  } catch (err) {
-    console.error('[customer-docs] Mobile suggest error:', err);
-  }
+  } catch (err) { console.error('[customer-docs] Mobile suggest error:', err); }
 }
 
 function renderMobileSuggestions(customers) {
   const sug = document.getElementById('mobile-suggestions');
   if (!sug) return;
-
   if (!customers.length) { hideMobileSuggestions(); return; }
 
   sug.innerHTML = '';
@@ -101,15 +154,20 @@ function renderMobileSuggestions(customers) {
     const item = document.createElement('div');
     item.style.cssText = 'padding:0.45rem 0.75rem;cursor:pointer;border-bottom:1px solid #f0f0f0;font-size:0.85rem;display:flex;align-items:center;gap:0.5rem';
 
-    const subParts = [c.mobile];
-    if (c.total_spent)    subParts.push('\u20B9' + Number(c.total_spent).toLocaleString('en-IN'));
-    if (c.last_stay_date) subParts.push(_fmtDate(c.last_stay_date));
+    const stays     = c.total_stays || 0;
+    const stayBadge = stays > 0
+      ? `<span style="background:#e3f2fd;color:#1565c0;border-radius:10px;padding:0.1rem 0.45rem;font-size:0.7rem;font-weight:700;white-space:nowrap;flex-shrink:0;">${stays}× stays</span>`
+      : '';
+
+    const sub = [c.mobile];
+    if (c.total_spent)    sub.push('₹' + Number(c.total_spent).toLocaleString('en-IN'));
+    if (c.last_stay_date) sub.push(_fmtDate(c.last_stay_date));
 
     item.innerHTML = `
       <div style="flex:1;min-width:0">
         <div style="font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${_fmtName(c.name) || '(No name)'}</div>
-        <div style="color:#888;font-size:0.76rem">${subParts.join(' \u00B7 ')}</div>
-      </div>`;
+        <div style="color:#888;font-size:0.76rem">${sub.join(' · ')}</div>
+      </div>${stayBadge}`;
 
     item.addEventListener('mouseover', () => { item.style.background = '#f5f5f5'; });
     item.addEventListener('mouseout',  () => { item.style.background = ''; });
@@ -121,7 +179,6 @@ function renderMobileSuggestions(customers) {
     });
     sug.appendChild(item);
   });
-
   sug.style.display = 'block';
 }
 
@@ -130,11 +187,6 @@ function hideMobileSuggestions() {
   if (sug) sug.style.display = 'none';
 }
 
-/**
- * Core lookup: fetch full customer by mobile, auto-fill form, show panels.
- * Called from mobile input (10 digits), mobile dropdown selection, and name
- * dropdown selection.
- */
 async function lookupAndFillCustomer(mobile) {
   try {
     const res  = await fetch(`/get_customer/${mobile}`);
@@ -144,28 +196,23 @@ async function lookupAndFillCustomer(mobile) {
     if (data.success && data.customer) {
       _currentCheckinCustomer = data.customer;
       autoFillFromCustomer(data.customer);
-      showReturningGuestPanel(data.customer);
-      applyDocCameraState(data.customer);
+      _applyIndicator(data.customer);
+      _applyDocViewBtn(data.customer);
     } else {
-      // Unknown number — new guest, enable camera
       _currentCheckinCustomer = null;
-      clearReturningGuestInfo();
-      enableDocCamera();
-      hideDocViewBtn();
       clearNameMismatch();
+      hideDocViewBtn();
+      _setIndicator('yellow');
     }
-  } catch (err) {
-    console.error('[customer-docs] Mobile lookup error:', err);
-  }
+  } catch (err) { console.error('[customer-docs] Mobile lookup error:', err); }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 2.  Auto-fill + name mismatch detection
+// 2.  Auto-fill + name mismatch
 // ─────────────────────────────────────────────────────────────────────────────
 
 function autoFillFromCustomer(customer) {
   const nameInput = document.getElementById('guest-name');
-  // Fill with formatted name — mobile uniquely identifies the customer
   if (nameInput) nameInput.value = _fmtName(customer.name) || '';
   if (customer.address && customer.address.trim()) expandAddress(customer.address);
   clearNameMismatch();
@@ -180,15 +227,11 @@ function initNameMismatchDetection() {
 function checkNameMismatch(currentName) {
   const warn = document.getElementById('name-mismatch-warn');
   if (!warn) return;
-
   if (!_currentCheckinCustomer?.name) { warn.style.display = 'none'; return; }
-
-  // Compare against the formatted display name (what was auto-filled)
   const stored  = _fmtName(_currentCheckinCustomer.name).trim().toLowerCase();
   const entered = currentName.trim().toLowerCase();
-
   if (entered && entered !== stored) {
-    warn.textContent = `\u26A0 Name on file: "${_fmtName(_currentCheckinCustomer.name)}"`;
+    warn.textContent = `⚠ Name on file: "${_fmtName(_currentCheckinCustomer.name)}"`;
     warn.style.display = 'inline';
   } else {
     warn.style.display = 'none';
@@ -201,46 +244,7 @@ function clearNameMismatch() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 3.  Returning-guest panel
-// ─────────────────────────────────────────────────────────────────────────────
-
-function showReturningGuestPanel(customer) {
-  const panel = document.getElementById('returning-guest-panel');
-  if (!panel) return;
-
-  const stays      = customer.total_stays || 0;
-  const spent      = customer.total_spent || 0;
-  const lastStay   = _fmtDate(customer.last_stay_date) || '\u2014';
-  const firstVisit = _fmtDate(customer.first_visit);
-
-  _setText('rg-stays',     stays);
-  _setText('rg-spent',     '\u20B9' + spent.toLocaleString('en-IN'));
-  _setText('rg-last-stay', lastStay);
-
-  const firstLabel = document.getElementById('rg-first-stay-label');
-  if (firstLabel) firstLabel.textContent = firstVisit ? `Since ${firstVisit}` : '';
-
-  const addrRow = document.getElementById('rg-address-row');
-  const addrEl  = document.getElementById('rg-address');
-  if (addrRow && addrEl) {
-    if (customer.address && customer.address.trim()) {
-      addrEl.textContent    = customer.address;
-      addrRow.style.display = 'block';
-    } else {
-      addrRow.style.display = 'none';
-    }
-  }
-
-  panel.style.display = 'block';
-}
-
-function clearReturningGuestInfo() {
-  const panel = document.getElementById('returning-guest-panel');
-  if (panel) panel.style.display = 'none';
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// 4.  Collapsible address field
+// 3.  Collapsible address
 // ─────────────────────────────────────────────────────────────────────────────
 
 function initAddressToggle() {
@@ -256,7 +260,6 @@ function expandAddress(prefill) {
   const icon      = document.getElementById('toggle-address-icon');
   const link      = document.getElementById('toggle-address-link');
   const addrInput = document.getElementById('guest-address');
-
   if (wrapper)   wrapper.style.display = 'block';
   if (icon)      icon.className        = 'fas fa-chevron-down';
   if (link)      link.childNodes[link.childNodes.length - 1].textContent = ' Address';
@@ -268,7 +271,6 @@ function collapseAddress() {
   const icon      = document.getElementById('toggle-address-icon');
   const link      = document.getElementById('toggle-address-link');
   const addrInput = document.getElementById('guest-address');
-
   if (wrapper)   wrapper.style.display = 'none';
   if (icon)      icon.className        = 'fas fa-chevron-right';
   if (link)      link.childNodes[link.childNodes.length - 1].textContent = ' Add address';
@@ -276,48 +278,36 @@ function collapseAddress() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 5.  Camera state + view-photos button
+// 4.  ID indicator dot
 // ─────────────────────────────────────────────────────────────────────────────
 
-function applyDocCameraState(customer) {
+function _setIndicator(state) {
+  const pill = document.getElementById('doc-id-indicator');
+  if (!pill) return;
+  const map = {
+    grey:   { text: 'ID?',   bg: '#e0e0e0', color: '#666',    title: 'Enter mobile to check ID status' },
+    yellow: { text: 'No ID', bg: '#fff3cd', color: '#b45309', title: 'No ID document on file' },
+    green:  { text: '✓ ID',  bg: '#d1fae5', color: '#065f46', title: 'ID document on file' },
+  };
+  const s = map[state] || map.grey;
+  pill.textContent      = s.text;
+  pill.style.background = s.bg;
+  pill.style.color      = s.color;
+  pill.title            = s.title;
+}
+
+function _applyIndicator(customer) {
+  const hasDoc = (customer.id_doc_urls || []).length > 0 || _docCapturedBlobs.length > 0;
+  _setIndicator(hasDoc ? 'green' : 'yellow');
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 5.  View-photos button (check-in header)
+// ─────────────────────────────────────────────────────────────────────────────
+
+function _applyDocViewBtn(customer) {
   const urls = customer.id_doc_urls || [];
-
-  if (urls.length === 0) {
-    enableDocCamera();
-    hideDocViewBtn();
-    _showDocHint(true);
-  } else if (urls.length >= 3) {
-    disableDocCamera('Maximum documents already on file');
-    showDocViewBtn(urls);
-    _showDocHint(false);
-  } else {
-    enableDocCamera();
-    showDocViewBtn(urls);
-    _showDocHint(false);
-  }
-}
-
-function _showDocHint(visible) {
-  const hint = document.getElementById('doc-missing-hint');
-  if (hint) hint.style.display = visible ? 'flex' : 'none';
-}
-
-function enableDocCamera() {
-  const btn = document.getElementById('doc-camera-btn');
-  if (!btn) return;
-  btn.disabled = false;
-  btn.classList.remove('doc-cam-disabled');
-  btn.classList.add('doc-cam-enabled');
-  btn.title = 'Capture ID document';
-}
-
-function disableDocCamera(reason) {
-  const btn = document.getElementById('doc-camera-btn');
-  if (!btn) return;
-  btn.disabled = true;
-  btn.classList.add('doc-cam-disabled');
-  btn.classList.remove('doc-cam-enabled');
-  btn.title = reason || 'Document already on file';
+  urls.length > 0 ? showDocViewBtn(urls) : hideDocViewBtn();
 }
 
 function showDocViewBtn(urls) {
@@ -325,8 +315,7 @@ function showDocViewBtn(urls) {
   if (!btn) return;
   btn._docUrls      = urls;
   btn.style.display = 'inline-flex';
-  const count = urls.length;
-  btn.title = `View ${count} ID document${count !== 1 ? 's' : ''}`;
+  btn.title         = `View ${urls.length} ID document${urls.length !== 1 ? 's' : ''}`;
 }
 
 function hideDocViewBtn() {
@@ -335,144 +324,497 @@ function hideDocViewBtn() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 6.  Document camera capture + upload
+// 6.  Camera modal — open / close / doc type toggle
 // ─────────────────────────────────────────────────────────────────────────────
 
 function initDocCamera() {
-  document.getElementById('doc-camera-btn')?.addEventListener('click',         openDocCamera);
-  document.getElementById('doc-capture-btn')?.addEventListener('click',        captureDocPhoto);
-  document.getElementById('doc-cancel-camera-btn')?.addEventListener('click',  closeDocCamera);
-  document.getElementById('doc-retake-btn')?.addEventListener('click',         openDocCamera);
-  document.getElementById('doc-upload-btn')?.addEventListener('click',         uploadDocPhoto);
-  document.getElementById('doc-file-input')?.addEventListener('change',        onDocFileSelected);
+  document.getElementById('doc-camera-btn')?.addEventListener('click', openDocCameraModal);
+  document.getElementById('doc-capture-btn')?.addEventListener('click', captureDocPhoto);
+  document.getElementById('doc-cancel-camera-btn')?.addEventListener('click', closeDocCameraModal);
+  document.getElementById('doc-camera-modal-close')?.addEventListener('click', closeDocCameraModal);
+  // Retake: stream was stopped after capture, so we must restart the camera fully
+  document.getElementById('doc-retake-cam-btn')?.addEventListener('click', _retakeDocPhoto);
+  document.getElementById('doc-add-photo-btn')?.addEventListener('click', _addPhotoAndRetake);
+  document.getElementById('doc-use-photo-btn')?.addEventListener('click', useDocPhoto);
+  document.getElementById('doc-add-more-btn')?.addEventListener('click', openDocCameraModal);
+  document.getElementById('doc-file-input')?.addEventListener('change', onDocFileSelected);
+
+  // Backdrop click closes
+  document.getElementById('doc-camera-modal')?.addEventListener('click', e => {
+    if (e.target === document.getElementById('doc-camera-modal')) closeDocCameraModal();
+  });
+
+  // Doc type toggle
+  document.getElementById('doc-type-card')?.addEventListener('click', () => _setDocType('card'));
+  document.getElementById('doc-type-page')?.addEventListener('click', () => _setDocType('page'));
+
+  // View-photos buttons
+  document.getElementById('doc-view-btn')?.addEventListener('click', () => {
+    openPhotoViewer(document.getElementById('doc-view-btn')._docUrls || []);
+  });
+  document.getElementById('checkout-doc-view-btn')?.addEventListener('click', () => {
+    openPhotoViewer(document.getElementById('checkout-doc-view-btn')._docUrls || []);
+  });
+
+  // Photo viewer controls
+  document.getElementById('doc-viewer-close')?.addEventListener('click', closePhotoViewer);
+  document.getElementById('doc-photo-viewer')?.addEventListener('click', e => {
+    if (e.target === document.getElementById('doc-photo-viewer')) closePhotoViewer();
+  });
+  document.getElementById('doc-viewer-prev')?.addEventListener('click', () => navigateViewer(-1));
+  document.getElementById('doc-viewer-next')?.addEventListener('click', () => navigateViewer(+1));
 }
 
-async function openDocCamera() {
+function _setDocType(type) {
+  _docType = type;
+  ['card', 'page'].forEach(t => {
+    const btn = document.getElementById(`doc-type-${t}`);
+    if (btn) btn.classList.toggle('active', t === type);
+  });
+  // Redraw guide immediately
+  _drawGuide(0);
+}
+
+async function openDocCameraModal() {
+  if (_docCapturedBlobs.length >= MAX_DOC_PHOTOS) {
+    _notify(`Maximum ${MAX_DOC_PHOTOS} photos already taken`, 'warning');
+    return;
+  }
+
   stopDocStream();
-  resetDocCaptureUI();
+  _showCameraFeedSection();
+
+  const modal = document.getElementById('doc-camera-modal');
+  if (modal) modal.classList.add('show');
+
   try {
     _docStream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: { ideal: 'environment' } }, audio: false,
+      video: {
+        facingMode: { ideal: 'environment' },
+        width:  { ideal: 1920 },
+        height: { ideal: 1080 },
+      },
+      audio: false,
     });
-    const feed      = document.getElementById('doc-camera-feed');
-    const container = document.getElementById('doc-camera-container');
-    if (feed)      feed.srcObject          = _docStream;
-    if (container) container.style.display = 'block';
+    const feed = document.getElementById('doc-camera-feed');
+    if (feed) {
+      feed.srcObject = _docStream;
+      feed.addEventListener('loadedmetadata', () => {
+        _resizeScanOverlay();
+        startAutoScan();
+      }, { once: true });
+    }
   } catch (err) {
     console.warn('[customer-docs] Camera unavailable, using file picker:', err);
+    closeDocCameraModal();
     document.getElementById('doc-file-input')?.click();
   }
 }
 
+function closeDocCameraModal() {
+  stopAutoScan();
+  stopDocStream();
+  const modal = document.getElementById('doc-camera-modal');
+  if (modal) modal.classList.remove('show');
+}
+
+/** Retake: discard the last captured blob and restart the camera */
+async function _retakeDocPhoto() {
+  // Remove the last blob that was pushed during captureDocPhoto
+  if (_docCapturedBlobs.length > 0) {
+    const last = _docCapturedBlobs.pop();
+    URL.revokeObjectURL(last.url);
+  }
+  // Stream was stopped by captureDocPhoto — restart it
+  _showCameraFeedSection();
+  try {
+    _docStream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } },
+      audio: false,
+    });
+    const feed = document.getElementById('doc-camera-feed');
+    if (feed) {
+      feed.srcObject = _docStream;
+      feed.addEventListener('loadedmetadata', () => {
+        _resizeScanOverlay();
+        startAutoScan();
+      }, { once: true });
+    }
+  } catch (err) {
+    console.warn('[customer-docs] Camera unavailable on retake:', err);
+    document.getElementById('doc-file-input')?.click();
+  }
+}
+
+function _showCameraFeedSection() {
+  const feed    = document.getElementById('doc-cam-modal-feed-section');
+  const preview = document.getElementById('doc-cam-modal-preview-section');
+  if (feed)    { feed.style.display    = 'flex'; feed.style.flexDirection = 'column'; }
+  if (preview) { preview.style.display = 'none'; }
+  _stableFrameCount = 0;
+  _lastFramePixels  = null;
+  _scanLineY        = 0;
+  _setScanStatus('scanning');
+}
+
+/** Save current pending blob and go back to camera for another shot */
+function _addPhotoAndRetake() {
+  // _docCapturedBlobs already has the temp blob from captureDocPhoto
+  // (it was pushed when captureDocPhoto ran)
+  renderThumbStrip();
+  _updateAddMoreBtn();
+
+  // If still under limit, re-open camera
+  if (_docCapturedBlobs.length < MAX_DOC_PHOTOS) {
+    _showCameraFeedSection();
+    startAutoScan();
+    const feed = document.getElementById('doc-camera-feed');
+    if (feed && _docStream) {
+      feed.srcObject = _docStream;
+    } else {
+      openDocCameraModal();
+    }
+  } else {
+    useDocPhoto();
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 7.  Auto-scan (frame stability detection)
+// ─────────────────────────────────────────────────────────────────────────────
+
+function _resizeScanOverlay() {
+  const feed    = document.getElementById('doc-camera-feed');
+  const overlay = document.getElementById('doc-scan-overlay');
+  if (!feed || !overlay) return;
+  const w = feed.videoWidth  || feed.clientWidth  || 640;
+  const h = feed.videoHeight || feed.clientHeight || 360;
+  overlay.width  = w;
+  overlay.height = h;
+  _drawGuide(0);
+}
+
+function startAutoScan() {
+  _autoScanActive   = true;
+  _scanCanvas       = document.createElement('canvas');
+  _scanCanvas.width  = 160;
+  _scanCanvas.height = 120;
+  _scanCtx           = _scanCanvas.getContext('2d');
+  _lastFramePixels   = null;
+  _stableFrameCount  = 0;
+  _scanLineY         = 0;
+  _setScanStatus('scanning');
+  _drawGuide(0);
+  _scanLoop();
+}
+
+function stopAutoScan() {
+  _autoScanActive = false;
+  clearTimeout(_scanTimer);
+}
+
+function _scanLoop() {
+  if (!_autoScanActive || !_docStream) return;
+
+  const feed = document.getElementById('doc-camera-feed');
+  if (!feed || feed.readyState < 2) {
+    _scanTimer = setTimeout(_scanLoop, SCAN_INTERVAL_MS);
+    return;
+  }
+
+  _scanCtx.drawImage(feed, 0, 0, 160, 120);
+  const current = _scanCtx.getImageData(0, 0, 160, 120).data;
+  let motion = 0, brightness = 0;
+  const total = 160 * 120;
+
+  if (_lastFramePixels) {
+    for (let i = 0; i < current.length; i += 4) {
+      motion     += Math.abs(current[i] - _lastFramePixels[i]);
+      brightness += current[i] * 0.299 + current[i + 1] * 0.587 + current[i + 2] * 0.114;
+    }
+    motion /= total;
+    brightness /= total;
+
+    if (motion < 6 && brightness > 90) {
+      _stableFrameCount = Math.min(_stableFrameCount + 1, STABLE_NEEDED);
+    } else if (motion < 10) {
+      _stableFrameCount = Math.max(0, _stableFrameCount - 1);
+    } else {
+      _stableFrameCount = 0;
+    }
+  }
+
+  const progress = _stableFrameCount / STABLE_NEEDED;
+
+  // Advance scan line when progress > 0
+  if (progress > 0) {
+    _scanLineY = (_scanLineY + 4) % 100;  // 0–99 percent of guide height
+  }
+
+  _drawGuide(progress);
+
+  if (_stableFrameCount >= STABLE_NEEDED) {
+    _setScanStatus('captured');
+    captureDocPhoto();
+    return;
+  }
+
+  _setScanStatus(progress > 0.3 ? 'hold' : 'scanning');
+  _lastFramePixels = new Uint8ClampedArray(current);
+  _scanTimer = setTimeout(_scanLoop, SCAN_INTERVAL_MS);
+}
+
+function _setScanStatus(state) {
+  const el = document.getElementById('doc-scan-status');
+  if (!el) return;
+  const map = {
+    scanning: { html: '<i class="fas fa-search" style="margin-right:0.3rem;font-size:0.7rem"></i>Scanning for document…', bg: 'rgba(0,0,0,0.7)' },
+    hold:     { html: '<i class="fas fa-lock" style="margin-right:0.3rem;font-size:0.7rem"></i>Hold steady…',            bg: 'rgba(21,101,192,0.85)' },
+    captured: { html: '<i class="fas fa-check" style="margin-right:0.3rem;font-size:0.7rem"></i>Captured!',              bg: 'rgba(25,135,84,0.9)' },
+  };
+  const s = map[state] || map.scanning;
+  el.innerHTML          = s.html;
+  el.style.background   = s.bg;
+}
+
+function _drawGuide(progress) {
+  const overlay = document.getElementById('doc-scan-overlay');
+  if (!overlay) return;
+  const ctx = overlay.getContext('2d');
+  const W   = overlay.width  || 640;
+  const H   = overlay.height || 360;
+
+  ctx.clearRect(0, 0, W, H);
+
+  // Guide rectangle dimensions based on doc type
+  let gW, gH;
+  if (_docType === 'card') {
+    // ID / Aadhaar card: landscape ~1.59:1  (credit card ratio)
+    gW = W * 0.88;
+    gH = gW / 1.586;
+    if (gH > H * 0.80) { gH = H * 0.80; gW = gH * 1.586; }
+  } else {
+    // A4 / passport portrait: ~0.707:1
+    gW = W * 0.75;
+    gH = gW / 0.707;
+    if (gH > H * 0.90) { gH = H * 0.90; gW = gH * 0.707; }
+  }
+
+  const gX = (W - gW) / 2;
+  const gY = (H - gH) / 2;
+
+  // Dim area outside guide
+  ctx.fillStyle = 'rgba(0,0,0,0.42)';
+  ctx.fillRect(0,  0,  W,  gY);
+  ctx.fillRect(0,  gY + gH, W, H - (gY + gH));
+  ctx.fillRect(0,  gY, gX,  gH);
+  ctx.fillRect(gX + gW, gY, W - (gX + gW), gH);
+
+  // Corner brackets
+  const bracketLen = Math.min(gW, gH) * 0.12;
+  const color      = progress > 0.5 ? '#69f0ae' : '#ffffff';
+  ctx.strokeStyle  = color;
+  ctx.lineWidth    = 3;
+  ctx.lineCap      = 'round';
+
+  [
+    [gX,      gY,       1,  1],
+    [gX + gW, gY,      -1,  1],
+    [gX,      gY + gH,  1, -1],
+    [gX + gW, gY + gH, -1, -1],
+  ].forEach(([x, y, dx, dy]) => {
+    ctx.beginPath();
+    ctx.moveTo(x + dx * bracketLen, y);
+    ctx.lineTo(x, y);
+    ctx.lineTo(x, y + dy * bracketLen);
+    ctx.stroke();
+  });
+
+  // Scanning sweep line (green, fades)
+  if (progress > 0 && progress < 1) {
+    const lineY = gY + (gH * _scanLineY / 100);
+    const grad  = ctx.createLinearGradient(gX, lineY, gX + gW, lineY);
+    grad.addColorStop(0,   'rgba(105,240,174,0)');
+    grad.addColorStop(0.5, `rgba(105,240,174,${0.7 * progress})`);
+    grad.addColorStop(1,   'rgba(105,240,174,0)');
+    ctx.strokeStyle = grad;
+    ctx.lineWidth   = 2;
+    ctx.beginPath();
+    ctx.moveTo(gX, lineY);
+    ctx.lineTo(gX + gW, lineY);
+    ctx.stroke();
+  }
+
+  // Progress bar at bottom of guide
+  if (progress > 0) {
+    const barH = 4;
+    ctx.fillStyle = `rgba(105,240,174,${0.5 + progress * 0.4})`;
+    ctx.fillRect(gX, gY + gH - barH, gW * progress, barH);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 8.  Capture + scanned look + multi-photo handling
+// ─────────────────────────────────────────────────────────────────────────────
+
 function captureDocPhoto() {
-  const feed             = document.getElementById('doc-camera-feed');
-  const cameraContainer  = document.getElementById('doc-camera-container');
-  const previewImg       = document.getElementById('doc-preview-img');
-  const previewContainer = document.getElementById('doc-preview-container');
+  stopAutoScan();
+  const feed = document.getElementById('doc-camera-feed');
   if (!feed) return;
 
   const canvas  = document.createElement('canvas');
-  canvas.width  = feed.videoWidth  || 640;
-  canvas.height = feed.videoHeight || 480;
-  canvas.getContext('2d').drawImage(feed, 0, 0, canvas.width, canvas.height);
+  canvas.width  = feed.videoWidth  || 1280;
+  canvas.height = feed.videoHeight || 720;
+  const ctx     = canvas.getContext('2d');
+  ctx.drawImage(feed, 0, 0, canvas.width, canvas.height);
+
+  // Apply scanned-document look
+  _applyScannedLook(ctx, canvas.width, canvas.height);
 
   canvas.toBlob(blob => {
-    _docCapturedBlob = blob;
-    if (previewImg)       previewImg.src           = URL.createObjectURL(blob);
-    if (previewContainer) previewContainer.style.display = 'block';
-    if (cameraContainer)  cameraContainer.style.display  = 'none';
+    if (!blob) return;
+    const url = URL.createObjectURL(blob);
+
+    // Push to blobs array immediately (so "Add Another" works)
+    _docCapturedBlobs.push({ blob, url });
+
+    // Show in modal preview
+    const prevImg = document.getElementById('doc-preview-img');
+    if (prevImg) prevImg.src = url;
+
+    const feedSec    = document.getElementById('doc-cam-modal-feed-section');
+    const previewSec = document.getElementById('doc-cam-modal-preview-section');
+    if (feedSec)    feedSec.style.display    = 'none';
+    if (previewSec) { previewSec.style.display = 'flex'; previewSec.style.flexDirection = 'column'; }
+
     stopDocStream();
-    _showDocHint(false);  // photo captured — hide the reminder
-  }, 'image/jpeg', 0.88);
+
+    // Update "Add Another" button visibility in preview
+    const addAnotherBtn = document.getElementById('doc-add-photo-btn');
+    if (addAnotherBtn) {
+      addAnotherBtn.style.display = _docCapturedBlobs.length < MAX_DOC_PHOTOS ? 'flex' : 'none';
+    }
+  }, 'image/jpeg', 0.90);
+}
+
+function _applyScannedLook(ctx, w, h) {
+  const d        = ctx.getImageData(0, 0, w, h);
+  const px       = d.data;
+  const contrast = 1.35;
+  for (let i = 0; i < px.length; i += 4) {
+    const lum  = px[i] * 0.299 + px[i + 1] * 0.587 + px[i + 2] * 0.114;
+    px[i]      = px[i]     * 0.7 + lum * 0.3;
+    px[i + 1]  = px[i + 1] * 0.7 + lum * 0.3;
+    px[i + 2]  = px[i + 2] * 0.7 + lum * 0.3;
+    px[i]      = Math.min(255, Math.max(0, (px[i]     - 128) * contrast + 128));
+    px[i + 1]  = Math.min(255, Math.max(0, (px[i + 1] - 128) * contrast + 128));
+    px[i + 2]  = Math.min(255, Math.max(0, (px[i + 2] - 128) * contrast + 128));
+  }
+  ctx.putImageData(d, 0, 0);
+}
+
+/** "Done" — finalise current blob (already in array), close modal, render strip */
+function useDocPhoto() {
+  renderThumbStrip();
+  _updateAddMoreBtn();
+  _setIndicator('green');
+  closeDocCameraModal();
 }
 
 function onDocFileSelected() {
-  const file             = document.getElementById('doc-file-input')?.files[0];
-  const previewImg       = document.getElementById('doc-preview-img');
-  const previewContainer = document.getElementById('doc-preview-container');
-  if (!file) return;
-  _docCapturedBlob = file;
-  if (previewImg)       previewImg.src           = URL.createObjectURL(file);
-  if (previewContainer) previewContainer.style.display = 'block';
+  const file = document.getElementById('doc-file-input')?.files[0];
+  if (!file || _docCapturedBlobs.length >= MAX_DOC_PHOTOS) return;
+  const url = URL.createObjectURL(file);
+  _docCapturedBlobs.push({ blob: file, url });
+  renderThumbStrip();
+  _updateAddMoreBtn();
+  _setIndicator('green');
 }
 
 function stopDocStream() {
   if (_docStream) { _docStream.getTracks().forEach(t => t.stop()); _docStream = null; }
 }
 
-function closeDocCamera() { stopDocStream(); resetDocCaptureUI(); }
+// ─────────────────────────────────────────────────────────────────────────────
+// 9.  Thumbnail strip rendering
+// ─────────────────────────────────────────────────────────────────────────────
+
+function renderThumbStrip() {
+  const strip   = document.getElementById('doc-thumbs-strip');
+  const preview = document.getElementById('doc-preview-container');
+  if (!strip) return;
+
+  strip.innerHTML = '';
+  _docCapturedBlobs.forEach((item, idx) => {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'doc-strip-thumb';
+    wrapper.title     = `Photo ${idx + 1} — click to view`;
+
+    const img   = document.createElement('img');
+    img.src     = item.url;
+    img.alt     = `ID photo ${idx + 1}`;
+    img.addEventListener('click', () => openPhotoViewer(
+      _docCapturedBlobs.map(b => b.url), idx
+    ));
+
+    const removeBtn  = document.createElement('button');
+    removeBtn.type   = 'button';
+    removeBtn.className = 'doc-strip-thumb-remove';
+    removeBtn.innerHTML = '×';
+    removeBtn.title  = 'Remove this photo';
+    removeBtn.addEventListener('click', e => {
+      e.stopPropagation();
+      URL.revokeObjectURL(item.url);
+      _docCapturedBlobs.splice(idx, 1);
+      renderThumbStrip();
+      _updateAddMoreBtn();
+      if (_docCapturedBlobs.length === 0) {
+        if (preview) preview.style.display = 'none';
+        _setIndicator(
+          (_currentCheckinCustomer?.id_doc_urls || []).length > 0 ? 'green' : 'yellow'
+        );
+      }
+    });
+
+    wrapper.appendChild(img);
+    wrapper.appendChild(removeBtn);
+    strip.appendChild(wrapper);
+  });
+
+  if (preview) {
+    preview.style.display = _docCapturedBlobs.length > 0 ? 'block' : 'none';
+  }
+}
+
+function _updateAddMoreBtn() {
+  const btn = document.getElementById('doc-add-more-btn');
+  if (!btn) return;
+  btn.style.display = _docCapturedBlobs.length < MAX_DOC_PHOTOS ? 'flex' : 'none';
+}
 
 function resetDocCaptureUI() {
-  ['doc-camera-container', 'doc-preview-container'].forEach(id => {
-    const el = document.getElementById(id);
-    if (el) el.style.display = 'none';
-  });
+  _docCapturedBlobs.forEach(item => URL.revokeObjectURL(item.url));
+  _docCapturedBlobs = [];
+
+  const strip   = document.getElementById('doc-thumbs-strip');
+  const preview = document.getElementById('doc-preview-container');
+  if (strip)   strip.innerHTML         = '';
+  if (preview) preview.style.display   = 'none';
+
   const fi = document.getElementById('doc-file-input');
   if (fi) fi.value = '';
-  _docCapturedBlob = null;
-}
 
-async function uploadDocPhoto() {
-  const mobile = (document.getElementById('guest-mobile')?.value || '').replace(/\D/g, '');
-  if (mobile.length !== 10) {
-    _notify('Enter a valid 10-digit mobile number first', 'error'); return;
-  }
-  if (!_docCapturedBlob) { _notify('No document captured', 'error'); return; }
-
-  const btn = document.getElementById('doc-upload-btn');
-  if (btn) {
-    btn.disabled  = true;
-    btn.innerHTML = '<span class="loader" style="width:16px;height:16px;vertical-align:middle;margin-right:4px"></span>Uploading...';
-  }
-
-  try {
-    const form = new FormData();
-    form.append('mobile',   mobile);
-    form.append('document', _docCapturedBlob, `doc_${Date.now()}.jpg`);
-
-    const res  = await fetch('/upload_customer_document', { method: 'POST', body: form });
-    const data = await res.json();
-
-    if (data.success) {
-      _notify('Document saved', 'success');
-      resetDocCaptureUI();
-      await lookupAndFillCustomer(mobile);
-    } else {
-      _notify(data.message || 'Upload failed', 'error');
-    }
-  } catch (err) {
-    _notify('Upload error: ' + err.message, 'error');
-  } finally {
-    if (btn) {
-      btn.disabled  = false;
-      btn.innerHTML = '<i class="fas fa-upload"></i> Save Document';
-    }
-  }
+  _updateAddMoreBtn();
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 7.  Photo viewer  (thumbnail strip + prev/next)
+// 10.  Photo viewer (lightbox for both saved and newly-captured photos)
 // ─────────────────────────────────────────────────────────────────────────────
 
-function initDocViewBtn() {
-  document.getElementById('doc-view-btn')?.addEventListener('click', () => {
-    const urls = document.getElementById('doc-view-btn')._docUrls || [];
-    openPhotoViewer(urls);
-  });
-
-  document.getElementById('doc-viewer-close')?.addEventListener('click', closePhotoViewer);
-  document.getElementById('doc-photo-viewer')?.addEventListener('click', e => {
-    if (e.target === document.getElementById('doc-photo-viewer')) closePhotoViewer();
-  });
-
-  document.getElementById('doc-viewer-prev')?.addEventListener('click', () => navigateViewer(-1));
-  document.getElementById('doc-viewer-next')?.addEventListener('click', () => navigateViewer(+1));
-}
-
-function openPhotoViewer(urls) {
-  if (!urls.length) return;
+function openPhotoViewer(urls, startIdx) {
+  if (!urls || !urls.length) return;
   _viewerUrls       = urls;
-  _viewerCurrentIdx = 0;
+  _viewerCurrentIdx = startIdx || 0;
 
   _setText('doc-viewer-count', `${urls.length} photo${urls.length !== 1 ? 's' : ''} on file`);
 
@@ -483,14 +825,14 @@ function openPhotoViewer(urls) {
       const img     = document.createElement('img');
       img.src       = url;
       img.alt       = `Doc ${i + 1}`;
-      img.className = 'doc-thumb' + (i === 0 ? ' active' : '');
+      img.className = 'doc-thumb' + (i === _viewerCurrentIdx ? ' active' : '');
       img.addEventListener('click', () => setViewerPhoto(i));
       thumbsEl.appendChild(img);
     });
     thumbsEl.style.display = urls.length > 1 ? 'flex' : 'none';
   }
 
-  setViewerPhoto(0);
+  setViewerPhoto(_viewerCurrentIdx);
 
   const showArrows = urls.length > 1;
   _showFlex('doc-viewer-prev', showArrows);
@@ -503,21 +845,15 @@ function openPhotoViewer(urls) {
 function setViewerPhoto(idx) {
   _viewerCurrentIdx = idx;
   const url = _viewerUrls[idx];
-
   const mainImg  = document.getElementById('doc-viewer-main-img');
   if (mainImg)  mainImg.src = url;
-
   const openLink = document.getElementById('doc-viewer-open-link');
   if (openLink) openLink.href = url;
-
-  document.querySelectorAll('.doc-thumb').forEach((el, i) => {
-    el.classList.toggle('active', i === idx);
-  });
+  document.querySelectorAll('.doc-thumb').forEach((el, i) => el.classList.toggle('active', i === idx));
 }
 
 function navigateViewer(delta) {
-  const next = (_viewerCurrentIdx + delta + _viewerUrls.length) % _viewerUrls.length;
-  setViewerPhoto(next);
+  setViewerPhoto((_viewerCurrentIdx + delta + _viewerUrls.length) % _viewerUrls.length);
 }
 
 function closePhotoViewer() {
@@ -526,7 +862,7 @@ function closePhotoViewer() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 8.  Name autocomplete  (fast, 1-char min, with spent + last visit)
+// 11.  Name autocomplete with stay-count badge
 // ─────────────────────────────────────────────────────────────────────────────
 
 function initNameSearch() {
@@ -554,34 +890,32 @@ async function _fetchNameSuggestions(query) {
 
   try {
     const res  = await fetch('/search_customers', {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ query }),
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query }),
     });
     const data = await res.json();
-
-    if (!data.success || !data.customers.length) {
-      suggestions.style.display = 'none'; return;
-    }
+    if (!data.success || !data.customers.length) { suggestions.style.display = 'none'; return; }
 
     suggestions.innerHTML = '';
     data.customers.slice(0, 6).forEach(c => {
       const item = document.createElement('div');
       item.style.cssText = 'padding:0.45rem 0.75rem;cursor:pointer;border-bottom:1px solid #f0f0f0;font-size:0.85rem;display:flex;align-items:center;gap:0.5rem';
 
-      const flagHtml = c.flag?.is_flagged
-        ? '<span style="color:#c62828;font-size:0.72rem;flex-shrink:0"><i class="fas fa-flag"></i></span>'
-        : '';
+      const flagHtml  = c.flag?.is_flagged
+        ? '<span style="color:#c62828;font-size:0.72rem;flex-shrink:0"><i class="fas fa-flag"></i></span>' : '';
+      const stays     = c.total_stays || 0;
+      const stayBadge = stays > 0
+        ? `<span style="background:#e3f2fd;color:#1565c0;border-radius:10px;padding:0.1rem 0.45rem;font-size:0.7rem;font-weight:700;white-space:nowrap;flex-shrink:0;">${stays}× stays</span>` : '';
 
-      const subParts = [c.mobile];
-      if (c.total_spent)    subParts.push('\u20B9' + Number(c.total_spent).toLocaleString('en-IN'));
-      if (c.last_stay_date) subParts.push(_fmtDate(c.last_stay_date));
+      const sub = [c.mobile];
+      if (c.total_spent)    sub.push('₹' + Number(c.total_spent).toLocaleString('en-IN'));
+      if (c.last_stay_date) sub.push(_fmtDate(c.last_stay_date));
 
       item.innerHTML = `
         <div style="flex:1;min-width:0">
           <div style="font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${_fmtName(c.name)}</div>
-          <div style="color:#888;font-size:0.76rem">${subParts.join(' \u00B7 ')}</div>
-        </div>${flagHtml}`;
+          <div style="color:#888;font-size:0.76rem">${sub.join(' · ')}</div>
+        </div>${stayBadge}${flagHtml}`;
 
       item.addEventListener('mouseover', () => { item.style.background = '#f5f5f5'; });
       item.addEventListener('mouseout',  () => { item.style.background = ''; });
@@ -594,53 +928,27 @@ async function _fetchNameSuggestions(query) {
         hideMobileSuggestions();
         lookupAndFillCustomer(c.mobile);
       });
-
       suggestions.appendChild(item);
     });
 
     suggestions.style.display = 'block';
-  } catch (err) {
-    console.error('[customer-docs] Name search error:', err);
-  }
+  } catch (err) { console.error('[customer-docs] Name search error:', err); }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 9.  Photo-missing reminder on check-in submit
-// ─────────────────────────────────────────────────────────────────────────────
-
-function initPhotoReminder() {
-  const form = document.getElementById('checkin-form');
-  if (!form) return;
-
-  form.addEventListener('submit', () => {
-    const existingDocs   = _currentCheckinCustomer?.id_doc_urls?.length || 0;
-    const capturedNow    = !!_docCapturedBlob;
-
-    if (existingDocs === 0 && !capturedNow) {
-      // Non-blocking — let the submit continue, just nudge staff
-      _notify(
-        'No ID document on file for this guest — consider capturing one with the camera button',
-        'warning'
-      );
-    }
-  }, /* useCapture = */ false);
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// 12. Check-in modal lifecycle
+// 12.  Check-in modal lifecycle
 // ─────────────────────────────────────────────────────────────────────────────
 
 function resetCheckinDocState() {
+  stopAutoScan();
   stopDocStream();
   closePhotoViewer();
-  _currentCheckinCustomer = null;
-  _docCapturedBlob        = null;
+  closeDocCameraModal();
 
+  _currentCheckinCustomer = null;
   resetDocCaptureUI();
-  clearReturningGuestInfo();
-  disableDocCamera('Enter mobile number first');
   hideDocViewBtn();
-  _showDocHint(false);
+  _setIndicator('grey');
   hideMobileSuggestions();
   clearNameMismatch();
   collapseAddress();
@@ -666,9 +974,7 @@ function _showFlex(id, visible) {
 function _fmtDate(raw) {
   if (!raw) return '';
   try {
-    return new Date(raw).toLocaleDateString('en-IN', {
-      day: 'numeric', month: 'short', year: 'numeric',
-    });
+    return new Date(raw).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
   } catch (_) { return raw; }
 }
 
@@ -676,34 +982,10 @@ function _notify(msg, type) {
   if (typeof showNotification === 'function') showNotification(msg, type);
 }
 
-/**
- * Normalise a raw mobile string to a clean 10-digit Indian mobile number.
- * Mirrors the Python _clean_mobile() logic in customer_service.py.
- *   "9876543210"      → "9876543210"
- *   "+91 98765 43210" → "9876543210"
- *   "09876543210"     → "9876543210"
- *   "N/A" / ""        → ""           (invalid — caller should reject)
- */
-function _cleanMobile(raw) {
-  let digits = (raw || '').replace(/\D/g, '');
-  if (digits.length >= 12 && digits.startsWith('91')) digits = digits.slice(2);
-  if (digits.length === 11 && digits.startsWith('0'))  digits = digits.slice(1);
-  return digits.length === 10 ? digits : '';
-}
-
-/**
- * Format a full name as "First M Last" (middle name condensed to initial).
- * e.g. "Neeraj Suresh Ladwa"  →  "Neeraj S Ladwa"
- *      "Neeraj Ladwa"         →  "Neeraj Ladwa"   (unchanged)
- *      "Neeraj"               →  "Neeraj"          (unchanged)
- * Only the stored full name for inputs is ever left untouched; this is
- * used purely for compact display in dropdowns and panels.
- */
 function _fmtName(name) {
   if (!name || typeof name !== 'string') return name || '';
   const parts = name.trim().split(/\s+/);
   if (parts.length < 3) return name.trim();
-  // first  +  middle-initial  +  last
   return `${parts[0]} ${parts[1][0].toUpperCase()} ${parts[parts.length - 1]}`;
 }
 
@@ -717,8 +999,6 @@ document.addEventListener('DOMContentLoaded', () => {
   initNameSearch();
   initAddressToggle();
   initDocCamera();
-  initDocViewBtn();
-  initPhotoReminder();
 
   document.addEventListener('checkinModalOpened', resetCheckinDocState);
   document.querySelectorAll('#checkin-modal .close-btn').forEach(btn => {

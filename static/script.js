@@ -526,7 +526,13 @@ function handleCleanedClick(event, roomNumber) {
 async function fetchData() {
   try {
     debugLog("Fetching data from server...");
-    const response = await fetch("/get_data");
+
+    // Fire both requests in parallel — cuts sequential wait by ~0.8–1s
+    const [response, metadataResponse] = await Promise.all([
+      fetch("/get_data"),
+      fetch("/get_transaction_metadata").catch(() => null),
+    ]);
+
     if (!response.ok) {
       throw new Error(`Server responded with status: ${response.status}`);
     }
@@ -538,10 +544,9 @@ async function fetchData() {
     logs = data.logs;
     totals = data.totals;
 
-    // Fetch transaction metadata
+    // Process transaction metadata from the parallel response
     try {
-      const metadataResponse = await fetch("/get_transaction_metadata");
-      if (metadataResponse.ok) {
+      if (metadataResponse && metadataResponse.ok) {
         const metadataData = await metadataResponse.json();
         if (metadataData.success) {
           transactionMetadata = metadataData.transaction_metadata || {};
@@ -1147,6 +1152,11 @@ function updateCheckoutModal(roomNumber) {
     } else {
       photoContainer.style.display = "none";
     }
+  }
+
+  // Populate checkout ID doc viewer button
+  if (typeof window.populateCheckoutDocView === "function") {
+    window.populateCheckoutDocView(roomInfo.guest.mobile || "");
   }
 
   // Reset the service form
@@ -3510,7 +3520,7 @@ function setupCheckoutConfirmation() {
         if (result.success) {
           console.log("Checkout successful");
 
-          // Close both modals
+          // Close both modals immediately — don't block on data reload
           const checkoutConfirmModal = document.getElementById(
             "checkout-confirm-modal",
           );
@@ -3523,22 +3533,26 @@ function setupCheckoutConfirmation() {
             checkoutModal.classList.remove("show");
           }
 
-          // Refresh data to get updated logs
-          await fetchData();
+          // Reset button state immediately
+          checkoutInProgress = false;
+          this.disabled = false;
+          this.innerHTML = "Yes, Checkout";
 
           showNotification(result.message || "Checkout successful!", "success");
+
+          // Reload data in the background — UI is already unblocked
+          fetchData();
         } else {
           console.error("Checkout failed:", result.message);
           showNotification(result.message || "Error during checkout", "error");
+          checkoutInProgress = false;
+          this.disabled = false;
+          this.innerHTML = "Yes, Checkout";
         }
       } catch (error) {
         console.error("Error during checkout:", error);
         showNotification(`Error during checkout: ${error.message}`, "error");
-      } finally {
-        // Always reset the checkout state
         checkoutInProgress = false;
-
-        // Re-enable button
         this.disabled = false;
         this.innerHTML = "Yes, Checkout";
       }
@@ -3863,6 +3877,17 @@ document.addEventListener("DOMContentLoaded", function () {
         const guestAddressInput = document.getElementById("guest-address");
         const guestAddress = guestAddressInput ? guestAddressInput.value.trim() : "";
 
+        // Upload any pending ID document photo before recording the check-in
+        if (typeof window.uploadPendingDocIfAny === 'function') {
+          const docUploaded = await window.uploadPendingDocIfAny(guestMobile);
+          if (!docUploaded) {
+            // Upload error already notified — re-enable button and abort
+            submitBtn.disabled = false;
+            submitBtn.innerHTML = originalContent;
+            return;
+          }
+        }
+
         const response = await fetch("/checkin", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -3886,25 +3911,29 @@ document.addEventListener("DOMContentLoaded", function () {
 
         const result = await response.json();
         if (result.success) {
+          // Close modal and show success immediately — don't block on data reload
           checkinModal.classList.remove("show");
-          await fetchData();
+          submitBtn.disabled = false;
+          submitBtn.innerHTML = originalContent;
 
-          // Show success message with serial number if available
           let message = result.message || "Check-in successful!";
           if (result.serial_number) {
             message += ` (Serial #${result.serial_number})`;
           }
           showNotification(message, "success");
+
+          // Reload data in the background — UI is already unblocked
+          fetchData();
         } else {
           showNotification(result.message || "Error during check-in", "error");
+          submitBtn.disabled = false;
+          submitBtn.innerHTML = originalContent;
         }
       } catch (error) {
         console.error("Error during check-in:", error);
         showNotification(`Error during check-in: ${error.message}`, "error");
-      } finally {
-        // Re-enable submit button
         submitBtn.disabled = false;
-        submitBtn.innerHTML = "Complete Check-in";
+        submitBtn.innerHTML = originalContent;
       }
     });
   } else {

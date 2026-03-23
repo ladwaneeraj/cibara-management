@@ -1861,6 +1861,24 @@ canvas {
   color: white;
 }
 
+.booking-source-badge {
+  display: inline-block;
+  padding: 0.18rem 0.45rem;
+  border-radius: 10px;
+  font-size: 0.7rem;
+  font-weight: 700;
+}
+.src-mmt {
+  background: #fff3e0;
+  color: #e65100;
+  border: 1px solid #ffcc80;
+}
+.src-bookingcom {
+  background: #e3f2fd;
+  color: #1565c0;
+  border: 1px solid #90caf9;
+}
+
 .booking-guest {
   font-size: 0.95rem;
   margin-bottom: 0.5rem;

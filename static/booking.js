@@ -99,6 +99,42 @@ function initializeBookingForm() {
     });
   }
 
+  // Booking Source toggle
+  const bookingSourceSelect = document.getElementById("booking-source");
+  const normalPaymentFields = document.getElementById("booking-normal-payment-fields");
+  const mmtFields = document.getElementById("booking-mmt-fields");
+
+  function handleBookingSourceChange() {
+    const source = bookingSourceSelect ? bookingSourceSelect.value : "normal";
+    if (source === "mmt") {
+      if (normalPaymentFields) normalPaymentFields.style.display = "none";
+      if (mmtFields) mmtFields.style.display = "block";
+    } else {
+      if (normalPaymentFields) normalPaymentFields.style.display = "block";
+      if (mmtFields) mmtFields.style.display = "none";
+    }
+  }
+
+  if (bookingSourceSelect) {
+    bookingSourceSelect.addEventListener("change", handleBookingSourceChange);
+    handleBookingSourceChange(); // Apply on load
+  }
+
+  // MMT net_receivable auto-calc
+  function recalcNetReceivable() {
+    const otaTotal = parseFloat(document.getElementById("booking-ota-total")?.value) || 0;
+    const otaComm = parseFloat(document.getElementById("booking-ota-commission")?.value) || 0;
+    const otaGst = parseFloat(document.getElementById("booking-ota-commission-gst")?.value) || 0;
+    const net = otaTotal - otaComm - otaGst;
+    const netDisplay = document.getElementById("booking-net-receivable");
+    if (netDisplay) netDisplay.textContent = "₹" + (net >= 0 ? net.toFixed(0) : 0);
+  }
+
+  ["booking-ota-total", "booking-ota-commission", "booking-ota-commission-gst"].forEach((id) => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener("input", recalcNetReceivable);
+  });
+
   // Payment Method Selection
   document.querySelectorAll("#booking-form .payment-btn").forEach((btn) => {
     btn.addEventListener("click", function () {
@@ -139,6 +175,12 @@ function initializeBookingForm() {
     partialPayment.addEventListener("input", calculateRemaining);
   }
 
+  // OTA Settlement modal wiring
+  const otaSettlementForm = document.getElementById("ota-settlement-form");
+  if (otaSettlementForm) {
+    otaSettlementForm.addEventListener("submit", submitOtaSettlement);
+  }
+
   // Form submission
   bookingForm.addEventListener("submit", createBooking);
 }
@@ -154,17 +196,26 @@ async function createBooking(event) {
   const checkInDate = document.getElementById("booking-check-in").value;
   const checkInTime = document.getElementById("booking-check-in-time").value; // Get the time
   const checkOutDate = document.getElementById("booking-check-out").value;
-  const totalAmount = parseInt(
-    document.getElementById("booking-total-amount").value,
-  );
-  const partialPayment = parseInt(
-    document.getElementById("booking-partial-payment").value || 0,
-  );
-  const paymentMethod = document.getElementById("booking-payment-method").value;
   const guestCount = parseInt(
     document.getElementById("booking-guest-count").value,
   );
   const notes = document.getElementById("booking-notes").value;
+  const bookingSource = document.getElementById("booking-source")?.value || "normal";
+
+  // OTA vs normal fields
+  const isMmt = bookingSource === "mmt";
+  const totalAmount = isMmt
+    ? parseInt(document.getElementById("booking-ota-total")?.value || 0)
+    : parseInt(document.getElementById("booking-total-amount").value);
+  const partialPayment = isMmt ? 0 : parseInt(
+    document.getElementById("booking-partial-payment").value || 0,
+  );
+  const paymentMethod = isMmt ? "ota" : document.getElementById("booking-payment-method").value;
+
+  // OTA-specific fields
+  const otaTotal = isMmt ? parseInt(document.getElementById("booking-ota-total")?.value || 0) : null;
+  const otaCommission = isMmt ? parseFloat(document.getElementById("booking-ota-commission")?.value || 0) : null;
+  const otaCommissionGst = isMmt ? parseFloat(document.getElementById("booking-ota-commission-gst")?.value || 0) : null;
 
   // Validation checks
   if (
@@ -177,6 +228,11 @@ async function createBooking(event) {
     !totalAmount
   ) {
     showNotification("Please fill all required fields", "error");
+    return;
+  }
+
+  if (isMmt && !otaTotal) {
+    showNotification("Please enter OTA total amount for MMT bookings", "error");
     return;
   }
 
@@ -224,7 +280,16 @@ async function createBooking(event) {
       guest_count: guestCount,
       notes,
       photo_path: uploadedPhotoUrl,
+      booking_source: bookingSource,
     };
+
+    // Add OTA fields for MMT
+    if (isMmt) {
+      bookingData.ota_total_amount = otaTotal;
+      bookingData.ota_commission = otaCommission;
+      bookingData.ota_commission_gst = otaCommissionGst;
+      bookingData.net_receivable = otaTotal - otaCommission - otaCommissionGst;
+    }
 
     console.log("Creating booking with data:", bookingData); // Debug log
 
@@ -438,6 +503,16 @@ function renderBookings() {
           ? '<span class="payment-badge partial">Partially Paid</span>'
           : '<span class="payment-badge unpaid">Unpaid</span>';
 
+    // Booking source badge
+    const src = booking.booking_source || "normal";
+    let sourceBadge = "";
+    if (src === "mmt") {
+      sourceBadge = '<span class="booking-source-badge src-mmt"><i class="fas fa-globe"></i> MMT</span>';
+    } else if (src === "booking.com") {
+      sourceBadge = '<span class="booking-source-badge src-bookingcom"><i class="fas fa-globe"></i> Booking.com</span>';
+    }
+    // Normal bookings: no badge (keeps UI clean)
+
     html += `
       <div class="booking-item" data-id="${booking.booking_id}">
         <div class="booking-header">
@@ -445,6 +520,7 @@ function renderBookings() {
           <div class="booking-badges">
             ${statusBadge}
             ${todayBadge}
+            ${sourceBadge}
           </div>
         </div>
         <div class="booking-guest">${booking.guest_name}</div>
@@ -465,7 +541,7 @@ function renderBookings() {
         <div class="booking-footer">
           <div class="booking-payment">
             ${paymentStatus}
-            <div class="booking-amount">₹${booking.total_amount}</div>
+            <div class="booking-amount">${src === "mmt" ? "OTA" : "₹" + booking.total_amount}</div>
           </div>
           <div class="booking-actions">
             <button class="action-btn btn-sm btn-primary view-booking-btn" data-id="${
@@ -599,6 +675,41 @@ function showBookingDetails(bookingId) {
       }
     } else {
       photoContainer.style.display = "none";
+    }
+  }
+
+  // OTA Section
+  const otaSection = document.getElementById("details-ota-section");
+  if (otaSection) {
+    if (booking.booking_source === "mmt") {
+      otaSection.style.display = "block";
+      const otaTotalEl = document.getElementById("details-ota-total");
+      const otaCommEl = document.getElementById("details-ota-commission");
+      const otaGstEl = document.getElementById("details-ota-gst");
+      const netRecvEl = document.getElementById("details-net-receivable");
+      const settlStatusEl = document.getElementById("details-settlement-status");
+      if (otaTotalEl) otaTotalEl.textContent = "₹" + (booking.ota_total_amount || 0);
+      if (otaCommEl) otaCommEl.textContent = "₹" + (booking.ota_commission || 0);
+      if (otaGstEl) otaGstEl.textContent = "₹" + (booking.ota_commission_gst || 0);
+      if (netRecvEl) netRecvEl.textContent = "₹" + (booking.net_receivable || 0);
+      if (settlStatusEl) {
+        settlStatusEl.textContent = booking.settlement_status === "received" ? "Received" : "Pending";
+        settlStatusEl.className = booking.settlement_status === "received" ? "badge badge-success" : "badge badge-warning";
+      }
+    } else {
+      otaSection.style.display = "none";
+    }
+  }
+
+  // Mark Settlement Button
+  const markSettlementBtn = document.getElementById("mark-settlement-btn");
+  if (markSettlementBtn) {
+    const showSettle = booking.booking_source === "mmt" && booking.settlement_status !== "received";
+    markSettlementBtn.style.display = showSettle ? "block" : "none";
+    if (showSettle) {
+      markSettlementBtn.onclick = () => {
+        showOtaSettlementModal(bookingId, booking);
+      };
     }
   }
 
@@ -828,11 +939,101 @@ function showNewBookingModal() {
 
   uploadedPhotoUrl = null;
 
+  // Reset booking source to normal and show normal payment fields
+  const bookingSourceEl = document.getElementById("booking-source");
+  if (bookingSourceEl) {
+    bookingSourceEl.value = "normal";
+    bookingSourceEl.dispatchEvent(new Event("change"));
+  }
+
   // Check availability for default dates
   checkAvailability();
 
   // Show modal
   modal.classList.add("show");
+}
+
+// Show OTA settlement modal
+function showOtaSettlementModal(bookingId, booking) {
+  const modal = document.getElementById("ota-settlement-modal");
+  if (!modal) return;
+
+  // Pre-fill booking ID and amount (using ota-prefixed IDs to avoid conflicts)
+  const bookingIdInput = document.getElementById("ota-booking-id");
+  if (bookingIdInput) bookingIdInput.value = bookingId;
+
+  const amountInput = document.getElementById("ota-settlement-amount");
+  if (amountInput) amountInput.value = booking.net_receivable || "";
+
+  const netDisplay = document.getElementById("ota-net-receivable-display");
+  if (netDisplay) netDisplay.textContent = "₹" + (booking.net_receivable || 0);
+
+  // Set default settlement date to today
+  const dateInput = document.getElementById("ota-settlement-date");
+  if (dateInput) {
+    dateInput.value = new Date().toISOString().split("T")[0];
+  }
+
+  // Clear notes
+  const notesInput = document.getElementById("ota-settlement-notes");
+  if (notesInput) notesInput.value = "";
+
+  modal.classList.add("show");
+}
+
+// Submit OTA settlement
+async function submitOtaSettlement(event) {
+  event.preventDefault();
+
+  const bookingId = document.getElementById("ota-booking-id")?.value;
+  const settlementDate = document.getElementById("ota-settlement-date")?.value;
+  const settlementAmount = parseFloat(document.getElementById("ota-settlement-amount")?.value || 0);
+  const notes = document.getElementById("ota-settlement-notes")?.value || "";
+
+  if (!bookingId || !settlementDate || !settlementAmount) {
+    showNotification("Please fill all settlement fields", "error");
+    return;
+  }
+
+  const submitBtn = event.target.querySelector("button[type=submit]");
+  const originalContent = submitBtn?.innerHTML;
+  if (submitBtn) {
+    submitBtn.disabled = true;
+    submitBtn.innerHTML = '<span class="loader" style="width: 20px; height: 20px;"></span> Processing...';
+  }
+
+  try {
+    const response = await fetch("/mark_ota_settlement", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        booking_id: bookingId,
+        settlement_date: settlementDate,
+        settlement_amount: settlementAmount,
+        notes,
+      }),
+    });
+
+    if (!response.ok) throw new Error(`Server error: ${response.status}`);
+    const result = await response.json();
+
+    if (result.success) {
+      const modal = document.getElementById("ota-settlement-modal");
+      if (modal) modal.classList.remove("show");
+      showNotification("OTA settlement recorded successfully!", "success");
+      fetchBookings();
+    } else {
+      showNotification(result.message || "Error recording settlement", "error");
+    }
+  } catch (error) {
+    console.error("Error submitting OTA settlement:", error);
+    showNotification(`Error: ${error.message}`, "error");
+  } finally {
+    if (submitBtn) {
+      submitBtn.disabled = false;
+      submitBtn.innerHTML = originalContent;
+    }
+  }
 }
 
 // Show cancel booking modal

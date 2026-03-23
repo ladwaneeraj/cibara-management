@@ -436,7 +436,90 @@ def create_bill_record(room, room_data, checkout_time, batch=None):
         total_amount = room_charges_total + services_total - total_discounts
         balance = total_amount - payment_cash - payment_online + total_refunds
 
-        bill_number = generate_sequential_bill_number(checkout_dt)
+        # bill_number is determined after invoice logic below
+        bill_number = None
+
+        # ── Booking source / OTA fields ─────────────────────────────────────
+        # Try to find the original booking record for this stay to pull OTA data
+        booking_source = "normal"
+        payment_source = "hotel"
+        ota_total_amount = 0
+        ota_commission = 0.0
+        ota_commission_gst = 0.0
+        net_receivable = 0
+        settlement_status = None
+        try:
+            # Match by room + guest + check_in_date (checkin_time date portion)
+            checkin_date_str = checkin_dt.strftime("%Y-%m-%d")
+            bq = bookings_ref \
+                .where("room", "==", room) \
+                .where("guest_name", "==", guest["name"]) \
+                .where("check_in_date", "==", checkin_date_str) \
+                .limit(1).stream()
+            for bdoc in bq:
+                bd = bdoc.to_dict()
+                booking_source = bd.get("booking_source", "normal")
+                payment_source = bd.get("payment_source", "hotel")
+                ota_total_amount = bd.get("ota_total_amount", 0)
+                ota_commission = bd.get("ota_commission", 0.0)
+                ota_commission_gst = bd.get("ota_commission_gst", 0.0)
+                net_receivable = bd.get("net_receivable", 0)
+                settlement_status = bd.get("settlement_status")
+                break
+        except Exception as _be:
+            logger.warning(f"Could not fetch booking source for room {room}: {_be}")
+
+        # ── Invoice logic (Section 3 of spec) ───────────────────────────────────
+        # invoice_number (INV/YYYY/MM/XXXXX) is the GST tax invoice — separate from
+        # bill_number (CC/YYYY/MM/XXXXX) which is always generated as the folio/receipt.
+        any_addon_online = any(
+            p.get("type") == "addon" and p.get("method") == "online"
+            for p in stay_payments
+        )
+        is_same_day = checkin_dt.date() == checkout_dt.date()
+        is_mmt_ota = (booking_source == "mmt" and payment_source == "ota")
+        is_booking_com = (booking_source == "booking.com")
+
+        # Determine whether this checkout qualifies for a bill + invoice.
+        # Same-day + cash-only = no folio, no GST invoice (walk-in, no overnight stay).
+        is_no_bill = (
+            is_same_day
+            and payment_cash > 0
+            and payment_online == 0
+            and not any_addon_online
+        )
+
+        if is_mmt_ota:
+            # OTA billing handled by MMT — no hotel-issued invoice
+            invoice_generated = False
+        elif is_booking_com:
+            # Booking.com: always generate invoice (spec requirement)
+            invoice_generated = True
+        elif is_no_bill:
+            # Same-day cash-only checkout → no bill number, no GST invoice
+            invoice_generated = False
+        elif payment_online > 0:
+            # Any UPI payment → generate invoice
+            invoice_generated = True
+        elif payment_cash > 0 and payment_online > 0:
+            # Split payment → generate invoice
+            invoice_generated = True
+        elif any_addon_online:
+            # Addon/service paid via UPI → generate invoice
+            invoice_generated = True
+        else:
+            invoice_generated = False
+
+        # Only generate bill_number (CC/...) when a bill is actually warranted.
+        # Same-day cash-only stays are excluded — they won't appear in the Bills module.
+        if not is_no_bill and not is_mmt_ota:
+            bill_number = generate_sequential_bill_number(checkout_dt)
+        else:
+            bill_number = "-"
+
+        invoice_number = None
+        if invoice_generated:
+            invoice_number = generate_sequential_invoice_number(checkout_dt)
 
         bill_record = {
             "bill_number": bill_number,
@@ -461,7 +544,18 @@ def create_bill_record(room, room_data, checkout_time, batch=None):
             "status": "completed",
             "created_at": checkout_time,
             "print_count": 0,
-            "serial_number": serial_number
+            "serial_number": serial_number,
+            # OTA / booking source fields
+            "booking_source": booking_source,
+            "payment_source": payment_source,
+            "ota_total_amount": ota_total_amount,
+            "ota_commission": ota_commission,
+            "ota_commission_gst": ota_commission_gst,
+            "net_receivable": net_receivable,
+            "settlement_status": settlement_status,
+            # GST invoice fields (separate from bill_number folio)
+            "invoice_generated": invoice_generated,
+            "invoice_number": invoice_number,
         }
 
         return bill_record
@@ -500,6 +594,36 @@ def generate_sequential_bill_number(checkout_date):
         # Timestamp-based fallback — still unique, never 0
         ts = max(1, int(checkout_date.timestamp()) % 100000)
         return f"CC/{checkout_date.year}/{str(checkout_date.month).zfill(2)}/{ts:05d}"
+
+def generate_sequential_invoice_number(checkout_date):
+    """
+    Format: INV/YYYY/MM/XXXXX
+    Separate atomic counter from bill numbers.
+    """
+    try:
+        year  = checkout_date.year
+        month = str(checkout_date.month).zfill(2)
+
+        counter_key = f"invoice_{year}_{month}"
+        counter_ref = counters_ref.document(counter_key)
+        txn         = db.transaction()
+
+        @firestore.transactional
+        def _inc(t, ref):
+            snap    = ref.get(transaction=t)
+            new_val = (snap.get("count") + 1) if snap.exists else 1
+            t.set(ref, {"count": new_val})
+            return new_val
+
+        seq    = _inc(txn, counter_ref)
+        serial = str(seq).zfill(5)
+        return f"INV/{year}/{month}/{serial}"
+
+    except Exception as e:
+        logger.error(f"Error generating invoice number: {e}")
+        ts = max(1, int(checkout_date.timestamp()) % 100000)
+        return f"INV/{checkout_date.year}/{str(checkout_date.month).zfill(2)}/{ts:05d}"
+
 
 def find_serial_number_for_checkin(room_number, guest_name, checkin_dt, all_logs):
     """

@@ -6,7 +6,8 @@ from firebase_admin import firestore
 from config import (
     db, bookings_ref, logs_ref, totals_ref, IST, logger,
     invalidate_rooms_and_totals,
-    rooms_ref, get_next_serial_number, store_transaction_metadata, send_whatsapp_message
+    rooms_ref, get_next_serial_number, store_transaction_metadata, send_whatsapp_message,
+    settlements_ref
 )
 from services import payment_service, customer_service
 
@@ -37,6 +38,25 @@ def create_booking():
                 return jsonify(success=False, message=f"Missing required field: {field}")
         
         booking_id = str(uuid.uuid4())
+        booking_source = booking_data.get("booking_source", "normal")
+        is_mmt = booking_source == "mmt"
+
+        # For MMT: total_amount = net_receivable; advance payment is not collected at hotel
+        if is_mmt:
+            ota_total = int(booking_data.get("ota_total_amount", 0))
+            ota_commission = float(booking_data.get("ota_commission", 0))
+            ota_commission_gst = float(booking_data.get("ota_commission_gst", 0))
+            net_receivable = ota_total - ota_commission - ota_commission_gst
+            total_amount = ota_total
+            paid_amount_val = 0
+        else:
+            ota_total = 0
+            ota_commission = 0.0
+            ota_commission_gst = 0.0
+            net_receivable = 0
+            total_amount = int(booking_data["total_amount"])
+            paid_amount_val = int(booking_data.get("paid_amount", 0))
+
         booking = {
             "room": booking_data["room"],
             "guest_name": booking_data["guest_name"],
@@ -46,17 +66,31 @@ def create_booking():
             "check_in_time": booking_data["check_in_time"],
             "check_out_date": booking_data["check_out_date"],
             "status": "confirmed",
-            "total_amount": int(booking_data["total_amount"]),
-            "paid_amount": int(booking_data.get("paid_amount", 0)),
-            "balance": int(booking_data["total_amount"]) - int(booking_data.get("paid_amount", 0)),
-            "payment_method": booking_data.get("payment_method", "cash"),
+            "booking_source": booking_source,
+            "payment_source": "ota" if is_mmt else "hotel",
+            "total_amount": total_amount,
+            "paid_amount": paid_amount_val,
+            "balance": total_amount - paid_amount_val,
+            "payment_method": booking_data.get("payment_method", "cash") if not is_mmt else "ota",
             "notes": booking_data.get("notes", ""),
             "photo_path": booking_data.get("photo_path", None),
-            "guest_count": int(booking_data.get("guest_count", 1))
+            "guest_count": int(booking_data.get("guest_count", 1)),
         }
-        
+
+        # MMT-specific OTA fields
+        if is_mmt:
+            booking.update({
+                "ota_total_amount": ota_total,
+                "ota_commission": ota_commission,
+                "ota_commission_gst": ota_commission_gst,
+                "net_receivable": net_receivable,
+                "settlement_status": "pending",
+                "settlement_date": None,
+                "settlement_amount": None,
+            })
+
         batch = db.batch()
-        paid_amount = int(booking_data.get("paid_amount", 0))
+        paid_amount = paid_amount_val
         if paid_amount > 0:
             payment_method = booking_data.get("payment_method", "cash")
             payment_log = {
@@ -640,3 +674,68 @@ Thank you for choosing us! 🙏"""
     except Exception as e:
         logger.error(f"Error sending booking confirmation: {str(e)}")
         return jsonify(success=False, message=f"Error sending confirmation: {str(e)}")
+
+
+@bookings_bp.route("/mark_ota_settlement", methods=["POST"])
+def mark_ota_settlement():
+    """Mark an MMT booking's settlement as received."""
+    try:
+        data = request.json
+        booking_id = data.get("booking_id")
+        settlement_date = data.get("settlement_date")
+        settlement_amount = float(data.get("settlement_amount", 0))
+
+        if not booking_id or not settlement_date or settlement_amount <= 0:
+            return jsonify(success=False, message="booking_id, settlement_date and settlement_amount are required")
+
+        booking_doc = bookings_ref.document(booking_id).get()
+        if not booking_doc.exists:
+            return jsonify(success=False, message="Booking not found")
+
+        booking = booking_doc.to_dict()
+        if booking.get("booking_source") != "mmt":
+            return jsonify(success=False, message="Settlement is only applicable to MMT bookings")
+        if booking.get("settlement_status") == "received":
+            return jsonify(success=False, message="Settlement already marked as received")
+
+        # Update booking doc
+        bookings_ref.document(booking_id).update({
+            "settlement_status": "received",
+            "settlement_date": settlement_date,
+            "settlement_amount": settlement_amount,
+        })
+
+        # Write to settlements collection — kept separate from cash/online totals
+        settlement_entry = {
+            "booking_id": booking_id,
+            "platform": "mmt",
+            "type": "bank_settlement",
+            "room": booking.get("room", ""),
+            "guest_name": booking.get("guest_name", ""),
+            "net_receivable": booking.get("net_receivable", 0),
+            "settlement_amount": settlement_amount,
+            "settlement_date": settlement_date,
+            "created_at": datetime.now(IST).strftime("%Y-%m-%d %H:%M"),
+        }
+        settlements_ref.add(settlement_entry)
+
+        # Also write to payments collection for traceability (method="bank_settlement")
+        payment_service.write_payment({
+            "room": booking.get("room", ""),
+            "name": booking.get("guest_name", ""),
+            "amount": settlement_amount,
+            "method": "bank_settlement",
+            "type": "bank_settlement",
+            "date": settlement_date,
+            "time": datetime.now(IST).strftime("%H:%M"),
+            "booking_id": booking_id,
+            "transaction_type": "bank_settlement",
+            "platform": "mmt",
+        })
+
+        logger.info(f"OTA settlement received for booking {booking_id}: ₹{settlement_amount} on {settlement_date}")
+        return jsonify(success=True, message=f"Settlement of ₹{settlement_amount} marked as received")
+
+    except Exception as e:
+        logger.error(f"Error marking OTA settlement: {str(e)}")
+        return jsonify(success=False, message=f"Error: {str(e)}")

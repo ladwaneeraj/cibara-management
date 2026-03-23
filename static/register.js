@@ -35,26 +35,51 @@
   display: flex; flex-wrap: wrap;
   align-items: center; gap: 0.4rem;
   margin-bottom: 0.7rem;
-  background: #f4f6fb; border-radius: 8px;
-  padding: 0.45rem 0.6rem;
+  background: #f4f6fb; border-radius: 10px;
+  padding: 0.5rem 0.7rem;
+  border: 1px solid #e8eaf0;
 }
-.reg-filter-bar label {
-  font-size: 0.72rem; font-weight: 700;
-  color: #888; white-space: nowrap;
-  text-transform: uppercase; letter-spacing: .03em;
+.reg-date-range-wrap {
+  display: flex; align-items: center; gap: 0.3rem;
+  background: #fff; border: 1px solid #d8d8d8; border-radius: 6px;
+  padding: 0.2rem 0.5rem; height: 30px; cursor: pointer;
+  transition: border-color 0.15s;
 }
-.reg-filter-bar input[type="date"],
+.reg-date-range-wrap:focus-within { border-color: var(--primary, #3f51b5); }
+.reg-date-range-wrap i { color: #6c757d; font-size: 0.75rem; flex-shrink: 0; }
+.reg-date-range-input {
+  border: none; outline: none; font-size: 0.8rem;
+  background: transparent; width: 155px; cursor: pointer;
+  color: #333;
+}
+.reg-quick-btn {
+  padding: 0.18rem 0.5rem; border-radius: 12px;
+  border: 1px solid #d0d0d0; font-size: 0.71rem;
+  background: #fff; cursor: pointer; color: #555;
+  font-weight: 600; transition: all 0.15s; height: 24px;
+  line-height: 1;
+}
+.reg-quick-btn:hover { background: #e8eaf6; border-color: var(--primary, #3f51b5); color: var(--primary, #3f51b5); }
+.reg-quick-btn.rq-active { background: var(--primary, #3f51b5); color: #fff; border-color: var(--primary, #3f51b5); }
+.reg-filter-divider { width: 1px; background: #dde1ea; height: 20px; margin: 0 0.15rem; flex-shrink: 0; }
 .reg-filter-bar select {
-  padding: 0.28rem 0.4rem;
-  border: 1px solid #d8d8d8; border-radius: 5px;
-  font-size: 0.8rem; background: #fff; height: 29px;
+  padding: 0.25rem 0.4rem;
+  border: 1px solid #d8d8d8; border-radius: 6px;
+  font-size: 0.8rem; background: #fff; height: 30px;
+  color: #444; cursor: pointer;
 }
-.reg-filter-bar .reg-sep { color: #bbb; padding: 0 0.05rem; }
 .reg-search-input {
-  flex: 1; min-width: 110px;
-  padding: 0.28rem 0.4rem;
-  border: 1px solid #d8d8d8; border-radius: 5px;
-  font-size: 0.8rem; height: 29px;
+  flex: 1; min-width: 120px;
+  padding: 0.25rem 0.5rem 0.25rem 1.8rem;
+  border: 1px solid #d8d8d8; border-radius: 6px;
+  font-size: 0.8rem; height: 30px;
+  background: #fff url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='13' height='13' viewBox='0 0 24 24' fill='none' stroke='%23aaa' stroke-width='2.5'%3E%3Ccircle cx='11' cy='11' r='8'%3E%3C/circle%3E%3Cline x1='21' y1='21' x2='16.65' y2='16.65'%3E%3C/line%3E%3C/svg%3E") no-repeat 0.45rem center;
+  transition: border-color 0.15s;
+}
+.reg-search-input:focus { outline: none; border-color: var(--primary, #3f51b5); }
+.reg-count-badge {
+  font-size: 0.72rem; color: #888; white-space: nowrap;
+  margin-left: auto; padding: 0 0.3rem;
 }
 
 .register-table-container {
@@ -150,7 +175,8 @@
   border-radius: 0 0 10px 10px;
 }
 
-#reg-bill-print-area {
+#reg-bill-print-area,
+#bl-bill-print-area {
   padding: 1rem 1.4rem;
   font-family: 'Courier New', monospace;
   font-size: 0.78rem; line-height: 1.42;
@@ -186,11 +212,13 @@
   /* Hide everything except the bill modal */
   body * { visibility: hidden !important; }
 
-  /* Show the bill modal and its content */
+  /* Show the bill modal and its content (reg- = Register, bl- = Bills) */
   .bill-modal.show,
   .bill-modal.show .bill-content,
   .bill-modal.show #reg-bill-print-area,
-  .bill-modal.show #reg-bill-print-area * {
+  .bill-modal.show #reg-bill-print-area *,
+  .bill-modal.show #bl-bill-print-area,
+  .bill-modal.show #bl-bill-print-area * {
     visibility: visible !important;
   }
 
@@ -210,7 +238,8 @@
   .bill-header { display: none !important; }
   .bill-actions { display: none !important; }
 
-  #reg-bill-print-area {
+  #reg-bill-print-area,
+  #bl-bill-print-area {
     padding: 0 !important;
     font-size: 8.5pt !important;
     line-height: 1.28 !important;
@@ -232,7 +261,8 @@
     page-break-inside: avoid !important;
     break-inside: avoid !important;
   }
-  #reg-bill-print-area {
+  #reg-bill-print-area,
+  #bl-bill-print-area {
     page-break-after: avoid !important;
     break-after: avoid !important;
   }
@@ -310,9 +340,6 @@
   function inr(n) {
     return (+(n || 0)).toLocaleString("en-IN");
   }
-  function fix2(n) {
-    return (+(n || 0)).toFixed(2);
-  }
   function debounce(fn, ms) {
     let t;
     return (...a) => {
@@ -322,17 +349,6 @@
   }
   function dom(id) {
     return document.getElementById(id);
-  }
-
-  // GST: 5% inclusive, only when daily rate > 999
-  function gstAmounts(ratePerNight, days) {
-    const total = (ratePerNight || 0) * (days || 1);
-    if (ratePerNight > 999) {
-      const base = total / 1.05;
-      const gst = total - base;
-      return { base, cgst: gst / 2, sgst: gst / 2, total };
-    }
-    return { base: total, cgst: 0, sgst: 0, total };
   }
 
   // ── Build tab HTML ────────────────────────────────────────────────────────────
@@ -347,18 +363,18 @@
       <button class="reg-icon-btn refresh" id="reg-refresh-btn" title="Refresh">
         <i class="fas fa-sync-alt"></i>
       </button>
-      <button class="reg-icon-btn export" id="reg-export-btn" title="Export Excel">
-        <i class="fas fa-file-excel"></i>
-      </button>
     </div>
   </div>
 
   <div class="reg-filter-bar">
-    <label>From</label>
-    <input type="date" id="reg-start-date" />
-    <span class="reg-sep">–</span>
-    <label>To</label>
-    <input type="date" id="reg-end-date" />
+    <div class="reg-date-range-wrap" id="reg-date-range-wrap">
+      <i class="fas fa-calendar-alt"></i>
+      <input type="text" id="reg-date-range" class="reg-date-range-input" placeholder="Select date range" readonly />
+    </div>
+    <button class="reg-quick-btn rq-active" data-rq="week">Week</button>
+    <button class="reg-quick-btn" data-rq="today">Today</button>
+    <button class="reg-quick-btn" data-rq="month">Month</button>
+    <span class="reg-filter-divider"></span>
     <select id="reg-status-filter">
       <option value="all">All Status</option>
       <option value="active">Active</option>
@@ -371,8 +387,7 @@
       <option value="split">Split</option>
       <option value="pending">Pending Balance</option>
     </select>
-    <input type="text" class="reg-search-input" id="reg-search"
-           placeholder="Name / Room / Mobile…" />
+    <input type="text" class="reg-search-input" id="reg-search" placeholder="Name / Room / Mobile…" />
   </div>
 
   <div class="register-table-container">
@@ -382,11 +397,11 @@
           <th>#</th><th>Bill No</th><th>Guest</th><th>Contact</th>
           <th>Room</th><th>Check-in</th><th>Check-out</th><th>Days</th>
           <th>Rate</th><th>Services</th><th>Total</th>
-          <th>Payment</th><th>Status</th><th>Bill</th>
+          <th>Payment</th><th>Status</th>
         </tr>
       </thead>
       <tbody id="reg-table-body">
-        <tr><td colspan="14">
+        <tr><td colspan="13">
           <div class="reg-state">
             <i class="fas fa-book-open"></i>
             <p>Open this tab to load register entries</p>
@@ -395,60 +410,65 @@
       </tbody>
     </table>
   </div>
-</div>
-
-<div class="bill-modal" id="reg-bill-modal">
-  <div class="bill-content">
-    <div class="bill-header">
-      <h2>Tax Invoice</h2>
-      <button class="bill-close" id="reg-bill-close">&times;</button>
-    </div>
-    <div id="reg-bill-print-area"></div>
-    <div class="bill-actions">
-      <button class="action-btn btn-secondary" id="reg-bill-close2">Close</button>
-      <button class="action-btn btn-primary" id="reg-bill-print">
-        <i class="fas fa-print"></i> Print
-      </button>
-    </div>
-  </div>
 </div>`;
   }
 
-  // ── Date defaults ─────────────────────────────────────────────────────────────
+  // ── Date helpers ──────────────────────────────────────────────────────────────
+  function dateToYMD(d) {
+    return d.getFullYear() + '-' +
+      String(d.getMonth() + 1).padStart(2, '0') + '-' +
+      String(d.getDate()).padStart(2, '0');
+  }
+
+  // ── Date defaults + flatpickr init ────────────────────────────────────────────
   function setDefaults() {
-    const s = dom("reg-start-date"),
-      e = dom("reg-end-date");
-    if (!s || !e) return;
-    const today = todayStr(),
-      week = nDaysAgoStr(6);
-    s.value = week;
-    e.value = today;
-    s.min = nDaysAgoStr(365);
-    e.max = today;
+    const today = todayStr(), week = nDaysAgoStr(6);
     state.dateRange.start = week;
     state.dateRange.end = today;
+
+    const el = dom("reg-date-range");
+    if (!el || !window.flatpickr) return;
+
+    state._datePicker = flatpickr(el, {
+      mode: "range",
+      dateFormat: "Y-m-d",   // internal ISO format — avoids maxDate mis-parsing
+      altInput: true,         // show human-friendly text to user
+      altFormat: "d M Y",     // display: "17 Mar 2026"
+      defaultDate: [week, today],
+      maxDate: today,
+      disableMobile: true,
+      onChange: function (selectedDates) {
+        if (selectedDates.length === 2) {
+          state.dateRange.start = dateToYMD(selectedDates[0]);
+          state.dateRange.end   = dateToYMD(selectedDates[1]);
+          // clear quick-btn active
+          document.querySelectorAll(".reg-quick-btn").forEach(b => b.classList.remove("rq-active"));
+          loadData(true);
+        }
+      }
+    });
   }
 
   // ── Events ────────────────────────────────────────────────────────────────────
   function wireEvents() {
-    function onDateChange() {
-      let s = dom("reg-start-date").value;
-      let e = dom("reg-end-date").value;
-      if (!s || !e) return;
-      if (s > e) {
-        [s, e] = [e, s];
-        dom("reg-start-date").value = s;
-        dom("reg-end-date").value = e;
-      }
-      state.dateRange.start = s;
-      state.dateRange.end = e;
-      loadData(true); // force reload on date change
-    }
-
-    const sd = dom("reg-start-date"),
-      ed = dom("reg-end-date");
-    if (sd) sd.addEventListener("change", onDateChange);
-    if (ed) ed.addEventListener("change", onDateChange);
+    // Quick-range buttons (Today / Week / Month)
+    document.querySelectorAll(".reg-quick-btn").forEach(btn => {
+      btn.addEventListener("click", () => {
+        const range = btn.dataset.rq;
+        const today = todayStr();
+        let start;
+        if (range === "today")  start = today;
+        else if (range === "week")  start = nDaysAgoStr(6);
+        else if (range === "month") start = nDaysAgoStr(29);
+        else start = today;
+        state.dateRange.start = start;
+        state.dateRange.end   = today;
+        if (state._datePicker) state._datePicker.setDate([start, today]);
+        document.querySelectorAll(".reg-quick-btn").forEach(b => b.classList.remove("rq-active"));
+        btn.classList.add("rq-active");
+        loadData(true);
+      });
+    });
 
     const sf = dom("reg-status-filter"),
       pf = dom("reg-payment-filter"),
@@ -472,33 +492,13 @@
         }, 220),
       );
 
-    const rb = dom("reg-refresh-btn"),
-      xb = dom("reg-export-btn");
+    const rb = dom("reg-refresh-btn");
     if (rb) rb.addEventListener("click", () => loadData(true));
-    if (xb) xb.addEventListener("click", exportToExcel);
 
-    const bc = dom("reg-bill-close"),
-      bc2 = dom("reg-bill-close2");
-    const bp = dom("reg-bill-print"),
-      bm = dom("reg-bill-modal");
-    if (bc) bc.addEventListener("click", closeBill);
-    if (bc2) bc2.addEventListener("click", closeBill);
-    if (bp) bp.addEventListener("click", () => window.print());
-    if (bm)
-      bm.addEventListener("click", (e) => {
-        if (e.target === bm) closeBill();
-      });
-
-    // Delegated: bill buttons + group toggle
+    // Delegated: group toggle
     const tbody = dom("reg-table-body");
     if (tbody) {
       tbody.addEventListener("click", (e) => {
-        const btn = e.target.closest(".bill-btn");
-        if (btn) {
-          e.stopPropagation();
-          openBill(btn.dataset.id);
-          return;
-        }
         const hdr = e.target.closest(".date-group-header");
         if (hdr) toggleGroup(hdr);
       });
@@ -609,7 +609,7 @@
         const entries = byDate[dk];
         const label = dk !== "unknown" ? fmtDate(dk) : "Unknown Date";
         html += `<tr class="date-group-header" data-group="${dk}">
-        <td colspan="14"><i class="fas fa-chevron-down"></i>${label}&nbsp;<span style="font-weight:400;opacity:.65;">(${entries.length})</span></td>
+        <td colspan="13"><i class="fas fa-chevron-down"></i>${label}&nbsp;<span style="font-weight:400;opacity:.65;">(${entries.length})</span></td>
       </tr>`;
         entries.forEach((e) => {
           html += rowHTML(e, dk);
@@ -628,11 +628,6 @@
         : "-";
     const billNo = e.status === "completed" ? e.bill_number || "-" : "-";
     const stCls = e.status === "active" ? "status-active" : "status-completed";
-    const billBtn =
-      e.status === "completed"
-        ? `<button class="bill-btn" data-id="${e.id}" title="View Bill"><i class="fas fa-receipt"></i></button>`
-        : `<span style="color:#ccc;">—</span>`;
-
     return `<tr class="date-group-row" data-date-group="${dk}">
       <td>${serial}</td>
       <td style="font-size:.73rem;white-space:nowrap;">${billNo}</td>
@@ -647,7 +642,6 @@
       <td><strong>₹${inr(e.total_amount)}</strong></td>
       <td>${paymentHTML(e)}</td>
       <td><span class="status-badge ${stCls}">${e.status}</span></td>
-      <td>${billBtn}</td>
     </tr>`;
   }
 
@@ -677,243 +671,17 @@
   function showLoading() {
     const t = dom("reg-table-body");
     if (t)
-      t.innerHTML = `<tr><td colspan="14"><div class="reg-state"><div class="reg-loader"></div><p>Loading…</p></div></td></tr>`;
+      t.innerHTML = `<tr><td colspan="13"><div class="reg-state"><div class="reg-loader"></div><p>Loading…</p></div></td></tr>`;
   }
   function showEmpty() {
     const t = dom("reg-table-body");
     if (t)
-      t.innerHTML = `<tr><td colspan="14"><div class="reg-state"><i class="fas fa-inbox"></i><p>No entries found for this period</p></div></td></tr>`;
+      t.innerHTML = `<tr><td colspan="13"><div class="reg-state"><i class="fas fa-inbox"></i><p>No entries found for this period</p></div></td></tr>`;
   }
   function showError(msg) {
     const t = dom("reg-table-body");
     if (t)
-      t.innerHTML = `<tr><td colspan="14"><div class="reg-state" style="color:#dc3545"><i class="fas fa-exclamation-circle"></i><p>${msg}</p></div></td></tr>`;
-  }
-
-  // ── Bill modal ────────────────────────────────────────────────────────────────
-  function closeBill() {
-    const m = dom("reg-bill-modal");
-    if (m) m.classList.remove("show");
-  }
-
-  async function openBill(id) {
-    const m = dom("reg-bill-modal"),
-      area = dom("reg-bill-print-area");
-    if (!m || !area) return;
-    area.innerHTML = `<div class="reg-state"><div class="reg-loader"></div><p>Generating…</p></div>`;
-    m.classList.add("show");
-    try {
-      const res = await fetch(`/generate_bill/${id}`);
-      const data = await res.json();
-      area.innerHTML = data.success
-        ? buildBillHTML(data.bill)
-        : `<div class="reg-state" style="color:#c00"><i class="fas fa-times-circle"></i><p>${data.message}</p></div>`;
-    } catch {
-      area.innerHTML = `<div class="reg-state" style="color:#c00"><i class="fas fa-times-circle"></i><p>Network error</p></div>`;
-    }
-  }
-
-  // ── Bill HTML builder ─────────────────────────────────────────────────────────
-  function fmtBillDT(dtStr) {
-    if (!dtStr) return "-";
-    const [dp, tp = ""] = dtStr.split(" ");
-    const [y, m, d] = dp.split("-");
-    const monthName = MONTHS[parseInt(m) - 1];
-    // Format: "Mar 17, 2026, 11:55 PM" style
-    let timePart = "";
-    if (tp) {
-      const [hh, mm] = tp.split(":");
-      const h = parseInt(hh);
-      const ampm = h >= 12 ? "PM" : "AM";
-      const h12 = h === 0 ? 12 : h > 12 ? h - 12 : h;
-      timePart = `, ${pad(h12)}:${mm} ${ampm}`;
-    }
-    return `${monthName} ${parseInt(d)}, ${y}${timePart}`;
-  }
-
-  function buildBillHTML(b) {
-    const days = b.days_stayed || calcDays(b.checkin_time, b.checkout_time);
-    const rate = b.room_price_per_night || b.room_rent || 0;
-    const { base, cgst, sgst, total: roomTotal } = gstAmounts(rate, days);
-    const svcTotal = b.services_total || 0;
-    const discounts = b.discounts || 0;
-    const grandTotal = roomTotal + svcTotal - discounts;
-    const cashPaid = b.payment_cash || 0;
-    const onlinePaid = b.payment_online || 0;
-    const totalPaid = cashPaid + onlinePaid;
-    const balance = b.balance || 0;
-
-    let svcRows = "";
-    if (b.services && b.services.length) {
-      svcRows = b.services
-        .map(
-          (s) => `
-        <tr>
-          <td>${s.item}</td><td class="b-tr">${s.quantity || 1}</td>
-          <td class="b-tr">${fix2(s.unit_price || s.price || 0)}</td>
-          <td class="b-tr">${fix2(s.price || 0)}</td>
-        </tr>`,
-        )
-        .join("");
-    } else if (svcTotal > 0) {
-      svcRows = `<tr><td>Services</td><td class="b-tr">—</td><td class="b-tr">—</td><td class="b-tr">${fix2(svcTotal)}</td></tr>`;
-    }
-
-    // Bill date = checkout time
-    const billDate = fmtBillDT(b.checkout_time);
-
-    return `
-<div class="b-lodge-name">CIBARA COMFORTS</div>
-<div class="b-lodge-sub">Opposite Bus Stand Road, Harihar, Karnataka – 577601</div>
-<div class="b-lodge-sub">Phone: +91 9482831381 &nbsp;|&nbsp; GSTIN: 29AAWFC1962B1Z9</div>
-<div class="b-title">TAX INVOICE</div>
-
-<div class="b-info-grid">
-  <div>
-    <div class="b-row"><span class="b-lbl">Bill No:</span><span>${b.bill_number || "N/A"}</span></div>
-    <div class="b-row"><span class="b-lbl">Guest Name:</span><span>${b.guest_name}</span></div>
-    <div class="b-row"><span class="b-lbl">Mobile:</span><span>${b.guest_mobile || "N/A"}</span></div>
-    <div class="b-row"><span class="b-lbl">Room No:</span><span>${b.room}</span></div>
-  </div>
-  <div>
-    <div class="b-row"><span class="b-lbl">Check-in:</span><span>${fmtBillDT(b.checkin_time)}</span></div>
-    <div class="b-row"><span class="b-lbl">Check-out:</span><span>${fmtBillDT(b.checkout_time)}</span></div>
-    <div class="b-row"><span class="b-lbl">Days Stayed:</span><span>${days}</span></div>
-    <div class="b-row"><span class="b-lbl">Bill Date:</span><span>${billDate}</span></div>
-  </div>
-</div>
-
-<table class="b-tbl">
-  <thead>
-    <tr><th>Description</th><th class="b-tr">Qty</th><th class="b-tr">Rate</th><th class="b-tr">Amount</th></tr>
-  </thead>
-  <tbody>
-    <tr class="b-sec"><td colspan="4">Room Charges</td></tr>
-    <tr>
-      <td>Room Rent (Base Amount)</td>
-      <td class="b-tr">${days}</td>
-      <td class="b-tr">${fix2(rate)}</td>
-      <td class="b-tr">${fix2(base)}</td>
-    </tr>
-    <tr><td style="padding-left:.7rem">CGST @ 2.5%</td><td class="b-tr">-</td><td class="b-tr">-</td><td class="b-tr">${fix2(cgst)}</td></tr>
-    <tr><td style="padding-left:.7rem">SGST @ 2.5%</td><td class="b-tr">-</td><td class="b-tr">-</td><td class="b-tr">${fix2(sgst)}</td></tr>
-    <tr style="font-weight:700;">
-      <td colspan="3" class="b-tr">Total Room Charges:</td>
-      <td class="b-tr">${fix2(roomTotal)}</td>
-    </tr>
-    ${svcRows ? `<tr class="b-sec"><td colspan="4">Additional Services</td></tr>${svcRows}<tr style="font-weight:700;"><td colspan="3" class="b-tr">Total Services:</td><td class="b-tr">${fix2(svcTotal)}</td></tr>` : ""}
-    ${discounts > 0 ? `<tr class="b-sec"><td colspan="4">Discounts</td></tr><tr><td>Discount Applied</td><td class="b-tr">—</td><td class="b-tr">—</td><td class="b-tr" style="color:green;">-${fix2(discounts)}</td></tr>` : ""}
-    <tr class="b-grand">
-      <td colspan="3" class="b-tr"><strong>GRAND TOTAL</strong></td>
-      <td class="b-tr"><strong>${fix2(grandTotal)}</strong></td>
-    </tr>
-  </tbody>
-</table>
-
-<div class="b-pay-section">
-  <strong>Payment Details</strong>
-  <table class="b-tbl" style="margin-top:.25rem;">
-    <tbody>
-      <tr><td>Cash Paid</td><td class="b-tr">${fix2(cashPaid)}</td></tr>
-      <tr><td>Online Paid</td><td class="b-tr">${fix2(onlinePaid)}</td></tr>
-      <tr style="font-weight:700;"><td>Total Paid</td><td class="b-tr">${fix2(totalPaid)}</td></tr>
-      ${balance > 0 ? `<tr style="font-weight:bold;color:#dc3545"><td>Balance Due</td><td class="b-tr">${fix2(balance)}</td></tr>` : ""}
-    </tbody>
-  </table>
-</div>
-
-<div class="b-sig">
-  <div class="b-sig-line">Guest Signature</div>
-  <div class="b-sig-line">Authorised Signatory</div>
-</div>
-<div class="b-footer">
-  <p>Thank you for choosing Cibara Comforts, Harihar!</p>
-  <p>Computer-generated invoice · No physical signature required</p>
-</div>`;
-  }
-
-  // ── Export ────────────────────────────────────────────────────────────────────
-  function exportToExcel() {
-    if (!state.filteredEntries.length) {
-      alert("No data to export.");
-      return;
-    }
-    if (typeof XLSX === "undefined") {
-      alert("Excel library not loaded. Refresh the page and retry.");
-      return;
-    }
-
-    const rows = state.filteredEntries.map((e, i) => {
-      const rate = e.room_rent || 0;
-      const days =
-        typeof e.days_stayed === "number"
-          ? e.days_stayed
-          : calcDays(e.checkin_time, e.checkout_time);
-      const { base, cgst, sgst } = gstAmounts(rate, days);
-
-      return {
-        "Sr No":
-          e.serial_number !== null &&
-          e.serial_number !== undefined &&
-          e.serial_number !== 0
-            ? e.serial_number
-            : i + 1,
-        "Bill No": e.bill_number || "-",
-        "Guest Name": e.guest_name || "-",
-        Contact: e.guest_mobile || "-",
-        Room: e.room || "-",
-        "Check-in": fmtDT(e.checkin_time),
-        "Check-out": e.checkout_time ? fmtDT(e.checkout_time) : "-",
-        Days: days,
-        "Room Rate/Night": rate,
-        "Base Amt (excl GST)": +base.toFixed(2),
-        "CGST 2.5%": +cgst.toFixed(2),
-        "SGST 2.5%": +sgst.toFixed(2),
-        "Total GST": +(cgst + sgst).toFixed(2),
-        "Room Total": rate * days,
-        Services: e.services_total || 0,
-        "Grand Total": e.total_amount || 0,
-        "Cash Paid": e.payment_cash || 0,
-        "Online Paid": e.payment_online || 0,
-        "Balance Due": e.balance || 0,
-        Status: e.status || "-",
-      };
-    });
-
-    try {
-      const ws = XLSX.utils.json_to_sheet(rows);
-      ws["!cols"] = [
-        { wch: 6 },
-        { wch: 18 },
-        { wch: 22 },
-        { wch: 14 },
-        { wch: 6 },
-        { wch: 20 },
-        { wch: 20 },
-        { wch: 5 },
-        { wch: 14 },
-        { wch: 18 },
-        { wch: 11 },
-        { wch: 11 },
-        { wch: 11 },
-        { wch: 12 },
-        { wch: 10 },
-        { wch: 13 },
-        { wch: 10 },
-        { wch: 12 },
-        { wch: 12 },
-        { wch: 10 },
-      ];
-      const wb = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wb, ws, "Register");
-      XLSX.writeFile(
-        wb,
-        `Register_${state.dateRange.start}_to_${state.dateRange.end}.xlsx`,
-      );
-    } catch (err) {
-      console.error("[Register] export error:", err);
-      alert("Export failed: " + err.message);
-    }
+      t.innerHTML = `<tr><td colspan="13"><div class="reg-state" style="color:#dc3545"><i class="fas fa-exclamation-circle"></i><p>${msg}</p></div></td></tr>`;
   }
 
   // ── Tab activation watch ──────────────────────────────────────────────────────

@@ -2658,6 +2658,23 @@ function initEnhancedCheckinForm() {
     acToggle.addEventListener("change", updateRoomPrice);
   }
 
+  // Track when the user manually edits amount-paid or room-price
+  // so auto-fill does not silently overwrite their values.
+  if (amountPaidInput) {
+    amountPaidInput.addEventListener("input", () => {
+      amountPaidInput.dataset.userEdited = "true";
+    });
+  }
+  if (roomPriceInput) {
+    roomPriceInput.addEventListener("input", () => {
+      // When price changes manually, also reset the amount to match
+      // unless the user has already set a custom amount.
+      if (amountPaidInput && amountPaidInput.dataset.userEdited !== "true") {
+        amountPaidInput.value = roomPriceInput.value || 0;
+      }
+    });
+  }
+
   // Update price when the form is first loaded
   function updateRoomInfo() {
     const selectedRoom = roomDropdown.value;
@@ -2759,18 +2776,20 @@ function initEnhancedCheckinForm() {
 
       roomPriceInput.value = price;
 
-      // Update amount paid based on current payment method
+      // Update amount paid based on current payment method,
+      // but only if the user has not manually changed the amount field.
       if (amountPaidInput) {
         const paymentMethodInput = document.getElementById("payment-method");
         const currentPaymentMethod = paymentMethodInput
           ? paymentMethodInput.value
           : "cash";
+        const userEdited = amountPaidInput.dataset.userEdited === "true";
 
         if (currentPaymentMethod === "balance") {
-          // Keep amount as 0 for Pay Later
+          // Always keep amount as 0 for Pay Later
           amountPaidInput.value = 0;
-        } else {
-          // Set to room price for Cash/Online
+        } else if (!userEdited) {
+          // Only auto-fill if user hasn't typed a custom amount
           amountPaidInput.value = price;
         }
       }
@@ -2842,6 +2861,16 @@ function showEnhancedCheckinModal(roomNumber) {
     const paymentMethodInput = document.getElementById("payment-method");
     if (paymentMethodInput) {
       paymentMethodInput.value = "cash";
+    }
+
+    // Reset user-edited flags so auto-fill works fresh on each modal open
+    const amountPaidInputReset = document.getElementById("amount-paid");
+    if (amountPaidInputReset) {
+      amountPaidInputReset.dataset.userEdited = "false";
+    }
+    const roomPriceInputReset = document.getElementById("room-price");
+    if (roomPriceInputReset) {
+      roomPriceInputReset.dataset.userEdited = "false";
     }
 
     // Update room info based on selected room
@@ -3774,15 +3803,19 @@ document.addEventListener("DOMContentLoaded", function () {
           }
 
           // Auto-adjust amount paid based on payment method
+          // Only override if the user has NOT manually entered a custom amount.
+          // We track whether the amount field was user-edited via the data-user-edited attribute.
           const amountPaidInput = document.getElementById("amount-paid");
           const roomPriceInput = document.getElementById("room-price");
 
           if (amountPaidInput && roomPriceInput) {
+            const userEdited = amountPaidInput.dataset.userEdited === "true";
             if (activePaymentMethod === "balance") {
-              // Set amount to 0 for "Pay Later"
+              // Always set to 0 for Pay Later (user can't pay anything in advance)
               amountPaidInput.value = 0;
-            } else {
-              // Set amount to room price for Cash/Online
+              amountPaidInput.dataset.userEdited = "false";
+            } else if (!userEdited) {
+              // Only auto-fill if user has not manually changed the amount
               amountPaidInput.value = roomPriceInput.value || 0;
             }
           }

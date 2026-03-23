@@ -11,7 +11,7 @@ from google.cloud.firestore_v1.base_query import FieldFilter
 
 from config import (
     db, rooms_ref, bills_ref, logs_ref, totals_ref, counters_ref,
-    metadata_ref, IST, logger,
+    metadata_ref, IST, logger, settlements_ref,
     _build_active_entry_fast, _find_serial_fast, _batch_fill_serials,
     get_all_rooms,
 )
@@ -228,6 +228,14 @@ def get_register_data():
                     "balance": bill_data.get("balance", 0),
                     "status": "completed",
                     "serial_number": serial_num,
+                    # OTA / booking source fields
+                    "booking_source": bill_data.get("booking_source", "normal"),
+                    "payment_source": bill_data.get("payment_source", "hotel"),
+                    "net_receivable": bill_data.get("net_receivable", 0),
+                    "settlement_status": bill_data.get("settlement_status"),
+                    # GST invoice fields
+                    "invoice_generated": bill_data.get("invoice_generated", False),
+                    "invoice_number": bill_data.get("invoice_number"),
                 }
                 register_entries.append(entry)
                 completed_count += 1
@@ -250,9 +258,58 @@ def get_register_data():
             reverse=True,
         )
 
+        # ── 5. Daily Tally Dashboard ─────────────────────────────────────────
+        today_str = datetime.now(IST).strftime("%Y-%m-%d")
+        tally = {
+            "cash_today": 0,
+            "upi_today": 0,
+            "revenue_today": 0,
+            "expenses_today": 0,
+            "mmt_pending": 0,
+            "mmt_received_today": 0,
+        }
+        try:
+            today_payments = payment_service.query_payments_by_date_range(today_str, today_str)
+            _refund_types = {"refund", "checkout_refund", "manual_refund", "booking_cancel_refund"}
+            _bank_settlement = "bank_settlement"
+
+            for p in today_payments:
+                ptype = p.get("type", "")
+                method = p.get("method", "")
+                amount = p.get("amount", 0) or 0
+                if ptype in _refund_types or ptype == "expense":
+                    continue
+                if method == "cash" and ptype != _bank_settlement:
+                    tally["cash_today"] += amount
+                elif method == "online" and ptype != _bank_settlement:
+                    tally["upi_today"] += amount
+                elif method == _bank_settlement or ptype == _bank_settlement:
+                    tally["mmt_received_today"] += amount
+
+            # Expenses today
+            for p in today_payments:
+                if p.get("type") == "expense" and p.get("expense_type") == "transaction":
+                    tally["expenses_today"] += (p.get("amount") or 0)
+
+            tally["revenue_today"] = tally["cash_today"] + tally["upi_today"]
+
+            # MMT pending: sum net_receivable from settlements collection where status=pending
+            pending_q = settlements_ref.where("settlement_status", "==", "pending").stream() \
+                if False else None  # settlements_ref stores booking_source != settlements status
+            # Query bookings collection directly for pending MMT settlements
+            mmt_pending_q = db.collection("bookings") \
+                .where("booking_source", "==", "mmt") \
+                .where("settlement_status", "==", "pending") \
+                .stream()
+            for bdoc in mmt_pending_q:
+                tally["mmt_pending"] += bdoc.to_dict().get("net_receivable", 0) or 0
+
+        except Exception as te:
+            logger.warning(f"Tally dashboard error: {te}")
+
         t3 = _t.time()
         logger.info(f"[PERF] /get_register_data TOTAL: {t3-t0:.3f}s, entries: {len(register_entries)}")
-        return jsonify(success=True, entries=register_entries)
+        return jsonify(success=True, entries=register_entries, tally=tally)
 
     except Exception as e:
         logger.error(f"ERROR in get_register_data: {e}", exc_info=True)

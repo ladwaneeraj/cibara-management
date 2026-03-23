@@ -10,6 +10,26 @@
     />
     <link rel="stylesheet" href="/static/style.css" />
     <link rel="stylesheet" href="/static/booking.css" />
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/flatpickr/4.6.13/flatpickr.min.css" />
+    <style>
+      /* ── Compact booking modal ── */
+      .booking-modal-compact { max-width: 520px; }
+      .bk-row { display: grid; grid-template-columns: 1fr 1fr; gap: 0.6rem; }
+      .bk-row .form-group { margin-bottom: 0.5rem; }
+      .bk-full { grid-column: 1 / -1; }
+      #new-booking-modal .form-group { margin-bottom: 0.7rem; }
+      #new-booking-modal .form-label { font-size: 0.78rem; margin-bottom: 0.25rem; }
+      #new-booking-modal .form-control { font-size: 0.85rem; padding: 0.35rem 0.5rem; }
+      #new-booking-modal textarea.form-control { padding: 0.35rem 0.5rem; }
+      .booking-date-range-wrap {
+        position: relative;
+      }
+      .booking-date-range-wrap input[type="text"] {
+        padding-left: 2rem;
+        cursor: pointer;
+        background: #fff url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%23888' stroke-width='2'%3E%3Crect x='3' y='4' width='18' height='18' rx='2' ry='2'%3E%3C/rect%3E%3Cline x1='16' y1='2' x2='16' y2='6'%3E%3C/line%3E%3Cline x1='8' y1='2' x2='8' y2='6'%3E%3C/line%3E%3Cline x1='3' y1='10' x2='21' y2='10'%3E%3C/line%3E%3C/svg%3E") no-repeat 0.5rem center;
+      }
+    </style>
     <link rel="stylesheet" href="/static/settle-later.css" />
     <style>
       /* ── Document-camera / view-photos buttons in check-in modal header ── */
@@ -572,6 +592,9 @@
           </div>
         </div>
 
+        <!-- Bills Tab Content (populated by bills.js) -->
+        <div class="tab-content hidden" id="bills-tab"></div>
+
         <!-- Register Tab Content -->
         <div class="tab-content hidden" id="register-tab">
           <div class="register-container">
@@ -701,6 +724,10 @@
         <div class="nav-item" data-tab="register">
           <div class="nav-icon"><i class="fas fa-book"></i></div>
           <div class="nav-label">Register</div>
+        </div>
+        <div class="nav-item" data-tab="bills">
+          <div class="nav-icon"><i class="fas fa-file-invoice-dollar"></i></div>
+          <div class="nav-label">Bills</div>
         </div>
         <div class="nav-item" data-tab="reports">
           <div class="nav-icon"><i class="fas fa-chart-bar"></i></div>
@@ -1909,19 +1936,17 @@
             <select class="form-control" id="expense-category" required>
               <option value="">Select Category</option>
               <option value="salary">Salary</option>
-              <option value="advance">Advance</option>
               <option value="utilities">Utilities</option>
               <option value="purchase">Purchase</option>
               <option value="sanitary">Sanitary</option>
               <option value="rent">Rent</option>
               <option value="maintenance">Maintenance</option>
+              <option value="booking_commission">Booking Commission</option>
               <option value="others">Others</option>
             </select>
           </div>
           <div class="form-group" id="expense-description-container">
-            <label class="form-label" for="expense-description"
-              >Description</label
-            >
+            <label class="form-label" for="expense-description">Description</label>
             <input
               type="text"
               class="form-control"
@@ -1940,6 +1965,47 @@
               required
               min="1"
             />
+          </div>
+
+          <!-- Extra fields shown only for Booking Commission -->
+          <div id="commission-fields" style="display:none;">
+            <div class="form-group">
+              <label class="form-label" for="commission-platform">Platform</label>
+              <select class="form-control" id="commission-platform">
+                <option value="booking.com">Booking.com</option>
+              </select>
+            </div>
+            <div class="form-row" style="display:flex; gap:0.75rem;">
+              <div class="form-group" style="flex:1;">
+                <label class="form-label" for="commission-amount">Commission (₹)</label>
+                <input type="number" class="form-control" id="commission-amount" placeholder="Commission amount" min="0" />
+              </div>
+              <div class="form-group" style="flex:1;">
+                <label class="form-label" for="commission-gst">GST on Commission (₹)</label>
+                <input type="number" class="form-control" id="commission-gst" placeholder="GST amount" min="0" />
+              </div>
+            </div>
+            <div class="form-row" style="display:flex; gap:0.75rem;">
+              <div class="form-group" style="flex:1;">
+                <label class="form-label" for="commission-invoice-number">Invoice Number</label>
+                <input type="text" class="form-control" id="commission-invoice-number" placeholder="e.g. BDC/2026/001" />
+              </div>
+              <div class="form-group" style="flex:1;">
+                <label class="form-label" for="commission-invoice-date">Invoice Date</label>
+                <input type="date" class="form-control" id="commission-invoice-date" />
+              </div>
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="commission-payment-status">Payment Status</label>
+              <select class="form-control" id="commission-payment-status">
+                <option value="pending">Pending</option>
+                <option value="paid">Paid</option>
+              </select>
+            </div>
+            <div class="form-group" id="commission-payment-date-group" style="display:none;">
+              <label class="form-label" for="commission-payment-date">Payment Date</label>
+              <input type="date" class="form-control" id="commission-payment-date" />
+            </div>
           </div>
           <div class="form-group">
             <label class="form-label">Payment Method</label>
@@ -1971,225 +2037,128 @@
 
     <!-- New Booking Modal -->
     <div class="modal-backdrop" id="new-booking-modal">
-      <div class="modal-content">
+      <div class="modal-content booking-modal-compact">
         <div class="modal-header">
-          <h2>New Booking</h2>
+          <h2><i class="fas fa-bookmark" style="font-size:0.9rem;margin-right:0.4rem;"></i>New Booking</h2>
           <button class="close-btn" aria-label="Close">&times;</button>
         </div>
         <form id="booking-form">
-          <div class="form-group">
-            <label class="form-label" for="booking-check-in"
-              >Check-in Date</label
-            >
-            <input
-              type="date"
-              class="form-control"
-              id="booking-check-in"
-              required
-            />
+
+          <!-- Row 1: Date range + check-in time -->
+          <div class="bk-row">
+            <div class="form-group">
+              <label class="form-label">Check-in → Check-out</label>
+              <div class="booking-date-range-wrap">
+                <input type="text" class="form-control" id="booking-date-range" placeholder="Select dates" readonly />
+              </div>
+              <input type="hidden" id="booking-check-in" />
+              <input type="hidden" id="booking-check-out" />
+            </div>
+            <div class="form-group">
+              <label class="form-label">Expected Check-in Time</label>
+              <input type="time" class="form-control" id="booking-check-in-time" required />
+            </div>
           </div>
-          <div class="form-group">
-            <label class="form-label" for="booking-check-in-time"
-              >Expected Check-in Time</label
-            >
-            <input
-              type="time"
-              class="form-control"
-              id="booking-check-in-time"
-              required
-            />
+
+          <!-- Row 2: Guest name + mobile -->
+          <div class="bk-row">
+            <div class="form-group">
+              <label class="form-label">Guest Name</label>
+              <input type="text" class="form-control" id="booking-guest-name" placeholder="Full name" required />
+            </div>
+            <div class="form-group">
+              <label class="form-label">Mobile</label>
+              <input type="tel" class="form-control" id="booking-guest-mobile" placeholder="10-digit mobile"
+                     required pattern="[0-9]{10}" title="10-digit mobile number" />
+            </div>
           </div>
-          <div class="form-group">
-            <label class="form-label" for="booking-check-out"
-              >Check-out Date</label
-            >
-            <input
-              type="date"
-              class="form-control"
-              id="booking-check-out"
-              required
-            />
+
+          <!-- Row 3: Guests count + source -->
+          <div class="bk-row">
+            <div class="form-group">
+              <label class="form-label"># Guests</label>
+              <input type="number" class="form-control" id="booking-guest-count" min="1" value="1" required />
+            </div>
+            <div class="form-group">
+              <label class="form-label">Booking Source</label>
+              <select class="form-control" id="booking-source" required>
+                <option value="normal">Normal</option>
+                <option value="mmt">MMT (Prepaid)</option>
+                <option value="booking.com">Booking.com (Pay at Hotel)</option>
+              </select>
+            </div>
           </div>
+
+          <!-- Room selector -->
           <div class="form-group">
-            <label class="form-label" for="booking-room">Select Room</label>
+            <label class="form-label">Room</label>
             <select class="form-control" id="booking-room" required>
               <option value="">Select dates to check availability</option>
             </select>
           </div>
-          <div class="form-group">
-            <label class="form-label" for="booking-guest-name"
-              >Guest Name</label
-            >
-            <input
-              type="text"
-              class="form-control"
-              id="booking-guest-name"
-              placeholder="Full name"
-              required
-            />
-          </div>
-          <div class="form-group">
-            <label class="form-label" for="booking-guest-mobile"
-              >Mobile Number</label
-            >
-            <input
-              type="tel"
-              class="form-control"
-              id="booking-guest-mobile"
-              placeholder="10-digit mobile number"
-              required
-              pattern="[0-9]{10}"
-              title="Please enter a valid 10-digit mobile number"
-            />
-          </div>
-          <div class="form-group">
-            <label class="form-label" for="booking-guest-count"
-              >Number of Guests</label
-            >
-            <input
-              type="number"
-              class="form-control"
-              id="booking-guest-count"
-              placeholder="Number of guests"
-              min="1"
-              value="1"
-              required
-            />
-          </div>
 
-          <!-- Photo Upload and Camera Capture -->
-          <div class="form-group">
-            <label class="form-label">Guest Photo (Optional)</label>
-            <div style="display: flex; gap: 0.5rem; margin-bottom: 0.5rem">
-              <input
-                type="file"
-                id="booking-guest-photo"
-                accept="image/*"
-                class="form-control"
-                style="flex: 2"
-              />
-              <button
-                type="button"
-                id="booking-camera-btn"
-                class="action-btn"
-                style="
-                  flex: 1;
-                  background-color: var(--secondary);
-                  color: white;
-                "
-              >
-                <i class="fas fa-camera"></i> Camera
-              </button>
+          <!-- Normal / Booking.com payment fields -->
+          <div id="booking-normal-payment-fields">
+            <div class="bk-row">
+              <div class="form-group">
+                <label class="form-label">Total Amount (₹)</label>
+                <input type="number" class="form-control" id="booking-total-amount" placeholder="Total" required min="1" />
+              </div>
+              <div class="form-group">
+                <label class="form-label">Advance (₹)</label>
+                <input type="number" class="form-control" id="booking-partial-payment" placeholder="Optional" min="0" />
+              </div>
             </div>
-            <div
-              id="booking-photo-preview-container"
-              style="display: none; margin-top: 1rem"
-            >
-              <img
-                id="booking-photo-preview"
-                style="max-width: 100%; max-height: 200px; border-radius: 8px"
-                alt="Guest photo preview"
-              />
-              <button
-                type="button"
-                id="booking-retake-photo-btn"
-                class="action-btn btn-danger"
-                style="margin-top: 0.5rem; padding: 0.5rem"
-              >
-                Retake Photo
-              </button>
-            </div>
-            <div
-              id="booking-camera-container"
-              style="display: none; margin-top: 1rem"
-            >
-              <video
-                id="booking-camera-feed"
-                style="width: 100%; border-radius: 8px"
-                autoplay
-                playsinline
-              ></video>
-              <button
-                type="button"
-                id="booking-capture-photo-btn"
-                class="action-btn btn-primary"
-                style="margin-top: 0.5rem; padding: 0.5rem"
-              >
-                <i class="fas fa-camera"></i> Capture
-              </button>
-              <button
-                type="button"
-                id="booking-cancel-camera-btn"
-                class="action-btn btn-danger"
-                style="margin-top: 0.5rem; padding: 0.5rem"
-              >
-                Cancel
-              </button>
+            <div class="bk-row" style="align-items:center; margin-bottom:0.5rem;">
+              <div class="form-group" style="margin-bottom:0">
+                <label class="form-label">Remaining</label>
+                <div class="form-value" id="booking-remaining-amount" style="font-weight:700;font-size:0.95rem;">₹0</div>
+              </div>
+              <div class="form-group" style="margin-bottom:0">
+                <label class="form-label">Payment Method</label>
+                <div class="payment-options" style="margin-top:0.2rem;">
+                  <button type="button" class="payment-btn cash active" data-payment="cash">
+                    <i class="fas fa-money-bill"></i> Cash
+                  </button>
+                  <button type="button" class="payment-btn online" data-payment="online">
+                    <i class="fas fa-mobile-alt"></i> Online
+                  </button>
+                </div>
+                <input type="hidden" id="booking-payment-method" value="cash" />
+              </div>
             </div>
           </div>
 
-          <div class="form-group">
-            <label class="form-label" for="booking-total-amount"
-              >Total Amount (₹)</label
-            >
-            <input
-              type="number"
-              class="form-control"
-              id="booking-total-amount"
-              placeholder="Enter total amount"
-              required
-              min="1"
-            />
-          </div>
-          <div class="form-group">
-            <label class="form-label" for="booking-partial-payment"
-              >Advance Payment (₹)</label
-            >
-            <input
-              type="number"
-              class="form-control"
-              id="booking-partial-payment"
-              placeholder="Enter advance payment (optional)"
-              min="0"
-            />
-          </div>
-          <div class="form-group">
-            <label class="form-label">Remaining Amount</label>
-            <div class="form-value" id="booking-remaining-amount">₹0</div>
-          </div>
-          <div class="form-group">
-            <label class="form-label">Payment Method</label>
-            <div class="payment-options">
-              <button
-                type="button"
-                class="payment-btn cash active"
-                data-payment="cash"
-              >
-                <i class="fas fa-money-bill"></i> Cash
-              </button>
-              <button
-                type="button"
-                class="payment-btn online"
-                data-payment="online"
-              >
-                <i class="fas fa-mobile-alt"></i> Online
-              </button>
+          <!-- MMT OTA fields -->
+          <div id="booking-mmt-fields" style="display:none;">
+            <div class="form-group">
+              <label class="form-label">OTA Total Amount (₹)</label>
+              <input type="number" class="form-control" id="booking-ota-total" placeholder="Amount charged on MMT" min="1" />
             </div>
-            <input type="hidden" id="booking-payment-method" value="cash" />
+            <div class="bk-row">
+              <div class="form-group">
+                <label class="form-label">MMT Commission (₹)</label>
+                <input type="number" class="form-control" id="booking-ota-commission" placeholder="Commission" min="0" />
+              </div>
+              <div class="form-group">
+                <label class="form-label">GST on Commission (₹)</label>
+                <input type="number" class="form-control" id="booking-ota-commission-gst" placeholder="GST" min="0" />
+              </div>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Net Receivable from MMT</label>
+              <div class="form-value" id="booking-net-receivable" style="font-weight:bold; color: var(--primary);">₹0</div>
+            </div>
           </div>
+
+          <!-- Notes -->
           <div class="form-group">
-            <label class="form-label" for="booking-notes"
-              >Notes (Optional)</label
-            >
-            <textarea
-              class="form-control"
-              id="booking-notes"
-              placeholder="Add any special requests or notes"
-              rows="3"
-            ></textarea>
+            <label class="form-label">Notes (Optional)</label>
+            <textarea class="form-control" id="booking-notes" placeholder="Special requests or notes" rows="2"></textarea>
           </div>
-          <button type="submit" class="action-btn btn-primary">
-            Create Booking
+
+          <button type="submit" class="action-btn btn-primary" style="width:100%;margin-top:0.25rem;">
+            <i class="fas fa-check"></i> Create Booking
           </button>
         </form>
       </div>
@@ -2269,6 +2238,29 @@
             <div class="detail-label">Notes</div>
             <div class="detail-value" id="details-notes"></div>
           </div>
+          <!-- OTA / MMT rows — hidden for normal bookings -->
+          <div id="details-ota-section" style="display:none;">
+            <div class="detail-row">
+              <div class="detail-label">Booking Source</div>
+              <div class="detail-value" id="details-booking-source"></div>
+            </div>
+            <div class="detail-row">
+              <div class="detail-label">OTA Total</div>
+              <div class="detail-value" id="details-ota-total"></div>
+            </div>
+            <div class="detail-row">
+              <div class="detail-label">MMT Commission</div>
+              <div class="detail-value" id="details-ota-commission"></div>
+            </div>
+            <div class="detail-row">
+              <div class="detail-label">Net Receivable</div>
+              <div class="detail-value" id="details-net-receivable" style="font-weight:bold;"></div>
+            </div>
+            <div class="detail-row">
+              <div class="detail-label">Settlement Status</div>
+              <div class="detail-value" id="details-settlement-status"></div>
+            </div>
+          </div>
 
           <!-- Guest Photo -->
           <div
@@ -2310,6 +2302,9 @@
           <button class="action-btn btn-danger" id="cancel-booking-btn">
             <i class="fas fa-times-circle"></i> Cancel
           </button>
+          <button class="action-btn btn-success" id="mark-settlement-btn" style="display:none; background:#17a2b8; border-color:#17a2b8;">
+            <i class="fas fa-university"></i> Mark Settlement
+          </button>
           <button
             class="action-btn btn-sm"
             style="
@@ -2324,6 +2319,38 @@
             <i class="fab fa-whatsapp"></i> WhatsApp
           </button>
         </div>
+      </div>
+    </div>
+
+    <!-- OTA Settlement Modal (MMT) -->
+    <div class="modal-backdrop" id="ota-settlement-modal">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h2>Mark MMT Settlement Received</h2>
+          <button class="close-btn" aria-label="Close">&times;</button>
+        </div>
+        <form id="ota-settlement-form">
+          <input type="hidden" id="ota-booking-id" />
+          <div class="form-group">
+            <label class="form-label">Net Receivable</label>
+            <div class="form-value" id="ota-net-receivable-display" style="font-weight:bold; color:var(--primary);">₹0</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="ota-settlement-date">Settlement Date</label>
+            <input type="date" class="form-control" id="ota-settlement-date" required />
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="ota-settlement-amount">Settlement Amount (₹)</label>
+            <input type="number" class="form-control" id="ota-settlement-amount" placeholder="Amount received from MMT" min="1" required />
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="ota-settlement-notes">Notes (Optional)</label>
+            <input type="text" class="form-control" id="ota-settlement-notes" placeholder="Reference / UTR number" />
+          </div>
+          <button type="submit" class="action-btn btn-primary">
+            <i class="fas fa-check"></i> Confirm Settlement
+          </button>
+        </form>
       </div>
     </div>
 
@@ -2691,9 +2718,11 @@
       </div>
     </div>
 
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/flatpickr/4.6.13/flatpickr.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
     <script src="/static/register.js"></script>
+    <script src="/static/bills.js"></script>
     <script src="/static/script.js"></script>
     <script src="/static/shift.js"></script>
     <script src="/static/analytics.js"></script>
@@ -2711,6 +2740,43 @@
       src="{{ url_for('static', filename='google_sync.js') }}"
     ></script>
     <!-- <script src="/static/realtime-sync.js"></script> -->
+
+    <!-- Booking modal date range picker init -->
+    <script>
+    document.addEventListener('DOMContentLoaded', function () {
+      if (!window.flatpickr) return;
+      var _bookingPicker = flatpickr('#booking-date-range', {
+        mode: 'range',
+        dateFormat: 'D, d M',
+        minDate: 'today',
+        disableMobile: true,
+        onChange: function (selectedDates) {
+          var ci = document.getElementById('booking-check-in');
+          var co = document.getElementById('booking-check-out');
+          function toYMD(d) {
+            return d.getFullYear() + '-' +
+              String(d.getMonth() + 1).padStart(2, '0') + '-' +
+              String(d.getDate()).padStart(2, '0');
+          }
+          if (selectedDates.length >= 1 && ci) {
+            ci.value = toYMD(selectedDates[0]);
+            ci.dispatchEvent(new Event('change'));
+          }
+          if (selectedDates.length === 2 && co) {
+            co.value = toYMD(selectedDates[1]);
+            co.dispatchEvent(new Event('change'));
+          }
+        }
+      });
+      // Reset picker when modal opens
+      var newBookingBtn = document.getElementById('new-booking-btn');
+      if (newBookingBtn) {
+        newBookingBtn.addEventListener('click', function () {
+          setTimeout(function () { if (_bookingPicker) _bookingPicker.clear(); }, 50);
+        });
+      }
+    });
+    </script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 
     <!-- ── Document photo viewer overlay ─────────────────────────────── -->

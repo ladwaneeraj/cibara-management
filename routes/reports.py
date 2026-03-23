@@ -134,6 +134,19 @@ def add_expense():
             "time": datetime.now(IST).strftime("%H:%M"),
         }
 
+        # Store commission-specific fields when category is booking_commission
+        if category == "booking_commission":
+            commission_fields = {
+                "commission_platform": data_json.get("commission_platform", "booking.com"),
+                "commission_amount": float(data_json.get("commission_amount", 0)),
+                "commission_gst": float(data_json.get("commission_gst", 0)),
+                "commission_invoice_number": data_json.get("commission_invoice_number", ""),
+                "commission_invoice_date": data_json.get("commission_invoice_date", ""),
+                "commission_payment_status": data_json.get("commission_payment_status", "pending"),
+                "commission_payment_date": data_json.get("commission_payment_date", ""),
+            }
+            expense_entry.update(commission_fields)
+
         expenses_doc = logs_ref.document("expenses").get()
         if not expenses_doc.exists:
             batch.set(logs_ref.document("expenses"), {"entries": [expense_entry]})
@@ -150,14 +163,17 @@ def add_expense():
         batch.commit()
         invalidate_rooms_and_totals()
 
-        # Dual-write: payments collection
-        payment_service.write_payment({
+        # Dual-write: payments collection (commission fields included for traceability)
+        payment_entry = {
             "room": "", "name": description, "amount": amount,
             "method": payment_method, "type": "expense",
             "date": date, "time": datetime.now(IST).strftime("%H:%M"),
             "category": category, "expense_type": expense_type,
             "transaction_type": "expense",
-        })
+        }
+        if category == "booking_commission":
+            payment_entry.update(commission_fields)
+        payment_service.write_payment(payment_entry)
 
         logger.info(f"Expense added: {description}, Category: {category}, Amount: ₹{amount}")
         return jsonify(success=True, message=f"Expense of ₹{amount} added successfully")

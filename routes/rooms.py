@@ -327,6 +327,20 @@ def checkout():
                 settlement_id = str(uuid.uuid4())
                 settlement_amount = balance
 
+                # Look up the original check-in serial number so it can be
+                # shown in the transaction log when the settlement is collected.
+                checkin_dt_str = room_data.get("checkin_time", "")
+                _checkin_serial = None
+                try:
+                    if checkin_dt_str:
+                        import re as _re
+                        _d = datetime.strptime(checkin_dt_str.split()[0], "%Y-%m-%d")
+                        _checkin_serial = payment_service.find_serial_number(
+                            room, guest_info["name"], _d
+                        )
+                except Exception:
+                    pass
+
                 settlement = {
                     "id": settlement_id,
                     "guest_name": guest_info["name"],
@@ -337,7 +351,9 @@ def checkout():
                     "checkout_time": datetime.now(IST).strftime("%H:%M"),
                     "status": "pending",
                     "notes": data_json.get("settlement_notes", ""),
-                    "photo": guest_info.get("photo")
+                    "photo": guest_info.get("photo"),
+                    "serial_number": _checkin_serial,  # original check-in serial
+                    "checkin_time": checkin_dt_str,     # for future lookups
                 }
 
                 from config import settlements_ref
@@ -1202,6 +1218,7 @@ def get_history():
                                                    "booking_cancel_refund")]
         room_addons_logs = [p for p in payments if p.get("type") == "addon"]
         room_renewal_logs = [p for p in payments if p.get("type") == "renewal"]
+        room_shift_logs = [p for p in payments if p.get("type") == "room_shift"]
 
         return jsonify(
             success=True,
@@ -1209,7 +1226,8 @@ def get_history():
             online=room_online_logs,
             refunds=room_refund_logs,
             addons=room_addons_logs,
-            renewals=room_renewal_logs
+            renewals=room_renewal_logs,
+            shifts=room_shift_logs
         )
     except Exception as e:
         logger.error(f"Error getting history: {str(e)}")

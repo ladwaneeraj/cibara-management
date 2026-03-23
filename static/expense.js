@@ -41,6 +41,45 @@ function initializeExpense() {
     });
   });
 
+  // Show/hide commission fields based on category selection
+  const expenseCategorySelect = document.getElementById("expense-category");
+  if (expenseCategorySelect) {
+    expenseCategorySelect.addEventListener("change", function () {
+      const isCommission = this.value === "booking_commission";
+      const commissionFields = document.getElementById("commission-fields");
+      const amountInput = document.getElementById("expense-amount");
+      const descriptionContainer = document.getElementById("expense-description-container");
+
+      if (commissionFields) commissionFields.style.display = isCommission ? "block" : "none";
+
+      // For commission, amount is auto-calculated — make it readonly
+      if (amountInput) {
+        amountInput.readOnly = isCommission;
+        if (!isCommission) amountInput.value = "";
+      }
+
+      // Description is still shown for all categories
+      if (descriptionContainer) descriptionContainer.style.display = "block";
+
+      if (isCommission) _recalcCommissionTotal();
+    });
+  }
+
+  // Auto-calculate total when commission or GST changes
+  ["commission-amount", "commission-gst"].forEach((id) => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener("input", _recalcCommissionTotal);
+  });
+
+  // Show/hide payment date based on payment status
+  const commissionPaymentStatus = document.getElementById("commission-payment-status");
+  if (commissionPaymentStatus) {
+    commissionPaymentStatus.addEventListener("change", function () {
+      const dateGroup = document.getElementById("commission-payment-date-group");
+      if (dateGroup) dateGroup.style.display = this.value === "paid" ? "block" : "none";
+    });
+  }
+
   // Close expense modal
   const closeExpenseBtn = document.querySelector("#expense-modal .close-btn");
   if (closeExpenseBtn) {
@@ -51,6 +90,14 @@ function initializeExpense() {
       }
     });
   }
+}
+
+// Helper: recalculate total amount from commission + GST fields
+function _recalcCommissionTotal() {
+  const commission = parseFloat(document.getElementById("commission-amount")?.value) || 0;
+  const gst = parseFloat(document.getElementById("commission-gst")?.value) || 0;
+  const amountInput = document.getElementById("expense-amount");
+  if (amountInput) amountInput.value = commission + gst;
 }
 
 // Show expense modal with appropriate type
@@ -66,6 +113,14 @@ function showExpenseModal(type) {
   if (expenseForm) {
     expenseForm.reset();
   }
+
+  // Reset commission-specific UI state
+  const commissionFields = document.getElementById("commission-fields");
+  if (commissionFields) commissionFields.style.display = "none";
+  const amountInput = document.getElementById("expense-amount");
+  if (amountInput) amountInput.readOnly = false;
+  const commissionPaymentDateGroup = document.getElementById("commission-payment-date-group");
+  if (commissionPaymentDateGroup) commissionPaymentDateGroup.style.display = "none";
 
   // Set default date to today AFTER form reset
   const expenseDateInput = document.getElementById("expense-date");
@@ -181,6 +236,18 @@ async function submitExpense(e) {
       type,
     });
 
+    // Collect commission-specific fields if applicable
+    const commissionPayload = {};
+    if (category === "booking_commission") {
+      commissionPayload.commission_platform = document.getElementById("commission-platform")?.value || "booking.com";
+      commissionPayload.commission_amount = parseFloat(document.getElementById("commission-amount")?.value) || 0;
+      commissionPayload.commission_gst = parseFloat(document.getElementById("commission-gst")?.value) || 0;
+      commissionPayload.commission_invoice_number = document.getElementById("commission-invoice-number")?.value || "";
+      commissionPayload.commission_invoice_date = document.getElementById("commission-invoice-date")?.value || "";
+      commissionPayload.commission_payment_status = document.getElementById("commission-payment-status")?.value || "pending";
+      commissionPayload.commission_payment_date = document.getElementById("commission-payment-date")?.value || "";
+    }
+
     const response = await fetch("/add_expense", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -191,6 +258,7 @@ async function submitExpense(e) {
         amount,
         payment_method: paymentMethod,
         type,
+        ...commissionPayload,
       }),
     });
 
@@ -723,7 +791,7 @@ function renderReportDataWithExpenses(data) {
       // Format category for display
       const categoryDisplay =
         (log.category || "others").charAt(0).toUpperCase() +
-        (log.category || "others").slice(1);
+        (log.category || "others").slice(1).replace(/_/g, " ");
 
       // Different styling for transaction vs report expenses
       const expenseTypeClass =
@@ -735,26 +803,43 @@ function renderReportDataWithExpenses(data) {
       const expenseTypeLabel =
         log.expense_type === "transaction" ? "Daily Expense" : "Report Expense";
 
+      // Build commission detail line for booking_commission entries
+      let commissionDetailHtml = "";
+      if (log.category === "booking_commission") {
+        const platform = log.commission_platform || "booking.com";
+        const commAmt = log.commission_amount != null ? `₹${log.commission_amount}` : "-";
+        const gstAmt = log.commission_gst != null ? `₹${log.commission_gst}` : "-";
+        const invNo = log.commission_invoice_number || "-";
+        const invDate = log.commission_invoice_date || "-";
+        const payStatus = log.commission_payment_status || "pending";
+        const payDate = log.commission_payment_date ? ` on ${log.commission_payment_date}` : "";
+        const statusColor = payStatus === "paid" ? "var(--success, #28a745)" : "var(--warning, #ffc107)";
+        commissionDetailHtml = `
+          <div class="log-subtitle" style="margin-top:4px; font-size:0.78rem; color: var(--text-muted, #666);">
+            <strong>Platform:</strong> ${platform} &nbsp;|&nbsp;
+            <strong>Commission:</strong> ${commAmt} &nbsp;|&nbsp;
+            <strong>GST:</strong> ${gstAmt} &nbsp;|&nbsp;
+            <strong>Invoice:</strong> ${invNo} &nbsp;|&nbsp;
+            <strong>Invoice Date:</strong> ${invDate} &nbsp;|&nbsp;
+            <strong style="color:${statusColor}">
+              ${payStatus.charAt(0).toUpperCase() + payStatus.slice(1)}${payDate}
+            </strong>
+          </div>`;
+      }
+
       html += `
         <div class="log-item ${expenseTypeClass}">
           <div class="log-details">
             <div class="log-title">
-              ${log.description} 
+              ${log.description}
               <span class="expense-category-badge">${categoryDisplay}</span>
-              <span class="expense-type-badge ${log.payment_method}">${
-        log.payment_method
-      }</span>
-              <span class="expense-indicator ${
-                log.expense_type
-              }">${expenseTypeLabel}</span>
+              <span class="expense-type-badge ${log.payment_method}">${log.payment_method}</span>
+              <span class="expense-indicator ${log.expense_type}">${expenseTypeLabel}</span>
             </div>
-            <div class="log-subtitle">Expense on ${log.date} at ${
-        log.time || "N/A"
-      }</div>
+            <div class="log-subtitle">Expense on ${log.date} at ${log.time || "N/A"}</div>
+            ${commissionDetailHtml}
           </div>
-          <div class="log-amount" style="color: var(--danger);">₹${
-            log.amount
-          }</div>
+          <div class="log-amount" style="color: var(--danger);">₹${log.amount}</div>
         </div>
       `;
     });

@@ -86,6 +86,10 @@ def collect_settlement():
         if payment_amount > settlement["amount"]:
             return jsonify(success=False, message=f"Payment amount (₹{payment_amount}) exceeds settlement amount (₹{settlement['amount']})")
 
+        # Carry original check-in serial number forward so the transaction
+        # log can show it alongside the settlement payment.
+        original_serial = settlement.get("serial_number")
+
         payment_log = {
             "room": settlement["room"],
             "name": settlement["guest_name"],
@@ -94,6 +98,8 @@ def collect_settlement():
             "date": datetime.now(IST).strftime("%Y-%m-%d"),
             "settlement_id": settlement_id,
             "note": "Settlement payment collected",
+            "serial_number": original_serial,
+            "transaction_type": "settlement_payment",
         }
 
         batch.update(logs_ref.document(payment_mode), {
@@ -137,6 +143,7 @@ def collect_settlement():
             "time": datetime.now(IST).strftime("%H:%M"),
             "settlement_id": settlement_id,
             "transaction_type": "settlement_payment",
+            "serial_number": original_serial,  # original check-in serial
         })
 
         if payment_amount == settlement["amount"]:

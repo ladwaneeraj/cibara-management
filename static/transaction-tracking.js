@@ -384,7 +384,10 @@ class TransactionLogManager {
 
     let titleContent = "";
     if (logType === "expenses") {
-      titleContent = `<strong>${log.description || "Expense"}</strong>`;
+      // description is the user-entered text; for payments-collection entries it
+      // gets stored in the `name` field, so fall back to that.
+      const expenseLabel = log.description || log.name || "Expense";
+      titleContent = `<strong>${expenseLabel}</strong>`;
     } else {
       titleContent = `Room ${log.room} - ${log.name}`;
     }
@@ -507,7 +510,12 @@ class TransactionLogManager {
       log.transaction_type === "booking_conversion" ||
       log.is_booking_conversion;
 
-    if (!isEligibleCheckin) {
+    // Settlement payments carry the original check-in serial number forward
+    const isSettlement =
+      log.transaction_type === "settlement_payment" ||
+      log.type === "settlement_payment";
+
+    if (!isEligibleCheckin && !isSettlement) {
       return null;
     }
 
@@ -540,177 +548,117 @@ class TransactionLogManager {
     paymentLogsContainer.innerHTML = `<div class="loading-indicator"><span class="loader"></span></div>`;
 
     const roomInfo = rooms[roomNumber];
-    if (!roomInfo || !roomInfo.guest || !roomInfo.checkin_time) {
+    if (!roomInfo || !roomInfo.guest) {
       paymentLogsContainer.innerHTML =
         '<div class="log-item">No payments recorded</div>';
       return;
     }
 
-    setTimeout(() => {
-      const currentCheckinTime = new Date(roomInfo.checkin_time);
-
-      const cashPayments = logs.cash.filter((log) => {
-        if (log.room !== roomNumber || log.name !== roomInfo.guest.name) {
-          return false;
-        }
-
-        if (log.date && log.time) {
-          const logTime = new Date(`${log.date} ${log.time}`);
-          return logTime >= currentCheckinTime;
-        }
-
-        return true;
-      });
-
-      const onlinePayments = logs.online.filter((log) => {
-        if (log.room !== roomNumber || log.name !== roomInfo.guest.name) {
-          return false;
-        }
-
-        if (log.date && log.time) {
-          const logTime = new Date(`${log.date} ${log.time}`);
-          return logTime >= currentCheckinTime;
-        }
-
-        return true;
-      });
-
-      const refundPayments = (logs.refunds || []).filter((log) => {
-        if (log.room !== roomNumber || log.name !== roomInfo.guest.name) {
-          return false;
-        }
-
-        if (log.date && log.time) {
-          const logTime = new Date(`${log.date} ${log.time}`);
-          return logTime >= currentCheckinTime;
-        }
-
-        return true;
-      });
-
-      const addOnPayments = (logs.add_ons || []).filter((log) => {
-        if (log.room !== roomNumber) {
-          return false;
-        }
-
-        if (log.date && log.time) {
-          const logTime = new Date(`${log.date} ${log.time}`);
-          return logTime >= currentCheckinTime;
-        }
-
-        return true;
-      });
-
-      const discountLogs = (logs.discounts || []).filter((log) => {
-        if (log.room !== roomNumber || log.name !== roomInfo.guest.name) {
-          return false;
-        }
-
-        if (log.date && log.time) {
-          const logTime = new Date(`${log.date} ${log.time}`);
-          return logTime >= currentCheckinTime;
-        }
-
-        return true;
-      });
-
-      const processedTransactions = new Map();
-
-      const allPayments = [
-        ...cashPayments,
-        ...onlinePayments,
-        ...refundPayments,
-        ...addOnPayments,
-        ...discountLogs,
-      ].sort((a, b) => {
-        const dateA = a.date
-          ? new Date(`${a.date} ${a.time || "00:00"}`)
-          : new Date(0);
-        const dateB = b.date
-          ? new Date(`${b.date} ${b.time || "00:00"}`)
-          : new Date(0);
-        return dateB - dateA;
-      });
-
-      if (allPayments.length === 0) {
-        paymentLogsContainer.innerHTML =
-          '<div class="log-item">No payments recorded</div>';
-        return;
-      }
-
-      let logsHtml = "";
-      allPayments.forEach((payment) => {
-        let paymentType,
-          colorStyle = "",
-          amountText = "",
-          paymentMethod = "";
-
-        const transactionKey = `${payment.date}-${payment.time}-${
-          payment.amount || payment.price
-        }-${payment.item || ""}-${payment.reason || ""}`;
-
-        if (processedTransactions.has(transactionKey)) {
+    // Fetch full payment history from the server — /get_history queries
+    // Firestore directly and is NOT limited to the 3-day window that
+    // /get_data uses for the main logs cache.
+    fetch("/get_history", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ room: roomNumber, name: roomInfo.guest.name }),
+    })
+      .then((res) => res.json())
+      .then((data) => {
+        if (!data.success) {
+          paymentLogsContainer.innerHTML =
+            '<div class="log-item">Could not load payment history</div>';
           return;
         }
 
-        processedTransactions.set(transactionKey, true);
+        const _refundTypes = new Set([
+          "refund", "checkout_refund", "manual_refund", "booking_cancel_refund"
+        ]);
 
-        if (cashPayments.includes(payment)) {
-          if (payment.item) {
-            paymentType = `Add-on: ${payment.item}`;
-            colorStyle = "style='color: var(--warning)'";
-            paymentMethod = `<span class="service-payment-badge cash">cash</span>`;
-            amountText = `₹${payment.amount}`;
-          } else {
-            paymentType = "Cash Payment";
-            amountText = `₹${payment.amount}`;
-          }
-        } else if (onlinePayments.includes(payment)) {
-          if (payment.item) {
-            paymentType = `Add-on: ${payment.item}`;
-            colorStyle = "style='color: var(--warning)'";
-            paymentMethod = `<span class="service-payment-badge online">online</span>`;
-            amountText = `₹${payment.amount}`;
-          } else {
-            paymentType = "Online Payment";
-            amountText = `₹${payment.amount}`;
-          }
-        } else if (refundPayments.includes(payment)) {
-          paymentType = "Refund";
-          colorStyle = "style='color: var(--danger)'";
-          amountText = `₹${payment.amount}`;
-        } else if (addOnPayments.includes(payment)) {
-          paymentType = `Add-on: ${payment.item}`;
-          colorStyle = "style='color: var(--warning)'";
-          amountText = `₹${payment.price}`;
+        // Combine all payment types from the response.
+        // Renewals are excluded — this tab shows cash, online, service and shift payments only.
+        const allPayments = [
+          ...(data.cash || []).map((p) => ({ ...p, _source: "cash" })),
+          ...(data.online || []).map((p) => ({ ...p, _source: "online" })),
+          ...(data.refunds || []).map((p) => ({ ...p, _source: "refund" })),
+          ...(data.addons || []).map((p) => ({ ...p, _source: "addon" })),
+          ...(data.shifts || []).map((p) => ({ ...p, _source: "shift" })),
+        ].sort((a, b) => {
+          const da = a.date ? new Date(`${a.date} ${a.time || "00:00"}`) : new Date(0);
+          const db = b.date ? new Date(`${b.date} ${b.time || "00:00"}`) : new Date(0);
+          return db - da;
+        });
 
-          if (payment.payment_method) {
-            const badgeClass = payment.payment_method;
-            paymentMethod = `<span class="service-payment-badge ${badgeClass}">${payment.payment_method}</span>`;
-          } else {
-            paymentMethod = `<span class="service-payment-badge balance">balance</span>`;
-          }
-        } else if (discountLogs.includes(payment)) {
-          paymentType = `Discount: ${payment.reason || ""}`;
-          colorStyle = "style='color: var(--success)'";
-          amountText = `₹${payment.amount}`;
+        if (allPayments.length === 0) {
+          paymentLogsContainer.innerHTML =
+            '<div class="log-item">No payments recorded</div>';
+          return;
         }
 
-        logsHtml += `
-          <div class="log-item">
-            <div class="log-details">
-              <div class="log-title">${paymentType}${paymentMethod}</div>
-              <div class="log-subtitle">${payment.time || "N/A"} on ${
-          payment.date || "N/A"
-        }</div>
-            </div>
-            <div class="log-amount" ${colorStyle}>${amountText}</div>
-          </div>
-        `;
-      });
+        // Deduplicate by a stable key
+        const seen = new Set();
+        let logsHtml = "";
 
-      paymentLogsContainer.innerHTML = logsHtml;
-    }, 300);
+        allPayments.forEach((payment) => {
+          const key = `${payment.date}-${payment.time}-${payment.amount || 0}-${payment.type || ""}-${payment.item || ""}`;
+          if (seen.has(key)) return;
+          seen.add(key);
+
+          let paymentType = "Payment";
+          let colorStyle = "";
+          let amountText = `₹${payment.amount || 0}`;
+          let badgeHtml = "";
+
+          const src = payment._source;
+          const ptype = payment.type || "";
+
+          if (src === "refund" || _refundTypes.has(ptype)) {
+            paymentType = "Refund";
+            colorStyle = "style='color: var(--danger)'";
+
+          } else if (src === "addon" || ptype === "addon") {
+            const itemName = payment.item || payment.note || "Add-on";
+            paymentType = `Add-on: ${itemName}`;
+            colorStyle = "style='color: var(--warning)'";
+            const method = payment.method || payment.payment_method || "balance";
+            badgeHtml = `<span class="service-payment-badge ${method}">${method}</span>`;
+            amountText = `₹${payment.amount || payment.price || 0}`;
+
+          } else if (src === "shift" || ptype === "room_shift") {
+            const oldRoom = payment.old_room || "?";
+            paymentType = `Room Shifted from Room ${oldRoom}`;
+            colorStyle = "style='color: var(--info, #17a2b8)'";
+            amountText = "";   // no monetary amount for a shift
+
+          } else if (src === "cash" || payment.method === "cash") {
+            if (payment.payment_method === "pay_later" || payment.amount === 0) {
+              paymentType = "Pay Later";
+              colorStyle = "style='color: var(--warning)'";
+            } else {
+              paymentType = "Cash Payment";
+            }
+
+          } else if (src === "online" || payment.method === "online") {
+            paymentType = "Online Payment";
+          }
+
+          logsHtml += `
+            <div class="log-item">
+              <div class="log-details">
+                <div class="log-title">${paymentType}${badgeHtml}</div>
+                <div class="log-subtitle">${payment.time || "N/A"} on ${payment.date || "N/A"}</div>
+              </div>
+              <div class="log-amount" ${colorStyle}>${amountText}</div>
+            </div>
+          `;
+        });
+
+        paymentLogsContainer.innerHTML = logsHtml;
+      })
+      .catch((err) => {
+        console.error("Error loading payment history:", err);
+        paymentLogsContainer.innerHTML =
+          '<div class="log-item">Error loading payment history</div>';
+      });
   }
 }
 

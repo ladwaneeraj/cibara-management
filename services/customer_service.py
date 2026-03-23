@@ -288,22 +288,26 @@ def upload_document(mobile: str, image_bytes: bytes, filename: str) -> str:
         return ""
 
     try:
+        # ── Check cap BEFORE uploading to avoid orphaned Storage files ──────
+        doc_ref = _customers_ref.document(clean)
+        doc     = doc_ref.get()
+        existing_urls = []
+
+        if doc.exists:
+            existing_urls = doc.to_dict().get("id_doc_urls", [])
+            if len(existing_urls) >= 3:
+                logger.warning(f"CustomerService: {clean} already has max (3) docs, aborting upload")
+                return ""   # caller gets "" → route returns success=False
+
+        # ── Now safe to upload ───────────────────────────────────────────────
         url = _store_image(clean, filename, image_bytes)
         if not url:
             return ""
 
-        doc_ref = _customers_ref.document(clean)
-        doc = doc_ref.get()
-
         if doc.exists:
-            existing = doc.to_dict()
-            urls = existing.get("id_doc_urls", [])
-            if len(urls) >= 3:
-                logger.warning(f"CustomerService: {clean} already has max (3) docs, skipping upload")
-                return url  # still return the url so the caller can show a preview
-            if url not in urls:
-                urls.append(url)
-                doc_ref.update({"id_doc_urls": urls})
+            if url not in existing_urls:
+                existing_urls.append(url)
+                doc_ref.update({"id_doc_urls": existing_urls})
         else:
             # Minimal stub record – will be enriched on first check-in
             doc_ref.set({
@@ -329,17 +333,46 @@ def _store_image(mobile_clean: str, filename: str, image_bytes: bytes) -> str:
     """
     Internal helper: upload bytes to Firebase Storage or local disk.
     Returns a URL string, or empty string on failure.
+
+    Uses Firebase token-based download URLs (same format as Firebase JS SDK)
+    instead of make_public() / ACLs — works even when the GCS bucket has
+    uniform bucket-level access enabled.
     """
     # ── Try Firebase Storage ───────────────────────────────────────────────
     try:
+        import urllib.parse
+        import uuid as _uuid
         from firebase_admin import storage as _fb_storage
+
         bucket = _fb_storage.bucket()
-        # bucket.name being the placeholder means Storage isn't configured
+        # bucket.name containing the placeholder means Storage isn't configured
         if bucket and "your-project-id" not in (bucket.name or ""):
-            blob = bucket.blob(f"customer_docs/{mobile_clean}/{filename}")
-            blob.upload_from_string(image_bytes, content_type="image/jpeg")
-            blob.make_public()
-            return blob.public_url
+            blob_path = f"customer_docs/{mobile_clean}/{filename}"
+            blob = bucket.blob(blob_path)
+
+            # Upload the file first
+            blob.upload_from_string(
+                image_bytes,
+                content_type="image/jpeg",
+            )
+
+            # Generate a download token and commit it to GCS metadata.
+            # Firebase Storage checks custom metadata key "firebaseStorageDownloadTokens"
+            # (flat string value) when validating ?token= download URLs.
+            # blob.patch() is required to persist — assigning blob.metadata alone
+            # does NOT write to the server.
+            download_token = str(_uuid.uuid4())
+            blob.metadata  = {"firebaseStorageDownloadTokens": download_token}
+            blob.patch()   # ← writes metadata to Firebase Storage
+
+            # Construct the Firebase Storage download URL
+            encoded_path = urllib.parse.quote(blob_path, safe="")
+            url = (
+                f"https://firebasestorage.googleapis.com/v0/b/"
+                f"{bucket.name}/o/{encoded_path}"
+                f"?alt=media&token={download_token}"
+            )
+            return url
     except Exception as storage_err:
         logger.warning(f"Firebase Storage unavailable, using local fallback: {storage_err}")
 

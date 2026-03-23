@@ -140,3 +140,62 @@ def upload_customer_document():
         return jsonify(success=False, message=f"Error: {str(e)}")
 
 
+@customers_bp.route("/delete_customer_document", methods=["POST"])
+def delete_customer_document():
+    """
+    Remove a specific document URL from a customer's id_doc_urls list.
+
+    JSON body:
+        mobile  – 10-digit mobile number
+        url     – the exact URL to remove
+
+    Returns JSON: { success, message, remaining }
+    """
+    try:
+        data   = request.get_json(silent=True) or {}
+        mobile = "".join(c for c in str(data.get("mobile", "")) if c.isdigit())
+        url    = str(data.get("url", "")).strip()
+
+        if len(mobile) != 10:
+            return jsonify(success=False, message="Valid 10-digit mobile required"), 400
+        if not url:
+            return jsonify(success=False, message="Document URL required"), 400
+
+        customer = customer_service.get_customer(mobile)
+        if not customer:
+            return jsonify(success=False, message="Customer not found"), 404
+
+        urls = list(customer.get("id_doc_urls", []))
+        if url not in urls:
+            return jsonify(success=False, message="URL not found in customer record"), 404
+
+        urls.remove(url)
+
+        from config import db as _db
+        _db.collection("customers").document(mobile).update({"id_doc_urls": urls})
+
+        # Delete from Firebase Storage in a background thread so the HTTP response
+        # is returned immediately after the Firestore update without waiting for
+        # the Storage round-trip (~200-400 ms saved per delete).
+        if url.startswith("https://firebasestorage.googleapis.com"):
+            import threading, urllib.parse
+            from firebase_admin import storage as _fb_storage
+
+            def _delete_blob(blob_url):
+                try:
+                    path_encoded = blob_url.split("/o/")[1].split("?")[0]
+                    blob_path    = urllib.parse.unquote(path_encoded)
+                    _fb_storage.bucket().blob(blob_path).delete()
+                    logger.info(f"Storage: deleted {blob_path}")
+                except Exception as err:
+                    logger.warning(f"Storage delete skipped: {err}")
+
+            threading.Thread(target=_delete_blob, args=(url,), daemon=True).start()
+
+        return jsonify(success=True, message="Document removed", remaining=len(urls))
+
+    except Exception as e:
+        logger.error(f"delete_customer_document error: {e}")
+        return jsonify(success=False, message=f"Error: {e}"), 500
+
+

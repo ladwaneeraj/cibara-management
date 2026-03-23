@@ -93,21 +93,24 @@
       }
       /* Thumbnail in viewer */
       .doc-thumb {
-        width: 56px;
-        height: 56px;
-        border-radius: 6px;
+        width: 54px;
+        height: 54px;
+        border-radius: 8px;
         object-fit: cover;
         cursor: pointer;
-        border: 2px solid transparent;
+        border: 2px solid rgba(255,255,255,0.1);
         flex-shrink: 0;
-        transition:
-          border-color 0.15s,
-          opacity 0.15s;
-        opacity: 0.65;
+        transition: border-color 0.15s, opacity 0.15s, transform 0.15s;
+        opacity: 0.55;
       }
+      .doc-thumb:hover { opacity: 0.85; transform: scale(1.05); }
       .doc-thumb.active {
-        border-color: #64b5f6;
+        border-color: #42a5f5;
         opacity: 1;
+      }
+      @keyframes pulse-dot {
+        0%, 100% { box-shadow: 0 0 0 3px rgba(245,158,11,0.2); }
+        50%       { box-shadow: 0 0 0 5px rgba(245,158,11,0.05); }
       }
 
       /* ── Name suggestion dropdown ── */
@@ -747,44 +750,26 @@
             </select>
           </h2>
           <div style="display: flex; align-items: center; gap: 0.4rem">
-            <!-- View existing photos — hidden until docs are on file -->
+            <!-- Camera + Scan buttons -->
             <button
-              id="doc-view-btn"
+              id="doc-camera-btn"
+              type="button"
+              class="doc-cam-btn doc-cam-enabled"
+              title="Take photo of ID document"
+              aria-label="Capture ID document"
+            >
+              <i class="fas fa-camera"></i>
+            </button>
+            <button
+              id="doc-scan-btn"
               type="button"
               class="doc-cam-btn"
-              title="View ID documents"
-              aria-label="View ID documents"
-              style="display: none"
+              title="Scan via Epson WiFi printer"
+              aria-label="Scan ID document"
+              style="background: #e8f0fe; color: #1565c0; border-color: #bbdefb"
             >
-              <i class="fas fa-images"></i>
+              <i class="fas fa-print"></i>
             </button>
-            <!-- Camera button + ID status pill stacked together -->
-            <div style="display: inline-flex; flex-direction: column; align-items: center; gap: 2px">
-              <button
-                id="doc-camera-btn"
-                type="button"
-                class="doc-cam-btn doc-cam-enabled"
-                title="Capture ID document"
-                aria-label="Capture ID document"
-              >
-                <i class="fas fa-camera"></i>
-              </button>
-              <!-- ID status pill — visible text label below camera icon -->
-              <span
-                id="doc-id-indicator"
-                style="
-                  font-size: 0.55rem;
-                  font-weight: 700;
-                  letter-spacing: 0.02em;
-                  padding: 1px 5px;
-                  border-radius: 6px;
-                  background: #e0e0e0;
-                  color: #666;
-                  white-space: nowrap;
-                  line-height: 1.4;
-                "
-              >ID?</span>
-            </div>
             <button class="close-btn" aria-label="Close">&times;</button>
           </div>
         </div>
@@ -859,6 +844,27 @@
                   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
                 "
               ></div>
+            </div>
+
+            <!-- Stored ID doc preview — shown when returning guest with docs on file -->
+            <div id="checkin-stored-doc-preview" style="display: none; margin-top: 0.5rem">
+              <div style="
+                background: #e8f5e9;
+                border: 1px solid #a5d6a7;
+                border-radius: 8px;
+                padding: 0.5rem 0.65rem;
+              ">
+                <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.4rem">
+                  <span style="font-size: 0.78rem; font-weight: 600; color: #2e7d32">
+                    <i class="fas fa-check-circle" style="margin-right: 0.25rem"></i>ID on file
+                  </span>
+                  <button type="button" id="checkin-view-stored-docs-btn"
+                    style="font-size: 0.72rem; color: #1565c0; background: none; border: none; cursor: pointer; padding: 0; text-decoration: underline">
+                    View all
+                  </button>
+                </div>
+                <div id="checkin-stored-doc-thumbs" style="display: flex; gap: 0.4rem; flex-wrap: wrap"></div>
+              </div>
             </div>
 
             <!-- Document thumbnail strip — multi-photo (up to 3), shown after capture -->
@@ -1035,7 +1041,7 @@
             <i class="fas fa-id-card" style="color: #1565c0; margin-right: 0.3rem"></i>
             Scan ID Document
           </span>
-          <!-- Doc type toggle: ID Card (horizontal) vs Full Page (portrait) -->
+          <!-- Doc type toggle + close -->
           <div style="display: flex; gap: 0.3rem; align-items: center">
             <button
               type="button"
@@ -1254,18 +1260,77 @@
         <div class="modal-header">
           <h2>Checkout - Room <span id="checkout-room-number"></span></h2>
           <div style="display: flex; align-items: center; gap: 0.4rem">
-            <!-- ID doc viewer for checkout — populated when modal opens -->
+            <!-- View stored ID docs -->
             <button
               id="checkout-doc-view-btn"
               type="button"
               class="doc-cam-btn"
-              title="View ID documents"
+              title="View ID documents on file"
               aria-label="View ID documents"
               style="display: none"
             >
               <i class="fas fa-id-card"></i>
             </button>
+            <!-- Upload / add a new ID doc -->
+            <button
+              id="checkout-upload-id-btn"
+              type="button"
+              class="doc-cam-btn"
+              title="Upload ID document"
+              aria-label="Upload ID document"
+            >
+              <i class="fas fa-camera"></i>
+            </button>
+            <!-- Hidden file input for checkout doc upload -->
+            <input type="file" id="checkout-doc-file-input" accept="image/*" style="display: none" />
             <button class="close-btn" aria-label="Close">&times;</button>
+          </div>
+        </div>
+
+        <!-- Pending-upload strip: shown after camera capture, before committing to server -->
+        <div id="checkout-pending-docs"
+          style="display: none; background: #f0f4ff;
+                 border-top: 3px solid #3f51b5;
+                 border-bottom: 1px solid #dde3f5;">
+          <!-- Top row: label + actions -->
+          <div style="padding: 0.55rem 1rem 0.35rem;
+                      display: flex; align-items: center; justify-content: space-between; gap: 0.5rem;">
+            <div style="display: flex; align-items: center; gap: 0.5rem; min-width: 0;">
+              <div style="width: 7px; height: 7px; border-radius: 50%; background: #f59e0b;
+                          box-shadow: 0 0 0 3px rgba(245,158,11,0.2); flex-shrink: 0; animation: pulse-dot 1.8s infinite;"></div>
+              <span style="font-size: 0.75rem; font-weight: 700; color: #3730a3; letter-spacing: 0.03em; white-space: nowrap;">
+                Ready to upload
+              </span>
+              <span id="checkout-pending-count"
+                style="background: #e0e7ff; color: #4338ca; border-radius: 20px;
+                       padding: 0.1rem 0.5rem; font-size: 0.68rem; font-weight: 700; flex-shrink: 0;"></span>
+            </div>
+            <div style="display: flex; align-items: center; gap: 0.4rem; flex-shrink: 0;">
+              <button id="checkout-pending-upload-btn" type="button"
+                style="padding: 0.32rem 0.9rem; border-radius: 20px;
+                       background: #4338ca; color: #fff; border: none;
+                       font-size: 0.76rem; font-weight: 600; cursor: pointer;
+                       display: flex; align-items: center; gap: 0.35rem;
+                       box-shadow: 0 2px 8px rgba(67,56,202,0.35); transition: background 0.15s;"
+                onmouseover="this.style.background='#3730a3'"
+                onmouseout="this.style.background='#4338ca'">
+                <i class="fas fa-cloud-upload-alt"></i> Save to guest
+              </button>
+              <button id="checkout-pending-discard-btn" type="button"
+                style="padding: 0.3rem 0.6rem; border-radius: 6px; background: transparent;
+                       color: #9ca3af; border: 1px solid #d1d5db; font-size: 0.72rem;
+                       cursor: pointer; white-space: nowrap; transition: all 0.15s;"
+                onmouseover="this.style.color='#ef4444';this.style.borderColor='#fca5a5'"
+                onmouseout="this.style.color='#9ca3af';this.style.borderColor='#d1d5db'"
+                title="Discard all">
+                <i class="fas fa-times"></i> Discard
+              </button>
+            </div>
+          </div>
+          <!-- Thumbnail row -->
+          <div id="checkout-pending-thumbs"
+            style="display: flex; gap: 0.55rem; padding: 0.2rem 1rem 0.65rem;
+                   overflow-x: auto; scrollbar-width: none; align-items: flex-end;">
           </div>
         </div>
 
@@ -2781,182 +2846,167 @@
 
     <!-- ── Document photo viewer overlay ─────────────────────────────── -->
     <div id="doc-photo-viewer">
-      <!-- Card -->
-      <div
-        style="
-          width: 100%;
-          max-width: 400px;
-          background: #1a1a2e;
-          border-radius: 16px;
-          overflow: hidden;
-          box-shadow: 0 24px 60px rgba(0, 0, 0, 0.6);
-        "
-      >
+      <div style="
+        width: 100%; max-width: 420px;
+        background: linear-gradient(160deg, #1c2133 0%, #141824 100%);
+        border-radius: 20px; overflow: hidden;
+        box-shadow: 0 32px 80px rgba(0,0,0,0.75), 0 0 0 1px rgba(255,255,255,0.06);
+      ">
+
         <!-- Header -->
-        <div
-          style="
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 0.85rem 1.1rem;
-            background: rgba(255, 255, 255, 0.07);
-            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-          "
-        >
-          <div style="display: flex; align-items: center; gap: 0.6rem">
-            <div
-              style="
-                width: 32px;
-                height: 32px;
-                background: #1976d2;
-                border-radius: 8px;
-                display: flex;
-                align-items: center;
-                justify-content: center;
-              "
-            >
-              <i
-                class="fas fa-id-card"
-                style="color: white; font-size: 0.9rem"
-              ></i>
+        <div style="
+          display: flex; align-items: center; justify-content: space-between;
+          padding: 0.9rem 1.1rem;
+          background: rgba(255,255,255,0.04);
+          border-bottom: 1px solid rgba(255,255,255,0.07);
+        ">
+          <div style="display: flex; align-items: center; gap: 0.65rem;">
+            <div style="
+              width: 34px; height: 34px; border-radius: 10px;
+              background: linear-gradient(135deg, #1565c0, #1976d2);
+              display: flex; align-items: center; justify-content: center;
+              box-shadow: 0 4px 12px rgba(25,118,210,0.4);
+            ">
+              <i class="fas fa-id-card" style="color: #fff; font-size: 0.85rem;"></i>
             </div>
             <div>
-              <div style="color: white; font-weight: 600; font-size: 0.95rem">
-                ID Documents
-              </div>
-              <div
-                id="doc-viewer-count"
-                style="color: rgba(255, 255, 255, 0.5); font-size: 0.72rem"
-              ></div>
+              <div style="color: #f0f4ff; font-weight: 700; font-size: 0.92rem; letter-spacing: 0.01em;">ID Documents</div>
+              <div id="doc-viewer-count" style="color: rgba(255,255,255,0.42); font-size: 0.7rem; margin-top: 1px;"></div>
             </div>
           </div>
-          <button
-            id="doc-viewer-close"
+          <button id="doc-viewer-close"
             style="
-              background: rgba(255, 255, 255, 0.1);
-              border: none;
-              color: white;
-              width: 30px;
-              height: 30px;
-              border-radius: 50%;
-              cursor: pointer;
-              font-size: 1rem;
-              display: flex;
-              align-items: center;
-              justify-content: center;
-              transition: background 0.15s;
-            "
-            onmouseover="this.style.background = 'rgba(255,255,255,0.2)'"
-            onmouseout="this.style.background = 'rgba(255,255,255,0.1)'"
-            aria-label="Close"
-          >
-            &times;
-          </button>
+              background: rgba(255,255,255,0.07); border: 1px solid rgba(255,255,255,0.1);
+              color: rgba(255,255,255,0.7); width: 32px; height: 32px; border-radius: 50%;
+              cursor: pointer; font-size: 1rem; display: flex; align-items: center;
+              justify-content: center; transition: all 0.15s;"
+            onmouseover="this.style.background='rgba(255,255,255,0.15)';this.style.color='#fff'"
+            onmouseout="this.style.background='rgba(255,255,255,0.07)';this.style.color='rgba(255,255,255,0.7)'"
+            aria-label="Close">&times;</button>
         </div>
 
-        <!-- Photo strip (single photo shown at a time, navigate with arrows) -->
-        <div
-          style="
-            position: relative;
-            background: #000;
-            min-height: 260px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-          "
-        >
-          <img
-            id="doc-viewer-main-img"
-            style="
-              width: 100%;
-              max-height: 320px;
-              object-fit: contain;
-              display: block;
-            "
-            alt="ID Document"
-          />
+        <!-- Image area -->
+        <div style="position: relative; background: #0a0c12; min-height: 280px; display: flex; align-items: center; justify-content: center;">
+          <img id="doc-viewer-main-img"
+            style="width: 100%; max-height: 340px; object-fit: contain; display: block;"
+            alt="ID Document" />
 
-          <!-- Prev / Next -->
-          <button
-            id="doc-viewer-prev"
-            style="
-              position: absolute;
-              left: 0.5rem;
-              top: 50%;
-              transform: translateY(-50%);
-              background: rgba(0, 0, 0, 0.55);
-              border: none;
-              color: white;
-              width: 34px;
-              height: 34px;
-              border-radius: 50%;
-              cursor: pointer;
-              font-size: 1rem;
-              display: none;
-              align-items: center;
-              justify-content: center;
-            "
-          >
+          <!-- Gradient fade edges -->
+          <div style="position: absolute; inset: 0; pointer-events: none;
+            background: linear-gradient(to right, rgba(10,12,18,0.35) 0%, transparent 18%, transparent 82%, rgba(10,12,18,0.35) 100%);"></div>
+
+          <!-- Prev -->
+          <button id="doc-viewer-prev"
+            style="position: absolute; left: 0.65rem; top: 50%; transform: translateY(-50%);
+              background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.15);
+              backdrop-filter: blur(4px); color: white; width: 36px; height: 36px;
+              border-radius: 50%; cursor: pointer; font-size: 0.85rem; display: none;
+              align-items: center; justify-content: center; transition: all 0.15s;"
+            onmouseover="this.style.background='rgba(255,255,255,0.22)'"
+            onmouseout="this.style.background='rgba(255,255,255,0.1)'">
             <i class="fas fa-chevron-left"></i>
           </button>
-          <button
-            id="doc-viewer-next"
-            style="
-              position: absolute;
-              right: 0.5rem;
-              top: 50%;
-              transform: translateY(-50%);
-              background: rgba(0, 0, 0, 0.55);
-              border: none;
-              color: white;
-              width: 34px;
-              height: 34px;
-              border-radius: 50%;
-              cursor: pointer;
-              font-size: 1rem;
-              display: none;
-              align-items: center;
-              justify-content: center;
-            "
-          >
+          <!-- Next -->
+          <button id="doc-viewer-next"
+            style="position: absolute; right: 0.65rem; top: 50%; transform: translateY(-50%);
+              background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.15);
+              backdrop-filter: blur(4px); color: white; width: 36px; height: 36px;
+              border-radius: 50%; cursor: pointer; font-size: 0.85rem; display: none;
+              align-items: center; justify-content: center; transition: all 0.15s;"
+            onmouseover="this.style.background='rgba(255,255,255,0.22)'"
+            onmouseout="this.style.background='rgba(255,255,255,0.1)'">
             <i class="fas fa-chevron-right"></i>
           </button>
         </div>
 
         <!-- Thumbnail strip -->
-        <div
-          id="doc-viewer-thumbs"
-          style="
-            display: flex;
-            gap: 0.5rem;
-            padding: 0.75rem 1rem;
-            background: rgba(0, 0, 0, 0.3);
-            overflow-x: auto;
-          "
-        >
-          <!-- Thumbnails injected by JS -->
+        <div id="doc-viewer-thumbs"
+          style="display: flex; gap: 0.55rem; padding: 0.7rem 1rem;
+            background: rgba(0,0,0,0.25); overflow-x: auto; scrollbar-width: none;">
         </div>
 
-        <!-- Footer: open full-size link -->
-        <div
-          style="
-            padding: 0.6rem 1rem;
-            border-top: 1px solid rgba(255, 255, 255, 0.08);
-            display: flex;
-            justify-content: flex-end;
-          "
-        >
-          <a
-            id="doc-viewer-open-link"
-            href="#"
-            target="_blank"
-            rel="noopener noreferrer"
-            style="color: #64b5f6; font-size: 0.82rem; text-decoration: none"
-          >
-            <i class="fas fa-external-link-alt"></i>&nbsp;Open full size
+        <!-- Footer -->
+        <div style="
+          padding: 0.65rem 1rem;
+          border-top: 1px solid rgba(255,255,255,0.06);
+          display: flex; justify-content: space-between; align-items: center;
+          gap: 0.5rem;
+        ">
+          <button id="doc-viewer-delete-btn" type="button"
+            style="
+              background: rgba(198,40,40,0.12); border: 1px solid rgba(198,40,40,0.35);
+              color: #ef9a9a; border-radius: 8px; padding: 0.38rem 0.85rem;
+              font-size: 0.78rem; cursor: pointer; display: flex; align-items: center;
+              gap: 0.4rem; transition: all 0.15s; font-weight: 500;"
+            onmouseover="this.style.background='rgba(198,40,40,0.25)';this.style.color='#ffcdd2'"
+            onmouseout="this.style.background='rgba(198,40,40,0.12)';this.style.color='#ef9a9a'"
+            title="Delete this document">
+            <i class="fas fa-trash-alt"></i> Delete &amp; Retake
+          </button>
+          <a id="doc-viewer-open-link" href="#" target="_blank" rel="noopener noreferrer"
+            style="
+              color: rgba(255,255,255,0.45); font-size: 0.78rem; text-decoration: none;
+              display: flex; align-items: center; gap: 0.35rem; transition: color 0.15s;
+              white-space: nowrap;"
+            onmouseover="this.style.color='#90caf9'"
+            onmouseout="this.style.color='rgba(255,255,255,0.45)'">
+            <i class="fas fa-external-link-alt"></i> Open full size
           </a>
         </div>
       </div>
     </div>
+
+    <!-- ── Professional confirm dialog ───────────────────────────────── -->
+    <div id="confirm-dialog"
+      style="display: none; position: fixed; inset: 0; z-index: 999999;
+             background: rgba(0,0,0,0.65); backdrop-filter: blur(4px);
+             align-items: center; justify-content: center;">
+      <div style="
+        background: linear-gradient(160deg, #1c2133 0%, #141824 100%);
+        border-radius: 18px; padding: 1.85rem 1.6rem;
+        max-width: 340px; width: 90%;
+        box-shadow: 0 32px 80px rgba(0,0,0,0.7), 0 0 0 1px rgba(255,255,255,0.06);
+        display: flex; flex-direction: column; gap: 1rem;">
+        <!-- Icon -->
+        <div style="display: flex; justify-content: center;">
+          <div style="
+            width: 56px; height: 56px; border-radius: 16px;
+            background: rgba(198,40,40,0.15); border: 1px solid rgba(198,40,40,0.25);
+            display: flex; align-items: center; justify-content: center;">
+            <i id="confirm-dialog-icon" class="fas fa-trash-alt"
+               style="font-size: 1.4rem; color: #ef5350;"></i>
+          </div>
+        </div>
+        <!-- Text -->
+        <h3 id="confirm-dialog-title"
+          style="margin: 0; text-align: center; font-size: 1.05rem; font-weight: 700;
+                 color: #f0f4ff; letter-spacing: 0.01em;"></h3>
+        <p id="confirm-dialog-message"
+          style="margin: -0.25rem 0 0; text-align: center; font-size: 0.82rem;
+                 color: rgba(240,244,255,0.5); line-height: 1.6;"></p>
+        <!-- Actions -->
+        <div style="display: flex; gap: 0.65rem; margin-top: 0.15rem;">
+          <button id="confirm-dialog-cancel"
+            style="flex: 1; padding: 0.65rem; border-radius: 10px;
+                   border: 1px solid rgba(255,255,255,0.1);
+                   background: rgba(255,255,255,0.05); color: rgba(240,244,255,0.75);
+                   font-size: 0.875rem; cursor: pointer; font-weight: 500; transition: all 0.15s;"
+            onmouseover="this.style.background='rgba(255,255,255,0.1)';this.style.color='#f0f4ff'"
+            onmouseout="this.style.background='rgba(255,255,255,0.05)';this.style.color='rgba(240,244,255,0.75)'">
+            Cancel
+          </button>
+          <button id="confirm-dialog-ok"
+            style="flex: 1; padding: 0.65rem; border-radius: 10px; border: none;
+                   background: #c62828; color: #fff; font-size: 0.875rem;
+                   cursor: pointer; font-weight: 600; transition: background 0.15s;
+                   box-shadow: 0 4px 14px rgba(198,40,40,0.4);"
+            onmouseover="this.style.background='#b71c1c'"
+            onmouseout="this.style.background='#c62828'">
+            Delete
+          </button>
+        </div>
+      </div>
+    </div>
+
   </body>
 </html>

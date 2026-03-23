@@ -48,17 +48,23 @@ window.uploadPendingDocIfAny = async function (mobile) {
   if (digits.length !== 10) return true;
 
   try {
-    for (const item of _docCapturedBlobs) {
+    const items = [..._docCapturedBlobs];
+    // Upload all blobs in parallel
+    const results = await Promise.all(items.map(async (item) => {
       const form = new FormData();
       form.append('mobile',   digits);
       form.append('document', item.blob, `doc_${Date.now()}.jpg`);
       const res  = await fetch('/upload_customer_document', { method: 'POST', body: form });
       const data = await res.json();
-      if (!data.success) {
-        _notify('ID document upload failed: ' + (data.message || 'unknown'), 'error');
-        return false;
-      }
+      return { ok: data.success, msg: data.message, url: item.url };
+    }));
+
+    const failed = results.find(r => !r.ok);
+    if (failed) {
+      _notify('ID document upload failed: ' + (failed.msg || 'unknown'), 'error');
+      return false;
     }
+    results.forEach(r => URL.revokeObjectURL(r.url));
     _docCapturedBlobs = [];
     return true;
   } catch (err) {
@@ -76,6 +82,7 @@ window.populateCheckoutDocView = async function (mobile) {
   if (!btn) return;
   btn.style.display = 'none';
   btn._docUrls = [];
+  btn._mobile  = '';
 
   const digits = (mobile || '').replace(/\D/g, '');
   if (digits.length !== 10) return;
@@ -87,12 +94,154 @@ window.populateCheckoutDocView = async function (mobile) {
       const urls = data.customer.id_doc_urls || [];
       if (urls.length > 0) {
         btn._docUrls      = urls;
+        btn._mobile       = digits;
         btn.style.display = 'inline-flex';
         btn.title         = `View ${urls.length} ID document${urls.length !== 1 ? 's' : ''}`;
       }
     }
   } catch (_) {}
 };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Public API — checkout modal document upload
+// ─────────────────────────────────────────────────────────────────────────────
+
+let _checkoutMobile = '';
+// 'checkin' = normal flow (upload on submit), 'checkout' = upload immediately on Done
+let _docCameraContext = 'checkin';
+
+window.initCheckoutDocAttach = function(mobile) {
+  // Discard any pending photos from a previous checkout session
+  _discardCheckoutPending();
+  _checkoutMobile = (mobile || '').replace(/\D/g, '');
+
+  // Re-wire the header camera button each time the modal opens
+  const uploadBtn = document.getElementById('checkout-upload-id-btn');
+  const newBtn    = uploadBtn?.cloneNode(true);
+  if (uploadBtn && newBtn) uploadBtn.parentNode.replaceChild(newBtn, uploadBtn);
+
+  newBtn?.addEventListener('click', () => {
+    if (!_checkoutMobile) { _notify('No mobile number for this guest', 'warning'); return; }
+    // Open the same camera modal used in check-in, but flag context as checkout
+    _docCameraContext = 'checkout';
+    openDocCameraModal();
+  });
+};
+
+async function _uploadCheckoutDoc(file) {
+  const form = new FormData();
+  form.append('mobile',   _checkoutMobile);
+  form.append('document', file, `checkout_doc_${Date.now()}.jpg`);
+
+  try {
+    const res  = await fetch('/upload_customer_document', { method: 'POST', body: form });
+    const data = await res.json();
+    if (!data.success) {
+      _notify('Upload failed: ' + data.message, 'error');
+      return false;
+    }
+    return true;
+  } catch (err) {
+    _notify('Upload error: ' + err.message, 'error');
+    return false;
+  }
+}
+
+/** Render (or refresh) the pending-upload strip in the checkout modal. */
+function _renderCheckoutPendingStrip() {
+  const strip    = document.getElementById('checkout-pending-docs');
+  const thumbEl  = document.getElementById('checkout-pending-thumbs');
+  const countBadge = document.getElementById('checkout-pending-count');
+  if (!strip || !thumbEl) return;
+
+  if (!_docCapturedBlobs.length) {
+    strip.style.display = 'none';
+    thumbEl.innerHTML   = '';
+    return;
+  }
+
+  // Update count badge
+  const n = _docCapturedBlobs.length;
+  if (countBadge) countBadge.textContent = `${n} photo${n !== 1 ? 's' : ''}`;
+
+  thumbEl.innerHTML = '';
+  _docCapturedBlobs.forEach((item, i) => {
+    const wrapper = document.createElement('div');
+    wrapper.style.cssText = 'position: relative; flex-shrink: 0;';
+
+    const img = document.createElement('img');
+    img.src   = item.url;
+    img.alt   = `Doc ${i + 1}`;
+    img.style.cssText = `
+      width: 58px; height: 58px; object-fit: cover; border-radius: 9px;
+      border: 2px solid #c7d2fe; cursor: pointer; display: block;
+      box-shadow: 0 2px 8px rgba(67,56,202,0.12);
+      transition: border-color 0.15s, transform 0.15s, box-shadow 0.15s;`;
+    img.title = 'Click to preview';
+    img.addEventListener('mouseover', () => { img.style.borderColor = '#4338ca'; img.style.transform = 'scale(1.05)'; img.style.boxShadow = '0 4px 14px rgba(67,56,202,0.25)'; });
+    img.addEventListener('mouseout',  () => { img.style.borderColor = '#c7d2fe'; img.style.transform = ''; img.style.boxShadow = '0 2px 8px rgba(67,56,202,0.12)'; });
+    img.addEventListener('click', () => openPhotoViewer(_docCapturedBlobs.map(b => b.url), i, ''));
+
+    // Remove button
+    const del = document.createElement('button');
+    del.type      = 'button';
+    del.innerHTML = '<i class="fas fa-times"></i>';
+    del.style.cssText = `
+      position: absolute; top: -5px; right: -5px;
+      width: 17px; height: 17px; border-radius: 50%; border: 2px solid #f0f4ff;
+      background: #6366f1; color: #fff; font-size: 0.5rem; line-height: 1;
+      cursor: pointer; padding: 0; display: flex; align-items: center; justify-content: center;
+      transition: background 0.15s; box-shadow: 0 1px 4px rgba(0,0,0,0.2);`;
+    del.title = 'Remove';
+    del.addEventListener('mouseover', () => { del.style.background = '#ef4444'; });
+    del.addEventListener('mouseout',  () => { del.style.background = '#6366f1'; });
+    del.addEventListener('click', () => {
+      URL.revokeObjectURL(item.url);
+      _docCapturedBlobs.splice(i, 1);
+      _renderCheckoutPendingStrip();
+    });
+
+    wrapper.appendChild(img);
+    wrapper.appendChild(del);
+    thumbEl.appendChild(wrapper);
+  });
+
+  strip.style.display = 'block';
+}
+
+/** Upload all pending checkout blobs in parallel then clear the strip. */
+async function _commitCheckoutPending() {
+  if (!_checkoutMobile) { _notify('No mobile linked — cannot save document', 'error'); return; }
+  if (!_docCapturedBlobs.length) return;
+
+  const uploadBtn = document.getElementById('checkout-pending-upload-btn');
+  if (uploadBtn) { uploadBtn.disabled = true; uploadBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Saving…'; }
+
+  const items = [..._docCapturedBlobs];
+  // Fire all uploads simultaneously instead of one-by-one
+  const results = await Promise.all(items.map(item => _uploadCheckoutDoc(item.blob)));
+
+  const allOk = results.every(Boolean);
+  results.forEach((ok, i) => { if (ok) URL.revokeObjectURL(items[i].url); });
+
+  if (allOk) {
+    _docCapturedBlobs = [];
+    _renderCheckoutPendingStrip();
+    _notify('Documents saved to guest record ✓', 'success');
+    if (typeof window.populateCheckoutDocView === 'function') {
+      window.populateCheckoutDocView(_checkoutMobile);
+    }
+  }
+
+  if (uploadBtn) { uploadBtn.disabled = false; uploadBtn.innerHTML = '<i class="fas fa-cloud-upload-alt"></i> Save to guest'; }
+}
+
+/** Discard all pending checkout blobs without uploading. */
+function _discardCheckoutPending() {
+  _docCapturedBlobs.forEach(item => URL.revokeObjectURL(item.url));
+  _docCapturedBlobs = [];
+  _renderCheckoutPendingStrip();
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 1.  Mobile partial-input lookup
@@ -198,11 +347,13 @@ async function lookupAndFillCustomer(mobile) {
       autoFillFromCustomer(data.customer);
       _applyIndicator(data.customer);
       _applyDocViewBtn(data.customer);
+      _showCheckinStoredDocs(data.customer);
     } else {
       _currentCheckinCustomer = null;
       clearNameMismatch();
       hideDocViewBtn();
       _setIndicator('yellow');
+      _hideCheckinStoredDocs();
     }
   } catch (err) { console.error('[customer-docs] Mobile lookup error:', err); }
 }
@@ -310,17 +461,63 @@ function _applyDocViewBtn(customer) {
   urls.length > 0 ? showDocViewBtn(urls) : hideDocViewBtn();
 }
 
-function showDocViewBtn(urls) {
-  const btn = document.getElementById('doc-view-btn');
-  if (!btn) return;
-  btn._docUrls      = urls;
-  btn.style.display = 'inline-flex';
-  btn.title         = `View ${urls.length} ID document${urls.length !== 1 ? 's' : ''}`;
+// doc-view-btn removed from header — inline preview below mobile field handles this
+function showDocViewBtn(_urls) {}
+function hideDocViewBtn() {}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 5b.  Check-in stored doc preview (shown inline when returning guest has docs)
+// ─────────────────────────────────────────────────────────────────────────────
+
+function _showCheckinStoredDocs(customer) {
+  const urls    = customer.id_doc_urls || [];
+  const preview = document.getElementById('checkin-stored-doc-preview');
+  const thumbs  = document.getElementById('checkin-stored-doc-thumbs');
+  const viewBtn = document.getElementById('checkin-view-stored-docs-btn');
+
+  if (!preview || !thumbs) return;
+
+  if (urls.length === 0) { preview.style.display = 'none'; return; }
+
+  thumbs.innerHTML = '';
+  urls.forEach((url, idx) => {
+    const img         = document.createElement('img');
+    img.src           = url;
+    img.alt           = `ID doc ${idx + 1}`;
+    img.style.cssText = 'width:64px;height:44px;object-fit:cover;border-radius:5px;border:1px solid #a5d6a7;cursor:pointer';
+    img.title         = `View document ${idx + 1}`;
+    img.addEventListener('click', () => openPhotoViewer(urls, idx, customer.mobile || ''));
+    thumbs.appendChild(img);
+  });
+
+  preview.style.display = 'block';
+
+  // Wire "View all" button
+  if (viewBtn) {
+    viewBtn.onclick = () => openPhotoViewer(urls, 0, customer.mobile || '');
+  }
 }
 
-function hideDocViewBtn() {
-  const btn = document.getElementById('doc-view-btn');
-  if (btn) btn.style.display = 'none';
+function _hideCheckinStoredDocs() {
+  const preview = document.getElementById('checkin-stored-doc-preview');
+  if (preview) preview.style.display = 'none';
+}
+
+function _refreshCheckinStoredDocs(mobile) {
+  if (!mobile || !_currentCheckinCustomer) return;
+  // Re-fetch and re-render
+  fetch(`/get_customer/${mobile}`)
+    .then(r => r.json())
+    .then(d => {
+      if (d.success && d.customer) {
+        _currentCheckinCustomer = d.customer;
+        _showCheckinStoredDocs(d.customer);
+        _applyIndicator(d.customer);
+        _applyDocViewBtn(d.customer);
+      } else {
+        _hideCheckinStoredDocs();
+      }
+    }).catch(() => {});
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -344,16 +541,23 @@ function initDocCamera() {
     if (e.target === document.getElementById('doc-camera-modal')) closeDocCameraModal();
   });
 
-  // Doc type toggle
+  // Doc type toggle (camera mode)
   document.getElementById('doc-type-card')?.addEventListener('click', () => _setDocType('card'));
   document.getElementById('doc-type-page')?.addEventListener('click', () => _setDocType('page'));
 
+  // Scan button in checkin header — direct WiFi scan, no modal change needed
+  document.getElementById('doc-scan-btn')?.addEventListener('click', _onScanBtnClick);
+
+  // Checkout pending-upload strip buttons
+  document.getElementById('checkout-pending-upload-btn')?.addEventListener('click', _commitCheckoutPending);
+  document.getElementById('checkout-pending-discard-btn')?.addEventListener('click', _discardCheckoutPending);
+
   // View-photos buttons
-  document.getElementById('doc-view-btn')?.addEventListener('click', () => {
-    openPhotoViewer(document.getElementById('doc-view-btn')._docUrls || []);
-  });
   document.getElementById('checkout-doc-view-btn')?.addEventListener('click', () => {
-    openPhotoViewer(document.getElementById('checkout-doc-view-btn')._docUrls || []);
+    const btn = document.getElementById('checkout-doc-view-btn');
+    // mobile is stored on the button via data attr set in populateCheckoutDocView
+    const mobile = btn._mobile || '';
+    openPhotoViewer(btn._docUrls || [], 0, mobile);
   });
 
   // Photo viewer controls
@@ -363,6 +567,9 @@ function initDocCamera() {
   });
   document.getElementById('doc-viewer-prev')?.addEventListener('click', () => navigateViewer(-1));
   document.getElementById('doc-viewer-next')?.addEventListener('click', () => navigateViewer(+1));
+
+  // Delete stored photo from viewer
+  document.getElementById('doc-viewer-delete-btn')?.addEventListener('click', _deleteViewerPhoto);
 }
 
 function _setDocType(type) {
@@ -426,6 +633,109 @@ function closeDocCameraModal() {
   stopDocStream();
   const modal = document.getElementById('doc-camera-modal');
   if (modal) modal.classList.remove('show');
+}
+
+// ── WiFi Scanner (Epson L3250 / eSCL) ─────────────────────────────────────────
+
+async function _onScanBtnClick() {
+  if (_docCapturedBlobs.length >= MAX_DOC_PHOTOS) {
+    _notify(`Maximum ${MAX_DOC_PHOTOS} photos already captured`, 'warning');
+    return;
+  }
+
+  const scanBtn = document.getElementById('doc-scan-btn');
+
+  // ── Step 1: Fetch saved scanner IP from backend ──────────────────────────
+  let scannerIp = '';
+  try {
+    const cfgRes  = await fetch('/scanner/config');
+    const cfgData = await cfgRes.json();
+    scannerIp = (cfgData.config?.ip || '').trim();
+  } catch (_) {}
+
+  // ── Step 2: If not set, ask user once and save to backend ────────────────
+  if (!scannerIp) {
+    const entered = (prompt(
+      'Enter your Epson scanner IP or hostname:\n' +
+      '  • IPv4 example:  192.168.1.45\n' +
+      '  • Hostname:       EPSON4F183E.local\n\n' +
+      'This will be saved so all devices on this network can scan.'
+    ) || '').trim();
+    if (!entered) return;
+
+    // Warn on link-local IPv6 before even sending
+    if (entered.toLowerCase().startsWith('fe80')) {
+      alert(
+        'That is a link-local IPv6 address (fe80::…) and won\'t work over WiFi.\n\n' +
+        'Please use:\n' +
+        '  • The IPv4 address (e.g. 192.168.1.45)  — found on the printer network status sheet\n' +
+        '  • Or the hostname: EPSON4F183E.local'
+      );
+      return;
+    }
+
+    // Save to backend
+    const saveRes  = await fetch('/scanner/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ip: entered, doc_type: _docType }),
+    });
+    const saveData = await saveRes.json();
+    if (!saveData.success) {
+      _notify('Could not save scanner: ' + saveData.message, 'error');
+      return;
+    }
+    scannerIp = entered;
+    _notify('Scanner IP saved — all devices will use this', 'success');
+  }
+
+  // ── Step 3: Scan ──────────────────────────────────────────────────────────
+  if (scanBtn) { scanBtn.disabled = true; scanBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>'; }
+  _notify('Scanning… place document face-down on the glass', 'info');
+
+  try {
+    const res  = await fetch('/scan_document', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ scanner_ip: scannerIp, doc_type: _docType }),
+    });
+    const data = await res.json();
+
+    if (!data.success) {
+      // If IP was wrong, clear saved config so user can re-enter
+      if (data.message && data.message.includes('Cannot reach')) {
+        await fetch('/scanner/config', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ip: '', doc_type: _docType }),
+        }).catch(() => {});
+        _notify('Scanner unreachable — IP cleared, tap Scan again to re-enter', 'error');
+      } else {
+        _notify('Scan failed: ' + data.message, 'error');
+      }
+      return;
+    }
+
+    // Convert data-URI → Blob → push to captured list
+    const arr   = data.image.split(',');
+    const mime  = arr[0].match(/:(.*?);/)[1];
+    const bstr  = atob(arr[1]);
+    const u8arr = new Uint8Array(bstr.length);
+    for (let i = 0; i < bstr.length; i++) u8arr[i] = bstr.charCodeAt(i);
+    const blob = new Blob([u8arr], { type: mime });
+    const url  = URL.createObjectURL(blob);
+
+    _docCapturedBlobs.push({ blob, url });
+    renderThumbStrip();
+    _updateAddMoreBtn();
+    _setIndicator('green');
+    _notify('Scan complete ✓', 'success');
+
+  } catch (err) {
+    _notify('Scanner error: ' + err.message, 'error');
+  } finally {
+    if (scanBtn) { scanBtn.disabled = false; scanBtn.innerHTML = '<i class="fas fa-print"></i>'; }
+  }
 }
 
 /** Retake: discard the last captured blob and restart the camera */
@@ -747,8 +1057,18 @@ function _applyScannedLook(ctx, w, h) {
   ctx.putImageData(d, 0, 0);
 }
 
-/** "Done" — finalise current blob (already in array), close modal, render strip */
-function useDocPhoto() {
+/** "Done" — finalise current blob(s), close modal, render strip or show pending preview */
+async function useDocPhoto() {
+  if (_docCameraContext === 'checkout') {
+    // Don't upload yet — move captured blobs to the pending strip in the checkout modal
+    // so the user can review, add more, or discard before committing to the server.
+    _docCameraContext = 'checkin'; // reset context
+    closeDocCameraModal();
+    _renderCheckoutPendingStrip();
+    return;
+  }
+
+  // Normal check-in flow — keep blobs for upload on form submit
   renderThumbStrip();
   _updateAddMoreBtn();
   _setIndicator('green');
@@ -845,10 +1165,15 @@ function resetDocCaptureUI() {
 // 10.  Photo viewer (lightbox for both saved and newly-captured photos)
 // ─────────────────────────────────────────────────────────────────────────────
 
-function openPhotoViewer(urls, startIdx) {
+// Mobile number associated with the photos currently in the viewer
+// (set when opening from a customer context so the delete button can call the API)
+let _viewerMobile = '';
+
+function openPhotoViewer(urls, startIdx, mobile) {
   if (!urls || !urls.length) return;
   _viewerUrls       = urls;
   _viewerCurrentIdx = startIdx || 0;
+  _viewerMobile     = (mobile || '').replace(/\D/g, '');
 
   _setText('doc-viewer-count', `${urls.length} photo${urls.length !== 1 ? 's' : ''} on file`);
 
@@ -893,6 +1218,84 @@ function navigateViewer(delta) {
 function closePhotoViewer() {
   const viewer = document.getElementById('doc-photo-viewer');
   if (viewer) viewer.style.display = 'none';
+}
+
+async function _deleteViewerPhoto() {
+  const urlToDelete = _viewerUrls[_viewerCurrentIdx];
+  if (!urlToDelete) return;
+
+  // If this is a locally-captured blob URL (not yet uploaded), just remove from array
+  if (urlToDelete.startsWith('blob:')) {
+    const blobIdx = _docCapturedBlobs.findIndex(b => b.url === urlToDelete);
+    if (blobIdx !== -1) {
+      URL.revokeObjectURL(_docCapturedBlobs[blobIdx].url);
+      _docCapturedBlobs.splice(blobIdx, 1);
+      renderThumbStrip();
+      _updateAddMoreBtn();
+      _notify('Photo removed', 'success');
+    }
+    // Update viewer or close if no more photos
+    _viewerUrls.splice(_viewerCurrentIdx, 1);
+    if (_viewerUrls.length === 0) { closePhotoViewer(); return; }
+    _viewerCurrentIdx = Math.min(_viewerCurrentIdx, _viewerUrls.length - 1);
+    openPhotoViewer(_viewerUrls, _viewerCurrentIdx, _viewerMobile);
+    return;
+  }
+
+  // Stored photo — need mobile to call backend
+  if (!_viewerMobile) {
+    _notify('Cannot delete — no customer mobile linked to this photo', 'warning');
+    return;
+  }
+
+  _showConfirmDialog({
+    title:        'Delete document?',
+    message:      'This will permanently remove the photo from the guest record and cannot be undone.',
+    confirmLabel: 'Delete',
+    iconClass:    'fa-trash-alt',
+    iconColor:    '#ef5350',
+    bgColor:      '#c62828',
+  }, async () => {
+    await _doDeleteViewerPhoto(urlToDelete);
+  });
+}
+
+/** Actual deletion logic — called after the user confirms. */
+async function _doDeleteViewerPhoto(urlToDelete) {
+  const btn = document.getElementById('doc-viewer-delete-btn');
+  if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Deleting…'; }
+
+  try {
+    const res  = await fetch('/delete_customer_document', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mobile: _viewerMobile, url: urlToDelete }),
+    });
+    const data = await res.json();
+
+    if (data.success) {
+      _notify('Document deleted', 'success');
+      _viewerUrls.splice(_viewerCurrentIdx, 1);
+
+      if (_viewerUrls.length === 0) {
+        closePhotoViewer();
+        // Re-check customer and update indicator
+        lookupAndFillCustomer(_viewerMobile);
+        return;
+      }
+      _viewerCurrentIdx = Math.min(_viewerCurrentIdx, _viewerUrls.length - 1);
+      openPhotoViewer(_viewerUrls, _viewerCurrentIdx, _viewerMobile);
+
+      // Refresh checkin stored docs preview if visible
+      _refreshCheckinStoredDocs(_viewerMobile);
+    } else {
+      _notify('Delete failed: ' + data.message, 'error');
+    }
+  } catch (err) {
+    _notify('Delete error: ' + err.message, 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-trash-alt"></i> Delete &amp; Retake'; }
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -974,6 +1377,7 @@ async function _fetchNameSuggestions(query) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 function resetCheckinDocState() {
+  _docCameraContext = 'checkin';
   stopAutoScan();
   stopDocStream();
   closePhotoViewer();
@@ -982,6 +1386,7 @@ function resetCheckinDocState() {
   _currentCheckinCustomer = null;
   resetDocCaptureUI();
   hideDocViewBtn();
+  _hideCheckinStoredDocs();
   _setIndicator('grey');
   hideMobileSuggestions();
   clearNameMismatch();
@@ -1014,6 +1419,52 @@ function _fmtDate(raw) {
 
 function _notify(msg, type) {
   if (typeof showNotification === 'function') showNotification(msg, type);
+}
+
+/**
+ * Show the professional confirm dialog.
+ * @param {object} opts
+ *   title        – heading text
+ *   message      – body text
+ *   confirmLabel – button label (default "Delete")
+ *   iconClass    – FontAwesome class (default "fa-trash-alt")
+ *   iconColor    – CSS color for icon (default "#ef5350")
+ *   bgColor      – confirm button bg (default "#c62828")
+ * @param {function} onConfirm  – called when user confirms
+ */
+function _showConfirmDialog(opts, onConfirm) {
+  const dialog  = document.getElementById('confirm-dialog');
+  if (!dialog) { if (confirm(opts.title + '\n' + (opts.message || ''))) onConfirm(); return; }
+
+  document.getElementById('confirm-dialog-title').textContent   = opts.title   || 'Are you sure?';
+  document.getElementById('confirm-dialog-message').textContent = opts.message || '';
+  document.getElementById('confirm-dialog-icon').className      = 'fas ' + (opts.iconClass || 'fa-trash-alt');
+  document.getElementById('confirm-dialog-icon').style.color    = opts.iconColor || '#ef5350';
+  document.getElementById('confirm-dialog-ok').textContent      = opts.confirmLabel || 'Delete';
+  document.getElementById('confirm-dialog-ok').style.background = opts.bgColor || '#c62828';
+
+  dialog.style.display = 'flex';
+
+  // One-shot listeners — clone buttons to remove previous listeners
+  const okBtn     = document.getElementById('confirm-dialog-ok');
+  const cancelBtn = document.getElementById('confirm-dialog-cancel');
+  const newOk     = okBtn.cloneNode(true);
+  const newCancel = cancelBtn.cloneNode(true);
+  okBtn.parentNode.replaceChild(newOk, okBtn);
+  cancelBtn.parentNode.replaceChild(newCancel, cancelBtn);
+
+  document.getElementById('confirm-dialog-ok').textContent      = opts.confirmLabel || 'Delete';
+  document.getElementById('confirm-dialog-ok').style.background = opts.bgColor || '#c62828';
+
+  document.getElementById('confirm-dialog-ok').addEventListener('click', () => {
+    dialog.style.display = 'none';
+    onConfirm();
+  });
+  document.getElementById('confirm-dialog-cancel').addEventListener('click', () => {
+    dialog.style.display = 'none';
+  });
+  // Also close on backdrop click
+  dialog.onclick = (e) => { if (e.target === dialog) dialog.style.display = 'none'; };
 }
 
 function _fmtName(name) {

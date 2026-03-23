@@ -1159,6 +1159,11 @@ function updateCheckoutModal(roomNumber) {
     window.populateCheckoutDocView(roomInfo.guest.mobile || "");
   }
 
+  // Init checkout doc attach section
+  if (typeof window.initCheckoutDocAttach === "function") {
+    window.initCheckoutDocAttach(roomInfo.guest.mobile || "");
+  }
+
   // Reset the service form
   resetServiceForm();
 

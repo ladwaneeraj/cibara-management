@@ -165,6 +165,21 @@
 }
 @keyframes bl-spin { to { transform: rotate(360deg); } }
 
+/* ── View toggle (date-grouped vs sorted) ── */
+.bl-view-toggle {
+  display: flex; align-items: center;
+  margin-bottom: 0.4rem; padding: 0 0.1rem;
+}
+.bl-view-btn {
+  padding: 0.18rem 0.55rem; border-radius: 12px;
+  border: 1px solid #d0d0d0; font-size: 0.72rem;
+  background: #fff; cursor: pointer; color: #555;
+  font-weight: 600; transition: all 0.15s; margin-right: 0.25rem;
+  line-height: 1.4;
+}
+.bl-view-btn:hover { border-color: var(--primary, #3f51b5); color: var(--primary, #3f51b5); }
+.bl-view-btn.bl-view-active { background: var(--primary, #3f51b5); color: #fff; border-color: var(--primary, #3f51b5); }
+
 @media (max-width: 600px) {
   .bl-filter-bar label { display: none; }
   .bills-table { font-size: 0.73rem; }
@@ -188,6 +203,7 @@
     dateRange: { start: null, end: null },
     filters: { search: "", source: "all" },
     lastLoadedRange: null,
+    sort: { key: null, dir: "asc" },
   };
 
   // ── Utilities ────────────────────────────────────────────────────────────────
@@ -201,6 +217,14 @@
     return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
   }
   const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+
+  // Parse the sequential number out of bill numbers like "CC/2026/03/00091" → 91
+  // Always take the last segment since the format can vary in number of parts.
+  function parseBillNo(bn) {
+    if (!bn) return 0;
+    const parts = bn.split("/");
+    return parseInt(parts[parts.length - 1], 10) || 0;
+  }
   function fmtDate(s) {
     const [y, m, d] = s.split("-");
     return `${parseInt(d)} ${MONTHS[parseInt(m)-1]} ${y}`;
@@ -310,6 +334,13 @@
     </select>
     <input type="text" class="bl-search-input" id="bl-search"
            placeholder="Name / Room / Invoice No…" />
+  </div>
+
+  <!-- View toggle -->
+  <div class="bl-view-toggle">
+    <span style="font-size:.72rem;color:#888;margin-right:.35rem;font-weight:600;">View:</span>
+    <button id="bl-view-date" class="bl-view-btn bl-view-active">&#128197; Check-in Date</button>
+    <button id="bl-view-billno" class="bl-view-btn">&#8645; Bill No</button>
   </div>
 
   <!-- Table -->
@@ -438,6 +469,51 @@
         if (hdr) toggleGroup(hdr);
       });
     }
+
+    _wireSortHeaders();
+  }
+
+  function _wireSortHeaders() {
+    const btnDate   = dom("bl-view-date");
+    const btnBillNo = dom("bl-view-billno");
+    if (!btnDate || !btnBillNo) return;
+
+    // "Check-in Date" → reset to grouped view
+    btnDate.addEventListener("click", () => {
+      state.sort.key = null;
+      state.sort.dir = "asc";
+      _updateSortArrows();
+      renderTable();
+    });
+
+    // "Bill No" → cycle asc → desc → asc on repeated clicks
+    btnBillNo.addEventListener("click", () => {
+      if (state.sort.key === "bill_no") {
+        state.sort.dir = state.sort.dir === "asc" ? "desc" : "asc";
+      } else {
+        state.sort.key = "bill_no";
+        state.sort.dir = "asc";
+      }
+      _updateSortArrows();
+      renderTable();
+    });
+  }
+
+  function _updateSortArrows() {
+    const btnDate   = dom("bl-view-date");
+    const btnBillNo = dom("bl-view-billno");
+    if (!btnDate || !btnBillNo) return;
+
+    if (state.sort.key === "bill_no") {
+      btnDate.classList.remove("bl-view-active");
+      const arrow = state.sort.dir === "asc" ? " ▲" : " ▼";
+      btnBillNo.innerHTML = `&#8645; Bill No${arrow}`;
+      btnBillNo.classList.add("bl-view-active");
+    } else {
+      btnDate.classList.add("bl-view-active");
+      btnBillNo.innerHTML = "&#8645; Bill No";
+      btnBillNo.classList.remove("bl-view-active");
+    }
   }
 
   // ── Load data ────────────────────────────────────────────────────────────────
@@ -531,6 +607,31 @@
     if (!tbody) return;
     if (!state.filteredEntries.length) { showEmpty(); return; }
 
+    // Sorted flat view — no date group headers
+    if (state.sort.key) {
+      const sorted = [...state.filteredEntries].sort((a, b) => {
+        let va, vb;
+        if (state.sort.key === "bill_no") {
+          va = parseBillNo(a.bill_number);
+          vb = parseBillNo(b.bill_number);
+        } else {
+          va = a.checkout_time || "";
+          vb = b.checkout_time || "";
+        }
+        if (va < vb) return state.sort.dir === "asc" ? -1 : 1;
+        if (va > vb) return state.sort.dir === "asc" ?  1 : -1;
+        return 0;
+      });
+      let html = "";
+      sorted.forEach((e, i) => {
+        const dk = (e.checkin_time || "").split(" ")[0] || "unknown";
+        html += rowHTML(e, dk, i + 1);
+      });
+      tbody.innerHTML = html;
+      return;
+    }
+
+    // Default: date-grouped view (dates descending)
     const byDate = {};
     state.filteredEntries.forEach((e) => {
       const dk = (e.checkin_time || "").split(" ")[0] || "unknown";

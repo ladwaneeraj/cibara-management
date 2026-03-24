@@ -25,6 +25,10 @@ let _nameDebounceTimer       = null;
 let _viewerCurrentIdx        = 0;
 let _viewerUrls              = [];
 
+// Fix 14: upload re-entrancy guards — prevents double-submit on rapid clicks
+let _checkinUploadLock  = false;
+let _checkoutUploadLock = false;
+
 // Auto-scan state
 let _scanTimer        = null;
 let _scanCanvas       = null;
@@ -44,32 +48,36 @@ const SCAN_INTERVAL_MS = 200;
 
 window.uploadPendingDocIfAny = async function (mobile) {
   if (!_docCapturedBlobs.length) return true;
+  // Fix 14: prevent re-entry if a previous call is still in-flight
+  if (_checkinUploadLock) return false;
   const digits = (mobile || '').replace(/\D/g, '');
   if (digits.length !== 10) return true;
 
+  _checkinUploadLock = true;
   try {
     const items = [..._docCapturedBlobs];
-    // Upload all blobs in parallel
-    const results = await Promise.all(items.map(async (item) => {
+    // Upload sequentially — parallel uploads race on the same Firestore doc
+    // and the transaction retry can drop one URL when both see the doc as
+    // non-existent at the same time.
+    for (const item of items) {
       const form = new FormData();
       form.append('mobile',   digits);
       form.append('document', item.blob, `doc_${Date.now()}.jpg`);
       const res  = await fetch('/upload_customer_document', { method: 'POST', body: form });
       const data = await res.json();
-      return { ok: data.success, msg: data.message, url: item.url };
-    }));
-
-    const failed = results.find(r => !r.ok);
-    if (failed) {
-      _notify('ID document upload failed: ' + (failed.msg || 'unknown'), 'error');
-      return false;
+      if (!data.success) {
+        _notify('ID document upload failed: ' + (data.message || 'unknown'), 'error');
+        return false;
+      }
+      URL.revokeObjectURL(item.url);
     }
-    results.forEach(r => URL.revokeObjectURL(r.url));
     _docCapturedBlobs = [];
     return true;
   } catch (err) {
     _notify('ID document upload error: ' + err.message, 'error');
     return false;
+  } finally {
+    _checkinUploadLock = false;
   }
 };
 
@@ -209,31 +217,44 @@ function _renderCheckoutPendingStrip() {
   strip.style.display = 'block';
 }
 
-/** Upload all pending checkout blobs in parallel then clear the strip. */
+/** Upload all pending checkout blobs sequentially then clear the strip. */
 async function _commitCheckoutPending() {
+  // Fix 14: prevent re-entry on rapid clicks
+  if (_checkoutUploadLock) return;
   if (!_checkoutMobile) { _notify('No mobile linked — cannot save document', 'error'); return; }
   if (!_docCapturedBlobs.length) return;
 
+  _checkoutUploadLock = true;
   const uploadBtn = document.getElementById('checkout-pending-upload-btn');
   if (uploadBtn) { uploadBtn.disabled = true; uploadBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Saving…'; }
 
-  const items = [..._docCapturedBlobs];
-  // Fire all uploads simultaneously instead of one-by-one
-  const results = await Promise.all(items.map(item => _uploadCheckoutDoc(item.blob)));
-
-  const allOk = results.every(Boolean);
-  results.forEach((ok, i) => { if (ok) URL.revokeObjectURL(items[i].url); });
-
-  if (allOk) {
-    _docCapturedBlobs = [];
-    _renderCheckoutPendingStrip();
-    _notify('Documents saved to guest record ✓', 'success');
-    if (typeof window.populateCheckoutDocView === 'function') {
-      window.populateCheckoutDocView(_checkoutMobile);
+  try {
+    const items = [..._docCapturedBlobs];
+    // Upload sequentially — same race condition fix as check-in upload:
+    // parallel uploads on the same mobile can lose a URL in the Firestore transaction.
+    let allOk = true;
+    for (let i = 0; i < items.length; i++) {
+      const ok = await _uploadCheckoutDoc(items[i].blob);
+      if (ok) {
+        URL.revokeObjectURL(items[i].url);
+      } else {
+        allOk = false;
+        break;
+      }
     }
-  }
 
-  if (uploadBtn) { uploadBtn.disabled = false; uploadBtn.innerHTML = '<i class="fas fa-cloud-upload-alt"></i> Save to guest'; }
+    if (allOk) {
+      _docCapturedBlobs = [];
+      _renderCheckoutPendingStrip();
+      _notify('Documents saved to guest record ✓', 'success');
+      if (typeof window.populateCheckoutDocView === 'function') {
+        window.populateCheckoutDocView(_checkoutMobile);
+      }
+    }
+  } finally {
+    _checkoutUploadLock = false;
+    if (uploadBtn) { uploadBtn.disabled = false; uploadBtn.innerHTML = '<i class="fas fa-cloud-upload-alt"></i> Save to guest'; }
+  }
 }
 
 /** Discard all pending checkout blobs without uploading. */

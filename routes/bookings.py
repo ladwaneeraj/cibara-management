@@ -13,6 +13,9 @@ from services import payment_service, customer_service
 
 bookings_bp = Blueprint('bookings', __name__)
 
+# Fix 6: whitelist of accepted payment method values
+VALID_PAYMENT_METHODS = {"cash", "upi", "card", "online", "balance", "ota", "already_paid", "bank_settlement"}
+
 @bookings_bp.route("/get_bookings", methods=["GET"])
 def get_bookings():
     try:
@@ -36,7 +39,11 @@ def create_booking():
         for field in required_fields:
             if field not in booking_data:
                 return jsonify(success=False, message=f"Missing required field: {field}")
-        
+
+        # Fix 11: require non-blank guest name
+        if not str(booking_data.get("guest_name", "")).strip():
+            return jsonify(success=False, message="Guest name cannot be blank")
+
         booking_id = str(uuid.uuid4())
         booking_source = booking_data.get("booking_source", "normal")
         is_mmt = booking_source == "mmt"
@@ -56,6 +63,17 @@ def create_booking():
             net_receivable = 0
             total_amount = int(booking_data["total_amount"])
             paid_amount_val = int(booking_data.get("paid_amount", 0))
+
+        # Fix 5: reject negative amounts
+        if total_amount < 0:
+            return jsonify(success=False, message="Total amount cannot be negative")
+        if paid_amount_val < 0:
+            return jsonify(success=False, message="Paid amount cannot be negative")
+
+        # Fix 6: whitelist payment method
+        payment_method_input = booking_data.get("payment_method", "cash") if not is_mmt else "ota"
+        if payment_method_input not in VALID_PAYMENT_METHODS:
+            return jsonify(success=False, message=f"Invalid payment method: {payment_method_input}")
 
         booking = {
             "room": booking_data["room"],
@@ -159,8 +177,14 @@ def update_booking():
         batch = db.batch()
         
         new_payment_amount = int(booking_data.get("new_payment", 0))
+        # Fix 5: reject negative payment
+        if new_payment_amount < 0:
+            return jsonify(success=False, message="Payment amount cannot be negative")
         if new_payment_amount > 0:
             payment_method = booking_data.get("payment_method", "cash")
+            # Fix 6: whitelist payment method
+            if payment_method not in VALID_PAYMENT_METHODS:
+                return jsonify(success=False, message=f"Invalid payment method: {payment_method}")
             payment_log = {
                 "booking_id": booking_id,
                 "room": booking["room"],
@@ -242,8 +266,14 @@ def cancel_booking():
         batch = db.batch()
         
         refund_amount = int(booking_data.get("refund_amount", 0))
+        # Fix 5: reject negative refund
+        if refund_amount < 0:
+            return jsonify(success=False, message="Refund amount cannot be negative")
         if refund_amount > 0:
             refund_method = booking_data.get("refund_method", "cash")
+            # Fix 6: whitelist refund method
+            if refund_method not in VALID_PAYMENT_METHODS:
+                return jsonify(success=False, message=f"Invalid refund method: {refund_method}")
             refund_log = {
                 "booking_id": booking_id,
                 "room": booking["room"],
@@ -333,8 +363,6 @@ def convert_booking_to_checkin():
         except Exception as e:
             logger.error(f"Error parsing expected time, using current time: {str(e)}")
             checkin_datetime_str = current_datetime.strftime("%Y-%m-%d %H:%M")
-        
-        store_transaction_metadata(room_number, current_date, serial_number, "booking_conversion")
         
         batch = db.batch()
         totals_update = {}
@@ -447,6 +475,10 @@ def convert_booking_to_checkin():
         if totals_update:
             batch.update(totals_ref.document('current_totals'), totals_update)
         batch.commit()
+
+        # Fix 4: store_transaction_metadata AFTER batch commit
+        store_transaction_metadata(room_number, current_date, serial_number, "booking_conversion")
+
         invalidate_rooms_and_totals()
 
         stay_key = f"{room_number}_{checkin_datetime_str}"
@@ -507,10 +539,11 @@ def convert_booking_to_checkin():
         except Exception as e:
             logger.warning(f"Failed to link booking advances to stay: {e}")
 
+        # Fix 7: sync=True so errors surface in logs rather than dying silently
         customer_service.upsert_customer({
             "name": booking["guest_name"],
             "mobile": booking["guest_mobile"],
-        }, amount_paid=remaining_payment)
+        }, amount_paid=remaining_payment, sync=True)
 
         arrival_status = "early" if current_datetime < expected_datetime else "on time"
 

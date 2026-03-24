@@ -13,6 +13,7 @@ Design principles:
   • All timestamps use Asia/Kolkata (IST).
 """
 
+import hashlib
 import logging
 import threading
 from datetime import datetime, timedelta, timezone
@@ -39,7 +40,7 @@ def init(db):
 # ---------------------------------------------------------------------------
 # WRITE — fire-and-forget in a daemon thread so it never blocks the request
 # ---------------------------------------------------------------------------
-def write_payment(payment_data: dict, *, batch=None):
+def write_payment(payment_data: dict, *, batch=None) -> bool:
     """
     Write a single payment document to the `payments` collection.
 
@@ -54,31 +55,42 @@ def write_payment(payment_data: dict, *, batch=None):
         serial_number, stay_room_key, item, note, booking_id,
         settlement_id, transaction_type, is_fresh_checkin, mobile,
         quantity, unit_price, payment_method, reason, ...
+
+    Returns True if the write was dispatched/queued, False if service is not
+    initialised.
     """
     if _payments_ref is None:
-        return  # service not initialised — silently skip
+        return False  # service not initialised
 
     doc = _normalise(payment_data)
 
     if batch is not None:
         try:
             batch.set(_payments_ref.document(), doc)
+            return True
         except Exception as e:
             logger.error(f"PaymentService batch-write failed: {e}")
+            return False
     else:
         # Async — never block the HTTP response
         threading.Thread(target=_write_async, args=(doc,), daemon=True).start()
+        return True
 
 
-def write_payment_sync(payment_data: dict):
-    """Blocking write — used in migration or where ordering matters."""
+def write_payment_sync(payment_data: dict) -> bool:
+    """
+    Blocking write — used in migration or where ordering matters.
+    Returns True on success, False on failure.
+    """
     if _payments_ref is None:
-        return
+        return False
     try:
         doc = _normalise(payment_data)
         _payments_ref.document().set(doc)
+        return True
     except Exception as e:
         logger.error(f"PaymentService sync-write failed: {e}")
+        return False
 
 
 def _write_async(doc: dict):
@@ -90,7 +102,7 @@ def _write_async(doc: dict):
 
 def _normalise(data: dict) -> dict:
     """
-    Ensure consistent field names and add created_at.
+    Ensure consistent field names and add created_at + idempotency_key.
     Copies data so the caller's dict is not mutated.
     """
     doc = dict(data)  # shallow copy
@@ -104,6 +116,19 @@ def _normalise(data: dict) -> dict:
             doc["amount"] = int(doc["amount"])
         except (ValueError, TypeError):
             doc["amount"] = 0
+    # Fix 16: stable idempotency key for duplicate detection/auditing
+    # Key is a short hash of the fields that uniquely identify a payment event
+    if "idempotency_key" not in doc:
+        key_src = "|".join([
+            str(doc.get("room", "")),
+            str(doc.get("name", "")),
+            str(doc.get("amount", 0)),
+            str(doc.get("method", "")),
+            str(doc.get("type", "")),
+            str(doc.get("date", "")),
+            str(doc.get("time", "")),
+        ])
+        doc["idempotency_key"] = hashlib.md5(key_src.encode()).hexdigest()[:16]
     return doc
 
 

@@ -273,7 +273,161 @@
   .register-table { font-size: 0.73rem; }
   .register-table th, .register-table td { padding: 0.35rem 0.25rem; }
 }
+
+/* ── Payments button (per register row) ── */
+.reg-pay-btn {
+  padding: .18rem .42rem; border: 1px solid #adb5bd;
+  background: #fff; color: #555; border-radius: 4px;
+  cursor: pointer; font-size: .7rem; font-weight: 600;
+  transition: all .15s; white-space: nowrap;
+}
+.reg-pay-btn:hover { background: #6c757d; color: #fff; border-color: #6c757d; }
+
+/* ── Password prompt modal ── */
+.rpm-overlay {
+  display: none; position: fixed; inset: 0;
+  background: rgba(0,0,0,.5); z-index: 1300;
+  align-items: center; justify-content: center;
+}
+.rpm-overlay.show { display: flex; }
+.rpm-box {
+  background: #fff; border-radius: 10px; padding: 1.5rem;
+  width: 300px; box-shadow: 0 8px 32px rgba(0,0,0,.2);
+}
+.rpm-box h3 { margin: 0 0 .9rem; font-size: .92rem; color: #333; }
+.rpm-box label { font-size: .75rem; color: #666; display: block; margin-bottom: .25rem; }
+.rpm-box input[type="password"] {
+  width: 100%; box-sizing: border-box;
+  padding: .42rem .55rem; border: 1px solid #d0d0d0;
+  border-radius: 6px; font-size: .88rem; margin-bottom: .6rem;
+}
+.rpm-box input[type="password"]:focus { outline: none; border-color: var(--primary,#3f51b5); }
+.rpm-err { color: #dc3545; font-size: .75rem; margin-bottom: .5rem; display: none; }
+.rpm-actions { display: flex; gap: .5rem; justify-content: flex-end; }
+.rpm-cancel-btn {
+  padding: .3rem .7rem; border: 1px solid #d0d0d0; background: #fff;
+  border-radius: 6px; cursor: pointer; font-size: .82rem; color: #555;
+}
+.rpm-submit-btn {
+  padding: .3rem .75rem; background: var(--primary,#3f51b5);
+  color: #fff; border: none; border-radius: 6px;
+  cursor: pointer; font-size: .82rem;
+}
+.rpm-submit-btn:hover { opacity: .85; }
+
+/* ── Payments detail modal ── */
+.rp-overlay {
+  display: none; position: fixed; inset: 0;
+  background: rgba(0,0,0,.5); z-index: 1200;
+  align-items: flex-start; justify-content: center;
+  padding: 1rem; overflow-y: auto;
+}
+.rp-overlay.show { display: flex; }
+.rp-modal {
+  background: #fff; border-radius: 10px; width: 100%;
+  max-width: 660px; margin-top: 1rem;
+  box-shadow: 0 8px 32px rgba(0,0,0,.2);
+}
+.rp-header {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: .7rem 1rem; border-bottom: 1px solid #eee;
+  position: sticky; top: 0; background: #fff; z-index: 1;
+  border-radius: 10px 10px 0 0;
+}
+.rp-header h3 { margin: 0; font-size: .92rem; }
+.rp-close { background: none; border: none; font-size: 1.3rem; cursor: pointer; color: #888; }
+.rp-body { padding: 1rem; }
+.rp-meta { font-size: .77rem; color: #666; margin-bottom: .75rem; line-height: 1.55; }
+.rp-meta strong { color: #333; }
+.rp-table { width: 100%; border-collapse: collapse; font-size: .8rem; }
+.rp-table th {
+  background: var(--primary,#3f51b5); color: #fff;
+  padding: .42rem .5rem; text-align: left; font-weight: 600;
+}
+.rp-table td { padding: .45rem .5rem; border-bottom: 1px solid #f0f0f0; vertical-align: middle; }
+.rp-table tbody tr:hover { background: #f7f9fc; }
+.rp-edit-btn {
+  padding: .16rem .42rem; border: 1px solid var(--primary,#3f51b5);
+  background: #fff; color: var(--primary,#3f51b5);
+  border-radius: 4px; cursor: pointer; font-size: .7rem;
+  transition: all .15s;
+}
+.rp-edit-btn:hover { background: var(--primary,#3f51b5); color: #fff; }
+.rp-edit-row { background: #eef2ff !important; }
+.rp-edit-row td { padding: .55rem .5rem !important; }
+.rp-edit-form { display: flex; gap: .45rem; align-items: center; flex-wrap: wrap; }
+.rp-edit-form input[type="date"], .rp-edit-form select {
+  padding: .3rem .45rem; border: 1px solid #d0d0d0;
+  border-radius: 5px; font-size: .8rem;
+}
+.rp-edit-form input[type="date"]:focus,
+.rp-edit-form select:focus { outline: none; border-color: var(--primary,#3f51b5); }
+.rp-save-btn {
+  padding: .28rem .65rem; background: #28a745; color: #fff;
+  border: none; border-radius: 4px; cursor: pointer; font-size: .76rem;
+}
+.rp-save-btn:hover { opacity: .85; }
+.rp-cancel-edit-btn {
+  padding: .28rem .65rem; background: #6c757d; color: #fff;
+  border: none; border-radius: 4px; cursor: pointer; font-size: .76rem;
+}
+.rp-cancel-edit-btn:hover { opacity: .85; }
+.rp-method-cash   { color: #28a745; font-weight: 700; font-size: .72rem; }
+.rp-method-online { color: #1565c0; font-weight: 700; font-size: .72rem; }
+.rp-empty { text-align: center; color: #999; padding: 1.5rem; font-size: .82rem; }
+.rp-spinner { text-align: center; padding: 1.5rem; color: #888; font-size: .82rem; }
+
+/* ── Document view button ── */
+.reg-doc-btn {
+  padding: .18rem .42rem; border: 1px solid #adb5bd;
+  background: #fff; color: #555; border-radius: 4px;
+  cursor: pointer; font-size: .7rem; font-weight: 600;
+  transition: all .15s; white-space: nowrap; margin-left: .25rem;
+}
+.reg-doc-btn:hover { background: #495057; color: #fff; border-color: #495057; }
+
+/* ── ID Documents modal ── */
+.rdoc-overlay {
+  display: none; position: fixed; inset: 0;
+  background: rgba(0,0,0,.55); z-index: 1200;
+  align-items: flex-start; justify-content: center;
+  padding: 1rem; overflow-y: auto;
+}
+.rdoc-overlay.show { display: flex; }
+.rdoc-modal {
+  background: #fff; border-radius: 10px; width: 100%;
+  max-width: 620px; margin-top: 1rem;
+  box-shadow: 0 8px 32px rgba(0,0,0,.22);
+}
+.rdoc-header {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: .7rem 1rem; border-bottom: 1px solid #eee;
+  position: sticky; top: 0; background: #fff; z-index: 1;
+  border-radius: 10px 10px 0 0;
+}
+.rdoc-header h3 { margin: 0; font-size: .92rem; }
+.rdoc-close { background: none; border: none; font-size: 1.3rem; cursor: pointer; color: #888; }
+.rdoc-body { padding: 1rem; }
+.rdoc-meta { font-size: .77rem; color: #666; margin-bottom: .75rem; }
+.rdoc-meta strong { color: #333; }
+.rdoc-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: .75rem;
+}
+.rdoc-img-wrap {
+  border: 1px solid #e0e0e0; border-radius: 6px; overflow: hidden;
+  background: #f8f8f8; aspect-ratio: 4/3; display: flex;
+  align-items: center; justify-content: center;
+}
+.rdoc-img-wrap img {
+  width: 100%; height: 100%; object-fit: cover; cursor: pointer;
+  transition: opacity .15s;
+}
+.rdoc-img-wrap img:hover { opacity: .88; }
+.rdoc-empty { text-align: center; color: #999; padding: 1.5rem; font-size: .82rem; }
+.rdoc-spinner { text-align: center; padding: 1.5rem; color: #888; font-size: .82rem; }
 `;
+
 
   function injectStyles() {
     if (document.getElementById("reg-mod-styles")) return;
@@ -397,11 +551,11 @@
           <th>#</th><th>Bill No</th><th>Guest</th><th>Contact</th>
           <th>Room</th><th>Check-in</th><th>Check-out</th><th>Days</th>
           <th>Rate</th><th>Services</th><th>Total</th>
-          <th>Payment</th><th>Status</th>
+          <th>Payment</th><th>Status</th><th></th>
         </tr>
       </thead>
       <tbody id="reg-table-body">
-        <tr><td colspan="13">
+        <tr><td colspan="14">
           <div class="reg-state">
             <i class="fas fa-book-open"></i>
             <p>Open this tab to load register entries</p>
@@ -409,6 +563,50 @@
         </td></tr>
       </tbody>
     </table>
+  </div>
+</div>
+
+<!-- ── Password prompt modal ──────────────────────────────────────────── -->
+<div id="rpm-overlay" class="rpm-overlay" role="dialog" aria-modal="true">
+  <div class="rpm-box">
+    <h3><i class="fas fa-lock" style="margin-right:.35rem;"></i>Manager Access</h3>
+    <label for="rpm-password">Enter manager password</label>
+    <input type="password" id="rpm-password" placeholder="Password" autocomplete="off" />
+    <div id="rpm-err" class="rpm-err"></div>
+    <div class="rpm-actions">
+      <button class="rpm-cancel-btn" id="rpm-cancel">Cancel</button>
+      <button class="rpm-submit-btn" id="rpm-submit">Open Payments</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── ID Documents modal ─────────────────────────────────────────────── -->
+<div id="rdoc-overlay" class="rdoc-overlay" role="dialog" aria-modal="true">
+  <div class="rdoc-modal">
+    <div class="rdoc-header">
+      <h3><i class="fas fa-id-card" style="margin-right:.4rem;"></i>ID Documents</h3>
+      <button class="rdoc-close" id="rdoc-close" title="Close">&times;</button>
+    </div>
+    <div class="rdoc-body">
+      <div class="rdoc-meta" id="rdoc-meta"></div>
+      <div id="rdoc-content"><div class="rdoc-spinner">Loading…</div></div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Payments detail modal ──────────────────────────────────────────── -->
+<div id="rp-overlay" class="rp-overlay" role="dialog" aria-modal="true">
+  <div class="rp-modal">
+    <div class="rp-header">
+      <h3><i class="fas fa-money-bill-wave" style="margin-right:.4rem;"></i>Payment Records</h3>
+      <button class="rp-close" id="rp-close" title="Close">&times;</button>
+    </div>
+    <div class="rp-body">
+      <div class="rp-meta" id="rp-meta"></div>
+      <div id="rp-content">
+        <div class="rp-spinner">Loading…</div>
+      </div>
+    </div>
   </div>
 </div>`;
   }
@@ -495,14 +693,66 @@
     const rb = dom("reg-refresh-btn");
     if (rb) rb.addEventListener("click", () => loadData(true));
 
-    // Delegated: group toggle
+    // Delegated: group toggle + pay button
     const tbody = dom("reg-table-body");
     if (tbody) {
       tbody.addEventListener("click", (e) => {
         const hdr = e.target.closest(".date-group-header");
-        if (hdr) toggleGroup(hdr);
+        if (hdr) { toggleGroup(hdr); return; }
+
+        const payBtn = e.target.closest(".reg-pay-btn");
+        if (payBtn) {
+          e.stopPropagation();
+          _openPasswordPrompt({
+            room:         payBtn.dataset.room,
+            guest_name:   decodeURIComponent(payBtn.dataset.guest || ""),
+            checkin_time: payBtn.dataset.checkin,
+          });
+          return;
+        }
+
+        const docBtn = e.target.closest(".reg-doc-btn");
+        if (docBtn) {
+          e.stopPropagation();
+          _openDocsModal(
+            docBtn.dataset.mobile,
+            decodeURIComponent(docBtn.dataset.guest || "")
+          );
+        }
       });
     }
+
+    // Doc modal close
+    const rdocClose = dom("rdoc-close");
+    if (rdocClose) rdocClose.addEventListener("click", _closeDocsModal);
+    const rdocOverlay = dom("rdoc-overlay");
+    if (rdocOverlay) rdocOverlay.addEventListener("click", (e) => {
+      if (e.target === rdocOverlay) _closeDocsModal();
+    });
+
+    // Password modal buttons
+    const rpmCancel = dom("rpm-cancel");
+    const rpmSubmit = dom("rpm-submit");
+    const rpmPwd    = dom("rpm-password");
+    if (rpmCancel) rpmCancel.addEventListener("click", _closePasswordPrompt);
+    if (rpmSubmit) rpmSubmit.addEventListener("click", _submitPassword);
+    if (rpmPwd)    rpmPwd.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") _submitPassword();
+    });
+
+    // Payments modal close
+    const rpClose = dom("rp-close");
+    if (rpClose) rpClose.addEventListener("click", _closePaymentsModal);
+
+    // Close modals on overlay click
+    const rpmOverlay = dom("rpm-overlay");
+    if (rpmOverlay) rpmOverlay.addEventListener("click", (e) => {
+      if (e.target === rpmOverlay) _closePasswordPrompt();
+    });
+    const rpOverlay = dom("rp-overlay");
+    if (rpOverlay) rpOverlay.addEventListener("click", (e) => {
+      if (e.target === rpOverlay) _closePaymentsModal();
+    });
   }
 
   // ── Load data from server ────────────────────────────────────────────────────
@@ -584,6 +834,7 @@
 
     state.filteredEntries = f;
     renderTable();
+    _checkAndShowDocButtons();
   }
 
   // ── Render ────────────────────────────────────────────────────────────────────
@@ -609,7 +860,7 @@
         const entries = byDate[dk];
         const label = dk !== "unknown" ? fmtDate(dk) : "Unknown Date";
         html += `<tr class="date-group-header" data-group="${dk}">
-        <td colspan="13"><i class="fas fa-chevron-down"></i>${label}&nbsp;<span style="font-weight:400;opacity:.65;">(${entries.length})</span></td>
+        <td colspan="14"><i class="fas fa-chevron-down"></i>${label}&nbsp;<span style="font-weight:400;opacity:.65;">(${entries.length})</span></td>
       </tr>`;
         entries.forEach((e) => {
           html += rowHTML(e, dk);
@@ -642,6 +893,18 @@
       <td><strong>₹${inr(e.total_amount)}</strong></td>
       <td>${paymentHTML(e)}</td>
       <td><span class="status-badge ${stCls}">${e.status}</span></td>
+      <td style="white-space:nowrap;">
+        <button class="reg-pay-btn"
+            data-room="${e.room}"
+            data-guest="${encodeURIComponent(e.guest_name || '')}"
+            data-checkin="${e.checkin_time || ''}"
+            title="View / edit payments">₹</button>${e.guest_mobile
+          ? `<button class="reg-doc-btn"
+                data-mobile="${e.guest_mobile}"
+                data-guest="${encodeURIComponent(e.guest_name || '')}"
+                title="View ID documents"
+                style="display:none;"><i class="fas fa-id-card"></i></button>`
+          : ''}</td>
     </tr>`;
   }
 
@@ -671,17 +934,17 @@
   function showLoading() {
     const t = dom("reg-table-body");
     if (t)
-      t.innerHTML = `<tr><td colspan="13"><div class="reg-state"><div class="reg-loader"></div><p>Loading…</p></div></td></tr>`;
+      t.innerHTML = `<tr><td colspan="14"><div class="reg-state"><div class="reg-loader"></div><p>Loading…</p></div></td></tr>`;
   }
   function showEmpty() {
     const t = dom("reg-table-body");
     if (t)
-      t.innerHTML = `<tr><td colspan="13"><div class="reg-state"><i class="fas fa-inbox"></i><p>No entries found for this period</p></div></td></tr>`;
+      t.innerHTML = `<tr><td colspan="14"><div class="reg-state"><i class="fas fa-inbox"></i><p>No entries found for this period</p></div></td></tr>`;
   }
   function showError(msg) {
     const t = dom("reg-table-body");
     if (t)
-      t.innerHTML = `<tr><td colspan="13"><div class="reg-state" style="color:#dc3545"><i class="fas fa-exclamation-circle"></i><p>${msg}</p></div></td></tr>`;
+      t.innerHTML = `<tr><td colspan="14"><div class="reg-state" style="color:#dc3545"><i class="fas fa-exclamation-circle"></i><p>${msg}</p></div></td></tr>`;
   }
 
   // ── Tab activation watch ──────────────────────────────────────────────────────
@@ -697,6 +960,397 @@
 
     if (!tab.classList.contains("hidden")) loadData(true);
   }
+
+  // ══════════════════════════════════════════════════════════════════════════════
+  // ID DOCUMENTS MODAL — view customer docs, no password required
+  // ══════════════════════════════════════════════════════════════════════════════
+
+  async function _checkAndShowDocButtons() {
+    // Collect unique mobile numbers from current filtered entries
+    const mobiles = [...new Set(
+      state.filteredEntries
+        .map(e => e.guest_mobile)
+        .filter(m => m && m.trim())
+    )];
+    if (!mobiles.length) return;
+
+    try {
+      const res  = await fetch("/batch_check_customer_docs", {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({ mobiles }),
+      });
+      const data = await res.json();
+      if (!data.success) return;
+
+      const withDocs = new Set(data.mobiles_with_docs || []);
+      // Reveal the hidden doc buttons for mobiles that have documents
+      document.querySelectorAll(".reg-doc-btn").forEach(btn => {
+        if (withDocs.has(btn.dataset.mobile)) {
+          btn.style.display = "inline-block";
+        }
+      });
+    } catch (_) {
+      // Silent fail — buttons stay hidden, not a blocking issue
+    }
+  }
+
+  async function _openDocsModal(mobile, guestName) {
+    const overlay = dom("rdoc-overlay");
+    const meta    = dom("rdoc-meta");
+    const content = dom("rdoc-content");
+    if (!overlay) return;
+
+    // Show modal immediately with spinner
+    if (meta)    meta.innerHTML = `<strong>Guest:</strong> ${guestName || "-"} &nbsp;|&nbsp; <strong>Mobile:</strong> ${mobile || "-"}`;
+    if (content) content.innerHTML = `<div class="rdoc-spinner"><i class="fas fa-spinner fa-spin"></i> Loading…</div>`;
+    overlay.classList.add("show");
+
+    try {
+      const res  = await fetch(`/get_customer/${encodeURIComponent(mobile)}`);
+      const data = await res.json();
+
+      if (!data.success || !data.customer) {
+        if (content) content.innerHTML = `<div class="rdoc-empty">No customer record found for this mobile number.</div>`;
+        return;
+      }
+
+      const urls = data.customer.id_doc_urls || [];
+      if (!urls.length) {
+        if (content) content.innerHTML = `<div class="rdoc-empty"><i class="fas fa-folder-open" style="font-size:1.5rem;opacity:.3;display:block;margin-bottom:.5rem;"></i>No ID documents on file for this guest.</div>`;
+        return;
+      }
+
+      // Render image grid — each image opens full-size in a new tab on click
+      const imgTiles = urls.map((url, i) =>
+        `<div class="rdoc-img-wrap">
+          <img src="${url}" alt="ID Document ${i + 1}" loading="lazy"
+               onclick="window.open('${url}', '_blank')"
+               onerror="this.parentElement.innerHTML='<span style=\\'color:#bbb;font-size:.75rem;\\'>Failed to load</span>'" />
+        </div>`
+      ).join("");
+
+      if (content) content.innerHTML = `<div class="rdoc-grid">${imgTiles}</div>`;
+
+    } catch (err) {
+      if (content) content.innerHTML = `<div class="rdoc-empty" style="color:#dc3545;">Network error — could not load documents.</div>`;
+    }
+  }
+
+  function _closeDocsModal() {
+    const overlay = dom("rdoc-overlay");
+    if (overlay) overlay.classList.remove("show");
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════════
+  // STAY PAYMENTS MODAL — password-protected view + edit of payment records
+  // ══════════════════════════════════════════════════════════════════════════════
+
+  // Module-level state for the payments flow
+  const pmState = {
+    entry:    null,   // { room, guest_name, checkin_time }
+    password: null,   // stored in-memory after first successful verify
+    payments: [],     // loaded payment records
+    editId:   null,   // payment doc id currently being edited
+  };
+
+  // ── Helpers ──────────────────────────────────────────────────────────────────
+  function _fmtPmDate(d) {
+    // "2026-03-24" → "24 Mar 2026"
+    if (!d) return "-";
+    const [y, m, day] = d.split("-");
+    const mn = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+    return `${parseInt(day)} ${mn[parseInt(m)-1]} ${y}`;
+  }
+
+  function _typeLabel(t) {
+    const map = {
+      checkin: "Check-in", checkout: "Checkout", payment: "Payment",
+      renewal: "Renewal", addon: "Add-on",
+      refund: "Refund", checkout_refund: "Refund",
+      manual_refund: "Refund", pay_later: "Pay Later",
+    };
+    return map[t] || t || "-";
+  }
+
+  function _notify(msg, type) {
+    // Simple toast — reuse if a global _notify exists, otherwise alert
+    if (window._notify) { window._notify(msg, type); return; }
+    if (type === "error") console.error(msg); else console.log(msg);
+  }
+
+  // ── Password prompt ───────────────────────────────────────────────────────────
+  function _openPasswordPrompt(entry) {
+    pmState.entry = entry;
+
+    // If password already verified this session, skip prompt and load directly
+    if (pmState.password) {
+      _loadAndShowPayments();
+      return;
+    }
+
+    const overlay = dom("rpm-overlay");
+    const pwd     = dom("rpm-password");
+    const err     = dom("rpm-err");
+    if (!overlay) return;
+    if (err)  { err.style.display = "none"; err.textContent = ""; }
+    if (pwd)  { pwd.value = ""; }
+    overlay.classList.add("show");
+    setTimeout(() => { if (pwd) pwd.focus(); }, 80);
+  }
+
+  // Shared fetch logic — called after password is confirmed (via prompt or cache)
+  async function _loadAndShowPayments() {
+    const btn = dom("rpm-submit");
+    const err = dom("rpm-err");
+
+    try {
+      const res = await fetch("/get_stay_payments", {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({
+          password:     pmState.password,
+          room:         pmState.entry.room,
+          guest_name:   pmState.entry.guest_name,
+          checkin_time: pmState.entry.checkin_time,
+        }),
+      });
+
+      if (res.status === 403) {
+        // Stored password rejected (e.g. changed server-side) — clear and re-prompt
+        pmState.password = null;
+        _openPasswordPrompt(pmState.entry);
+        return;
+      }
+
+      const data = await res.json();
+      if (!data.success) {
+        _notify(data.message || "Failed to load payments.", "error");
+        return;
+      }
+
+      pmState.payments = data.payments || [];
+      _showPaymentsModal();
+
+    } catch (e) {
+      _notify("Network error loading payments.", "error");
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = "Open Payments"; }
+    }
+  }
+
+  function _closePasswordPrompt() {
+    const overlay = dom("rpm-overlay");
+    if (overlay) overlay.classList.remove("show");
+  }
+
+  async function _submitPassword() {
+    const pwd  = dom("rpm-password");
+    const err  = dom("rpm-err");
+    const btn  = dom("rpm-submit");
+    const pass = pwd ? pwd.value.trim() : "";
+
+    if (!pass) {
+      if (err) { err.textContent = "Please enter the password."; err.style.display = "block"; }
+      return;
+    }
+
+    if (btn) { btn.disabled = true; btn.textContent = "Verifying…"; }
+    if (err) { err.style.display = "none"; }
+
+    // Store password then use shared loader
+    pmState.password = pass;
+
+    try {
+      const res = await fetch("/get_stay_payments", {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({
+          password:     pass,
+          room:         pmState.entry.room,
+          guest_name:   pmState.entry.guest_name,
+          checkin_time: pmState.entry.checkin_time,
+        }),
+      });
+
+      if (res.status === 403) {
+        pmState.password = null;  // wrong password — don't cache it
+        if (err) { err.textContent = "Incorrect password. Try again."; err.style.display = "block"; }
+        if (pwd) { pwd.value = ""; pwd.focus(); }
+        return;
+      }
+
+      const data = await res.json();
+      if (!data.success) {
+        pmState.password = null;
+        if (err) { err.textContent = data.message || "Failed to load payments."; err.style.display = "block"; }
+        return;
+      }
+
+      pmState.payments = data.payments || [];
+      _closePasswordPrompt();
+      _showPaymentsModal();
+
+    } catch (e) {
+      pmState.password = null;
+      if (err) { err.textContent = "Network error. Please try again."; err.style.display = "block"; }
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = "Open Payments"; }
+    }
+  }
+
+  // ── Payments modal ────────────────────────────────────────────────────────────
+  function _showPaymentsModal() {
+    const overlay = dom("rp-overlay");
+    const meta    = dom("rp-meta");
+    const content = dom("rp-content");
+    if (!overlay) return;
+
+    const e = pmState.entry;
+    if (meta) {
+      meta.innerHTML =
+        `<strong>Guest:</strong> ${e.guest_name || "-"} &nbsp;|&nbsp; ` +
+        `<strong>Room:</strong> ${e.room || "-"} &nbsp;|&nbsp; ` +
+        `<strong>Check-in:</strong> ${e.checkin_time || "-"}`;
+    }
+
+    pmState.editId = null;
+    _renderPaymentsTable(content);
+    overlay.classList.add("show");
+  }
+
+  function _closePaymentsModal() {
+    const overlay = dom("rp-overlay");
+    if (overlay) overlay.classList.remove("show");
+    pmState.editId  = null;
+    pmState.entry   = null;
+    pmState.payments = [];
+    // Do NOT clear pmState.password — user may open another entry without re-typing
+  }
+
+  function _renderPaymentsTable(container) {
+    if (!container) return;
+    const payments = pmState.payments;
+
+    if (!payments.length) {
+      container.innerHTML = `<div class="rp-empty">No payment records found for this stay.</div>`;
+      return;
+    }
+
+    let rows = "";
+    payments.forEach((p) => {
+      const isEditing = (pmState.editId === p.id);
+      const methodCls = p.method === "cash" ? "rp-method-cash" : "rp-method-online";
+      const methodLbl = p.method === "cash" ? "Cash" : (p.method === "online" ? "Online" : p.method);
+
+      if (isEditing) {
+        rows += `
+        <tr class="rp-edit-row" data-pid="${p.id}">
+          <td colspan="5">
+            <div class="rp-edit-form">
+              <label style="font-size:.75rem;font-weight:600;color:#555;white-space:nowrap;">Date:</label>
+              <input type="date" id="rp-edit-date-${p.id}" value="${p.date || ''}" />
+              <label style="font-size:.75rem;font-weight:600;color:#555;white-space:nowrap;">Mode:</label>
+              <select id="rp-edit-mode-${p.id}">
+                <option value="cash"   ${p.method === "cash"   ? "selected" : ""}>Cash</option>
+                <option value="online" ${p.method === "online" ? "selected" : ""}>Online</option>
+              </select>
+              <button class="rp-save-btn"        onclick="_rpSave('${p.id}')">Save</button>
+              <button class="rp-cancel-edit-btn" onclick="_rpCancelEdit()">Cancel</button>
+            </div>
+          </td>
+        </tr>`;
+      } else {
+        rows += `
+        <tr data-pid="${p.id}">
+          <td>${_fmtPmDate(p.date)}${p.time ? ' <span style="color:#999;font-size:.7rem;">' + p.time + '</span>' : ''}</td>
+          <td><span class="${methodCls}">${methodLbl}</span></td>
+          <td><strong>₹${(p.amount || 0).toLocaleString("en-IN")}</strong></td>
+          <td style="color:#666;font-size:.73rem;">${_typeLabel(p.type)}</td>
+          <td><button class="rp-edit-btn" onclick="_rpStartEdit('${p.id}')">Edit</button></td>
+        </tr>`;
+      }
+    });
+
+    container.innerHTML = `
+      <table class="rp-table">
+        <thead>
+          <tr>
+            <th>Date</th><th>Mode</th><th>Amount</th><th>Type</th><th></th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>`;
+  }
+
+  // Called by onclick attributes in the rendered table
+  window._rpStartEdit = function(payId) {
+    pmState.editId = payId;
+    const container = dom("rp-content");
+    _renderPaymentsTable(container);
+    // Focus the date input
+    const dateInput = dom(`rp-edit-date-${payId}`);
+    if (dateInput) dateInput.focus();
+  };
+
+  window._rpCancelEdit = function() {
+    pmState.editId = null;
+    _renderPaymentsTable(dom("rp-content"));
+  };
+
+  window._rpSave = async function(payId) {
+    const dateInput = dom(`rp-edit-date-${payId}`);
+    const modeInput = dom(`rp-edit-mode-${payId}`);
+    const saveBtn   = document.querySelector(`.rp-edit-row[data-pid="${payId}"] .rp-save-btn`);
+
+    const newDate   = dateInput ? dateInput.value.trim() : "";
+    const newMethod = modeInput ? modeInput.value.trim() : "";
+
+    if (!newDate || !newMethod) {
+      _notify("Date and mode are required.", "error");
+      return;
+    }
+
+    if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = "Saving…"; }
+
+    try {
+      const res = await fetch("/update_stay_payment", {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({
+          password:   pmState.password,
+          payment_id: payId,
+          method:     newMethod,
+          date:       newDate,
+        }),
+      });
+
+      if (res.status === 403) {
+        _notify("Session expired. Please close and re-open payments.", "error");
+        pmState.password = null;
+        return;
+      }
+
+      const data = await res.json();
+      if (!data.success) {
+        _notify(data.message || "Update failed.", "error");
+        return;
+      }
+
+      // Update local state so re-render is instant (no refetch needed)
+      const p = pmState.payments.find(x => x.id === payId);
+      if (p) { p.method = newMethod; p.date = newDate; }
+
+      pmState.editId = null;
+      _renderPaymentsTable(dom("rp-content"));
+      _notify("Payment updated.", "success");
+
+    } catch (err) {
+      _notify("Network error. Please try again.", "error");
+    } finally {
+      if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = "Save"; }
+    }
+  };
 
   // ── Init ──────────────────────────────────────────────────────────────────────
   function init() {

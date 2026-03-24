@@ -53,20 +53,34 @@ def checkin():
         current_date = datetime.now(IST).strftime("%Y-%m-%d")
 
         serial_number = get_next_serial_number(current_date)
-        store_transaction_metadata(room, current_date, serial_number, "fresh_checkin")
 
-        batch = db.batch()
-
+        # ── Fix 2: Atomically claim the room — prevents double check-in ──────
         room_ref = rooms_ref.document(room)
-        batch.update(room_ref, {
-            "status": "occupied",
-            "guest": guest,
-            "checkin_time": current_time,
-            "balance": balance,
-            "add_ons": [],
-            "renewal_count": 0,
-            "last_renewal_time": None
-        })
+
+        @firestore.transactional
+        def _claim_room(txn, r_ref):
+            snap = r_ref.get(transaction=txn)
+            if not snap.exists:
+                raise ValueError(f"Room {room} does not exist")
+            if snap.to_dict().get("status") != "vacant":
+                raise ValueError(f"Room {room} is already occupied")
+            txn.update(r_ref, {
+                "status": "occupied",
+                "guest": guest,
+                "checkin_time": current_time,
+                "balance": balance,
+                "add_ons": [],
+                "renewal_count": 0,
+                "last_renewal_time": None,
+            })
+
+        try:
+            _claim_room(db.transaction(), room_ref)
+        except ValueError as ve:
+            return jsonify(success=False, message=str(ve))
+
+        # Room is now atomically claimed — write logs and totals in a batch
+        batch = db.batch()
 
         # Build atomic update for totals
         totals_update = {}
@@ -124,6 +138,10 @@ def checkin():
             batch.update(totals_ref.document('current_totals'), totals_update)
         batch.commit()
 
+        # Fix 4: store_transaction_metadata AFTER batch commit so serial is
+        # only persisted if the batch succeeded
+        store_transaction_metadata(room, current_date, serial_number, "fresh_checkin")
+
         invalidate_rooms_and_totals()
 
         # --- Dual-write: payments collection ---
@@ -155,7 +173,8 @@ def checkin():
                 "transaction_type": "fresh_checkin",
             })
 
-        # --- Auto-create / update customer record ---
+        # Fix 7: sync=True so customer record errors are visible and logged
+        # rather than silently swallowed in a daemon thread
         customer_service.upsert_customer({
             "name": guest["name"],
             "mobile": data_json.get("mobile", ""),
@@ -163,7 +182,7 @@ def checkin():
             "id_number": data_json.get("id_number", ""),
             "address": data_json.get("address", ""),
             "photo": data_json.get("photo_path", ""),
-        }, amount_paid=amount_paid)
+        }, amount_paid=amount_paid, sync=True)
 
         logger.info(f"Check-in successful for room {room}, guest: {guest['name']}, serial: {serial_number}")
         return jsonify(
@@ -734,18 +753,53 @@ def update_checkin_time():
                     .where(filter=_FF("room", "==", str(room)))
                     .where(filter=_FF("date", "==", old_date))
                 )
+                new_time_str = new_checkin_dt.strftime("%H:%M")
+                old_payment_serial = None
                 for pdoc in pq.stream():
                     pdata = pdoc.to_dict()
                     # Only update the first checkin/booking_conversion payment
                     if (pdata.get("name") == guest_name and
                             pdata.get("transaction_type") in
                             ("fresh_checkin", "booking_conversion")):
+                        old_payment_serial = pdata.get("serial_number")
                         pdoc.reference.update({
                             "date": new_date,
+                            "time": new_time_str,
                             "serial_number": new_serial,
                             "original_date": old_date,
                         })
-                        logger.info(f"Updated payments doc {pdoc.id}: date {old_date} -> {new_date}, serial #{new_serial}")
+                        logger.info(f"Updated payments doc {pdoc.id}: date {old_date} -> {new_date}, time -> {new_time_str}, serial #{new_serial}")
+
+                # Fix 3: release the old date's counter slot only if it was the
+                # last serial issued that day.  This lets the next check-in on
+                # old_date reuse the number instead of skipping it.
+                # If it was NOT the last (other guests checked in after), we leave
+                # the counter alone to avoid creating a duplicate serial.
+                if old_payment_serial is not None:
+                    old_counter_ref = counters_ref.document(old_date)
+
+                    @firestore.transactional
+                    def _release_if_last(txn, cref, released_serial):
+                        snap = cref.get(transaction=txn)
+                        if snap.exists and snap.get('count') == released_serial:
+                            txn.update(cref, {'count': _fs.Increment(-1)})
+                            return True
+                        return False
+
+                    was_released = _release_if_last(
+                        db.transaction(), old_counter_ref, old_payment_serial
+                    )
+                    if was_released:
+                        logger.info(
+                            f"Released serial #{old_payment_serial} from {old_date} "
+                            f"counter — next check-in on {old_date} will reuse it"
+                        )
+                    else:
+                        logger.info(
+                            f"Serial #{old_payment_serial} was not the last on {old_date}; "
+                            f"counter unchanged (gap accepted to avoid collision)"
+                        )
+
             except Exception as e:
                 logger.warning(f"Failed to update payments collection for date change: {e}")
 
@@ -1123,8 +1177,9 @@ def get_data():
                          "booking_cancel_refund")
 
         # Build logs in the shape the frontend expects — all from one query
+        # "pay_later" method is used for settle-later check-ins; include alongside cash
         cash_logs = [p for p in recent_payments
-                     if p.get("method") == "cash"
+                     if p.get("method") in ("cash", "pay_later")
                      and p.get("type") not in _refund_types
                      and p.get("type") not in ("expense", "discount")]
         online_logs = [p for p in recent_payments
@@ -1290,3 +1345,208 @@ def cleanup_old_data_route():
         return jsonify(success=True, message="Old data cleaned up successfully")
     except Exception as e:
         return jsonify(success=False, message=f"Error cleaning up data: {str(e)}")
+
+
+# ── Manager password helper ───────────────────────────────────────────────────
+import os as _os
+
+def _check_manager_password(provided: str) -> bool:
+    """
+    Verify the manager password against the MANAGER_PASSWORD env var.
+    Falls back to a default only in development (env var not set).
+    Never expose the result in logs.
+    """
+    expected = _os.environ.get("MANAGER_PASSWORD", "manager@1234")
+    return provided == expected
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# STAY PAYMENTS — view & edit payment records for a specific stay
+# ══════════════════════════════════════════════════════════════════════════════
+
+@rooms_bp.route("/get_stay_payments", methods=["POST"])
+def get_stay_payments():
+    """
+    Return all payment documents for a specific stay.
+
+    Body: {
+        password: str,
+        room: str,
+        guest_name: str,
+        checkin_time: str  -- "YYYY-MM-DD HH:MM"
+    }
+
+    Queries the `payments` collection by room + name + date >= checkin_date.
+    Returns each doc with its Firestore document ID so the frontend can
+    address individual records for editing.
+
+    Excludes expense and discount records (those are not guest payments).
+    """
+    try:
+        data = request.json or {}
+        password     = data.get("password", "")
+        room         = str(data.get("room", "")).strip()
+        guest_name   = data.get("guest_name", "").strip()
+        checkin_time = data.get("checkin_time", "").strip()
+
+        # ── Auth ──────────────────────────────────────────────────────────────
+        if not _check_manager_password(password):
+            return jsonify(success=False, message="Incorrect password"), 403
+
+        # ── Validate inputs ───────────────────────────────────────────────────
+        if not room or not guest_name or not checkin_time:
+            return jsonify(success=False, message="room, guest_name, checkin_time are required"), 400
+
+        try:
+            checkin_dt = datetime.strptime(checkin_time, "%Y-%m-%d %H:%M")
+        except ValueError:
+            return jsonify(success=False, message="checkin_time must be YYYY-MM-DD HH:MM"), 400
+
+        checkin_date_str = checkin_dt.strftime("%Y-%m-%d")
+
+        # ── Query payments collection ─────────────────────────────────────────
+        _payments_ref = db.collection("payments")
+        _exclude_types = ("expense", "discount")
+
+        query = (
+            _payments_ref
+            .where(filter=FieldFilter("room",  "==", room))
+            .where(filter=FieldFilter("name",  "==", guest_name))
+            .where(filter=FieldFilter("date",  ">=", checkin_date_str))
+        )
+
+        payments = []
+        for doc in query.stream():
+            d = doc.to_dict()
+            if d.get("type") in _exclude_types:
+                continue
+            payments.append({
+                "id":     doc.id,
+                "amount": d.get("amount", 0),
+                "method": d.get("method", ""),
+                "type":   d.get("type", ""),
+                "date":   d.get("date", ""),
+                "time":   d.get("time", ""),
+                "note":   d.get("note", ""),
+            })
+
+        # Sort in Python — avoids requiring a composite Firestore index
+        payments.sort(key=lambda p: (p.get("date", ""), p.get("time", "")))
+
+        logger.info(f"get_stay_payments: room={room} guest={guest_name} "
+                    f"checkin={checkin_date_str} → {len(payments)} records")
+        return jsonify(success=True, payments=payments)
+
+    except Exception as e:
+        logger.error(f"get_stay_payments error: {e}", exc_info=True)
+        return jsonify(success=False, message=f"Error: {str(e)}"), 500
+
+
+@rooms_bp.route("/update_stay_payment", methods=["POST"])
+def update_stay_payment():
+    """
+    Edit the method and/or date of a single payment record.
+
+    Body: {
+        password: str,
+        payment_id: str,        -- Firestore document ID in payments collection
+        method: "cash"|"online",
+        date: "YYYY-MM-DD",
+        time: "HH:MM"           -- optional, preserves original if omitted
+    }
+
+    Side effects:
+      - Updates the payment doc in the `payments` collection.
+      - If method changed: adjusts `current_totals` atomically
+        (decrements old method, increments new method).
+
+    Does NOT touch the legacy `logs` collection.
+    All operations are wrapped in a Firestore transaction / batch so they
+    are atomic.
+    """
+    try:
+        data = request.json or {}
+        password   = data.get("password", "")
+        payment_id = data.get("payment_id", "").strip()
+        new_method = data.get("method", "").strip().lower()
+        new_date   = data.get("date", "").strip()
+        new_time   = data.get("time", "").strip()
+
+        # ── Auth ──────────────────────────────────────────────────────────────
+        if not _check_manager_password(password):
+            return jsonify(success=False, message="Incorrect password"), 403
+
+        # ── Validate ──────────────────────────────────────────────────────────
+        if not payment_id:
+            return jsonify(success=False, message="payment_id is required"), 400
+
+        if new_method and new_method not in ("cash", "online"):
+            return jsonify(success=False, message="method must be cash or online"), 400
+
+        if new_date:
+            try:
+                datetime.strptime(new_date, "%Y-%m-%d")
+            except ValueError:
+                return jsonify(success=False, message="date must be YYYY-MM-DD"), 400
+
+        if new_time:
+            try:
+                datetime.strptime(new_time, "%H:%M")
+            except ValueError:
+                return jsonify(success=False, message="time must be HH:MM"), 400
+
+        # ── Fetch the existing payment doc ────────────────────────────────────
+        _payments_ref = db.collection("payments")
+        pay_doc_ref   = _payments_ref.document(payment_id)
+        pay_snap      = pay_doc_ref.get()
+
+        if not pay_snap.exists:
+            return jsonify(success=False, message="Payment record not found"), 404
+
+        old_data   = pay_snap.to_dict()
+        old_method = old_data.get("method", "")
+        old_amount = int(old_data.get("amount", 0))
+
+        # ── Build update payload ──────────────────────────────────────────────
+        update_fields = {}
+        if new_method and new_method != old_method:
+            update_fields["method"] = new_method
+        if new_date:
+            update_fields["date"] = new_date
+        if new_time:
+            update_fields["time"] = new_time
+
+        if not update_fields:
+            return jsonify(success=True, message="No changes detected")
+
+        # ── Apply changes atomically ──────────────────────────────────────────
+        batch = db.batch()
+
+        # 1. Update payments doc
+        batch.update(pay_doc_ref, update_fields)
+
+        # 2. If method changed, adjust current_totals
+        #    Only adjust for positive payment methods (cash/online).
+        #    Pay_later and balance entries don't affect cash/online totals directly.
+        totals_doc_ref = totals_ref.document("current_totals")
+        if new_method and new_method != old_method:
+            valid_total_methods = ("cash", "online")
+            totals_delta = {}
+            if old_method in valid_total_methods:
+                totals_delta[old_method] = firestore.Increment(-old_amount)
+            if new_method in valid_total_methods:
+                totals_delta[new_method] = firestore.Increment(old_amount)
+            if totals_delta:
+                batch.update(totals_doc_ref, totals_delta)
+
+        batch.commit()
+
+        invalidate_rooms_and_totals()
+
+        logger.info(f"update_stay_payment: id={payment_id} "
+                    f"changes={update_fields} old_method={old_method}")
+        return jsonify(success=True, message="Payment updated successfully")
+
+    except Exception as e:
+        logger.error(f"update_stay_payment error: {e}", exc_info=True)
+        return jsonify(success=False, message=f"Error: {str(e)}"), 500

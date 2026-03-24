@@ -199,3 +199,41 @@ def delete_customer_document():
         return jsonify(success=False, message=f"Error: {e}"), 500
 
 
+@customers_bp.route("/batch_check_customer_docs", methods=["POST"])
+def batch_check_customer_docs():
+    """
+    Given a list of mobile numbers, return which ones have at least one
+    ID document stored (non-empty id_doc_urls).
+
+    Uses Firestore getAll() for a single round-trip regardless of list size.
+
+    Body:  { "mobiles": ["9876543210", ...] }
+    Returns: { "success": true, "mobiles_with_docs": ["9876543210", ...] }
+    """
+    try:
+        from config import db as _db
+        data    = request.json or {}
+        mobiles = [str(m).strip() for m in data.get("mobiles", []) if m]
+        mobiles = list(dict.fromkeys(mobiles))[:100]  # deduplicate, cap at 100
+
+        if not mobiles:
+            return jsonify(success=True, mobiles_with_docs=[])
+
+        cust_ref = _db.collection("customers")
+        refs     = [cust_ref.document(m) for m in mobiles]
+
+        mobiles_with_docs = []
+        for snap in _db.get_all(refs):
+            if snap.exists:
+                urls = snap.get("id_doc_urls") or []
+                if urls:
+                    mobiles_with_docs.append(snap.id)
+
+        return jsonify(success=True, mobiles_with_docs=mobiles_with_docs)
+
+    except Exception as e:
+        logger.error(f"batch_check_customer_docs error: {e}")
+        # Non-fatal — return empty so the UI just hides all doc buttons
+        return jsonify(success=True, mobiles_with_docs=[])
+
+

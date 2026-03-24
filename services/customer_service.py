@@ -18,6 +18,7 @@ Design:
 import logging
 import threading
 from datetime import datetime, timezone
+from firebase_admin import firestore as _fs
 
 logger = logging.getLogger(__name__)
 
@@ -278,6 +279,11 @@ def upload_document(mobile: str, image_bytes: bytes, filename: str) -> str:
     Tries Firebase Storage first; falls back to local file serving if Storage
     is not configured or fails.  Enforces a hard cap of 3 documents per customer.
 
+    Uses a Firestore transaction to atomically check the cap and append the URL,
+    preventing TOCTOU races when concurrent uploads happen.  If the transaction
+    detects the cap was hit after the Storage upload already completed, the
+    orphaned blob is deleted from Storage.
+
     Returns the public URL on success, or an empty string on failure.
     """
     if _customers_ref is None:
@@ -288,38 +294,53 @@ def upload_document(mobile: str, image_bytes: bytes, filename: str) -> str:
         return ""
 
     try:
-        # ── Check cap BEFORE uploading to avoid orphaned Storage files ──────
+        # ── Pre-flight cap check (fast path, avoids unnecessary Storage upload) ──
         doc_ref = _customers_ref.document(clean)
-        doc     = doc_ref.get()
-        existing_urls = []
-
-        if doc.exists:
-            existing_urls = doc.to_dict().get("id_doc_urls", [])
-            if len(existing_urls) >= 3:
+        pre_snap = doc_ref.get()
+        if pre_snap.exists:
+            if len(pre_snap.to_dict().get("id_doc_urls", []) or []) >= 3:
                 logger.warning(f"CustomerService: {clean} already has max (3) docs, aborting upload")
-                return ""   # caller gets "" → route returns success=False
+                return ""
 
-        # ── Now safe to upload ───────────────────────────────────────────────
+        # ── Upload to Storage ─────────────────────────────────────────────────
         url = _store_image(clean, filename, image_bytes)
         if not url:
             return ""
 
-        if doc.exists:
-            if url not in existing_urls:
-                existing_urls.append(url)
-                doc_ref.update({"id_doc_urls": existing_urls})
-        else:
-            # Minimal stub record – will be enriched on first check-in
-            doc_ref.set({
-                "mobile": clean,
-                "name": "",
-                "address": "",
-                "id_doc_urls": [url],
-                "total_stays": 0,
-                "total_spent": 0,
-                "first_visit": datetime.now(timezone.utc).isoformat(),
-                "last_stay_date": "",
-            })
+        # ── Atomic Firestore transaction: append URL or clean up orphan ───────
+        @_fs.transactional
+        def _append_url(transaction, d_ref, new_url):
+            snap = d_ref.get(transaction=transaction)
+            if snap.exists:
+                urls = list(snap.to_dict().get("id_doc_urls", []) or [])
+                if len(urls) >= 3:
+                    raise RuntimeError("cap_hit")
+                if new_url not in urls:
+                    transaction.update(d_ref, {"id_doc_urls": _fs.ArrayUnion([new_url])})
+            else:
+                # Minimal stub — enriched on first check-in
+                transaction.set(d_ref, {
+                    "mobile": clean,
+                    "name": "",
+                    "address": "",
+                    "id_doc_urls": [new_url],
+                    "total_stays": 0,
+                    "total_spent": 0,
+                    "first_visit": datetime.now(timezone.utc).isoformat(),
+                    "last_stay_date": "",
+                })
+
+        try:
+            _append_url(_db.transaction(), doc_ref, url)
+        except RuntimeError as cap_err:
+            if "cap_hit" in str(cap_err):
+                # Concurrent upload reached the cap first — delete the orphan
+                _delete_storage_url(url)
+                logger.warning(
+                    f"CustomerService: cap hit in transaction for {clean}; orphan deleted"
+                )
+                return ""
+            raise
 
         logger.info(f"CustomerService: document stored for {clean} -> {url}")
         return url
@@ -327,6 +348,21 @@ def upload_document(mobile: str, image_bytes: bytes, filename: str) -> str:
     except Exception as e:
         logger.error(f"CustomerService upload_document failed for {mobile}: {e}")
         return ""
+
+
+def _delete_storage_url(url: str):
+    """Delete a Firebase Storage blob by its download URL. Silently ignores errors."""
+    if not url.startswith("https://firebasestorage.googleapis.com"):
+        return
+    try:
+        import urllib.parse
+        from firebase_admin import storage as _fb_storage
+        path_encoded = url.split("/o/")[1].split("?")[0]
+        blob_path = urllib.parse.unquote(path_encoded)
+        _fb_storage.bucket().blob(blob_path).delete()
+        logger.info(f"CustomerService: orphan blob deleted: {blob_path}")
+    except Exception as e:
+        logger.warning(f"CustomerService: orphan blob delete failed: {e}")
 
 
 def _store_image(mobile_clean: str, filename: str, image_bytes: bytes) -> str:
@@ -350,20 +386,17 @@ def _store_image(mobile_clean: str, filename: str, image_bytes: bytes) -> str:
             blob_path = f"customer_docs/{mobile_clean}/{filename}"
             blob = bucket.blob(blob_path)
 
-            # Upload the file first
+            # Set the download token BEFORE upload so it is included in the
+            # single multipart upload request.  This avoids a separate
+            # blob.patch() call (which is a second HTTP round-trip and was
+            # the step most likely to fail, causing silent fallback to local).
+            download_token = str(_uuid.uuid4())
+            blob.metadata  = {"firebaseStorageDownloadTokens": download_token}
+
             blob.upload_from_string(
                 image_bytes,
                 content_type="image/jpeg",
             )
-
-            # Generate a download token and commit it to GCS metadata.
-            # Firebase Storage checks custom metadata key "firebaseStorageDownloadTokens"
-            # (flat string value) when validating ?token= download URLs.
-            # blob.patch() is required to persist — assigning blob.metadata alone
-            # does NOT write to the server.
-            download_token = str(_uuid.uuid4())
-            blob.metadata  = {"firebaseStorageDownloadTokens": download_token}
-            blob.patch()   # ← writes metadata to Firebase Storage
 
             # Construct the Firebase Storage download URL
             encoded_path = urllib.parse.quote(blob_path, safe="")
@@ -372,9 +405,13 @@ def _store_image(mobile_clean: str, filename: str, image_bytes: bytes) -> str:
                 f"{bucket.name}/o/{encoded_path}"
                 f"?alt=media&token={download_token}"
             )
+            logger.info(f"Firebase Storage upload OK: {blob_path}")
             return url
     except Exception as storage_err:
-        logger.warning(f"Firebase Storage unavailable, using local fallback: {storage_err}")
+        logger.error(
+            f"Firebase Storage upload FAILED for {mobile_clean}/{filename} — "
+            f"error: {storage_err!r} — falling back to local"
+        )
 
     # ── Local fallback ─────────────────────────────────────────────────────
     try:
@@ -412,5 +449,5 @@ def _clean_mobile(raw: str) -> str:
         digits = digits[1:]
     if len(digits) == 10:
         return digits
-    # Return as-is if not a standard 10-digit Indian mobile
-    return digits if digits else ""
+    # Non-10-digit after normalisation is not a valid Indian mobile
+    return ""

@@ -462,6 +462,8 @@ def get_register_stats():
         return jsonify(success=False, message=f"Error: {str(e)}")
 
 
+
+
 @billing_bp.route("/debug_bills", methods=["GET"])
 def debug_bills():
     """Debug endpoint to see all completed bills."""

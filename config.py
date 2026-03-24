@@ -418,10 +418,18 @@ def create_bill_record(room, room_data, checkout_time, batch=None):
                 })
                 services_total += p.get("amount", 0)
 
+        _refund_types = ("refund", "checkout_refund", "manual_refund", "booking_cancel_refund")
         total_refunds = sum(
             p.get("amount", 0) for p in stay_payments
-            if p.get("type") in ("refund", "checkout_refund",
-                                  "manual_refund", "booking_cancel_refund")
+            if p.get("type") in _refund_types
+        )
+        refund_cash = sum(
+            p.get("amount", 0) for p in stay_payments
+            if p.get("type") in _refund_types and p.get("method") == "cash"
+        )
+        refund_online = sum(
+            p.get("amount", 0) for p in stay_payments
+            if p.get("type") in _refund_types and p.get("method") == "online"
         )
         total_discounts = sum(
             p.get("amount", 0) for p in stay_payments
@@ -537,6 +545,8 @@ def create_bill_record(room, room_data, checkout_time, batch=None):
             "services_total": services_total,
             "discounts": total_discounts,
             "refunds": total_refunds,
+            "refund_cash": refund_cash,
+            "refund_online": refund_online,
             "total_amount": total_amount,
             "payment_cash": payment_cash,
             "payment_online": payment_online,

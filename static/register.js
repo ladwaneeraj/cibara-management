@@ -209,20 +209,32 @@
 
   html, body { height: auto !important; overflow: visible !important; }
 
-  /* Hide everything except the bill modal */
-  body * { visibility: hidden !important; }
+  /* ── Clone-based print (bills module): body gets .bl-printing class ──
+     Hide every direct child of body EXCEPT the injected #bl-print-clone.
+     Uses display:none so no layout space is reserved → zero blank pages. */
+  body.bl-printing > *:not(#bl-print-clone) { display: none !important; }
 
-  /* Show the bill modal and its content (reg- = Register, bl- = Bills) */
-  .bill-modal.show,
-  .bill-modal.show .bill-content,
-  .bill-modal.show #reg-bill-print-area,
-  .bill-modal.show #reg-bill-print-area *,
-  .bill-modal.show #bl-bill-print-area,
-  .bill-modal.show #bl-bill-print-area * {
-    visibility: visible !important;
+  #bl-print-clone {
+    display: block !important;
+    padding: 0;
+    font-size: 8.5pt !important;
+    line-height: 1.28 !important;
+    font-family: 'Courier New', monospace;
+    width: 100%;
   }
 
-  .bill-modal.show {
+  /* ── Fallback: rooms-module bill modal (visibility approach kept for
+     the existing #bill-modal in index.html that uses printBill()) ── */
+  body:not(.bl-printing) * { visibility: hidden !important; }
+  body:not(.bl-printing) .bill-modal.show,
+  body:not(.bl-printing) .bill-modal.show .bill-content,
+  body:not(.bl-printing) .bill-modal.show #bill-print-area,
+  body:not(.bl-printing) .bill-modal.show #bill-print-area *,
+  body:not(.bl-printing) .bill-modal.show #reg-bill-print-area,
+  body:not(.bl-printing) .bill-modal.show #reg-bill-print-area * {
+    visibility: visible !important;
+  }
+  body:not(.bl-printing) .bill-modal.show {
     position: absolute !important; top:0 !important; left:0 !important;
     width:100% !important; height:auto !important;
     background: white !important; padding:0 !important;
@@ -235,11 +247,13 @@
     width: 100% !important; max-width: 100% !important;
     margin:0 !important; padding:0 !important;
   }
-  .bill-header { display: none !important; }
+  .bill-header  { display: none !important; }
   .bill-actions { display: none !important; }
 
+  /* ── Bill element sizing (applies in both print modes) ── */
+  #bl-print-clone,
   #reg-bill-print-area,
-  #bl-bill-print-area {
+  #bill-print-area {
     padding: 0 !important;
     font-size: 8.5pt !important;
     line-height: 1.28 !important;
@@ -261,8 +275,9 @@
     page-break-inside: avoid !important;
     break-inside: avoid !important;
   }
+  #bl-print-clone,
   #reg-bill-print-area,
-  #bl-bill-print-area {
+  #bill-print-area {
     page-break-after: avoid !important;
     break-after: avoid !important;
   }
@@ -1230,7 +1245,13 @@
 
   function _renderPaymentsTable(container) {
     if (!container) return;
-    const payments = pmState.payments;
+    // Only show cash / online payments and refund entries — exclude checkin, checkout,
+    // addon, renewal, pay_later, expense, discount and any other internal log types.
+    const ALLOWED_METHODS = new Set(["cash", "online"]);
+    const REFUND_TYPES    = new Set(["refund", "checkout_refund", "manual_refund"]);
+    const payments = (pmState.payments || []).filter(
+      p => ALLOWED_METHODS.has(p.method) || REFUND_TYPES.has(p.type)
+    );
 
     if (!payments.length) {
       container.innerHTML = `<div class="rp-empty">No payment records found for this stay.</div>`;

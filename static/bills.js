@@ -456,7 +456,23 @@
     const bm  = dom("bl-bill-modal");
     if (bc)  bc.addEventListener("click", closeBill);
     if (bc2) bc2.addEventListener("click", closeBill);
-    if (bp)  bp.addEventListener("click", () => window.print());
+    if (bp)  bp.addEventListener("click", function() {
+      const area = dom("bl-bill-print-area");
+      if (!area || !area.innerHTML.trim()) return;
+      // Remove any stale clone from a previous print
+      var old = document.getElementById("bl-print-clone");
+      if (old) old.remove();
+      // Append bill HTML as a direct <body> child — only content in the page during print
+      var clone = document.createElement("div");
+      clone.id = "bl-print-clone";
+      clone.innerHTML = area.innerHTML;
+      document.body.appendChild(clone);
+      document.body.classList.add("bl-printing");
+      try { window.print(); } finally {
+        document.body.classList.remove("bl-printing");
+        clone.remove();
+      }
+    });
     if (bm)  bm.addEventListener("click", (e) => { if (e.target === bm) closeBill(); });
 
     // Delegated clicks: bill view + group toggle
@@ -689,11 +705,17 @@
   }
 
   function paymentHTML(e) {
-    const c = e.payment_cash || 0, o = e.payment_online || 0, b = e.balance || 0;
-    if (!c && !o && !b) return '<span style="color:#ccc;">—</span>';
+    const c = e.payment_cash || 0, o = e.payment_online || 0,
+          r = e.refunds || 0,    b = e.balance || 0;
+    if (!c && !o && !r && !b) return '<span style="color:#ccc;">—</span>';
     let h = '<div class="bl-pay-split">';
     if (c) h += `<div class="bl-pay-item"><span class="bl-pm-cash">Cash</span><span>₹${inr(c)}</span></div>`;
     if (o) h += `<div class="bl-pay-item"><span class="bl-pm-upi">Online</span><span>₹${inr(o)}</span></div>`;
+    if (r > 0) {
+      const rc = e.refund_cash || 0, ro = e.refund_online || 0;
+      const rLabel = rc > 0 && ro > 0 ? "Refund" : rc > 0 ? "Refund (Cash)" : ro > 0 ? "Refund (UPI)" : "Refund";
+      h += `<div class="bl-pay-item"><span class="bl-pm-bal">${rLabel}</span><span>-₹${inr(r)}</span></div>`;
+    }
     if (b > 0) h += `<div class="bl-pay-item"><span class="bl-pm-bal">Due</span><span>₹${inr(b)}</span></div>`;
     return h + "</div>";
   }
@@ -748,10 +770,14 @@
     const svcTotal  = b.services_total || 0;
     const discounts = b.discounts || 0;
     const grandTotal = roomTotal + svcTotal - discounts;
-    const cashPaid   = b.payment_cash   || 0;
-    const onlinePaid = b.payment_online || 0;
-    const totalPaid  = cashPaid + onlinePaid;
-    const balance    = b.balance || 0;
+    const cashPaid    = b.payment_cash   || 0;
+    const onlinePaid  = b.payment_online || 0;
+    const refunds     = b.refunds        || 0;
+    const refundCash  = b.refund_cash    || 0;
+    const refundOnline= b.refund_online  || 0;
+    const totalPaid   = cashPaid + onlinePaid;
+    const netCollected= totalPaid - refunds;
+    const balance     = b.balance || 0;
 
     let svcRows = "";
     if (b.services && b.services.length) {
@@ -830,6 +856,12 @@
       <tr><td>Cash Paid</td><td class="b-tr">${fix2(cashPaid)}</td></tr>
       <tr><td>Online / UPI Paid</td><td class="b-tr">${fix2(onlinePaid)}</td></tr>
       <tr style="font-weight:700;"><td>Total Paid</td><td class="b-tr">${fix2(totalPaid)}</td></tr>
+      ${refunds > 0 ? (() => {
+        const rCashLbl   = refundCash   > 0 ? `<tr><td>Refund Given (Cash)</td><td class="b-tr">- ${fix2(refundCash)}</td></tr>` : "";
+        const rOnlineLbl = refundOnline > 0 ? `<tr><td>Refund Given (UPI)</td><td class="b-tr">- ${fix2(refundOnline)}</td></tr>` : "";
+        const fallback   = (!refundCash && !refundOnline) ? `<tr><td>Refund Given</td><td class="b-tr">- ${fix2(refunds)}</td></tr>` : "";
+        return rCashLbl + rOnlineLbl + fallback + `<tr style="font-weight:700;"><td>Net Collected</td><td class="b-tr">${fix2(netCollected)}</td></tr>`;
+      })() : ""}
       ${balance > 0 ? `<tr style="font-weight:bold;color:#dc3545"><td>Balance Due</td><td class="b-tr">${fix2(balance)}</td></tr>` : ""}
     </tbody>
   </table>
@@ -875,6 +907,7 @@
         "Grand Total"        : e.total_amount || 0,
         "Cash Paid"          : e.payment_cash || 0,
         "Online/UPI Paid"    : e.payment_online || 0,
+        "Refund"             : e.refunds || 0,
         "Balance Due"        : e.balance || 0,
         "Booking Source"     : e.booking_source || "normal",
         "Place of Supply"    : "Karnataka (KA-29)",

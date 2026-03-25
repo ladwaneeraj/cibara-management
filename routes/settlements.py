@@ -9,7 +9,7 @@ import uuid
 from firebase_admin import firestore
 
 from config import (
-    db, logs_ref, totals_ref, IST, logger,
+    db, totals_ref, IST, logger,
     invalidate_rooms_and_totals,
 )
 
@@ -67,19 +67,6 @@ def collect_settlement():
             settlement["discount_amount"] = discount_amount
             settlement["discount_reason"] = discount_reason
 
-            discount_log = {
-                "settlement_id": settlement_id,
-                "name": settlement["guest_name"],
-                "amount": discount_amount,
-                "reason": discount_reason,
-                "date": datetime.now(IST).strftime("%Y-%m-%d"),
-                "time": datetime.now(IST).strftime("%H:%M"),
-            }
-
-            batch.update(logs_ref.document("discounts"), {
-                "entries": firestore.ArrayUnion([discount_log])
-            })
-
         if payment_amount <= 0:
             payment_amount = settlement["amount"]
 
@@ -89,22 +76,6 @@ def collect_settlement():
         # Carry original check-in serial number forward so the transaction
         # log can show it alongside the settlement payment.
         original_serial = settlement.get("serial_number")
-
-        payment_log = {
-            "room": settlement["room"],
-            "name": settlement["guest_name"],
-            "amount": payment_amount,
-            "time": datetime.now(IST).strftime("%H:%M"),
-            "date": datetime.now(IST).strftime("%Y-%m-%d"),
-            "settlement_id": settlement_id,
-            "note": "Settlement payment collected",
-            "serial_number": original_serial,
-            "transaction_type": "settlement_payment",
-        }
-
-        batch.update(logs_ref.document(payment_mode), {
-            "entries": firestore.ArrayUnion([payment_log])
-        })
 
         batch.update(totals_ref.document('current_totals'), {
             payment_mode: firestore.Increment(payment_amount),
@@ -134,7 +105,7 @@ def collect_settlement():
 
         invalidate_rooms_and_totals()
 
-        # Dual-write: payments collection
+        # Write settlement payment to payments collection
         payment_service.write_payment({
             "room": settlement["room"], "name": settlement["guest_name"],
             "amount": payment_amount, "method": payment_mode,
@@ -143,8 +114,22 @@ def collect_settlement():
             "time": datetime.now(IST).strftime("%H:%M"),
             "settlement_id": settlement_id,
             "transaction_type": "settlement_payment",
-            "serial_number": original_serial,  # original check-in serial
+            "serial_number": original_serial,
         })
+
+        # Write discount to payments collection (previously missing — gap fix)
+        if discount_amount > 0:
+            payment_service.write_payment({
+                "room": settlement["room"], "name": settlement["guest_name"],
+                "amount": discount_amount, "method": "discount",
+                "type": "discount",
+                "date": datetime.now(IST).strftime("%Y-%m-%d"),
+                "time": datetime.now(IST).strftime("%H:%M"),
+                "settlement_id": settlement_id,
+                "transaction_type": "settlement_discount",
+                "reason": discount_reason,
+                "serial_number": original_serial,
+            })
 
         if payment_amount == settlement["amount"]:
             message = f"Full payment of ₹{payment_amount} collected successfully"

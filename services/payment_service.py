@@ -140,9 +140,12 @@ def query_payments_for_stay(room, guest_name, checkin_dt):
     """
     Return all payment docs for a specific room stay.
 
-    Two queries merged:
-      1. room == X AND name == Y AND date >= checkin_date  (normal payments)
-      2. room == X AND stay_checkin_date == checkin_date    (booking advances linked later)
+    Two queries merged and deduplicated:
+      Q1. room == X AND name == Y AND date >= checkin_date  (normal payments)
+      Q2. stay_room_key == "{room}_{checkin_datetime}"      (booking advances paid
+          before checkin; linked at conversion time via stay_room_key backfill)
+
+    Q2 uses a single-field equality filter — no composite index required.
 
     Falls back to empty list on any error.
     """
@@ -152,9 +155,10 @@ def query_payments_for_stay(room, guest_name, checkin_dt):
     results = []
     seen_ids = set()
     checkin_date_str = checkin_dt.strftime("%Y-%m-%d")
+    checkin_dt_str   = checkin_dt.strftime("%Y-%m-%d %H:%M")
     room_str = str(room)
 
-    # 1. Normal payments from checkin date onwards
+    # Q1: Normal payments from checkin date onwards
     try:
         q1 = (
             _payments_ref
@@ -168,19 +172,21 @@ def query_payments_for_stay(room, guest_name, checkin_dt):
     except Exception as e:
         logger.error(f"PaymentService query_payments_for_stay q1 failed: {e}")
 
-    # 2. Booking advances linked to this stay (paid before checkin date)
+    # Q2: Booking advances linked to this stay via stay_room_key.
+    # Single-field equality — no composite index needed.
+    # The convert_booking_to_checkin route backfills stay_room_key on all
+    # booking_advance / booking_payment docs for the booking.
     try:
-        q2 = (
-            _payments_ref
-            .where(filter=fa_firestore.FieldFilter("room", "==", room_str))
-            .where(filter=fa_firestore.FieldFilter("stay_checkin_date", "==", checkin_date_str))
+        stay_key = f"{room_str}_{checkin_dt_str}"
+        q2 = _payments_ref.where(
+            filter=fa_firestore.FieldFilter("stay_room_key", "==", stay_key)
         )
         for doc in q2.stream():
             if doc.id not in seen_ids:
+                seen_ids.add(doc.id)
                 results.append(doc.to_dict())
     except Exception as e:
-        # This query may fail if no index exists yet — non-critical
-        logger.debug(f"PaymentService booking-advance query failed (index may be building): {e}")
+        logger.warning(f"PaymentService booking-advance Q2 failed: {e}")
 
     return results
 

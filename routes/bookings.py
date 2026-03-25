@@ -7,7 +7,7 @@ from config import (
     db, bookings_ref, logs_ref, totals_ref, IST, logger,
     invalidate_rooms_and_totals,
     rooms_ref, get_next_serial_number, store_transaction_metadata, send_whatsapp_message,
-    settlements_ref
+    settlements_ref, ota_settlements_ref  # logs_ref kept for whatsapp_messages only
 )
 from services import payment_service, customer_service
 
@@ -111,31 +111,6 @@ def create_booking():
         paid_amount = paid_amount_val
         if paid_amount > 0:
             payment_method = booking_data.get("payment_method", "cash")
-            payment_log = {
-                "booking_id": booking_id,
-                "room": booking["room"],
-                "name": booking["guest_name"],
-                "amount": paid_amount,
-                "time": datetime.now(IST).strftime("%H:%M"),
-                "date": datetime.now(IST).strftime("%Y-%m-%d"),
-                "type": "booking_advance"
-            }
-            batch.update(logs_ref.document(payment_method), {
-                "entries": firestore.ArrayUnion([payment_log])
-            })
-            booking_payment = {
-                "booking_id": booking_id,
-                "room": booking["room"],
-                "name": booking["guest_name"],
-                "amount": paid_amount,
-                "payment_method": payment_method,
-                "time": datetime.now(IST).strftime("%H:%M"),
-                "date": datetime.now(IST).strftime("%Y-%m-%d"),
-                "type": "advance"
-            }
-            batch.update(logs_ref.document("booking_payments"), {
-                "entries": firestore.ArrayUnion([booking_payment])
-            })
             batch.update(totals_ref.document('current_totals'), {
                 payment_method: firestore.Increment(paid_amount),
                 "advance_bookings": firestore.Increment(paid_amount)
@@ -154,6 +129,9 @@ def create_booking():
                 "time": datetime.now(IST).strftime("%H:%M"),
                 "booking_id": booking_id, "transaction_type": "booking_advance",
                 "mobile": booking["guest_mobile"],
+                # stay_checkin_date links this pre-stay payment to the actual checkin
+                # date so query_payments_for_stay Q2 can find it at checkout
+                "stay_checkin_date": booking.get("check_in_date", ""),
             })
 
         logger.info(f"Booking created: {booking_id} for {booking['guest_name']}")
@@ -185,31 +163,6 @@ def update_booking():
             # Fix 6: whitelist payment method
             if payment_method not in VALID_PAYMENT_METHODS:
                 return jsonify(success=False, message=f"Invalid payment method: {payment_method}")
-            payment_log = {
-                "booking_id": booking_id,
-                "room": booking["room"],
-                "name": booking["guest_name"],
-                "amount": new_payment_amount,
-                "time": datetime.now(IST).strftime("%H:%M"),
-                "date": datetime.now(IST).strftime("%Y-%m-%d"),
-                "type": "booking_payment"
-            }
-            batch.update(logs_ref.document(payment_method), {
-                "entries": firestore.ArrayUnion([payment_log])
-            })
-            booking_payment = {
-                "booking_id": booking_id,
-                "room": booking["room"],
-                "name": booking["guest_name"],
-                "amount": new_payment_amount,
-                "payment_method": payment_method,
-                "time": datetime.now(IST).strftime("%H:%M"),
-                "date": datetime.now(IST).strftime("%Y-%m-%d"),
-                "type": "additional_payment"
-            }
-            batch.update(logs_ref.document("booking_payments"), {
-                "entries": firestore.ArrayUnion([booking_payment])
-            })
             batch.update(totals_ref.document('current_totals'), {
                 payment_method: firestore.Increment(new_payment_amount),
                 "advance_bookings": firestore.Increment(new_payment_amount)
@@ -243,6 +196,7 @@ def update_booking():
                 "date": datetime.now(IST).strftime("%Y-%m-%d"),
                 "time": datetime.now(IST).strftime("%H:%M"),
                 "booking_id": booking_id, "transaction_type": "booking_payment",
+                "stay_checkin_date": booking.get("check_in_date", ""),
             })
 
         logger.info(f"Booking updated: {booking_id}")
@@ -274,19 +228,6 @@ def cancel_booking():
             # Fix 6: whitelist refund method
             if refund_method not in VALID_PAYMENT_METHODS:
                 return jsonify(success=False, message=f"Invalid refund method: {refund_method}")
-            refund_log = {
-                "booking_id": booking_id,
-                "room": booking["room"],
-                "name": booking["guest_name"],
-                "amount": refund_amount,
-                "time": datetime.now(IST).strftime("%H:%M"),
-                "date": datetime.now(IST).strftime("%Y-%m-%d"),
-                "payment_mode": refund_method,
-                "note": "Booking cancellation refund"
-            }
-            batch.update(logs_ref.document("refunds"), {
-                "entries": firestore.ArrayUnion([refund_log])
-            })
             batch.update(totals_ref.document('current_totals'), {"refunds": firestore.Increment(refund_amount)})
             booking["paid_amount"] -= refund_amount
             booking["balance"] = booking["total_amount"] - booking["paid_amount"]
@@ -368,57 +309,7 @@ def convert_booking_to_checkin():
         totals_update = {}
 
         if remaining_payment > 0:
-            payment_log = {
-                "booking_id": booking_id,
-                "room": booking["room"],
-                "name": booking["guest_name"],
-                "amount": remaining_payment,
-                "time": current_time,
-                "date": current_date,
-                "type": "booking_final_payment",
-                "serial_number": serial_number,
-                "transaction_type": "booking_conversion",
-                "is_booking_conversion": True
-            }
-            batch.update(logs_ref.document(payment_method), {
-                "entries": firestore.ArrayUnion([payment_log])
-            })
             totals_update[payment_method] = firestore.Increment(remaining_payment)
-        else:
-            zero_payment_log = {
-                "booking_id": booking_id,
-                "room": booking["room"],
-                "name": booking["guest_name"],
-                "amount": 0,
-                "time": current_time,
-                "date": current_date,
-                "type": "booking_conversion_zero_payment",
-                "serial_number": serial_number,
-                "transaction_type": "booking_conversion",
-                "is_booking_conversion": True,
-                "payment_method": "already_paid"
-            }
-            batch.update(logs_ref.document("cash"), {
-                "entries": firestore.ArrayUnion([zero_payment_log])
-            })
-        
-        booking_payment = {
-            "booking_id": booking_id,
-            "room": booking["room"],
-            "name": booking["guest_name"],
-            "amount": remaining_payment,
-            "payment_method": payment_method if remaining_payment > 0 else "already_paid",
-            "time": current_time,
-            "date": current_date,
-            "type": "final_payment" if remaining_payment > 0 else "conversion_no_payment",
-            "serial_number": serial_number,
-            "transaction_type": "booking_conversion",
-            "is_booking_conversion": True
-        }
-        
-        batch.update(logs_ref.document("booking_payments"), {
-            "entries": firestore.ArrayUnion([booking_payment])
-        })
         
         room_price = int(booking_data.get("room_price", booking["total_amount"]))
         is_ac = False
@@ -451,20 +342,6 @@ def convert_booking_to_checkin():
         })
         
         if balance_after_payment > 0:
-            balance_log = {
-                "room": room_number,
-                "name": guest["name"],
-                "amount": balance_after_payment,
-                "date": current_date,
-                "time": current_time,
-                "note": "Remaining balance from booking",
-                "serial_number": serial_number,
-                "transaction_type": "booking_conversion",
-                "is_booking_conversion": True
-            }
-            batch.update(logs_ref.document("balance"), {
-                "entries": firestore.ArrayUnion([balance_log])
-            })
             totals_update["balance"] = firestore.Increment(balance_after_payment)
 
         booking["status"] = "checked_in"
@@ -738,7 +615,7 @@ def mark_ota_settlement():
             "settlement_amount": settlement_amount,
         })
 
-        # Write to settlements collection — kept separate from cash/online totals
+        # Write to ota_settlements collection (separate from hotel-side settle-later)
         settlement_entry = {
             "booking_id": booking_id,
             "platform": "mmt",
@@ -750,7 +627,7 @@ def mark_ota_settlement():
             "settlement_date": settlement_date,
             "created_at": datetime.now(IST).strftime("%Y-%m-%d %H:%M"),
         }
-        settlements_ref.add(settlement_entry)
+        ota_settlements_ref.add(settlement_entry)
 
         # Also write to payments collection for traceability (method="bank_settlement")
         payment_service.write_payment({
@@ -771,4 +648,24 @@ def mark_ota_settlement():
 
     except Exception as e:
         logger.error(f"Error marking OTA settlement: {str(e)}")
+        return jsonify(success=False, message=f"Error: {str(e)}")
+
+
+@bookings_bp.route("/get_ota_settlements", methods=["GET"])
+def get_ota_settlements():
+    """
+    Return all OTA (MMT / Booking.com) bank settlements.
+    Reads from ota_settlements collection — completely separate from
+    hotel-side 'settle later' records in the settlements collection.
+    """
+    try:
+        docs = ota_settlements_ref.order_by("settlement_date", direction="DESCENDING").stream()
+        settlements = []
+        for doc in docs:
+            entry = doc.to_dict()
+            entry["id"] = doc.id
+            settlements.append(entry)
+        return jsonify(success=True, settlements=settlements)
+    except Exception as e:
+        logger.error(f"Error fetching OTA settlements: {str(e)}")
         return jsonify(success=False, message=f"Error: {str(e)}")

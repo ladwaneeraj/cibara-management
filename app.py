@@ -1,4 +1,4 @@
-from flask import Flask, render_template, send_from_directory, jsonify
+from flask import Flask, render_template, send_from_directory, jsonify, request
 from config import initialize_data, logger, db, UPLOAD_FOLDER
 from routes.rooms import rooms_bp
 from routes.bookings import bookings_bp
@@ -11,6 +11,39 @@ import os
 import threading
 
 app = Flask(__name__, static_folder='static', template_folder='templates')
+
+# ---------------------------------------------------------------------------
+# API Key Authentication
+# ---------------------------------------------------------------------------
+# Set API_KEY env var in Cloud Run (or .env locally).
+# All API routes require X-API-Key header or ?api_key= query param.
+# Exempt: index page, health probe, static assets, uploads.
+
+_PUBLIC_PREFIXES = ("/static/", "/uploads/")
+_PUBLIC_EXACT    = ("/", "/health")
+
+@app.before_request
+def require_api_key():
+    path = request.path
+
+    # Allow public routes through without a key
+    if path in _PUBLIC_EXACT:
+        return None
+    if any(path.startswith(p) for p in _PUBLIC_PREFIXES):
+        return None
+
+    api_key = os.environ.get("API_KEY", "")
+    if not api_key:
+        # API_KEY not configured — allow all (dev mode, log a warning once)
+        logger.warning("API_KEY env var not set — all routes are unprotected")
+        return None
+
+    provided = (
+        request.headers.get("X-API-Key", "")
+        or request.args.get("api_key", "")
+    )
+    if provided != api_key:
+        return jsonify(success=False, message="Unauthorized"), 401
 
 # ---------------------------------------------------------------------------
 # Core routes

@@ -1,7 +1,7 @@
 """
 Room management routes: checkin, checkout, add_on, renew_rent, update_checkin_time,
 add_room, transfer_room, mark_room_cleaned, apply_discount, get_rooms_only, get_data,
-get_history, get_logs_only, get_totals_only
+get_history, get_totals_only
 """
 
 from flask import Blueprint, request, jsonify
@@ -13,11 +13,11 @@ from firebase_admin import firestore
 from google.cloud.firestore_v1.base_query import FieldFilter
 
 from config import (
-    db, rooms_ref, logs_ref, totals_ref, bookings_ref, metadata_ref,
+    db, rooms_ref, totals_ref, bookings_ref, metadata_ref,
     counters_ref, bills_ref, IST, logger, invalidate_cache,
     invalidate_rooms_and_totals, get_all_rooms,
-    get_all_logs, get_totals, is_log_from_current_stay, get_next_serial_number,
-    store_transaction_metadata, create_bill_record, get_all_logs_limited,
+    get_totals, is_log_from_current_stay, get_next_serial_number,
+    store_transaction_metadata, create_bill_record,
     find_serial_number_for_checkin, _build_active_entry_fast, _find_serial_fast,
     _batch_fill_serials
 )
@@ -87,51 +87,9 @@ def checkin():
 
         if payment != "balance":
             if amount_paid > 0:
-                log_entry = {
-                    "room": room,
-                    "name": guest["name"],
-                    "amount": amount_paid,
-                    "time": datetime.now(IST).strftime("%H:%M"),
-                    "date": current_date,
-                    "serial_number": serial_number,
-                    "transaction_type": "fresh_checkin",
-                    "is_fresh_checkin": True
-                }
-
-                batch.update(logs_ref.document(payment), {
-                    "entries": firestore.ArrayUnion([log_entry])
-                })
                 totals_update[payment] = firestore.Increment(amount_paid)
-        else:
-            pay_later_log = {
-                "room": room,
-                "name": guest["name"],
-                "amount": 0,
-                "time": datetime.now(IST).strftime("%H:%M"),
-                "date": current_date,
-                "serial_number": serial_number,
-                "transaction_type": "fresh_checkin",
-                "is_fresh_checkin": True,
-                "payment_method": "pay_later"
-            }
-
-            batch.update(logs_ref.document("cash"), {
-                "entries": firestore.ArrayUnion([pay_later_log])
-            })
 
         if balance > 0:
-            balance_log = {
-                "room": room,
-                "name": guest["name"],
-                "amount": balance,
-                "date": current_date,
-                "serial_number": serial_number,
-                "transaction_type": "fresh_checkin"
-            }
-
-            batch.update(logs_ref.document("balance"), {
-                "entries": firestore.ArrayUnion([balance_log])
-            })
             totals_update["balance"] = firestore.Increment(balance)
 
         if totals_update:
@@ -227,20 +185,6 @@ def checkout():
                 except:
                     is_renewal_payment = False
 
-            log_entry = {
-                "room": room,
-                "name": room_data["guest"]["name"],
-                "amount": amount,
-                "time": datetime.now(IST).strftime("%H:%M"),
-                "date": datetime.now(IST).strftime("%Y-%m-%d"),
-                "is_renewal": is_renewal_payment,
-                "transaction_type": "renewal_payment" if is_renewal_payment else "regular_payment"
-            }
-
-            batch.update(logs_ref.document(payment_mode), {
-                "entries": firestore.ArrayUnion([log_entry])
-            })
-
             # Build atomic update for totals
             totals_update = {payment_mode: firestore.Increment(amount)}
 
@@ -295,21 +239,6 @@ def checkout():
 
             refund_method = payment_mode or "cash"
             guest_name = room_data["guest"]["name"]
-
-            refund_log = {
-                "room": room,
-                "name": guest_name,
-                "amount": amount,
-                "payment_mode": refund_method,
-                "time": data_json.get("time", datetime.now(IST).strftime("%H:%M")),
-                "date": data_json.get("date", datetime.now(IST).strftime("%Y-%m-%d")),
-                "note": "Manual refund",
-                "transaction_type": "manual_refund"
-            }
-
-            batch.update(logs_ref.document("refunds"), {
-                "entries": firestore.ArrayUnion([refund_log])
-            })
 
             new_balance = current_balance + amount
             batch.update(rooms_ref.document(room), {"balance": new_balance})
@@ -379,21 +308,6 @@ def checkout():
                 batch.set(settlements_ref.document(settlement_id), settlement)
                 totals_update["balance"] = firestore.Increment(-settlement_amount)
 
-                balance_log = {
-                    "room": room,
-                    "name": guest_info["name"],
-                    "amount": -settlement_amount,
-                    "time": datetime.now(IST).strftime("%H:%M"),
-                    "date": datetime.now(IST).strftime("%Y-%m-%d"),
-                    "note": "Converted to 'settle later' during checkout",
-                    "settlement_id": settlement_id,
-                    "transaction_type": "settlement"
-                }
-
-                batch.update(logs_ref.document("balance"), {
-                    "entries": firestore.ArrayUnion([balance_log])
-                })
-
                 logger.info(f"Settlement created for room {room}, amount: ₹{settlement_amount}")
 
             elif balance > 0 and not settle_later:
@@ -404,21 +318,6 @@ def checkout():
             if balance < 0 and data_json.get("refund_method"):
                 refund_amount = abs(balance)
                 refund_method = data_json.get("refund_method", "cash")
-
-                checkout_refund_log = {
-                    "room": room,
-                    "name": guest_name,
-                    "amount": refund_amount,
-                    "payment_mode": refund_method,
-                    "time": datetime.now(IST).strftime("%H:%M"),
-                    "date": datetime.now(IST).strftime("%Y-%m-%d"),
-                    "note": "Checkout refund",
-                    "transaction_type": "checkout_refund"
-                }
-
-                batch.update(logs_ref.document("refunds"), {
-                    "entries": firestore.ArrayUnion([checkout_refund_log])
-                })
 
                 totals_update["refunds"] = firestore.Increment(refund_amount)
                 refund_processed = True
@@ -524,52 +423,14 @@ def add_on():
         totals_update = {}
 
         if payment_method in ["cash", "online"]:
-            payment_log = {
-                "room": room,
-                "name": room_data["guest"]["name"],
-                "amount": price,
-                "time": datetime.now(IST).strftime("%H:%M"),
-                "date": datetime.now(IST).strftime("%Y-%m-%d"),
-                "item": item,
-                "unit_price": unit_price,
-                "quantity": quantity,
-                "payment_method": payment_method,
-                "transaction_type": "service"
-            }
-
-            batch.update(logs_ref.document(payment_method), {
-                "entries": firestore.ArrayUnion([payment_log])
-            })
             totals_update[payment_method] = firestore.Increment(price)
         else:
             new_balance = room_data["balance"] + price
             batch.update(rooms_ref.document(room), {"balance": new_balance})
-
             totals_update["balance"] = firestore.Increment(price)
-
-            balance_log = {
-                "room": room,
-                "name": room_data["guest"]["name"],
-                "amount": price,
-                "time": datetime.now(IST).strftime("%H:%M"),
-                "date": datetime.now(IST).strftime("%Y-%m-%d"),
-                "item": item,
-                "unit_price": unit_price,
-                "quantity": quantity,
-                "note": f"Added {item} to balance",
-                "transaction_type": "service"
-            }
-
-            batch.update(logs_ref.document("balance"), {
-                "entries": firestore.ArrayUnion([balance_log])
-            })
 
         batch.update(rooms_ref.document(room), {
             "add_ons": firestore.ArrayUnion([add_on_entry])
-        })
-
-        batch.update(logs_ref.document("add_ons"), {
-            "entries": firestore.ArrayUnion([add_on_entry])
         })
 
         batch.update(totals_ref.document('current_totals'), totals_update)
@@ -628,25 +489,6 @@ def renew_rent():
 
         batch.update(totals_ref.document('current_totals'), {"balance": firestore.Increment(price)})
 
-        renewal_log = {
-            "room": room,
-            "name": guest["name"],
-            "amount": price,
-            "time": datetime.now(IST).strftime("%H:%M"),
-            "date": datetime.now(IST).strftime("%Y-%m-%d"),
-            "note": f"Day {renewal_count + 1} rent renewal",
-            "day": renewal_count + 1,
-            "transaction_type": "rent_renewal"
-        }
-
-        batch.update(logs_ref.document("balance"), {
-            "entries": firestore.ArrayUnion([renewal_log])
-        })
-
-        batch.update(logs_ref.document("renewals"), {
-            "entries": firestore.ArrayUnion([renewal_log])
-        })
-
         batch.commit()
         invalidate_rooms_and_totals()
 
@@ -703,41 +545,6 @@ def update_checkin_time():
                 f"Checkin date changed for room {room}: {old_date} -> {new_date}. "
                 f"New serial: #{new_serial}"
             )
-
-            # Update serial number in log entries for this guest/room
-            invalidate_cache()  # full clear — modifies log arrays
-            all_logs = get_all_logs()
-
-            if old_checkin_time:
-                old_checkin_dt = datetime.strptime(old_checkin_time, "%Y-%m-%d %H:%M")
-            else:
-                old_checkin_dt = None
-
-            for log_type in ("cash", "online", "booking_payments", "balance"):
-                entries = all_logs.get(log_type, [])
-                updated = False
-                for entry in entries:
-                    # ONLY match the first checkin payment — not renewals or later payments
-                    if (str(entry.get("room")) == str(room) and
-                            entry.get("name") == guest_name and
-                            entry.get("date") == old_date and
-                            (entry.get("transaction_type") in
-                             ("fresh_checkin", "booking_conversion") or
-                             entry.get("is_fresh_checkin") or
-                             entry.get("is_booking_conversion"))):
-                        entry["serial_number"] = new_serial
-                        entry["date"] = new_date
-                        entry["original_date"] = old_date
-                        updated = True
-
-                if updated:
-                    try:
-                        logs_ref.document(log_type).update({
-                            "entries": entries
-                        })
-                        logger.info(f"Updated first checkin log in {log_type} for room {room}")
-                    except Exception as e:
-                        logger.warning(f"Failed to update {log_type} logs: {e}")
 
             # Update transaction metadata
             store_transaction_metadata(room, new_date, new_serial, "date_correction")
@@ -810,7 +617,7 @@ def update_checkin_time():
             "last_renewal_time": None
         })
 
-        invalidate_cache()  # full clear — log arrays were modified
+        invalidate_cache()
 
         msg = "Check-in time updated successfully."
         if new_serial:
@@ -908,23 +715,10 @@ def apply_discount():
         if totals_update:
             batch.update(totals_ref.document('current_totals'), totals_update)
 
-        discount_log = {
-            "room": room,
-            "name": room_data["guest"]["name"],
-            "amount": amount,
-            "reason": reason,
-            "date": datetime.now(IST).strftime("%Y-%m-%d"),
-            "time": datetime.now(IST).strftime("%H:%M")
-        }
-
-        batch.update(logs_ref.document("discounts"), {
-            "entries": firestore.ArrayUnion([discount_log])
-        })
-
         batch.commit()
         invalidate_rooms_and_totals()
 
-        # --- Dual-write: payments collection ---
+        # --- payments collection ---
         payment_service.write_payment({
             "room": room, "name": room_data["guest"]["name"],
             "amount": amount, "method": "discount", "type": "discount",
@@ -951,7 +745,6 @@ def transfer_room():
         is_ac = data_json.get("is_ac", False)
 
         rooms_dict = get_all_rooms()
-        logs_dict = get_all_logs()
 
         if old_room not in rooms_dict or new_room not in rooms_dict:
             return jsonify(success=False, message="One or both rooms do not exist.")
@@ -980,30 +773,6 @@ def transfer_room():
 
         current_checkin_time = datetime.strptime(checkin_time, "%Y-%m-%d %H:%M")
 
-        def update_log_entries(log_type):
-            log_doc = logs_ref.document(log_type).get()
-            if log_doc.exists:
-                entries = log_doc.to_dict().get('entries', [])
-                updated = False
-
-                for log in entries:
-                    if (log.get("room") == old_room and
-                        log.get("name") == guest_name and
-                        is_log_from_current_stay(log, current_checkin_time)):
-                        log["room"] = new_room
-                        log["room_shifted"] = True
-                        log["old_room"] = old_room
-                        updated = True
-
-                if updated:
-                    batch.set(logs_ref.document(log_type), {"entries": entries})
-
-        log_types = ["cash", "online", "balance", "add_ons", "refunds", "renewals",
-                     "booking_payments", "discounts"]
-
-        for log_type in log_types:
-            update_log_entries(log_type)
-
         batch.update(rooms_ref.document(old_room), {
             "status": "vacant",
             "guest": None,
@@ -1016,33 +785,10 @@ def transfer_room():
             "cleaning_start_time": None
         })
 
-        shift_log = {
-            "room": new_room,
-            "name": guest_name,
-            "old_room": old_room,
-            "time": datetime.now(IST).strftime("%H:%M"),
-            "date": datetime.now(IST).strftime("%Y-%m-%d"),
-            "note": f"Transferred from Room {old_room} to Room {new_room}",
-            "room_shifted": True,
-            "guest_mobile": guest_mobile
-        }
-
-        if new_price:
-            shift_log["new_price"] = new_price
-            shift_log["note"] += f" (Price updated to ₹{new_price})"
-
-        if new_room >= "202" and new_room <= "205":
-            shift_log["is_ac"] = is_ac
-            shift_log["note"] += f" ({'AC' if is_ac else 'Non-AC'})"
-
-        batch.update(logs_ref.document("room_shifts"), {
-            "entries": firestore.ArrayUnion([shift_log])
-        })
-
         batch.commit()
-        invalidate_cache()  # full clear — log arrays were modified
+        invalidate_cache()
 
-        # --- Dual-write: update room in payments collection ---
+        # --- Update payments collection ---
         payment_service.update_payments_room(
             old_room, new_room, guest_name, current_checkin_time
         )
@@ -1114,16 +860,6 @@ def get_rooms_only():
         return jsonify(success=True, rooms=rooms)
     except Exception as e:
         logger.error(f"Error getting rooms: {str(e)}")
-        return jsonify(success=False, message=str(e))
-
-@rooms_bp.route("/get_logs_only")
-def get_logs_only():
-    """Get only logs data - with limits"""
-    try:
-        logs = get_all_logs_limited()
-        return jsonify(success=True, logs=logs)
-    except Exception as e:
-        logger.error(f"Error getting logs: {str(e)}")
         return jsonify(success=False, message=str(e))
 
 @rooms_bp.route("/get_totals_only")

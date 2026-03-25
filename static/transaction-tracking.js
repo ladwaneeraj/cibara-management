@@ -629,6 +629,20 @@ class TransactionLogManager {
             colorStyle = "style='color: var(--info, #17a2b8)'";
             amountText = "";   // no monetary amount for a shift
 
+          } else if (ptype === "booking_advance" || ptype === "booking_payment") {
+            const method = (payment.method || "cash");
+            paymentType = `Booking Advance (${method})`;
+            colorStyle = "style='color: var(--info, #17a2b8)'";
+
+          } else if (ptype === "booking_conversion") {
+            if (payment.amount === 0) {
+              paymentType = "Booking — Fully Paid";
+              colorStyle = "style='color: var(--warning)'";
+            } else {
+              const method = (payment.method || "cash");
+              paymentType = `Booking Final Payment (${method})`;
+            }
+
           } else if (src === "cash" || payment.method === "cash") {
             if (payment.payment_method === "pay_later" || payment.amount === 0) {
               paymentType = "Pay Later";

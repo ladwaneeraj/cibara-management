@@ -370,17 +370,24 @@ def search_bills():
         bills_query = bills_ref.where('bill_number', '==', search_term).limit(10).stream()
         results = [doc.to_dict() for doc in bills_query]
 
-        # If no results, search by guest name / mobile (partial match)
+        # If no results, search by guest name / mobile across ALL bills
+        # ordered by most recent checkout so newest results surface first
         if not results:
-            all_bills = bills_ref.limit(100).stream()
-            results = [
-                doc.to_dict()
-                for doc in all_bills
-                if (search_term.lower() in doc.to_dict().get('guest_name', '').lower() or
-                    search_term in doc.to_dict().get('guest_mobile', ''))
-            ]
+            all_bills = (
+                bills_ref
+                .order_by("checkin_time", direction="DESCENDING")
+                .stream()
+            )
+            term_lower = search_term.lower()
+            for doc in all_bills:
+                data = doc.to_dict()
+                if (term_lower in data.get('guest_name', '').lower() or
+                        search_term in data.get('guest_mobile', '')):
+                    results.append(data)
+                if len(results) >= 20:
+                    break
 
-        return jsonify(success=True, bills=results[:10])
+        return jsonify(success=True, bills=results[:20])
 
     except Exception as e:
         logger.error(f"Error searching bills: {str(e)}")
@@ -469,7 +476,11 @@ def get_register_stats():
 
 @billing_bp.route("/debug_bills", methods=["GET"])
 def debug_bills():
-    """Debug endpoint to see all completed bills."""
+    """Debug endpoint — only accessible from localhost."""
+    from flask import request as _req
+    remote = _req.remote_addr or ""
+    if remote not in ("127.0.0.1", "::1", "localhost"):
+        return jsonify(success=False, message="Not found"), 404
     try:
         bills_query = bills_ref.where('status', '==', 'completed').stream()
 

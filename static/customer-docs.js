@@ -1431,75 +1431,6 @@ async function _doDeleteViewerPhoto(urlToDelete) {
 // 11.  Name autocomplete with stay-count badge
 // ─────────────────────────────────────────────────────────────────────────────
 
-function initNameSearch() {
-  const nameInput   = document.getElementById('guest-name');
-  const suggestions = document.getElementById('name-suggestions');
-  if (!nameInput || !suggestions) return;
-
-  nameInput.addEventListener('input', function () {
-    clearTimeout(_nameDebounceTimer);
-    const q = this.value.trim();
-    if (q.length < 1) { suggestions.style.display = 'none'; return; }
-    _nameDebounceTimer = setTimeout(() => _fetchNameSuggestions(q), 180);
-  });
-
-  document.addEventListener('click', e => {
-    if (!nameInput.contains(e.target) && !suggestions.contains(e.target)) {
-      suggestions.style.display = 'none';
-    }
-  });
-}
-
-async function _fetchNameSuggestions(query) {
-  const suggestions = document.getElementById('name-suggestions');
-  if (!suggestions) return;
-
-  try {
-    const res  = await fetch('/search_customers', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ query }),
-    });
-    const data = await res.json();
-    if (!data.success || !data.customers.length) { suggestions.style.display = 'none'; return; }
-
-    suggestions.innerHTML = '';
-    data.customers.slice(0, 6).forEach(c => {
-      const item = document.createElement('div');
-      item.style.cssText = 'padding:0.45rem 0.75rem;cursor:pointer;border-bottom:1px solid #f0f0f0;font-size:0.85rem;display:flex;align-items:center;gap:0.5rem';
-
-      const flagHtml  = c.flag?.is_flagged
-        ? '<span style="color:#c62828;font-size:0.72rem;flex-shrink:0"><i class="fas fa-flag"></i></span>' : '';
-      const stays     = c.total_stays || 0;
-      const stayBadge = stays > 0
-        ? `<span style="background:#e3f2fd;color:#1565c0;border-radius:10px;padding:0.1rem 0.45rem;font-size:0.7rem;font-weight:700;white-space:nowrap;flex-shrink:0;">${stays}× stays</span>` : '';
-
-      const sub = [c.mobile];
-      if (c.total_spent)    sub.push('₹' + Number(c.total_spent).toLocaleString('en-IN'));
-      if (c.last_stay_date) sub.push(_fmtDate(c.last_stay_date));
-
-      item.innerHTML = `
-        <div style="flex:1;min-width:0">
-          <div style="font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${_fmtName(c.name)}</div>
-          <div style="color:#888;font-size:0.76rem">${sub.join(' · ')}</div>
-        </div>${stayBadge}${flagHtml}`;
-
-      item.addEventListener('mouseover', () => { item.style.background = '#f5f5f5'; });
-      item.addEventListener('mouseout',  () => { item.style.background = ''; });
-      item.addEventListener('click', () => {
-        const ni = document.getElementById('guest-name');
-        const mi = document.getElementById('guest-mobile');
-        if (ni) ni.value = c.name;
-        if (mi) mi.value = c.mobile;
-        suggestions.style.display = 'none';
-        hideMobileSuggestions();
-        lookupAndFillCustomer(c.mobile);
-      });
-      suggestions.appendChild(item);
-    });
-
-    suggestions.style.display = 'block';
-  } catch (err) { console.error('[customer-docs] Name search error:', err); }
-}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 12.  Check-in modal lifecycle
@@ -1521,8 +1452,6 @@ function resetCheckinDocState() {
   clearNameMismatch();
   collapseAddress();
 
-  const nameSug = document.getElementById('name-suggestions');
-  if (nameSug) nameSug.style.display = 'none';
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1610,7 +1539,6 @@ function _fmtName(name) {
 document.addEventListener('DOMContentLoaded', () => {
   initMobileLookup();
   initNameMismatchDetection();
-  initNameSearch();
   initAddressToggle();
   initDocCamera();
 

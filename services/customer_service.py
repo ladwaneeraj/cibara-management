@@ -408,23 +408,22 @@ def _store_image(mobile_clean: str, filename: str, image_bytes: bytes) -> str:
             logger.info(f"Firebase Storage upload OK: {blob_path}")
             return url
     except Exception as storage_err:
+        # Log the full exception so the server admin can see exactly why
+        # Firebase Storage is failing (permissions, bucket name, network, etc.)
         logger.error(
             f"Firebase Storage upload FAILED for {mobile_clean}/{filename} — "
-            f"error: {storage_err!r} — falling back to local"
+            f"error type: {type(storage_err).__name__} — "
+            f"detail: {storage_err!r}",
+            exc_info=True,
         )
-
-    # ── Local fallback ─────────────────────────────────────────────────────
-    try:
-        import os
-        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        upload_dir = os.path.join(base_dir, "uploads", "customer_docs")
-        os.makedirs(upload_dir, exist_ok=True)
-        file_path = os.path.join(upload_dir, filename)
-        with open(file_path, "wb") as f:
-            f.write(image_bytes)
-        return f"/uploads/customer_docs/{filename}"
-    except Exception as local_err:
-        logger.error(f"Local file save also failed: {local_err}")
+        # Do NOT fall back to local disk storage:
+        # • On cloud platforms (Heroku, Railway, Cloud Run) the local file
+        #   system is ephemeral — files survive only until the next dyno
+        #   restart or scale-out, after which /uploads/* URLs return 404.
+        # • Silently returning a local URL stores a broken URL in Firestore
+        #   that can never be reliably served.
+        # Returning "" signals failure to the caller, which returns an error
+        # response to the client so the issue is visible immediately.
         return ""
 
 

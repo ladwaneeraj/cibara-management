@@ -123,16 +123,38 @@ window.initCheckoutDocAttach = function(mobile) {
   _discardCheckoutPending();
   _checkoutMobile = (mobile || '').replace(/\D/g, '');
 
-  // Re-wire the header camera button each time the modal opens
+  // Re-wire the header camera button each time the modal opens.
+  // Clone to strip any previously attached listeners.
   const uploadBtn = document.getElementById('checkout-upload-id-btn');
   const newBtn    = uploadBtn?.cloneNode(true);
   if (uploadBtn && newBtn) uploadBtn.parentNode.replaceChild(newBtn, uploadBtn);
 
+  // Re-wire the hidden file input the same way.
+  const fileInput = document.getElementById('checkout-doc-file-input');
+  const newInput  = fileInput?.cloneNode(true);
+  if (fileInput && newInput) fileInput.parentNode.replaceChild(newInput, fileInput);
+
+  // Button click → trigger the file picker (no `capture` attribute, so the
+  // OS shows a full sheet on mobile: Camera, Gallery, Files, etc.)
   newBtn?.addEventListener('click', () => {
     if (!_checkoutMobile) { _notify('No mobile number for this guest', 'warning'); return; }
-    // Open the same camera modal used in check-in, but flag context as checkout
-    _docCameraContext = 'checkout';
-    openDocCameraModal();
+    document.getElementById('checkout-doc-file-input')?.click();
+  });
+
+  // File selected → add to pending strip, exactly like the check-in flow
+  newInput?.addEventListener('change', function() {
+    const file = this.files && this.files[0];
+    if (!file) return;
+    if (_docCapturedBlobs.length >= MAX_DOC_PHOTOS) {
+      _notify(`Maximum ${MAX_DOC_PHOTOS} photos already taken`, 'warning');
+      this.value = '';
+      return;
+    }
+    const url = URL.createObjectURL(file);
+    _docCapturedBlobs.push({ blob: file, url });
+    _renderCheckoutPendingStrip();
+    // Reset value so the same file can be re-selected if needed
+    this.value = '';
   });
 };
 

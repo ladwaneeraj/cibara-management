@@ -62,7 +62,8 @@ logs_ref = db.collection('logs')
 totals_ref = db.collection('totals')
 bookings_ref = db.collection('bookings')
 settings_ref = db.collection('settings')
-settlements_ref = db.collection('settlements')
+settlements_ref     = db.collection('settlements')      # hotel-side "settle later" only
+ota_settlements_ref = db.collection('ota_settlements')   # MMT / OTA bank settlements
 counters_ref = db.collection('daily_counters')
 metadata_ref = db.collection('transaction_metadata')
 bills_ref = db.collection('bills')
@@ -102,16 +103,6 @@ def get_all_rooms():
         rooms_dict[room_doc.id] = room_doc.to_dict()
     return rooms_dict
 
-@cached(ttl=10)
-def get_all_logs():
-    """Get all logs with caching"""
-    logs_dict = {}
-    logs_stream = logs_ref.stream()
-    for log_doc in logs_stream:
-        log_data = log_doc.to_dict()
-        logs_dict[log_doc.id] = log_data.get('entries', [])
-    return logs_dict
-
 @cached(ttl=15)
 def get_totals():
     """Get totals with caching"""
@@ -137,7 +128,7 @@ def invalidate_cache(cache_keys=None):
 
 def invalidate_rooms_and_totals():
     """Targeted invalidation for room/payment operations (most common case).
-    Clears rooms + totals cache but leaves logs cache intact."""
+    Clears rooms + totals cache entries."""
     with _cache_lock:
         keys_to_remove = [k for k in _cache
                           if 'get_all_rooms' in k or 'get_totals' in k]
@@ -301,30 +292,6 @@ def create_default_structure():
     except Exception as e:
         logger.error(f"Error creating default structure: {str(e)}")
 
-def get_all_logs_limited():
-    """Get logs with limits to prevent memory overflow"""
-    logs_dict = {}
-    try:
-        log_types = ["cash", "online", "balance", "add_ons", "refunds",
-                     "renewals", "booking_payments", "discounts", "expenses", "room_shifts"]
-
-        for log_type in log_types:
-            try:
-                log_doc = logs_ref.document(log_type).get()
-                if log_doc.exists:
-                    entries = log_doc.to_dict().get('entries', [])
-                    # Only return last 200 entries to save memory
-                    logs_dict[log_type] = entries[-200:] if len(entries) > 200 else entries
-                else:
-                    logs_dict[log_type] = []
-            except Exception as e:
-                logger.error(f"Error fetching {log_type} logs: {str(e)}")
-                logs_dict[log_type] = []
-
-    except Exception as e:
-        logger.error(f"Error fetching logs: {str(e)}")
-
-    return logs_dict
 
 def send_whatsapp_message(phone_number, message):
     """
@@ -497,8 +464,12 @@ def create_bill_record(room, room_data, checkout_time, batch=None):
             and not any_addon_online
         )
 
-        if is_mmt_ota:
-            # OTA billing handled by MMT — no hotel-issued invoice
+        if is_mmt_ota and any_addon_online:
+            # MMT room (no hotel invoice) BUT guest paid for a service via UPI →
+            # generate a hotel invoice for the addon portion only
+            invoice_generated = True
+        elif is_mmt_ota:
+            # OTA billing fully handled by MMT — no hotel-issued invoice
             invoice_generated = False
         elif is_booking_com:
             # Booking.com: always generate invoice (spec requirement)
@@ -506,11 +477,11 @@ def create_bill_record(room, room_data, checkout_time, batch=None):
         elif is_no_bill:
             # Same-day cash-only checkout → no bill number, no GST invoice
             invoice_generated = False
-        elif payment_online > 0:
-            # Any UPI payment → generate invoice
-            invoice_generated = True
         elif payment_cash > 0 and payment_online > 0:
-            # Split payment → generate invoice
+            # Split payment (cash + UPI) → generate invoice
+            invoice_generated = True
+        elif payment_online > 0:
+            # UPI-only payment → generate invoice
             invoice_generated = True
         elif any_addon_online:
             # Addon/service paid via UPI → generate invoice

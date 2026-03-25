@@ -113,11 +113,6 @@
         50%       { box-shadow: 0 0 0 5px rgba(245,158,11,0.05); }
       }
 
-      /* ── Name suggestion dropdown ── */
-      #name-suggestions > div:last-child {
-        border-bottom: none !important;
-      }
-
       /* ── Camera modal — mobile bottom-sheet ── */
       @media (max-width: 600px) {
         #doc-camera-modal {
@@ -796,24 +791,6 @@
                   margin-top: 0.15rem;
                 "
               ></span>
-              <!-- Name suggestion dropdown (populated by customer-docs.js) -->
-              <div
-                id="name-suggestions"
-                style="
-                  display: none;
-                  position: absolute;
-                  top: 100%;
-                  left: 0;
-                  right: 0;
-                  background: white;
-                  border: 1px solid #ddd;
-                  border-radius: 6px;
-                  z-index: 9999;
-                  max-height: 200px;
-                  overflow-y: auto;
-                  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-                "
-              ></div>
             </div>
             <div class="form-group" style="position: relative">
               <label class="form-label" for="guest-mobile">Mobile Number</label>

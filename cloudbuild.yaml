@@ -9,14 +9,12 @@ steps:
       - "--platform=managed"
       - "--allow-unauthenticated"
       - "--clear-base-image"
-      - "--update-env-vars=FIREBASE_CREDENTIALS=$$FIREBASE_CREDS,FIREBASE_STORAGE_BUCKET=$$FIREBASE_BUCKET"
-    secretEnv: ["FIREBASE_CREDS", "FIREBASE_BUCKET"]
+      - "--update-env-vars=FIREBASE_CREDENTIALS=$$FIREBASE_CREDS,FIREBASE_STORAGE_BUCKET=cibara-software-61512.firebasestorage.app,MANAGER_PASSWORD=admin123"
+    secretEnv: ["FIREBASE_CREDS"]
 
 availableSecrets:
   secretManager:
     - versionName: projects/$PROJECT_ID/secrets/firebase-credentials/versions/latest
       env: "FIREBASE_CREDS"
-    - versionName: projects/$PROJECT_ID/secrets/firebase-storage-bucket/versions/latest
-      env: "FIREBASE_BUCKET"
 
 timeout: "1200s"

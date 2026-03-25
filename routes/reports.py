@@ -6,9 +6,10 @@ All reads use payments collection as primary data source.
 from flask import Blueprint, request, jsonify
 from datetime import datetime, timedelta
 from firebase_admin import firestore
+from google.cloud.firestore_v1.base_query import FieldFilter
 
 from config import (
-    db, logs_ref, totals_ref, IST, logger,
+    db, totals_ref, bills_ref, IST, logger,
     invalidate_rooms_and_totals, get_all_rooms,
 )
 from services import payment_service
@@ -147,14 +148,6 @@ def add_expense():
             }
             expense_entry.update(commission_fields)
 
-        expenses_doc = logs_ref.document("expenses").get()
-        if not expenses_doc.exists:
-            batch.set(logs_ref.document("expenses"), {"entries": [expense_entry]})
-        else:
-            batch.update(logs_ref.document("expenses"), {
-                "entries": firestore.ArrayUnion([expense_entry])
-            })
-
         if expense_type == "transaction":
             batch.update(totals_ref.document('current_totals'), {
                 "expenses": firestore.Increment(amount),
@@ -180,3 +173,111 @@ def add_expense():
     except Exception as e:
         logger.error(f"Error adding expense: {str(e)}")
         return jsonify(success=False, message=f"Error adding expense: {str(e)}")
+
+
+@reports_bp.route("/revenue_report", methods=["POST"])
+def revenue_report():
+    """
+    Checkout-basis revenue report.
+
+    Revenue is recognised when the guest checks OUT, not when payment is
+    collected. This is what a CA needs for a proper monthly P&L.
+
+    Reads from: bills collection (checkout_time range).
+    Excludes:   MMT OTA bills (payment_source == 'ota') since hotel never
+                collects that cash directly.
+    """
+    try:
+        data_json = request.json
+        start_date = data_json.get("start_date")
+        end_date   = data_json.get("end_date")
+
+        if not start_date or not end_date:
+            return jsonify(success=False, message="start_date and end_date are required")
+
+        # Build half-open range [start_date 00:00, end_date+1 00:00)
+        start_dt  = datetime.strptime(start_date, "%Y-%m-%d")
+        end_dt    = datetime.strptime(end_date,   "%Y-%m-%d") + timedelta(days=1)
+        start_str = start_dt.strftime("%Y-%m-%d %H:%M")
+        end_str   = end_dt.strftime("%Y-%m-%d %H:%M")
+
+        bills_q = (
+            bills_ref
+            .where(filter=FieldFilter("checkout_time", ">=", start_str))
+            .where(filter=FieldFilter("checkout_time", "<",  end_str))
+            .order_by("checkout_time", direction="DESCENDING")
+        )
+
+        bills = []
+        total_billed        = 0
+        total_room_charges  = 0
+        total_services      = 0
+        total_discounts     = 0
+        total_cash          = 0
+        total_online        = 0
+        total_refunds       = 0
+        total_balance_due   = 0
+        invoice_count       = 0
+        ota_revenue         = 0
+        hotel_revenue       = 0
+
+        for doc in bills_q.stream():
+            b = doc.to_dict()
+            b["id"] = doc.id
+
+            is_ota = (b.get("payment_source") == "ota")
+
+            room_charges = b.get("room_charges_total", 0)
+            services     = b.get("services_total", 0)
+            discounts    = b.get("discounts", 0)
+            grand_total  = b.get("total_amount", 0)
+            cash         = b.get("payment_cash", 0)
+            online       = b.get("payment_online", 0)
+            refunds      = b.get("refunds", 0)
+            balance      = b.get("balance", 0)
+
+            total_billed       += grand_total
+            total_room_charges += room_charges
+            total_services     += services
+            total_discounts    += discounts
+            total_cash         += cash
+            total_online       += online
+            total_refunds      += refunds
+            total_balance_due  += max(balance, 0)
+
+            if b.get("invoice_generated"):
+                invoice_count += 1
+
+            if is_ota:
+                ota_revenue   += grand_total
+            else:
+                hotel_revenue += grand_total
+
+            bills.append(b)
+
+        net_collected = total_cash + total_online - total_refunds
+
+        return jsonify(
+            success=True,
+            period={"start": start_date, "end": end_date},
+            summary={
+                "total_bills":        len(bills),
+                "total_billed":       total_billed,
+                "hotel_revenue":      hotel_revenue,   # cash/UPI collected at hotel
+                "ota_revenue":        ota_revenue,     # MMT/Booking.com (settled separately)
+                "total_room_charges": total_room_charges,
+                "total_services":     total_services,
+                "total_discounts":    total_discounts,
+                "total_cash":         total_cash,
+                "total_online":       total_online,
+                "total_refunds":      total_refunds,
+                "net_collected":      net_collected,
+                "total_balance_due":  total_balance_due,
+                "invoices_issued":    invoice_count,
+            },
+            bills=bills,
+        )
+
+    except Exception as e:
+        logger.error(f"Error generating revenue report: {str(e)}", exc_info=True)
+        return jsonify(success=False, message=f"Error: {str(e)}")

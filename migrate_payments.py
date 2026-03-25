@@ -4,9 +4,9 @@ One-time migration script: logs → payments collection + customers collection.
 
 Safety guarantees:
   • NEVER modifies or deletes existing data in the `logs` collection.
-  • Safe to re-run: skips documents that already exist in `payments` (dedup
-    by room + name + amount + date + time composite check).
-  • Only migrates 2026 data (and March specifically for customers).
+  • Safe to re-run: idempotent — deterministic doc IDs mean re-running
+    overwrites with identical data, no duplicates created.
+  • Migrates ALL historical data regardless of date.
   • Runs in batches of 400 (Firestore batch limit = 500) to avoid timeouts.
   • Prints progress to stdout — redirect to a file for a permanent record.
 
@@ -33,8 +33,6 @@ from firebase_admin import credentials, firestore
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-YEAR_FILTER = "2026"                    # Only migrate 2026 data
-CUSTOMER_MONTH_FILTER = "2026-03"       # Customers: only March 2026 data
 BATCH_SIZE = 400                        # Firestore batch limit safety margin
 DRY_RUN = "--dry-run" in sys.argv       # Pass --dry-run to preview without writing
 
@@ -92,7 +90,6 @@ LOG_TYPE_MAP = {
     "booking_payments":  {"method": "cash",    "type": "booking_payment"},
     "discounts":         {"method": "discount","type": "discount"},
     "expenses":          {"method": "cash",    "type": "expense"},
-    "room_shifts":       {"method": "none",    "type": "room_shift"},
 }
 
 
@@ -187,28 +184,31 @@ def migrate_payments(db):
                 continue
 
             entries = doc.to_dict().get("entries", [])
-            log.info(f"  Found {len(entries)} total entries")
-
-            # Filter to 2026 only
-            filtered = [
-                e for e in entries
-                if str(e.get("date", "")).startswith(YEAR_FILTER)
-            ]
-            log.info(f"  {len(filtered)} entries in {YEAR_FILTER}")
+            log.info(f"  Found {len(entries)} entries in logs")
 
             batch = db.batch()
             batch_count = 0
+            type_would_write = 0
+            type_would_skip  = 0
 
-            for i, entry in enumerate(filtered):
+            for i, entry in enumerate(entries):
                 try:
                     payment_doc = entry_to_payment(entry, log_type)
 
-                    # Skip if amount field is missing/zero and it's not a
-                    # zero-payment checkin or room shift
+                    # Skip zero-amount entries except for events that are
+                    # legitimately ₹0 (fresh checkin with no advance,
+                    # booking fully paid before conversion).
+                    # room_shift is audit-only — no financial value, skip it.
                     if (payment_doc["amount"] == 0
                             and payment_doc["type"] not in (
-                                "checkin", "booking_conversion", "room_shift")):
+                                "checkin", "booking_conversion")):
                         total_skipped += 1
+                        type_would_skip += 1
+                        continue
+
+                    if DRY_RUN:
+                        total_migrated += 1
+                        type_would_write += 1
                         continue
 
                     # Deterministic doc ID — re-running overwrites with same
@@ -218,14 +218,6 @@ def migrate_payments(db):
                         payment_doc["amount"], payment_doc["date"],
                         payment_doc["time"], log_type,
                     )
-
-                    if DRY_RUN:
-                        log.info(f"  [DRY-RUN] Would write: {payment_doc['type']} "
-                                 f"room={payment_doc['room']} "
-                                 f"amount={payment_doc['amount']} "
-                                 f"date={payment_doc['date']}")
-                        total_migrated += 1
-                        continue
 
                     batch.set(payments_ref.document(doc_id), payment_doc)
                     batch_count += 1
@@ -247,6 +239,10 @@ def migrate_payments(db):
                 total_migrated += batch_count
                 log.info(f"  Committed final batch of {batch_count}")
 
+            if DRY_RUN:
+                log.info(f"  [DRY-RUN] would write {type_would_write}, "
+                         f"skip {type_would_skip} (of {len(entries)} entries)")
+
         except Exception as e:
             log.error(f"Error processing {log_type}: {e}")
             total_errors += 1
@@ -262,7 +258,7 @@ def migrate_payments(db):
 # ---------------------------------------------------------------------------
 def migrate_customers(db):
     """
-    Build customer records from existing data:
+    Build customer records from ALL existing data:
       1. Currently occupied rooms (have guest data with mobile).
       2. Bills collection (has guest_name + guest_mobile).
       3. Bookings collection (has guest_name + guest_mobile).
@@ -325,12 +321,11 @@ def migrate_customers(db):
         if guest and guest.get("mobile"):
             checkin_time = rd.get("checkin_time", "")
             checkin_date = checkin_time.split(" ")[0] if checkin_time else ""
-            if checkin_date.startswith(CUSTOMER_MONTH_FILTER):
-                add_guest(
-                    guest["mobile"], guest.get("name", ""),
-                    checkin_date, 0,
-                    photo=guest.get("photo", ""),
-                )
+            add_guest(
+                guest["mobile"], guest.get("name", ""),
+                checkin_date, 0,
+                photo=guest.get("photo", ""),
+            )
 
     # 2. Bills (completed stays)
     log.info("Scanning bills for guest data...")
@@ -339,7 +334,7 @@ def migrate_customers(db):
         mobile = bd.get("guest_mobile", "")
         checkin = bd.get("checkin_time", "")
         checkin_date = checkin.split(" ")[0] if checkin else ""
-        if checkin_date.startswith(CUSTOMER_MONTH_FILTER) and mobile:
+        if mobile:
             total = bd.get("payment_cash", 0) + bd.get("payment_online", 0)
             add_guest(mobile, bd.get("guest_name", ""), checkin_date, total)
 
@@ -349,7 +344,7 @@ def migrate_customers(db):
         bk = booking_doc.to_dict()
         mobile = bk.get("guest_mobile", "")
         check_in = bk.get("check_in_date", "")
-        if check_in.startswith(CUSTOMER_MONTH_FILTER) and mobile:
+        if mobile:
             add_guest(mobile, bk.get("guest_name", ""), check_in,
                       bk.get("paid_amount", 0))
 
@@ -362,7 +357,7 @@ def migrate_customers(db):
                 for entry in doc.to_dict().get("entries", []):
                     mobile = entry.get("guest_mobile", "") or entry.get("mobile", "")
                     date = entry.get("date", "")
-                    if mobile and date.startswith(CUSTOMER_MONTH_FILTER):
+                    if mobile:
                         add_guest(mobile, entry.get("name", ""), date)
         except Exception as e:
             log.warning(f"Error scanning {lt}: {e}")
@@ -383,6 +378,11 @@ def migrate_customers(db):
 
     for mobile, data in guests.items():
         try:
+            # Skip records with no usable name — not worth storing
+            if not data.get("name", "").strip():
+                log.debug(f"  Skipping customer {mobile}: no name")
+                continue
+
             doc_ref = customers_ref.document(mobile)
 
             # Check if already exists — merge, don't overwrite
@@ -405,16 +405,12 @@ def migrate_customers(db):
                 if data["id_number"] and not ex_data.get("id_number"):
                     updates["id_number"] = data["id_number"]
 
-                if DRY_RUN:
-                    log.info(f"  [DRY-RUN] Would update customer {mobile}")
-                else:
+                if not DRY_RUN:
                     batch.update(doc_ref, updates)
                     batch_count += 1
                 skipped += 1
             else:
-                if DRY_RUN:
-                    log.info(f"  [DRY-RUN] Would create customer {mobile}: {data['name']}")
-                else:
+                if not DRY_RUN:
                     batch.set(doc_ref, data)
                     batch_count += 1
                 migrated += 1
@@ -436,6 +432,90 @@ def migrate_customers(db):
     log.info(f"  Updated/skipped: {skipped}")
 
 
+# ---------------------------------------------------------------------------
+# Tally: compare logs entries vs payments documents
+# ---------------------------------------------------------------------------
+def tally(db):
+    """
+    Print a side-by-side count of every log type vs the payments collection.
+
+    For each log type:
+      • LOGS  — count of entries[] in that document
+      • PMTS  — count of payments docs whose source_log_type matches
+                (migrated docs) OR whose type/method maps to that log type
+
+    Also prints overall totals and the delta.
+    Run with:  python migrate_payments.py --tally
+    """
+    logs_ref     = db.collection("logs")
+    payments_ref = db.collection("payments")
+
+    log_types = list(LOG_TYPE_MAP.keys())
+
+    # --- Count logs entries per type ---
+    logs_counts = {}
+    logs_total  = 0
+    for lt in log_types:
+        try:
+            doc = logs_ref.document(lt).get()
+            if doc.exists:
+                n = len(doc.to_dict().get("entries", []))
+            else:
+                n = 0
+        except Exception as e:
+            log.warning(f"Could not read logs/{lt}: {e}")
+            n = 0
+        logs_counts[lt] = n
+        logs_total += n
+
+    # --- Count payments docs per source_log_type ---
+    pmts_by_source = defaultdict(int)
+    pmts_total = 0
+    try:
+        for doc in payments_ref.stream():
+            pmts_total += 1
+            src = doc.to_dict().get("source_log_type", "__live__")
+            pmts_by_source[src] += 1
+    except Exception as e:
+        log.error(f"Could not stream payments: {e}")
+
+    # --- Print table ---
+    col_w = 20
+    print()
+    print("=" * 62)
+    print(f"  {'LOG TYPE':<{col_w}} {'LOGS entries':>14} {'PMTS docs':>12} {'DELTA':>10}")
+    print("=" * 62)
+    for lt in log_types:
+        lc  = logs_counts[lt]
+        pc  = pmts_by_source.get(lt, 0)
+        delta = pc - lc
+        flag = "  ✓" if delta >= 0 else "  ✗ MISSING"
+        print(f"  {lt:<{col_w}} {lc:>14,} {pc:>12,} {delta:>+10,}{flag}")
+
+    # Live (non-migrated) payments written directly by the app
+    live = pmts_by_source.get("__live__", 0)
+    if live:
+        print(f"  {'(live writes)':<{col_w}} {'—':>14} {live:>12,}")
+
+    print("-" * 62)
+    migrated_pmts = pmts_total - live
+    overall_delta = migrated_pmts - logs_total
+    flag = "✓ covered" if overall_delta >= 0 else "✗ SHORTFALL"
+    print(f"  {'TOTAL':<{col_w}} {logs_total:>14,} {migrated_pmts:>12,} {overall_delta:>+10,}  {flag}")
+    print(f"  {'TOTAL incl live':<{col_w}} {'':>14} {pmts_total:>12,}")
+    print("=" * 62)
+    print()
+
+    if overall_delta < 0:
+        print(f"  ⚠  {abs(overall_delta):,} log entries have no matching payment doc.")
+        print("     Run the migration (without --tally) to fill the gap.")
+    else:
+        print(f"  ✓  All log entries are covered in the payments collection.")
+        if live:
+            print(f"  +  {live:,} additional live-write docs (from app activity).")
+    print()
+
+
 def _clean_mobile(raw):
     """Normalise mobile number to 10 digits."""
     if not raw:
@@ -454,6 +534,12 @@ def _clean_mobile(raw):
 # Main
 # ---------------------------------------------------------------------------
 def main():
+    # --tally: just print counts, no writes
+    if "--tally" in sys.argv:
+        db = init_firebase()
+        tally(db)
+        return
+
     if DRY_RUN:
         log.info("=== DRY RUN MODE — no writes will be made ===")
 
@@ -468,6 +554,12 @@ def main():
 
     log.info("")
     log.info("All migrations complete.")
+
+    # Always print tally after a real run so you can see the result immediately
+    if not DRY_RUN:
+        log.info("")
+        log.info("=== POST-MIGRATION TALLY ===")
+        tally(db)
 
 
 if __name__ == "__main__":

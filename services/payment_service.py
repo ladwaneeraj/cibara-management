@@ -188,11 +188,21 @@ def query_payments_for_stay(room, guest_name, checkin_dt):
     except Exception as e:
         logger.warning(f"PaymentService booking-advance Q2 failed: {e}")
 
-    # Content-based dedup: migration + live writes can produce two docs for
-    # the same transaction with different IDs. Deduplicate by fingerprint.
+    return _dedup_payments(results)
+
+
+def _dedup_payments(payments: list) -> list:
+    """
+    Remove duplicate payment docs that arise when migration + live writes
+    both exist for the same transaction (different doc IDs, same content).
+
+    Deduplicates by (room, name, amount, date, time, type).
+    When a duplicate is found, the live-written doc (migrated != True)
+    is preferred over the migrated copy.
+    """
     seen_fps = set()
     deduped = []
-    for p in results:
+    for p in payments:
         fp = (
             str(p.get("room", "")),
             str(p.get("name", "")),
@@ -203,10 +213,9 @@ def query_payments_for_stay(room, guest_name, checkin_dt):
         )
         if fp not in seen_fps:
             seen_fps.add(fp)
-            # Prefer the live-written doc (migrated=False) over the migrated one
             deduped.append(p)
         elif p.get("migrated") is not True:
-            # Replace previously added migrated doc with the live-written one
+            # Replace the previously added migrated doc with the live one
             for i, existing in enumerate(deduped):
                 efp = (
                     str(existing.get("room", "")),
@@ -219,7 +228,6 @@ def query_payments_for_stay(room, guest_name, checkin_dt):
                 if efp == fp and existing.get("migrated") is True:
                     deduped[i] = p
                     break
-
     return deduped
 
 
@@ -241,7 +249,7 @@ def query_payments_by_date_range(start_date: str, end_date: str,
             query = query.where(
                 filter=fa_firestore.FieldFilter("method", "==", method)
             )
-        return [doc.to_dict() for doc in query.stream()]
+        return _dedup_payments([doc.to_dict() for doc in query.stream()])
     except Exception as e:
         logger.error(f"PaymentService query_payments_by_date_range failed: {e}")
         return []

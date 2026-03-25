@@ -294,7 +294,7 @@ async function processEnhancedRoomTransfer(
 
     console.log("Sending enhanced transfer request:", transferData);
 
-    const response = await fetch("/transfer_room", {
+    const response = await apiFetch("/transfer_room", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(transferData),

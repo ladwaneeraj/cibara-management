@@ -856,7 +856,7 @@ async function generateEnhancedReport() {
   }
 
   try {
-    const response = await fetch("/reports", {
+    const response = await apiFetch("/reports", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({

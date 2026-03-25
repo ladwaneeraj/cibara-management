@@ -188,7 +188,39 @@ def query_payments_for_stay(room, guest_name, checkin_dt):
     except Exception as e:
         logger.warning(f"PaymentService booking-advance Q2 failed: {e}")
 
-    return results
+    # Content-based dedup: migration + live writes can produce two docs for
+    # the same transaction with different IDs. Deduplicate by fingerprint.
+    seen_fps = set()
+    deduped = []
+    for p in results:
+        fp = (
+            str(p.get("room", "")),
+            str(p.get("name", "")),
+            str(p.get("amount", "")),
+            str(p.get("date", "")),
+            str(p.get("time", "")),
+            str(p.get("type", "")),
+        )
+        if fp not in seen_fps:
+            seen_fps.add(fp)
+            # Prefer the live-written doc (migrated=False) over the migrated one
+            deduped.append(p)
+        elif p.get("migrated") is not True:
+            # Replace previously added migrated doc with the live-written one
+            for i, existing in enumerate(deduped):
+                efp = (
+                    str(existing.get("room", "")),
+                    str(existing.get("name", "")),
+                    str(existing.get("amount", "")),
+                    str(existing.get("date", "")),
+                    str(existing.get("time", "")),
+                    str(existing.get("type", "")),
+                )
+                if efp == fp and existing.get("migrated") is True:
+                    deduped[i] = p
+                    break
+
+    return deduped
 
 
 def query_payments_by_date_range(start_date: str, end_date: str,

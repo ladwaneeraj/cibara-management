@@ -97,7 +97,7 @@
 
         try {
           console.log("Sending checkout request to server");
-          const response = await fetch("/checkout", {
+          const response = await apiFetch("/checkout", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({

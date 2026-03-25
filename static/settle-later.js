@@ -63,7 +63,7 @@ function initSettleLater() {
 
       try {
         console.log("Sending checkout request to server");
-        const response = await fetch("/checkout", {
+        const response = await apiFetch("/checkout", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -359,7 +359,7 @@ function enhanceCheckoutConfirmation() {
 // Fetch pending settlements from the server
 async function fetchPendingSettlements() {
   try {
-    const response = await fetch("/get_pending_settlements");
+    const response = await apiFetch("/get_pending_settlements");
     if (!response.ok) {
       throw new Error(`Server responded with status: ${response.status}`);
     }
@@ -602,7 +602,7 @@ async function collectSettlementPayment() {
 
   try {
     // Call API to collect payment
-    const response = await fetch("/collect_settlement", {
+    const response = await apiFetch("/collect_settlement", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -708,7 +708,7 @@ async function cancelSettlement() {
     }
 
     // Call API to cancel settlement
-    const response = await fetch("/cancel_settlement", {
+    const response = await apiFetch("/cancel_settlement", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({

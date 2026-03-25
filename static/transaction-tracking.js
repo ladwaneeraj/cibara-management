@@ -557,7 +557,7 @@ class TransactionLogManager {
     // Fetch full payment history from the server — /get_history queries
     // Firestore directly and is NOT limited to the 3-day window that
     // /get_data uses for the main logs cache.
-    fetch("/get_history", {
+    apiFetch("/get_history", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ room: roomNumber, name: roomInfo.guest.name }),

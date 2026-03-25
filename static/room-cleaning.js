@@ -502,7 +502,7 @@ async function markRoomAsCleaned(roomNumber) {
 async function completeRoomCleaning(roomNumber) {
   try {
     // Send request to backend to mark as cleaned
-    const response = await fetch("/mark_room_cleaned", {
+    const response = await apiFetch("/mark_room_cleaned", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({

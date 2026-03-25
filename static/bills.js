@@ -547,7 +547,7 @@
     showLoading();
 
     try {
-      const res = await fetch("/get_register_data", {
+      const res = await apiFetch("/get_register_data", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ start_date: start, end_date: end }),
@@ -751,7 +751,7 @@
     area.innerHTML = `<div class="bl-state"><div class="bl-loader"></div><p>Generating…</p></div>`;
     m.classList.add("show");
     try {
-      const res  = await fetch(`/generate_bill/${id}`);
+      const res  = await apiFetch(`/generate_bill/${id}`);
       const data = await res.json();
       area.innerHTML = data.success
         ? buildBillHTML(data.bill)

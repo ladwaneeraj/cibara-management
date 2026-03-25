@@ -2760,6 +2760,14 @@
       </div>
     </div>
 
+    <script>
+      // Global API fetch wrapper — must load before all other scripts
+      const _API_KEY = "cibara-secure-2026";
+      function apiFetch(url, options = {}) {
+        options.headers = Object.assign({ "X-API-Key": _API_KEY }, options.headers || {});
+        return fetch(url, options);
+      }
+    </script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/flatpickr/4.6.13/flatpickr.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>

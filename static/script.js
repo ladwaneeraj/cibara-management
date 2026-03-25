@@ -529,8 +529,8 @@ async function fetchData() {
 
     // Fire both requests in parallel — cuts sequential wait by ~0.8–1s
     const [response, metadataResponse] = await Promise.all([
-      fetch("/get_data"),
-      fetch("/get_transaction_metadata").catch(() => null),
+      apiFetch("/get_data"),
+      apiFetch("/get_transaction_metadata").catch(() => null),
     ]);
 
     if (!response.ok) {
@@ -795,7 +795,7 @@ async function triggerRentRenewal(roomNumber) {
         (newRenewalCount + 1),
     );
 
-    const response = await fetch("/renew_rent", {
+    const response = await apiFetch("/renew_rent", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -1245,7 +1245,7 @@ function showCheckoutModal(roomNumber) {
       }
 
       try {
-        const response = await fetch("/checkout", {
+        const response = await apiFetch("/checkout", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -1572,7 +1572,7 @@ async function addService() {
     const serviceWithQuantity =
       quantity > 1 ? `${service} × ${quantity}` : service;
 
-    const response = await fetch("/add_on", {
+    const response = await apiFetch("/add_on", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -1680,7 +1680,7 @@ function showEditTimeModal(roomNumber, currentCheckInTime) {
       submitBtn.innerHTML =
         '<span class="loader" style="width: 20px; height: 20px;"></span> Updating...';
 
-      const response = await fetch("/update_checkin_time", {
+      const response = await apiFetch("/update_checkin_time", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -1934,7 +1934,7 @@ async function populateRoomDropdown() {
 
   try {
     // Get all room numbers
-    const response = await fetch("/get_room_numbers");
+    const response = await apiFetch("/get_room_numbers");
     if (!response.ok) {
       throw new Error(`Server responded with status: ${response.status}`);
     }
@@ -2277,7 +2277,7 @@ async function processRefund() {
     );
 
     // Make API request with all necessary information
-    const response = await fetch("/checkout", {
+    const response = await apiFetch("/checkout", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -2388,7 +2388,7 @@ async function addPayment(mode) {
     }
 
     // Proceed with payment API call - using the fixed backend endpoint
-    const response = await fetch("/checkout", {
+    const response = await apiFetch("/checkout", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -2450,7 +2450,7 @@ async function uploadPhoto(file) {
     const formData = new FormData();
     formData.append("photo", file);
 
-    const response = await fetch("/upload_photo", {
+    const response = await apiFetch("/upload_photo", {
       method: "POST",
       body: formData,
     });
@@ -3292,7 +3292,7 @@ async function applyDiscount() {
     submitBtn.innerHTML =
       '<span class="loader" style="width: 20px; height: 20px;"></span> Processing...';
 
-    const response = await fetch("/apply_discount", {
+    const response = await apiFetch("/apply_discount", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -3537,7 +3537,7 @@ function setupCheckoutConfirmation() {
       try {
         console.log("Sending checkout request to server");
 
-        const response = await fetch("/checkout", {
+        const response = await apiFetch("/checkout", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -3926,7 +3926,7 @@ document.addEventListener("DOMContentLoaded", function () {
           }
         }
 
-        const response = await fetch("/checkin", {
+        const response = await apiFetch("/checkin", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({

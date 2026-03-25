@@ -248,7 +248,7 @@ async function submitExpense(e) {
       commissionPayload.commission_payment_date = document.getElementById("commission-payment-date")?.value || "";
     }
 
-    const response = await fetch("/add_expense", {
+    const response = await apiFetch("/add_expense", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -572,7 +572,7 @@ function updateReportGeneration(originalGenerateReport) {
     if (loadingIndicator) loadingIndicator.classList.remove("hidden");
 
     try {
-      const response = await fetch("/reports", {
+      const response = await apiFetch("/reports", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

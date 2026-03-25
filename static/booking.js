@@ -294,7 +294,7 @@ async function createBooking(event) {
     console.log("Creating booking with data:", bookingData); // Debug log
 
     // Send request to create booking
-    const response = await fetch("/create_booking", {
+    const response = await apiFetch("/create_booking", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(bookingData),
@@ -351,7 +351,7 @@ async function createBooking(event) {
 // Fetch all bookings
 async function fetchBookings() {
   try {
-    const response = await fetch("/get_bookings");
+    const response = await apiFetch("/get_bookings");
     if (!response.ok) {
       throw new Error(`Server responded with status: ${response.status}`);
     }
@@ -784,7 +784,7 @@ async function checkAvailability() {
     // Show loading indicator
     roomSelect.innerHTML = '<option value="">Checking availability...</option>';
 
-    const response = await fetch("/check_availability", {
+    const response = await apiFetch("/check_availability", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -1003,7 +1003,7 @@ async function submitOtaSettlement(event) {
   }
 
   try {
-    const response = await fetch("/mark_ota_settlement", {
+    const response = await apiFetch("/mark_ota_settlement", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -1122,7 +1122,7 @@ function initializeCancelBookingForm() {
       '<span class="loader" style="width: 20px; height: 20px;"></span> Processing...';
 
     try {
-      const response = await fetch("/cancel_booking", {
+      const response = await apiFetch("/cancel_booking", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -1284,7 +1284,7 @@ function initializeConvertBookingForm() {
       '<span class="loader" style="width: 20px; height: 20px;"></span> Processing...';
 
     try {
-      const response = await fetch("/convert_booking_to_checkin", {
+      const response = await apiFetch("/convert_booking_to_checkin", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -1437,7 +1437,7 @@ function initializeAddPaymentForm() {
       '<span class="loader" style="width: 20px; height: 20px;"></span> Processing...';
 
     try {
-      const response = await fetch("/update_booking", {
+      const response = await apiFetch("/update_booking", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -1628,7 +1628,7 @@ function initializeUpdateBookingForm() {
       '<span class="loader" style="width: 20px; height: 20px;"></span> Processing...';
 
     try {
-      const response = await fetch("/update_booking", {
+      const response = await apiFetch("/update_booking", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -1686,7 +1686,7 @@ async function updateRoomOptions(currentRoom, checkInDate, checkOutDate) {
     // Show loading indicator
     roomSelect.innerHTML = '<option value="">Checking availability...</option>';
 
-    const response = await fetch("/check_availability", {
+    const response = await apiFetch("/check_availability", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -2510,7 +2510,7 @@ async function checkAvailabilityForDate(dateStr) {
     const checkOutDate = new Date(dateStr);
     checkOutDate.setDate(checkOutDate.getDate() + 1);
 
-    const response = await fetch("/check_availability", {
+    const response = await apiFetch("/check_availability", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({

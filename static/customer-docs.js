@@ -63,7 +63,7 @@ window.uploadPendingDocIfAny = async function (mobile) {
       const form = new FormData();
       form.append('mobile',   digits);
       form.append('document', item.blob, `doc_${Date.now()}.jpg`);
-      const res  = await fetch('/upload_customer_document', { method: 'POST', body: form });
+      const res  = await apiFetch('/upload_customer_document', { method: 'POST', body: form });
       const data = await res.json();
       if (!data.success) {
         _notify('ID document upload failed: ' + (data.message || 'unknown'), 'error');
@@ -96,7 +96,7 @@ window.populateCheckoutDocView = async function (mobile) {
   if (digits.length !== 10) return;
 
   try {
-    const res  = await fetch(`/get_customer/${digits}`);
+    const res  = await apiFetch(`/get_customer/${digits}`);
     const data = await res.json();
     if (data.success && data.customer) {
       const urls = data.customer.id_doc_urls || [];
@@ -254,7 +254,7 @@ async function _uploadCheckoutDoc(file) {
   form.append('document', compressed, `checkout_doc_${Date.now()}.jpg`);
 
   try {
-    const res  = await fetch('/upload_customer_document', { method: 'POST', body: form });
+    const res  = await apiFetch('/upload_customer_document', { method: 'POST', body: form });
     const data = await res.json();
     if (!data.success) {
       _notify('Upload failed: ' + data.message, 'error');
@@ -413,7 +413,7 @@ function initMobileLookup() {
 
 async function fetchMobileSuggestions(prefix) {
   try {
-    const res  = await fetch('/search_customers_mobile', {
+    const res  = await apiFetch('/search_customers_mobile', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ prefix }),
     });
@@ -467,7 +467,7 @@ function hideMobileSuggestions() {
 
 async function lookupAndFillCustomer(mobile) {
   try {
-    const res  = await fetch(`/get_customer/${mobile}`);
+    const res  = await apiFetch(`/get_customer/${mobile}`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
 
@@ -635,7 +635,7 @@ function _hideCheckinStoredDocs() {
 function _refreshCheckinStoredDocs(mobile) {
   if (!mobile || !_currentCheckinCustomer) return;
   // Re-fetch and re-render
-  fetch(`/get_customer/${mobile}`)
+  apiFetch(`/get_customer/${mobile}`)
     .then(r => r.json())
     .then(d => {
       if (d.success && d.customer) {
@@ -777,7 +777,7 @@ async function _onScanBtnClick() {
   // ── Step 1: Fetch saved scanner IP from backend ──────────────────────────
   let scannerIp = '';
   try {
-    const cfgRes  = await fetch('/scanner/config');
+    const cfgRes  = await apiFetch('/scanner/config');
     const cfgData = await cfgRes.json();
     scannerIp = (cfgData.config?.ip || '').trim();
   } catch (_) {}
@@ -804,7 +804,7 @@ async function _onScanBtnClick() {
     }
 
     // Save to backend
-    const saveRes  = await fetch('/scanner/config', {
+    const saveRes  = await apiFetch('/scanner/config', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ip: entered, doc_type: _docType }),
@@ -823,7 +823,7 @@ async function _onScanBtnClick() {
   _notify('Scanning… place document face-down on the glass', 'info');
 
   try {
-    const res  = await fetch('/scan_document', {
+    const res  = await apiFetch('/scan_document', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ scanner_ip: scannerIp, doc_type: _docType }),
@@ -833,7 +833,7 @@ async function _onScanBtnClick() {
     if (!data.success) {
       // If IP was wrong, clear saved config so user can re-enter
       if (data.message && data.message.includes('Cannot reach')) {
-        await fetch('/scanner/config', {
+        await apiFetch('/scanner/config', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ ip: '', doc_type: _docType }),
@@ -1395,7 +1395,7 @@ async function _doDeleteViewerPhoto(urlToDelete) {
   if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Deleting…'; }
 
   try {
-    const res  = await fetch('/delete_customer_document', {
+    const res  = await apiFetch('/delete_customer_document', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ mobile: _viewerMobile, url: urlToDelete }),

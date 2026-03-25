@@ -792,7 +792,7 @@
     showLoading();
 
     try {
-      const res = await fetch("/get_register_data", {
+      const res = await apiFetch("/get_register_data", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ start_date: start, end_date: end }),
@@ -990,7 +990,7 @@
     if (!mobiles.length) return;
 
     try {
-      const res  = await fetch("/batch_check_customer_docs", {
+      const res  = await apiFetch("/batch_check_customer_docs", {
         method:  "POST",
         headers: { "Content-Type": "application/json" },
         body:    JSON.stringify({ mobiles }),
@@ -1022,7 +1022,7 @@
     overlay.classList.add("show");
 
     try {
-      const res  = await fetch(`/get_customer/${encodeURIComponent(mobile)}`);
+      const res  = await apiFetch(`/get_customer/${encodeURIComponent(mobile)}`);
       const data = await res.json();
 
       if (!data.success || !data.customer) {
@@ -1120,7 +1120,7 @@
     const err = dom("rpm-err");
 
     try {
-      const res = await fetch("/get_stay_payments", {
+      const res = await apiFetch("/get_stay_payments", {
         method:  "POST",
         headers: { "Content-Type": "application/json" },
         body:    JSON.stringify({
@@ -1177,7 +1177,7 @@
     pmState.password = pass;
 
     try {
-      const res = await fetch("/get_stay_payments", {
+      const res = await apiFetch("/get_stay_payments", {
         method:  "POST",
         headers: { "Content-Type": "application/json" },
         body:    JSON.stringify({
@@ -1335,7 +1335,7 @@
     if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = "Saving…"; }
 
     try {
-      const res = await fetch("/update_stay_payment", {
+      const res = await apiFetch("/update_stay_payment", {
         method:  "POST",
         headers: { "Content-Type": "application/json" },
         body:    JSON.stringify({

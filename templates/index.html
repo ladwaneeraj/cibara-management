@@ -1276,13 +1276,13 @@
               id="checkout-upload-id-btn"
               type="button"
               class="doc-cam-btn"
-              title="Upload ID document"
+              title="Upload ID document (up to 3 images)"
               aria-label="Upload ID document"
             >
-              <i class="fas fa-camera"></i>
+              <i class="fas fa-upload"></i>
             </button>
-            <!-- Hidden file input for checkout doc upload -->
-            <input type="file" id="checkout-doc-file-input" accept="image/*" style="display: none" />
+            <!-- Hidden file input for checkout doc upload (multiple, no capture → gallery/files picker) -->
+            <input type="file" id="checkout-doc-file-input" accept="image/*" multiple style="display: none" />
             <button class="close-btn" aria-label="Close">&times;</button>
           </div>
         </div>

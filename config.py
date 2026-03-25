@@ -39,7 +39,7 @@ try:
         cred_json = base64.b64decode(os.environ.get('FIREBASE_CREDENTIALS')).decode('utf-8')
         cred_dict = json.loads(cred_json)
         cred = credentials.Certificate(cred_dict)
-        storage_bucket = os.environ.get('FIREBASE_STORAGE_BUCKET', 'your-project-id.appspot.com')
+        storage_bucket = os.environ.get('FIREBASE_STORAGE_BUCKET', 'cibara-software-61512.firebasestorage.app')
         firebase_admin.initialize_app(cred, {'storageBucket': storage_bucket})
     else:
         cred = credentials.Certificate('service-account.json')

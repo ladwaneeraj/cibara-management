@@ -294,13 +294,10 @@ def upload_document(mobile: str, image_bytes: bytes, filename: str) -> str:
         return ""
 
     try:
-        # ── Pre-flight cap check (fast path, avoids unnecessary Storage upload) ──
+        # No pre-flight Firestore read here — the route already ran get_customer()
+        # and enforced the cap before calling upload_document().  The transaction
+        # below provides the final atomic safety net against concurrent uploads.
         doc_ref = _customers_ref.document(clean)
-        pre_snap = doc_ref.get()
-        if pre_snap.exists:
-            if len(pre_snap.to_dict().get("id_doc_urls", []) or []) >= 3:
-                logger.warning(f"CustomerService: {clean} already has max (3) docs, aborting upload")
-                return ""
 
         # ── Upload to Storage ─────────────────────────────────────────────────
         url = _store_image(clean, filename, image_bytes)

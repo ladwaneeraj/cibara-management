@@ -141,27 +141,117 @@ window.initCheckoutDocAttach = function(mobile) {
     document.getElementById('checkout-doc-file-input')?.click();
   });
 
-  // File selected → add to pending strip, exactly like the check-in flow
+  // File(s) selected → add to pending strip (up to MAX_DOC_PHOTOS total)
   newInput?.addEventListener('change', function() {
-    const file = this.files && this.files[0];
-    if (!file) return;
-    if (_docCapturedBlobs.length >= MAX_DOC_PHOTOS) {
-      _notify(`Maximum ${MAX_DOC_PHOTOS} photos already taken`, 'warning');
-      this.value = '';
-      return;
+    const files = Array.from(this.files || []);
+    if (!files.length) return;
+
+    let added = 0;
+    for (const file of files) {
+      if (_docCapturedBlobs.length >= MAX_DOC_PHOTOS) break;
+      const url = URL.createObjectURL(file);
+      _docCapturedBlobs.push({ blob: file, url });
+      added++;
     }
-    const url = URL.createObjectURL(file);
-    _docCapturedBlobs.push({ blob: file, url });
+
+    if (added === 0) {
+      _notify(`Maximum ${MAX_DOC_PHOTOS} photos already selected`, 'warning');
+    } else if (_docCapturedBlobs.length >= MAX_DOC_PHOTOS && files.length > added) {
+      _notify(`Maximum ${MAX_DOC_PHOTOS} photos reached — only ${added} added`, 'warning');
+    }
+
     _renderCheckoutPendingStrip();
-    // Reset value so the same file can be re-selected if needed
+    // Reset so the same file can be re-selected if needed
     this.value = '';
   });
 };
 
+/**
+ * Apply a scanned-document effect to a canvas in-place.
+ *
+ * Steps (all done in a single pixel loop):
+ *   1. Grayscale — removes colour noise from phone photos of documents.
+ *   2. Contrast boost — makes text darker and background whiter,
+ *      mimicking the output of a real document scanner.
+ *   3. Brightness nudge — lifts midtones so off-white paper reads as white.
+ */
+function _applyScanEffect(canvas) {
+  const ctx  = canvas.getContext('2d');
+  const imgd = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  const d    = imgd.data;
+
+  // Tuning constants
+  const CONTRAST   = 1.9;   // >1 = more contrast; 1.0 = no change
+  const BRIGHTNESS = 18;    // additive lift in [0,255]; 0 = no change
+
+  for (let i = 0; i < d.length; i += 4) {
+    // 1. Perceptual grayscale (ITU-R BT.601 luma coefficients)
+    let v = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+
+    // 2. Contrast: pivot around 128
+    v = (v - 128) * CONTRAST + 128;
+
+    // 3. Brightness nudge
+    v += BRIGHTNESS;
+
+    // Clamp to [0, 255]
+    v = v < 0 ? 0 : v > 255 ? 255 : v;
+
+    d[i] = d[i + 1] = d[i + 2] = v;
+    // d[i+3] (alpha) is left unchanged
+  }
+
+  ctx.putImageData(imgd, 0, 0);
+}
+
+/**
+ * Resize, apply scan effect, and compress an image Blob to JPEG.
+ * Caps the longest side at MAX_SIDE px.
+ * Falls back to the original Blob on any error.
+ */
+async function _compressImage(blob) {
+  const MAX_SIDE = 1280;
+  const QUALITY  = 0.88;   // slightly higher — grayscale compresses well anyway
+  return new Promise((resolve) => {
+    const img    = new Image();
+    const tmpUrl = URL.createObjectURL(blob);
+    img.onload = () => {
+      URL.revokeObjectURL(tmpUrl);
+      let { width, height } = img;
+      if (width > MAX_SIDE || height > MAX_SIDE) {
+        if (width >= height) {
+          height = Math.round(height * MAX_SIDE / width);
+          width  = MAX_SIDE;
+        } else {
+          width  = Math.round(width * MAX_SIDE / height);
+          height = MAX_SIDE;
+        }
+      }
+      const canvas = document.createElement('canvas');
+      canvas.width  = width;
+      canvas.height = height;
+      canvas.getContext('2d').drawImage(img, 0, 0, width, height);
+
+      // Apply scan effect after drawing
+      _applyScanEffect(canvas);
+
+      canvas.toBlob(
+        (compressed) => resolve(compressed || blob),
+        'image/jpeg',
+        QUALITY,
+      );
+    };
+    img.onerror = () => { URL.revokeObjectURL(tmpUrl); resolve(blob); };
+    img.src = tmpUrl;
+  });
+}
+
 async function _uploadCheckoutDoc(file) {
+  // Compress before sending — reduces a 5 MB phone photo to ~200–350 KB
+  const compressed = await _compressImage(file);
   const form = new FormData();
   form.append('mobile',   _checkoutMobile);
-  form.append('document', file, `checkout_doc_${Date.now()}.jpg`);
+  form.append('document', compressed, `checkout_doc_${Date.now()}.jpg`);
 
   try {
     const res  = await fetch('/upload_customer_document', { method: 'POST', body: form });
@@ -252,18 +342,14 @@ async function _commitCheckoutPending() {
 
   try {
     const items = [..._docCapturedBlobs];
-    // Upload sequentially — same race condition fix as check-in upload:
-    // parallel uploads on the same mobile can lose a URL in the Firestore transaction.
-    let allOk = true;
-    for (let i = 0; i < items.length; i++) {
-      const ok = await _uploadCheckoutDoc(items[i].blob);
-      if (ok) {
-        URL.revokeObjectURL(items[i].url);
-      } else {
-        allOk = false;
-        break;
-      }
-    }
+    // Upload all files in parallel — the Firestore transaction inside
+    // upload_document uses ArrayUnion + optimistic retry, so concurrent
+    // writes to the same customer doc are safe and much faster than sequential.
+    const results = await Promise.all(items.map(item => _uploadCheckoutDoc(item.blob)));
+    const allOk   = results.every(Boolean);
+
+    // Revoke object URLs for successfully uploaded items
+    items.forEach((item, i) => { if (results[i]) URL.revokeObjectURL(item.url); });
 
     if (allOk) {
       _docCapturedBlobs = [];

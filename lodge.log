@@ -21601,3 +21601,997 @@ google.api_core.exceptions.FailedPrecondition: 400 The query requires an index. 
 2026-03-25 11:25:35,946 - config - INFO - [PERF] /get_data TOTAL: 2.111s
 2026-03-25 11:25:35,949 - werkzeug - INFO - 127.0.0.1 - - [25/Mar/2026 11:25:35] "GET /get_data HTTP/1.1" 200 -
 2026-03-25 11:25:37,446 - werkzeug - INFO - 127.0.0.1 - - [25/Mar/2026 11:25:37] "GET /get_transaction_metadata HTTP/1.1" 200 -
+2026-03-26 12:53:34,121 - config - INFO - Firebase initialized successfully
+2026-03-26 12:53:34,122 - services.payment_service - INFO - PaymentService initialised (payments collection)
+2026-03-26 12:53:34,122 - services.customer_service - INFO - CustomerService initialised (customers collection)
+2026-03-26 12:53:34,125 - config - INFO - Checking Firebase data structure...
+2026-03-26 12:53:34,256 - config - INFO - Checking Firebase data structure...
+2026-03-26 12:53:34,264 - werkzeug - INFO - [31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:5000
+ * Running on http://192.168.1.47:5000
+2026-03-26 12:53:34,264 - werkzeug - INFO - [33mPress CTRL+C to quit[0m
+2026-03-26 12:53:36,024 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 12:53:36] "GET / HTTP/1.1" 200 -
+2026-03-26 12:53:36,294 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 12:53:36] "[36mGET /static/booking.css HTTP/1.1[0m" 304 -
+2026-03-26 12:53:36,302 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 12:53:36] "[36mGET /static/settle-later.css HTTP/1.1[0m" 304 -
+2026-03-26 12:53:36,303 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 12:53:36] "GET /static/register.js HTTP/1.1" 200 -
+2026-03-26 12:53:36,312 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 12:53:36] "[36mGET /static/style.css HTTP/1.1[0m" 304 -
+2026-03-26 12:53:36,334 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 12:53:36] "GET /static/shift.js HTTP/1.1" 200 -
+2026-03-26 12:53:36,343 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 12:53:36] "GET /static/bills.js HTTP/1.1" 200 -
+2026-03-26 12:53:36,355 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 12:53:36] "GET /static/expense.js HTTP/1.1" 200 -
+2026-03-26 12:53:36,358 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 12:53:36] "GET /static/settle-later.js HTTP/1.1" 200 -
+2026-03-26 12:53:36,358 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 12:53:36] "GET /static/analytics.js HTTP/1.1" 200 -
+2026-03-26 12:53:36,385 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 12:53:36] "GET /static/settle-later-fix.js HTTP/1.1" 200 -
+2026-03-26 12:53:36,392 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 12:53:36] "GET /static/script.js HTTP/1.1" 200 -
+2026-03-26 12:53:36,395 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 12:53:36] "[36mGET /static/google_sync.js HTTP/1.1[0m" 304 -
+2026-03-26 12:53:36,409 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 12:53:36] "[36mGET /static/revenue-protection.js HTTP/1.1[0m" 304 -
+2026-03-26 12:53:36,410 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 12:53:36] "GET /static/transaction-tracking.js HTTP/1.1" 200 -
+2026-03-26 12:53:36,417 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 12:53:36] "GET /static/room-cleaning.js HTTP/1.1" 200 -
+2026-03-26 12:53:36,423 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 12:53:36] "GET /static/booking.js HTTP/1.1" 200 -
+2026-03-26 12:53:36,449 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 12:53:36] "GET /static/customer-docs.js HTTP/1.1" 200 -
+2026-03-26 12:53:36,734 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 12:53:36,735 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 12:53:36,873 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 12:53:36,874 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 12:53:36] "[33mGET /favicon.ico HTTP/1.1[0m" 404 -
+2026-03-26 12:53:37,746 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 12:53:38,800 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 12:53:38] "GET /get_pending_settlements HTTP/1.1" 200 -
+2026-03-26 12:53:39,163 - config - INFO - [PERF] parallel fetch (rooms+totals+payments): 2.423s, 276 payment docs
+2026-03-26 12:53:39,163 - config - INFO - [PERF] /get_data TOTAL: 2.423s
+2026-03-26 12:53:39,165 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 12:53:39] "GET /get_data HTTP/1.1" 200 -
+2026-03-26 12:53:39,230 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 12:53:39,234 - config - INFO - === REGISTER: 2026-03-20 to 2026-03-26 ===
+2026-03-26 12:53:40,913 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 12:53:40] "GET /get_transaction_metadata HTTP/1.1" 200 -
+2026-03-26 12:53:41,268 - config - INFO - [PERF] register parallel fetch: 2.033s, 439 payments
+2026-03-26 12:53:41,270 - config - INFO - [PERF] active rooms built: 0.002s, count: 17
+2026-03-26 12:53:42,271 - config - INFO - Completed bills: 128, skipped: 0
+2026-03-26 12:53:43,744 - config - INFO - [PERF] /get_register_data TOTAL: 4.510s, entries: 145
+2026-03-26 12:53:43,746 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 12:53:43] "POST /get_register_data HTTP/1.1" 200 -
+2026-03-26 12:53:43,769 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 12:53:44,700 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 12:53:44] "POST /batch_check_customer_docs HTTP/1.1" 200 -
+2026-03-26 12:53:49,000 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 12:53:49,000 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 12:53:49] "[31m[1mPOST /get_stay_payments HTTP/1.1[0m" 403 -
+2026-03-26 12:53:51,804 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 12:53:51,805 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 12:53:51] "[31m[1mPOST /get_stay_payments HTTP/1.1[0m" 403 -
+2026-03-26 12:53:55,768 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 12:53:56,223 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 12:53:56] "POST /get_stay_payments HTTP/1.1" 200 -
+2026-03-26 12:54:03,220 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 12:54:03,537 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 12:54:03] "POST /get_stay_payments HTTP/1.1" 200 -
+2026-03-26 12:54:07,019 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 12:54:07,341 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 12:54:07] "POST /get_stay_payments HTTP/1.1" 200 -
+2026-03-26 12:54:15,135 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 12:54:15,450 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 12:54:15] "POST /get_stay_payments HTTP/1.1" 200 -
+2026-03-26 12:54:18,777 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 12:54:19,093 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 12:54:19] "POST /get_stay_payments HTTP/1.1" 200 -
+2026-03-26 12:54:26,665 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 12:54:26,965 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 12:54:26] "POST /get_stay_payments HTTP/1.1" 200 -
+2026-03-26 12:54:34,151 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 12:54:34,151 - config - INFO - === REGISTER: 2026-03-20 to 2026-03-26 ===
+2026-03-26 12:54:36,835 - config - INFO - [PERF] register parallel fetch: 2.684s, 439 payments
+2026-03-26 12:54:36,836 - config - INFO - [PERF] active rooms built: 0.001s, count: 17
+2026-03-26 12:54:37,900 - config - INFO - Completed bills: 128, skipped: 0
+2026-03-26 12:54:39,359 - config - INFO - [PERF] /get_register_data TOTAL: 5.208s, entries: 145
+2026-03-26 12:54:39,362 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 12:54:39] "POST /get_register_data HTTP/1.1" 200 -
+2026-03-26 12:54:48,559 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 12:54:49,333 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 12:54:49] "POST /batch_check_customer_docs HTTP/1.1" 200 -
+2026-03-26 12:54:55,755 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 12:54:56,058 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 12:54:56] "GET /generate_bill/220_1774507654 HTTP/1.1" 200 -
+2026-03-26 12:55:02,484 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 12:55:03,241 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 12:55:03] "POST /batch_check_customer_docs HTTP/1.1" 200 -
+2026-03-26 12:55:04,099 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 12:55:04,402 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 12:55:04] "POST /get_stay_payments HTTP/1.1" 200 -
+2026-03-26 12:55:07,569 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 12:55:07,882 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 12:55:07] "POST /get_stay_payments HTTP/1.1" 200 -
+2026-03-26 12:55:21,408 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 12:55:21,709 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 12:55:21] "POST /get_stay_payments HTTP/1.1" 200 -
+2026-03-26 12:55:26,646 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 12:55:26,953 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 12:55:26] "POST /get_stay_payments HTTP/1.1" 200 -
+2026-03-26 12:55:44,115 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 12:55:44,483 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 12:55:44] "POST /get_stay_payments HTTP/1.1" 200 -
+2026-03-26 12:55:55,747 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 12:55:56,076 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 12:55:56] "POST /get_stay_payments HTTP/1.1" 200 -
+2026-03-26 12:56:42,285 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 12:56:42,626 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 12:56:42] "POST /get_stay_payments HTTP/1.1" 200 -
+2026-03-26 12:56:57,527 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 12:56:57,884 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 12:56:57] "POST /get_stay_payments HTTP/1.1" 200 -
+2026-03-26 12:57:11,345 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 12:57:11,684 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 12:57:11] "POST /get_stay_payments HTTP/1.1" 200 -
+2026-03-26 12:58:36,033 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 12:58:36,657 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 12:58:37,163 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 12:58:37] "GET /get_bookings HTTP/1.1" 200 -
+2026-03-26 12:58:38,015 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 12:58:38] "POST /batch_check_customer_docs HTTP/1.1" 200 -
+2026-03-26 12:58:53,315 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 12:58:53,622 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 12:58:53] "GET /generate_bill/202_1774439063 HTTP/1.1" 200 -
+2026-03-26 13:00:10,710 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 13:00:11,444 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 13:00:11] "GET /get_room_numbers HTTP/1.1" 200 -
+2026-03-26 13:00:13,837 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 13:00:13,837 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 13:00:14,135 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 13:00:14] "GET /get_customer/7411422390 HTTP/1.1" 200 -
+2026-03-26 13:00:16,753 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 13:00:16] "POST /get_history HTTP/1.1" 200 -
+2026-03-26 13:00:30,662 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 13:00:31,816 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 13:00:31] "GET /get_bookings HTTP/1.1" 200 -
+2026-03-26 13:00:37,052 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 13:00:40,103 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 13:00:40] "POST /check_availability HTTP/1.1" 200 -
+2026-03-26 13:00:46,359 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 13:00:46,546 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 13:00:46,547 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 13:00:49,340 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 13:00:49] "POST /check_availability HTTP/1.1" 200 -
+2026-03-26 13:00:50,899 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 13:00:50] "POST /check_availability HTTP/1.1" 200 -
+2026-03-26 13:00:52,031 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 13:00:52] "POST /check_availability HTTP/1.1" 200 -
+2026-03-26 13:01:19,373 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 13:01:20,058 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 13:01:20,060 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 13:01:23,548 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 13:01:23] "POST /check_availability HTTP/1.1" 200 -
+2026-03-26 13:01:24,156 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 13:01:24] "POST /check_availability HTTP/1.1" 200 -
+2026-03-26 13:01:24,544 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 13:01:24] "POST /check_availability HTTP/1.1" 200 -
+2026-03-26 14:56:34,183 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 14:56:34,205 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 14:56:45,366 - config - INFO - [PERF] parallel fetch (rooms+totals+payments): 11.178s, 278 payment docs
+2026-03-26 14:56:45,371 - config - INFO - [PERF] /get_data TOTAL: 11.183s
+2026-03-26 14:56:45,395 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 14:56:45] "GET /get_data HTTP/1.1" 200 -
+2026-03-26 14:56:47,563 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 14:56:47] "GET /get_transaction_metadata HTTP/1.1" 200 -
+2026-03-26 14:58:13,989 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 14:58:13,992 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 14:58:16,386 - config - INFO - [PERF] parallel fetch (rooms+totals+payments): 2.395s, 279 payment docs
+2026-03-26 14:58:16,387 - config - INFO - [PERF] /get_data TOTAL: 2.397s
+2026-03-26 14:58:16,391 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 14:58:16] "GET /get_data HTTP/1.1" 200 -
+2026-03-26 14:58:18,555 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 14:58:18] "GET /get_transaction_metadata HTTP/1.1" 200 -
+2026-03-26 14:58:40,575 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 14:58:40,577 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 14:58:42,963 - config - INFO - [PERF] parallel fetch (rooms+totals+payments): 2.387s, 280 payment docs
+2026-03-26 14:58:42,965 - config - INFO - [PERF] /get_data TOTAL: 2.389s
+2026-03-26 14:58:42,971 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 14:58:42] "GET /get_data HTTP/1.1" 200 -
+2026-03-26 14:58:45,064 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 14:58:45] "GET /get_transaction_metadata HTTP/1.1" 200 -
+2026-03-26 14:58:59,270 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 14:58:59,271 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 14:59:01,715 - config - INFO - [PERF] parallel fetch (rooms+totals+payments): 2.443s, 280 payment docs
+2026-03-26 14:59:01,717 - config - INFO - [PERF] /get_data TOTAL: 2.445s
+2026-03-26 14:59:01,724 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 14:59:01] "GET /get_data HTTP/1.1" 200 -
+2026-03-26 14:59:03,642 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 14:59:03] "GET /get_transaction_metadata HTTP/1.1" 200 -
+2026-03-26 15:25:13,230 - config - INFO - Firebase initialized successfully
+2026-03-26 15:25:13,235 - services.payment_service - INFO - PaymentService initialised (payments collection)
+2026-03-26 15:25:13,238 - services.customer_service - INFO - CustomerService initialised (customers collection)
+2026-03-26 15:25:13,247 - config - INFO - Checking Firebase data structure...
+2026-03-26 15:25:13,438 - config - INFO - Checking Firebase data structure...
+2026-03-26 15:25:13,480 - werkzeug - INFO - [31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:5000
+ * Running on http://192.168.1.47:5000
+2026-03-26 15:25:13,481 - werkzeug - INFO - [33mPress CTRL+C to quit[0m
+2026-03-26 15:25:18,986 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:25:18] "GET / HTTP/1.1" 200 -
+2026-03-26 15:25:20,065 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:25:20] "GET /static/style.css HTTP/1.1" 200 -
+2026-03-26 15:25:20,146 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:25:20] "GET /static/register.js HTTP/1.1" 200 -
+2026-03-26 15:25:20,149 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:25:20] "GET /static/shift.js HTTP/1.1" 200 -
+2026-03-26 15:25:20,172 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:25:20] "GET /static/bills.js HTTP/1.1" 200 -
+2026-03-26 15:25:20,186 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:25:20] "GET /static/booking.js HTTP/1.1" 200 -
+2026-03-26 15:25:20,239 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:25:20] "GET /static/settle-later.css HTTP/1.1" 200 -
+2026-03-26 15:25:20,246 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:25:20] "GET /static/booking.css HTTP/1.1" 200 -
+2026-03-26 15:25:20,273 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:25:20] "GET /static/expense.js HTTP/1.1" 200 -
+2026-03-26 15:25:20,275 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:25:20] "GET /static/settle-later.js HTTP/1.1" 200 -
+2026-03-26 15:25:20,301 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:25:20] "GET /static/script.js HTTP/1.1" 200 -
+2026-03-26 15:25:20,303 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:25:20] "GET /static/analytics.js HTTP/1.1" 200 -
+2026-03-26 15:25:20,355 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:25:20] "GET /static/settle-later-fix.js HTTP/1.1" 200 -
+2026-03-26 15:25:20,382 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:25:20] "GET /static/transaction-tracking.js HTTP/1.1" 200 -
+2026-03-26 15:25:20,386 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:25:20] "GET /static/revenue-protection.js HTTP/1.1" 200 -
+2026-03-26 15:25:20,408 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:25:20] "GET /static/google_sync.js HTTP/1.1" 200 -
+2026-03-26 15:25:20,419 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:25:20] "GET /static/room-cleaning.js HTTP/1.1" 200 -
+2026-03-26 15:25:20,437 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:25:20] "GET /static/customer-docs.js HTTP/1.1" 200 -
+2026-03-26 15:25:21,216 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 15:25:21,218 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 15:25:21,389 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 15:25:21,390 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:25:21] "[33mGET /favicon.ico HTTP/1.1[0m" 404 -
+2026-03-26 15:25:22,234 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 15:25:23,586 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 15:25:23,749 - config - INFO - [PERF] parallel fetch (rooms+totals+payments): 2.523s, 285 payment docs
+2026-03-26 15:25:23,750 - config - INFO - [PERF] /get_data TOTAL: 2.524s
+2026-03-26 15:25:23,856 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:25:23] "GET /get_pending_settlements HTTP/1.1" 200 -
+2026-03-26 15:25:24,734 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:25:24] "GET /get_bookings HTTP/1.1" 200 -
+2026-03-26 15:25:24,867 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:25:24] "GET /get_data HTTP/1.1" 200 -
+2026-03-26 15:25:24,885 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 15:25:25,728 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:25:25] "GET /get_transaction_metadata HTTP/1.1" 200 -
+2026-03-26 15:25:26,916 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 15:25:27,431 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 15:25:27,434 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 15:25:27,951 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:25:27] "POST /check_availability HTTP/1.1" 200 -
+2026-03-26 15:25:31,115 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:25:31] "POST /check_availability HTTP/1.1" 200 -
+2026-03-26 15:25:31,629 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:25:31] "POST /check_availability HTTP/1.1" 200 -
+2026-03-26 15:25:32,740 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:25:32] "POST /check_availability HTTP/1.1" 200 -
+2026-03-26 15:25:47,386 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 15:25:47,802 - config - INFO - Booking created: d146e092-2202-4f9b-9cbd-f0a1060f5c18 for Neeraj Ladwa
+2026-03-26 15:25:47,803 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:25:47] "POST /create_booking HTTP/1.1" 200 -
+2026-03-26 15:25:47,817 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 15:25:49,785 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:25:49] "GET /get_bookings HTTP/1.1" 200 -
+2026-03-26 15:25:57,993 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 15:25:59,131 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:25:59] "GET /get_bookings HTTP/1.1" 200 -
+2026-03-26 15:31:04,759 - config - INFO - Firebase initialized successfully
+2026-03-26 15:31:04,761 - services.payment_service - INFO - PaymentService initialised (payments collection)
+2026-03-26 15:31:04,762 - services.customer_service - INFO - CustomerService initialised (customers collection)
+2026-03-26 15:31:04,765 - config - INFO - Checking Firebase data structure...
+2026-03-26 15:31:04,843 - config - INFO - Checking Firebase data structure...
+2026-03-26 15:31:04,875 - werkzeug - INFO - [31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:5000
+ * Running on http://192.168.1.47:5000
+2026-03-26 15:31:04,876 - werkzeug - INFO - [33mPress CTRL+C to quit[0m
+2026-03-26 15:31:06,896 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:31:06] "GET / HTTP/1.1" 200 -
+2026-03-26 15:31:07,579 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:31:07] "[36mGET /static/booking.css HTTP/1.1[0m" 304 -
+2026-03-26 15:31:07,580 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:31:07] "[36mGET /static/style.css HTTP/1.1[0m" 304 -
+2026-03-26 15:31:07,591 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:31:07] "[36mGET /static/settle-later.css HTTP/1.1[0m" 304 -
+2026-03-26 15:31:07,603 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:31:07] "GET /static/script.js HTTP/1.1" 200 -
+2026-03-26 15:31:07,626 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:31:07] "GET /static/booking.js HTTP/1.1" 200 -
+2026-03-26 15:31:07,658 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:31:07] "[36mGET /static/shift.js HTTP/1.1[0m" 304 -
+2026-03-26 15:31:07,663 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:31:07] "[36mGET /static/analytics.js HTTP/1.1[0m" 304 -
+2026-03-26 15:31:07,670 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:31:07] "[36mGET /static/bills.js HTTP/1.1[0m" 304 -
+2026-03-26 15:31:07,681 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:31:07] "[36mGET /static/register.js HTTP/1.1[0m" 304 -
+2026-03-26 15:31:07,682 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:31:07] "[36mGET /static/expense.js HTTP/1.1[0m" 304 -
+2026-03-26 15:31:07,707 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:31:07] "[36mGET /static/settle-later.js HTTP/1.1[0m" 304 -
+2026-03-26 15:31:07,742 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:31:07] "[36mGET /static/revenue-protection.js HTTP/1.1[0m" 304 -
+2026-03-26 15:31:07,752 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:31:07] "[36mGET /static/transaction-tracking.js HTTP/1.1[0m" 304 -
+2026-03-26 15:31:07,756 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:31:07] "[36mGET /static/room-cleaning.js HTTP/1.1[0m" 304 -
+2026-03-26 15:31:07,759 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:31:07] "[36mGET /static/settle-later-fix.js HTTP/1.1[0m" 304 -
+2026-03-26 15:31:07,774 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:31:07] "[36mGET /static/google_sync.js HTTP/1.1[0m" 304 -
+2026-03-26 15:31:07,780 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:31:07] "[36mGET /static/customer-docs.js HTTP/1.1[0m" 304 -
+2026-03-26 15:31:08,184 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 15:31:08,185 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 15:31:09,201 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 15:31:10,678 - config - INFO - [PERF] parallel fetch (rooms+totals+payments): 2.489s, 285 payment docs
+2026-03-26 15:31:10,681 - config - INFO - [PERF] /get_data TOTAL: 2.492s
+2026-03-26 15:31:10,685 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:31:10] "GET /get_data HTTP/1.1" 200 -
+2026-03-26 15:31:10,725 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:31:10] "GET /get_pending_settlements HTTP/1.1" 200 -
+2026-03-26 15:31:13,088 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:31:13] "GET /get_transaction_metadata HTTP/1.1" 200 -
+2026-03-26 15:31:14,811 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 15:31:15,964 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:31:15] "GET /get_bookings HTTP/1.1" 200 -
+2026-03-26 15:31:45,322 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 15:31:48,673 - config - ERROR - Error parsing expected time, using current time: can't compare offset-naive and offset-aware datetimes
+2026-03-26 15:31:49,812 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 15:31:49,814 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 15:31:52,233 - config - INFO - [PERF] parallel fetch (rooms+totals+payments): 2.418s, 287 payment docs
+2026-03-26 15:31:52,235 - config - INFO - [PERF] /get_data TOTAL: 2.420s
+2026-03-26 15:31:52,239 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:31:52] "GET /get_data HTTP/1.1" 200 -
+2026-03-26 15:31:52,866 - services.customer_service - INFO - CustomerService: upserted customer 6361800647
+2026-03-26 15:31:52,867 - config - ERROR - Error converting booking to check-in: can't compare offset-naive and offset-aware datetimes
+Traceback (most recent call last):
+  File "C:\Users\Neeraj\Documents\GitHub\cibara-management\routes\bookings.py", line 425, in convert_booking_to_checkin
+    arrival_status = "early" if current_datetime < expected_datetime else "on time"
+                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: can't compare offset-naive and offset-aware datetimes
+2026-03-26 15:31:52,911 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:31:52] "POST /convert_booking_to_checkin HTTP/1.1" 200 -
+2026-03-26 15:31:55,394 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:31:55] "GET /get_transaction_metadata HTTP/1.1" 200 -
+2026-03-26 15:35:51,271 - config - INFO - Firebase initialized successfully
+2026-03-26 15:35:51,272 - services.payment_service - INFO - PaymentService initialised (payments collection)
+2026-03-26 15:35:51,273 - services.customer_service - INFO - CustomerService initialised (customers collection)
+2026-03-26 15:35:51,277 - config - INFO - Checking Firebase data structure...
+2026-03-26 15:35:51,362 - config - INFO - Checking Firebase data structure...
+2026-03-26 15:35:51,373 - werkzeug - INFO - [31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:5000
+ * Running on http://192.168.1.47:5000
+2026-03-26 15:35:51,373 - werkzeug - INFO - [33mPress CTRL+C to quit[0m
+2026-03-26 15:35:52,858 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:35:52] "GET / HTTP/1.1" 200 -
+2026-03-26 15:35:53,483 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:35:53] "[36mGET /static/style.css HTTP/1.1[0m" 304 -
+2026-03-26 15:35:53,491 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:35:53] "[36mGET /static/shift.js HTTP/1.1[0m" 304 -
+2026-03-26 15:35:53,500 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:35:53] "[36mGET /static/analytics.js HTTP/1.1[0m" 304 -
+2026-03-26 15:35:53,506 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:35:53] "[36mGET /static/expense.js HTTP/1.1[0m" 304 -
+2026-03-26 15:35:53,515 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:35:53] "GET /static/booking.js HTTP/1.1" 200 -
+2026-03-26 15:35:53,517 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:35:53] "[36mGET /static/booking.css HTTP/1.1[0m" 304 -
+2026-03-26 15:35:53,523 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:35:53] "[36mGET /static/settle-later.css HTTP/1.1[0m" 304 -
+2026-03-26 15:35:53,532 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:35:53] "[36mGET /static/settle-later-fix.js HTTP/1.1[0m" 304 -
+2026-03-26 15:35:53,533 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:35:53] "[36mGET /static/settle-later.js HTTP/1.1[0m" 304 -
+2026-03-26 15:35:53,536 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:35:53] "[36mGET /static/register.js HTTP/1.1[0m" 304 -
+2026-03-26 15:35:53,547 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:35:53] "GET /static/script.js HTTP/1.1" 200 -
+2026-03-26 15:35:53,552 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:35:53] "[36mGET /static/revenue-protection.js HTTP/1.1[0m" 304 -
+2026-03-26 15:35:53,557 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:35:53] "[36mGET /static/transaction-tracking.js HTTP/1.1[0m" 304 -
+2026-03-26 15:35:53,559 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:35:53] "[36mGET /static/room-cleaning.js HTTP/1.1[0m" 304 -
+2026-03-26 15:35:53,564 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:35:53] "[36mGET /static/bills.js HTTP/1.1[0m" 304 -
+2026-03-26 15:35:53,567 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:35:53] "[36mGET /static/customer-docs.js HTTP/1.1[0m" 304 -
+2026-03-26 15:35:53,570 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:35:53] "[36mGET /static/google_sync.js HTTP/1.1[0m" 304 -
+2026-03-26 15:35:54,037 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 15:35:54,038 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 15:35:55,049 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 15:35:56,005 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:35:56] "GET /get_pending_settlements HTTP/1.1" 200 -
+2026-03-26 15:35:56,450 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 15:35:56,470 - config - INFO - [PERF] parallel fetch (rooms+totals+payments): 2.428s, 287 payment docs
+2026-03-26 15:35:56,471 - config - INFO - [PERF] /get_data TOTAL: 2.429s
+2026-03-26 15:35:56,476 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:35:56] "GET /get_data HTTP/1.1" 200 -
+2026-03-26 15:35:58,237 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:35:58] "GET /get_bookings HTTP/1.1" 200 -
+2026-03-26 15:35:58,962 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:35:58] "GET /get_transaction_metadata HTTP/1.1" 200 -
+2026-03-26 15:42:48,544 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 15:42:50,987 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:42:50] "GET /get_bookings HTTP/1.1" 200 -
+2026-03-26 15:42:58,214 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 15:43:00,111 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 15:43:00,524 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 15:43:00,525 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 15:43:01,249 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:43:01] "POST /check_availability HTTP/1.1" 200 -
+2026-03-26 15:43:04,702 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:43:04] "POST /check_availability HTTP/1.1" 200 -
+2026-03-26 15:43:05,018 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:43:05] "POST /check_availability HTTP/1.1" 200 -
+2026-03-26 15:43:06,165 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:43:06] "POST /check_availability HTTP/1.1" 200 -
+2026-03-26 15:43:15,660 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:43:15] "GET / HTTP/1.1" 200 -
+2026-03-26 15:43:15,793 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:43:15] "[36mGET /static/settle-later.css HTTP/1.1[0m" 304 -
+2026-03-26 15:43:15,794 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:43:15] "[36mGET /static/booking.css HTTP/1.1[0m" 304 -
+2026-03-26 15:43:15,797 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:43:15] "[36mGET /static/style.css HTTP/1.1[0m" 304 -
+2026-03-26 15:43:15,850 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:43:15] "[36mGET /static/bills.js HTTP/1.1[0m" 304 -
+2026-03-26 15:43:15,862 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:43:15] "[36mGET /static/register.js HTTP/1.1[0m" 304 -
+2026-03-26 15:43:15,865 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:43:15] "GET /static/booking.js HTTP/1.1" 200 -
+2026-03-26 15:43:15,880 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:43:15] "[36mGET /static/shift.js HTTP/1.1[0m" 304 -
+2026-03-26 15:43:15,882 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:43:15] "[36mGET /static/expense.js HTTP/1.1[0m" 304 -
+2026-03-26 15:43:15,895 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:43:15] "[36mGET /static/analytics.js HTTP/1.1[0m" 304 -
+2026-03-26 15:43:15,933 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:43:15] "[36mGET /static/script.js HTTP/1.1[0m" 304 -
+2026-03-26 15:43:15,952 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:43:15] "[36mGET /static/settle-later.js HTTP/1.1[0m" 304 -
+2026-03-26 15:43:15,964 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:43:15] "[36mGET /static/settle-later-fix.js HTTP/1.1[0m" 304 -
+2026-03-26 15:43:15,964 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:43:15] "[36mGET /static/revenue-protection.js HTTP/1.1[0m" 304 -
+2026-03-26 15:43:15,978 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:43:15] "[36mGET /static/room-cleaning.js HTTP/1.1[0m" 304 -
+2026-03-26 15:43:15,989 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:43:15] "[36mGET /static/transaction-tracking.js HTTP/1.1[0m" 304 -
+2026-03-26 15:43:16,007 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:43:16] "[36mGET /static/google_sync.js HTTP/1.1[0m" 304 -
+2026-03-26 15:43:16,019 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:43:16] "[36mGET /static/customer-docs.js HTTP/1.1[0m" 304 -
+2026-03-26 15:43:16,284 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 15:43:16,285 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 15:43:17,295 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 15:43:18,248 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:43:18] "GET /get_pending_settlements HTTP/1.1" 200 -
+2026-03-26 15:43:18,709 - config - INFO - [PERF] parallel fetch (rooms+totals+payments): 2.424s, 287 payment docs
+2026-03-26 15:43:18,710 - config - INFO - [PERF] /get_data TOTAL: 2.426s
+2026-03-26 15:43:18,713 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:43:18] "GET /get_data HTTP/1.1" 200 -
+2026-03-26 15:43:20,959 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:43:20] "GET /get_transaction_metadata HTTP/1.1" 200 -
+2026-03-26 15:44:23,752 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 15:44:24,463 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:44:24] "GET /get_room_numbers HTTP/1.1" 200 -
+2026-03-26 15:44:29,436 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 15:44:30,164 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:44:30] "GET /get_room_numbers HTTP/1.1" 200 -
+2026-03-26 15:44:35,928 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 15:44:36,379 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:44:36] "POST /search_customers_mobile HTTP/1.1" 200 -
+2026-03-26 15:44:37,868 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 15:44:38,332 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:44:38] "POST /search_customers_mobile HTTP/1.1" 200 -
+2026-03-26 15:44:38,724 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 15:44:39,349 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:44:39] "POST /search_customers_mobile HTTP/1.1" 200 -
+2026-03-26 15:44:40,127 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 15:44:40,409 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 15:44:40,435 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:44:40] "POST /search_customers_mobile HTTP/1.1" 200 -
+2026-03-26 15:44:41,703 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:44:41] "GET /get_customer/9945563325 HTTP/1.1" 200 -
+2026-03-26 15:45:50,189 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 15:45:54,739 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 15:45:54,743 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 15:45:57,191 - config - INFO - [PERF] parallel fetch (rooms+totals+payments): 2.451s, 287 payment docs
+2026-03-26 15:45:57,193 - config - INFO - [PERF] /get_data TOTAL: 2.453s
+2026-03-26 15:45:57,198 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:45:57] "GET /get_data HTTP/1.1" 200 -
+2026-03-26 15:45:58,077 - services.customer_service - INFO - CustomerService: upserted customer 9945563325
+2026-03-26 15:45:58,079 - config - INFO - Check-in successful for room 227, guest: Shashidhara K, serial: 11
+2026-03-26 15:45:58,080 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:45:58] "POST /checkin HTTP/1.1" 200 -
+2026-03-26 15:45:58,091 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 15:45:59,350 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:45:59] "GET /get_transaction_metadata HTTP/1.1" 200 -
+2026-03-26 15:45:59,361 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 15:45:59,387 - config - INFO - [PERF] parallel fetch (rooms+totals+payments): 1.295s, 289 payment docs
+2026-03-26 15:45:59,388 - config - INFO - [PERF] /get_data TOTAL: 1.296s
+2026-03-26 15:45:59,392 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:45:59] "GET /get_data HTTP/1.1" 200 -
+2026-03-26 15:46:03,000 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:46:02] "GET /get_transaction_metadata HTTP/1.1" 200 -
+2026-03-26 15:46:03,578 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 15:46:03,580 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 15:46:03,881 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:46:03] "GET /get_customer/6361800647 HTTP/1.1" 200 -
+2026-03-26 15:46:06,597 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:46:06] "POST /get_history HTTP/1.1" 200 -
+2026-03-26 15:49:43,086 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 15:49:43,089 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 15:49:44,918 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:49:44] "GET /get_customer/6361800647 HTTP/1.1" 200 -
+2026-03-26 15:49:46,455 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:49:46] "POST /get_history HTTP/1.1" 200 -
+2026-03-26 15:49:47,174 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 15:49:48,834 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 15:49:48,836 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 15:49:49,149 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:49:49] "POST /apply_discount HTTP/1.1" 200 -
+2026-03-26 15:49:51,592 - config - INFO - [PERF] parallel fetch (rooms+totals+payments): 2.443s, 290 payment docs
+2026-03-26 15:49:51,594 - config - INFO - [PERF] /get_data TOTAL: 2.445s
+2026-03-26 15:49:51,598 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:49:51] "GET /get_data HTTP/1.1" 200 -
+2026-03-26 15:49:51,615 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 15:49:53,296 - config - INFO - [PERF] parallel fetch (rooms+totals+payments): 1.680s, 290 payment docs
+2026-03-26 15:49:53,298 - config - INFO - [PERF] /get_data TOTAL: 1.682s
+2026-03-26 15:49:53,303 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:49:53] "GET /get_data HTTP/1.1" 200 -
+2026-03-26 15:49:53,749 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:49:53] "GET /get_transaction_metadata HTTP/1.1" 200 -
+2026-03-26 15:49:53,755 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 15:49:54,260 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 15:49:54,261 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 15:49:55,199 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:49:55] "GET /get_customer/6361800647 HTTP/1.1" 200 -
+2026-03-26 15:49:57,237 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:49:57] "POST /get_history HTTP/1.1" 200 -
+2026-03-26 15:49:58,056 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:49:58] "GET /get_transaction_metadata HTTP/1.1" 200 -
+2026-03-26 15:49:58,101 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 15:49:58,103 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 15:49:58,431 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:49:58] "GET /get_customer/6361800647 HTTP/1.1" 200 -
+2026-03-26 15:50:01,203 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:50:01] "POST /get_history HTTP/1.1" 200 -
+2026-03-26 15:50:03,604 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 15:50:07,008 - config - INFO - Bill saved for room 2: -
+2026-03-26 15:50:08,267 - config - INFO - Room 2 checked out. Guest: Neeraj Ladwa
+2026-03-26 15:50:08,269 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:50:08] "POST /checkout HTTP/1.1" 200 -
+2026-03-26 15:50:08,278 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 15:50:08,281 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 15:50:10,840 - config - INFO - [PERF] parallel fetch (rooms+totals+payments): 2.560s, 290 payment docs
+2026-03-26 15:50:10,841 - config - INFO - [PERF] /get_data TOTAL: 2.561s
+2026-03-26 15:50:10,846 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:50:10] "GET /get_data HTTP/1.1" 200 -
+2026-03-26 15:50:10,856 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 15:50:12,713 - config - INFO - [PERF] parallel fetch (rooms+totals+payments): 1.855s, 290 payment docs
+2026-03-26 15:50:12,715 - config - INFO - [PERF] /get_data TOTAL: 1.857s
+2026-03-26 15:50:12,720 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:50:12] "GET /get_data HTTP/1.1" 200 -
+2026-03-26 15:50:13,006 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:50:13] "GET /get_transaction_metadata HTTP/1.1" 200 -
+2026-03-26 15:50:13,012 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 15:50:13,650 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 15:50:15,351 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:50:15] "GET /get_bookings HTTP/1.1" 200 -
+2026-03-26 15:50:17,335 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:50:17] "GET /get_transaction_metadata HTTP/1.1" 200 -
+2026-03-26 15:50:31,768 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 15:50:33,646 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:50:33] "POST /mark_ota_settlement HTTP/1.1" 200 -
+2026-03-26 15:50:33,656 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 15:50:35,949 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:50:35] "GET /get_bookings HTTP/1.1" 200 -
+2026-03-26 15:50:40,462 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 15:50:40,463 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 15:50:42,984 - config - INFO - [PERF] parallel fetch (rooms+totals+payments): 2.521s, 291 payment docs
+2026-03-26 15:50:42,985 - config - INFO - [PERF] /get_data TOTAL: 2.522s
+2026-03-26 15:50:42,990 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:50:42] "GET /get_data HTTP/1.1" 200 -
+2026-03-26 15:50:44,239 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:50:44] "GET /get_transaction_metadata HTTP/1.1" 200 -
+2026-03-26 15:51:57,677 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 15:51:57,677 - config - INFO - === REGISTER: 2026-03-20 to 2026-03-26 ===
+2026-03-26 15:51:58,936 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 15:51:58,938 - config - INFO - === REGISTER: 2026-03-20 to 2026-03-26 ===
+2026-03-26 15:51:59,554 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 15:52:00,547 - config - INFO - [PERF] register parallel fetch: 2.868s, 454 payments
+2026-03-26 15:52:00,551 - config - INFO - [PERF] active rooms built: 0.005s, count: 19
+2026-03-26 15:52:00,646 - config - INFO - [PERF] register parallel fetch: 1.709s, 454 payments
+2026-03-26 15:52:00,650 - config - INFO - [PERF] active rooms built: 0.003s, count: 19
+2026-03-26 15:52:01,244 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:52:01] "GET /get_bookings HTTP/1.1" 200 -
+2026-03-26 15:52:01,727 - config - INFO - Completed bills: 130, skipped: 0
+2026-03-26 15:52:02,704 - config - INFO - Completed bills: 130, skipped: 0
+2026-03-26 15:52:03,220 - config - INFO - [PERF] /get_register_data TOTAL: 5.542s, entries: 149
+2026-03-26 15:52:03,224 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:52:03] "POST /get_register_data HTTP/1.1" 200 -
+2026-03-26 15:52:03,319 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 15:52:04,621 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:52:04] "POST /batch_check_customer_docs HTTP/1.1" 200 -
+2026-03-26 15:52:04,776 - config - INFO - [PERF] /get_register_data TOTAL: 5.838s, entries: 149
+2026-03-26 15:52:04,780 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:52:04] "POST /get_register_data HTTP/1.1" 200 -
+2026-03-26 15:52:12,667 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 15:52:12,668 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 15:52:15,123 - config - INFO - [PERF] parallel fetch (rooms+totals+payments): 2.454s, 291 payment docs
+2026-03-26 15:52:15,125 - config - INFO - [PERF] /get_data TOTAL: 2.456s
+2026-03-26 15:52:15,129 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:52:15] "GET /get_data HTTP/1.1" 200 -
+2026-03-26 15:52:16,420 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:52:16] "GET /get_transaction_metadata HTTP/1.1" 200 -
+2026-03-26 15:52:24,926 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 15:52:25,712 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:52:25] "POST /batch_check_customer_docs HTTP/1.1" 200 -
+2026-03-26 15:52:43,458 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 15:52:43,460 - config - INFO - === REGISTER: 2026-03-20 to 2026-03-26 ===
+2026-03-26 15:52:46,171 - config - INFO - [PERF] register parallel fetch: 2.712s, 454 payments
+2026-03-26 15:52:46,174 - config - INFO - [PERF] active rooms built: 0.003s, count: 19
+2026-03-26 15:52:47,165 - config - INFO - Completed bills: 130, skipped: 0
+2026-03-26 15:52:48,637 - config - INFO - [PERF] /get_register_data TOTAL: 5.177s, entries: 149
+2026-03-26 15:52:48,641 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:52:48] "POST /get_register_data HTTP/1.1" 200 -
+2026-03-26 15:53:01,026 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 15:53:02,274 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:53:02] "GET /get_bookings HTTP/1.1" 200 -
+2026-03-26 15:54:16,747 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 15:54:19,809 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:54:19] "POST /check_availability HTTP/1.1" 200 -
+2026-03-26 15:55:03,208 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 15:55:04,021 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:55:04] "POST /batch_check_customer_docs HTTP/1.1" 200 -
+2026-03-26 15:55:16,601 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 15:55:16,602 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:55:16] "[31m[1mPOST /get_stay_payments HTTP/1.1[0m" 403 -
+2026-03-26 15:55:20,023 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 15:55:20,400 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 15:55:20] "POST /get_stay_payments HTTP/1.1" 200 -
+2026-03-26 16:01:59,819 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 16:02:01,352 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 16:02:01] "GET /get_bookings HTTP/1.1" 200 -
+2026-03-26 16:03:39,947 - config - INFO - Firebase initialized successfully
+2026-03-26 16:03:39,948 - services.payment_service - INFO - PaymentService initialised (payments collection)
+2026-03-26 16:03:39,949 - services.customer_service - INFO - CustomerService initialised (customers collection)
+2026-03-26 16:03:39,952 - config - INFO - Checking Firebase data structure...
+2026-03-26 16:03:40,023 - config - INFO - Checking Firebase data structure...
+2026-03-26 16:03:40,056 - werkzeug - INFO - [31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:5000
+ * Running on http://192.168.1.47:5000
+2026-03-26 16:03:40,058 - werkzeug - INFO - [33mPress CTRL+C to quit[0m
+2026-03-26 16:03:42,635 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 16:03:42] "GET / HTTP/1.1" 200 -
+2026-03-26 16:03:43,121 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 16:03:43] "[36mGET /static/style.css HTTP/1.1[0m" 304 -
+2026-03-26 16:03:43,129 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 16:03:43] "[36mGET /static/shift.js HTTP/1.1[0m" 304 -
+2026-03-26 16:03:43,136 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 16:03:43] "[36mGET /static/analytics.js HTTP/1.1[0m" 304 -
+2026-03-26 16:03:43,144 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 16:03:43] "[36mGET /static/expense.js HTTP/1.1[0m" 304 -
+2026-03-26 16:03:43,154 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 16:03:43] "GET /static/booking.js HTTP/1.1" 200 -
+2026-03-26 16:03:43,163 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 16:03:43] "[36mGET /static/settle-later.js HTTP/1.1[0m" 304 -
+2026-03-26 16:03:43,164 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 16:03:43] "[36mGET /static/settle-later.css HTTP/1.1[0m" 304 -
+2026-03-26 16:03:43,174 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 16:03:43] "[36mGET /static/settle-later-fix.js HTTP/1.1[0m" 304 -
+2026-03-26 16:03:43,177 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 16:03:43] "[36mGET /static/revenue-protection.js HTTP/1.1[0m" 304 -
+2026-03-26 16:03:43,179 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 16:03:43] "[36mGET /static/booking.css HTTP/1.1[0m" 304 -
+2026-03-26 16:03:43,193 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 16:03:43] "[36mGET /static/transaction-tracking.js HTTP/1.1[0m" 304 -
+2026-03-26 16:03:43,194 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 16:03:43] "[36mGET /static/room-cleaning.js HTTP/1.1[0m" 304 -
+2026-03-26 16:03:43,197 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 16:03:43] "[36mGET /static/customer-docs.js HTTP/1.1[0m" 304 -
+2026-03-26 16:03:43,197 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 16:03:43] "[36mGET /static/register.js HTTP/1.1[0m" 304 -
+2026-03-26 16:03:43,205 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 16:03:43] "[36mGET /static/bills.js HTTP/1.1[0m" 304 -
+2026-03-26 16:03:43,206 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 16:03:43] "GET /static/script.js HTTP/1.1" 200 -
+2026-03-26 16:03:43,209 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 16:03:43] "[36mGET /static/google_sync.js HTTP/1.1[0m" 304 -
+2026-03-26 16:03:43,773 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 16:03:43,773 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 16:03:44,813 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 16:03:45,649 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 16:03:45,838 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 16:03:45] "GET /get_pending_settlements HTTP/1.1" 200 -
+2026-03-26 16:03:46,210 - config - INFO - [PERF] parallel fetch (rooms+totals+payments): 2.433s, 291 payment docs
+2026-03-26 16:03:46,212 - config - INFO - [PERF] /get_data TOTAL: 2.435s
+2026-03-26 16:03:46,215 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 16:03:46] "GET /get_data HTTP/1.1" 200 -
+2026-03-26 16:03:47,097 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 16:03:47] "GET /get_bookings HTTP/1.1" 200 -
+2026-03-26 16:03:47,798 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 16:03:48,159 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 16:03:48] "GET /get_ota_settlements HTTP/1.1" 200 -
+2026-03-26 16:03:49,293 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 16:03:49] "GET /get_transaction_metadata HTTP/1.1" 200 -
+2026-03-26 16:05:01,425 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 16:05:01,829 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 16:05:01] "GET /get_ota_settlements HTTP/1.1" 200 -
+2026-03-26 16:06:34,932 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 16:06:34] "[36mGET /static/style.css HTTP/1.1[0m" 304 -
+2026-03-26 16:06:34,933 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 16:06:34] "[36mGET /static/settle-later.css HTTP/1.1[0m" 304 -
+2026-03-26 16:06:34,934 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 16:06:34] "[36mGET /static/booking.css HTTP/1.1[0m" 304 -
+2026-03-26 16:06:34,949 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 16:06:34,950 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 16:06:34] "[33mGET /.well-known/appspecific/com.chrome.devtools.json HTTP/1.1[0m" 404 -
+2026-03-26 17:15:01,419 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 17:15:01,421 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 17:15:06,595 - config - INFO - [PERF] parallel fetch (rooms+totals+payments): 5.175s, 292 payment docs
+2026-03-26 17:15:06,597 - config - INFO - [PERF] /get_data TOTAL: 5.177s
+2026-03-26 17:15:06,602 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:15:06] "GET /get_data HTTP/1.1" 200 -
+2026-03-26 17:15:08,538 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:15:08] "GET /get_transaction_metadata HTTP/1.1" 200 -
+2026-03-26 17:15:32,747 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:15:32] "GET / HTTP/1.1" 200 -
+2026-03-26 17:15:32,841 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 17:15:32,844 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:15:32] "[33mGET /.well-known/appspecific/com.chrome.devtools.json HTTP/1.1[0m" 404 -
+2026-03-26 17:15:32,856 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:15:32] "[36mGET /static/booking.css HTTP/1.1[0m" 304 -
+2026-03-26 17:15:32,857 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:15:32] "[36mGET /static/settle-later.css HTTP/1.1[0m" 304 -
+2026-03-26 17:15:32,863 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:15:32] "[36mGET /static/register.js HTTP/1.1[0m" 304 -
+2026-03-26 17:15:32,865 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:15:32] "[36mGET /static/bills.js HTTP/1.1[0m" 304 -
+2026-03-26 17:15:32,870 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:15:32] "[36mGET /static/script.js HTTP/1.1[0m" 304 -
+2026-03-26 17:15:32,879 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:15:32] "[36mGET /static/shift.js HTTP/1.1[0m" 304 -
+2026-03-26 17:15:32,883 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:15:32] "[36mGET /static/analytics.js HTTP/1.1[0m" 304 -
+2026-03-26 17:15:32,884 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:15:32] "GET /static/style.css HTTP/1.1" 200 -
+2026-03-26 17:15:32,887 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:15:32] "[36mGET /static/expense.js HTTP/1.1[0m" 304 -
+2026-03-26 17:15:32,895 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:15:32] "[36mGET /static/booking.js HTTP/1.1[0m" 304 -
+2026-03-26 17:15:32,896 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:15:32] "[36mGET /static/settle-later.js HTTP/1.1[0m" 304 -
+2026-03-26 17:15:32,899 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:15:32] "[36mGET /static/settle-later-fix.js HTTP/1.1[0m" 304 -
+2026-03-26 17:15:32,906 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:15:32] "GET /static/transaction-tracking.js HTTP/1.1" 200 -
+2026-03-26 17:15:32,911 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:15:32] "[36mGET /static/revenue-protection.js HTTP/1.1[0m" 304 -
+2026-03-26 17:15:32,914 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:15:32] "[36mGET /static/room-cleaning.js HTTP/1.1[0m" 304 -
+2026-03-26 17:15:32,920 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:15:32] "[36mGET /static/customer-docs.js HTTP/1.1[0m" 304 -
+2026-03-26 17:15:32,927 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:15:32] "[36mGET /static/google_sync.js HTTP/1.1[0m" 304 -
+2026-03-26 17:15:33,702 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 17:15:33,703 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 17:15:34,727 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 17:15:36,219 - config - INFO - [PERF] parallel fetch (rooms+totals+payments): 2.515s, 292 payment docs
+2026-03-26 17:15:36,222 - config - INFO - [PERF] /get_data TOTAL: 2.517s
+2026-03-26 17:15:36,228 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:15:36] "GET /get_data HTTP/1.1" 200 -
+2026-03-26 17:15:36,391 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:15:36] "GET /get_pending_settlements HTTP/1.1" 200 -
+2026-03-26 17:15:37,790 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:15:37] "GET /get_transaction_metadata HTTP/1.1" 200 -
+2026-03-26 17:15:54,153 - config - INFO - Firebase initialized successfully
+2026-03-26 17:15:54,154 - services.payment_service - INFO - PaymentService initialised (payments collection)
+2026-03-26 17:15:54,154 - services.customer_service - INFO - CustomerService initialised (customers collection)
+2026-03-26 17:15:54,157 - config - INFO - Checking Firebase data structure...
+2026-03-26 17:15:54,220 - config - INFO - Checking Firebase data structure...
+2026-03-26 17:15:54,250 - werkzeug - INFO - [31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:5000
+ * Running on http://192.168.1.47:5000
+2026-03-26 17:15:54,250 - werkzeug - INFO - [33mPress CTRL+C to quit[0m
+2026-03-26 17:15:56,044 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:15:56] "GET / HTTP/1.1" 200 -
+2026-03-26 17:15:56,654 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:15:56] "[36mGET /static/style.css HTTP/1.1[0m" 304 -
+2026-03-26 17:15:56,660 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:15:56] "[36mGET /static/shift.js HTTP/1.1[0m" 304 -
+2026-03-26 17:15:56,669 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:15:56] "[36mGET /static/booking.css HTTP/1.1[0m" 304 -
+2026-03-26 17:15:56,670 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:15:56] "[36mGET /static/analytics.js HTTP/1.1[0m" 304 -
+2026-03-26 17:15:56,680 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:15:56] "[36mGET /static/expense.js HTTP/1.1[0m" 304 -
+2026-03-26 17:15:56,681 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:15:56] "[36mGET /static/booking.js HTTP/1.1[0m" 304 -
+2026-03-26 17:15:56,684 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:15:56] "[36mGET /static/settle-later.css HTTP/1.1[0m" 304 -
+2026-03-26 17:15:56,697 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:15:56] "[36mGET /static/settle-later-fix.js HTTP/1.1[0m" 304 -
+2026-03-26 17:15:56,698 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:15:56] "[36mGET /static/settle-later.js HTTP/1.1[0m" 304 -
+2026-03-26 17:15:56,698 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:15:56] "[36mGET /static/revenue-protection.js HTTP/1.1[0m" 304 -
+2026-03-26 17:15:56,715 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:15:56] "[36mGET /static/transaction-tracking.js HTTP/1.1[0m" 304 -
+2026-03-26 17:15:56,717 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:15:56] "[36mGET /static/room-cleaning.js HTTP/1.1[0m" 304 -
+2026-03-26 17:15:56,718 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:15:56] "[36mGET /static/customer-docs.js HTTP/1.1[0m" 304 -
+2026-03-26 17:15:56,720 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:15:56] "[36mGET /static/script.js HTTP/1.1[0m" 304 -
+2026-03-26 17:15:56,721 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:15:56] "[36mGET /static/register.js HTTP/1.1[0m" 304 -
+2026-03-26 17:15:56,722 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:15:56] "[36mGET /static/bills.js HTTP/1.1[0m" 304 -
+2026-03-26 17:15:56,734 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:15:56] "[36mGET /static/google_sync.js HTTP/1.1[0m" 304 -
+2026-03-26 17:15:57,205 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 17:15:57,206 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 17:15:58,237 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 17:15:59,658 - config - INFO - [PERF] parallel fetch (rooms+totals+payments): 2.447s, 292 payment docs
+2026-03-26 17:15:59,660 - config - INFO - [PERF] /get_data TOTAL: 2.449s
+2026-03-26 17:15:59,664 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:15:59] "GET /get_data HTTP/1.1" 200 -
+2026-03-26 17:15:59,863 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:15:59] "GET /get_pending_settlements HTTP/1.1" 200 -
+2026-03-26 17:16:01,881 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:16:01] "GET /get_transaction_metadata HTTP/1.1" 200 -
+2026-03-26 17:18:58,476 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 17:18:59,683 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:18:59] "GET /get_bookings HTTP/1.1" 200 -
+2026-03-26 17:19:00,542 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 17:19:00,549 - config - INFO - === REGISTER: 2026-03-20 to 2026-03-26 ===
+2026-03-26 17:19:03,331 - config - INFO - [PERF] register parallel fetch: 2.781s, 455 payments
+2026-03-26 17:19:03,336 - config - INFO - [PERF] active rooms built: 0.005s, count: 17
+2026-03-26 17:19:04,372 - config - INFO - Completed bills: 132, skipped: 0
+2026-03-26 17:19:05,827 - config - INFO - [PERF] /get_register_data TOTAL: 5.277s, entries: 149
+2026-03-26 17:19:05,832 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:19:05] "POST /get_register_data HTTP/1.1" 200 -
+2026-03-26 17:20:31,717 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:20:31] "GET / HTTP/1.1" 200 -
+2026-03-26 17:20:31,794 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:20:31] "GET /static/style.css HTTP/1.1" 200 -
+2026-03-26 17:20:31,795 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:20:31] "[36mGET /static/booking.css HTTP/1.1[0m" 304 -
+2026-03-26 17:20:31,797 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:20:31] "[36mGET /static/settle-later.css HTTP/1.1[0m" 304 -
+2026-03-26 17:20:31,804 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:20:31] "[36mGET /static/register.js HTTP/1.1[0m" 304 -
+2026-03-26 17:20:31,804 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:20:31] "[36mGET /static/bills.js HTTP/1.1[0m" 304 -
+2026-03-26 17:20:31,807 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:20:31] "[36mGET /static/script.js HTTP/1.1[0m" 304 -
+2026-03-26 17:20:31,810 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:20:31] "[36mGET /static/shift.js HTTP/1.1[0m" 304 -
+2026-03-26 17:20:31,811 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:20:31] "[36mGET /static/analytics.js HTTP/1.1[0m" 304 -
+2026-03-26 17:20:31,830 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:20:31] "[36mGET /static/expense.js HTTP/1.1[0m" 304 -
+2026-03-26 17:20:31,831 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:20:31] "[36mGET /static/booking.js HTTP/1.1[0m" 304 -
+2026-03-26 17:20:31,836 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:20:31] "[36mGET /static/settle-later.js HTTP/1.1[0m" 304 -
+2026-03-26 17:20:31,843 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:20:31] "[36mGET /static/settle-later-fix.js HTTP/1.1[0m" 304 -
+2026-03-26 17:20:31,846 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:20:31] "[36mGET /static/revenue-protection.js HTTP/1.1[0m" 304 -
+2026-03-26 17:20:31,852 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:20:31] "GET /static/transaction-tracking.js HTTP/1.1" 200 -
+2026-03-26 17:20:31,853 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:20:31] "[36mGET /static/room-cleaning.js HTTP/1.1[0m" 304 -
+2026-03-26 17:20:31,861 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:20:31] "[36mGET /static/customer-docs.js HTTP/1.1[0m" 304 -
+2026-03-26 17:20:31,862 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:20:31] "[36mGET /static/google_sync.js HTTP/1.1[0m" 304 -
+2026-03-26 17:20:32,069 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 17:20:32,070 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 17:20:33,112 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 17:20:34,069 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:20:34] "GET /get_pending_settlements HTTP/1.1" 200 -
+2026-03-26 17:20:34,561 - config - INFO - [PERF] parallel fetch (rooms+totals+payments): 2.492s, 292 payment docs
+2026-03-26 17:20:34,563 - config - INFO - [PERF] /get_data TOTAL: 2.493s
+2026-03-26 17:20:34,567 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:20:34] "GET /get_data HTTP/1.1" 200 -
+2026-03-26 17:20:37,033 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:20:37] "GET /get_transaction_metadata HTTP/1.1" 200 -
+2026-03-26 17:20:37,173 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:20:37] "GET / HTTP/1.1" 200 -
+2026-03-26 17:20:37,241 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:20:37] "[36mGET /static/style.css HTTP/1.1[0m" 304 -
+2026-03-26 17:20:37,244 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:20:37] "[36mGET /static/booking.css HTTP/1.1[0m" 304 -
+2026-03-26 17:20:37,246 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:20:37] "[36mGET /static/settle-later.css HTTP/1.1[0m" 304 -
+2026-03-26 17:20:37,248 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:20:37] "[36mGET /static/register.js HTTP/1.1[0m" 304 -
+2026-03-26 17:20:37,256 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:20:37] "[36mGET /static/bills.js HTTP/1.1[0m" 304 -
+2026-03-26 17:20:37,261 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:20:37] "[36mGET /static/script.js HTTP/1.1[0m" 304 -
+2026-03-26 17:20:37,267 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:20:37] "[36mGET /static/shift.js HTTP/1.1[0m" 304 -
+2026-03-26 17:20:37,271 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:20:37] "[36mGET /static/analytics.js HTTP/1.1[0m" 304 -
+2026-03-26 17:20:37,273 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:20:37] "[36mGET /static/expense.js HTTP/1.1[0m" 304 -
+2026-03-26 17:20:37,279 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:20:37] "[36mGET /static/booking.js HTTP/1.1[0m" 304 -
+2026-03-26 17:20:37,281 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:20:37] "[36mGET /static/settle-later.js HTTP/1.1[0m" 304 -
+2026-03-26 17:20:37,286 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:20:37] "[36mGET /static/settle-later-fix.js HTTP/1.1[0m" 304 -
+2026-03-26 17:20:37,290 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:20:37] "[36mGET /static/revenue-protection.js HTTP/1.1[0m" 304 -
+2026-03-26 17:20:37,291 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:20:37] "[36mGET /static/transaction-tracking.js HTTP/1.1[0m" 304 -
+2026-03-26 17:20:37,299 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:20:37] "[36mGET /static/room-cleaning.js HTTP/1.1[0m" 304 -
+2026-03-26 17:20:37,305 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:20:37] "[36mGET /static/customer-docs.js HTTP/1.1[0m" 304 -
+2026-03-26 17:20:37,307 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:20:37] "[36mGET /static/google_sync.js HTTP/1.1[0m" 304 -
+2026-03-26 17:20:37,500 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 17:20:37,502 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 17:20:38,507 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 17:20:39,935 - config - INFO - [PERF] parallel fetch (rooms+totals+payments): 2.433s, 292 payment docs
+2026-03-26 17:20:39,936 - config - INFO - [PERF] /get_data TOTAL: 2.434s
+2026-03-26 17:20:39,941 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:20:39] "GET /get_data HTTP/1.1" 200 -
+2026-03-26 17:20:40,142 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:20:40] "GET /get_pending_settlements HTTP/1.1" 200 -
+2026-03-26 17:20:41,262 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:20:41] "GET /get_transaction_metadata HTTP/1.1" 200 -
+2026-03-26 17:20:51,877 - config - INFO - Firebase initialized successfully
+2026-03-26 17:20:51,878 - services.payment_service - INFO - PaymentService initialised (payments collection)
+2026-03-26 17:20:51,878 - services.customer_service - INFO - CustomerService initialised (customers collection)
+2026-03-26 17:20:51,882 - config - INFO - Checking Firebase data structure...
+2026-03-26 17:20:51,947 - config - INFO - Checking Firebase data structure...
+2026-03-26 17:20:51,986 - werkzeug - INFO - [31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:5000
+ * Running on http://192.168.1.47:5000
+2026-03-26 17:20:51,986 - werkzeug - INFO - [33mPress CTRL+C to quit[0m
+2026-03-26 17:20:53,822 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:20:53] "GET / HTTP/1.1" 200 -
+2026-03-26 17:20:54,431 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:20:54] "[36mGET /static/settle-later.css HTTP/1.1[0m" 304 -
+2026-03-26 17:20:54,439 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:20:54] "[36mGET /static/shift.js HTTP/1.1[0m" 304 -
+2026-03-26 17:20:54,447 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:20:54] "[36mGET /static/analytics.js HTTP/1.1[0m" 304 -
+2026-03-26 17:20:54,448 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:20:54] "[36mGET /static/booking.css HTTP/1.1[0m" 304 -
+2026-03-26 17:20:54,459 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:20:54] "[36mGET /static/expense.js HTTP/1.1[0m" 304 -
+2026-03-26 17:20:54,460 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:20:54] "[36mGET /static/booking.js HTTP/1.1[0m" 304 -
+2026-03-26 17:20:54,471 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:20:54] "[36mGET /static/settle-later.js HTTP/1.1[0m" 304 -
+2026-03-26 17:20:54,472 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:20:54] "[36mGET /static/settle-later-fix.js HTTP/1.1[0m" 304 -
+2026-03-26 17:20:54,476 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:20:54] "[36mGET /static/style.css HTTP/1.1[0m" 304 -
+2026-03-26 17:20:54,486 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:20:54] "[36mGET /static/revenue-protection.js HTTP/1.1[0m" 304 -
+2026-03-26 17:20:54,490 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:20:54] "[36mGET /static/transaction-tracking.js HTTP/1.1[0m" 304 -
+2026-03-26 17:20:54,492 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:20:54] "[36mGET /static/script.js HTTP/1.1[0m" 304 -
+2026-03-26 17:20:54,493 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:20:54] "[36mGET /static/room-cleaning.js HTTP/1.1[0m" 304 -
+2026-03-26 17:20:54,507 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:20:54] "[36mGET /static/customer-docs.js HTTP/1.1[0m" 304 -
+2026-03-26 17:20:54,508 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:20:54] "[36mGET /static/google_sync.js HTTP/1.1[0m" 304 -
+2026-03-26 17:20:54,511 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:20:54] "[36mGET /static/register.js HTTP/1.1[0m" 304 -
+2026-03-26 17:20:54,512 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:20:54] "[36mGET /static/bills.js HTTP/1.1[0m" 304 -
+2026-03-26 17:20:55,031 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 17:20:55,032 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 17:20:56,059 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 17:20:57,513 - config - INFO - [PERF] parallel fetch (rooms+totals+payments): 2.476s, 292 payment docs
+2026-03-26 17:20:57,514 - config - INFO - [PERF] /get_data TOTAL: 2.477s
+2026-03-26 17:20:57,519 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:20:57] "GET /get_data HTTP/1.1" 200 -
+2026-03-26 17:20:57,707 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:20:57] "GET /get_pending_settlements HTTP/1.1" 200 -
+2026-03-26 17:21:00,178 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:21:00] "GET /get_transaction_metadata HTTP/1.1" 200 -
+2026-03-26 17:24:26,635 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 17:24:26,637 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 17:24:28,606 - config - INFO - [PERF] parallel fetch (rooms+totals+payments): 1.970s, 292 payment docs
+2026-03-26 17:24:28,608 - config - INFO - [PERF] /get_data TOTAL: 1.972s
+2026-03-26 17:24:28,614 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:24:28] "GET /get_data HTTP/1.1" 200 -
+2026-03-26 17:24:31,102 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:24:31] "GET /get_transaction_metadata HTTP/1.1" 200 -
+2026-03-26 17:27:03,951 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 17:27:03,954 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 17:27:06,361 - config - INFO - [PERF] parallel fetch (rooms+totals+payments): 2.408s, 293 payment docs
+2026-03-26 17:27:06,362 - config - INFO - [PERF] /get_data TOTAL: 2.409s
+2026-03-26 17:27:06,365 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:27:06] "GET /get_data HTTP/1.1" 200 -
+2026-03-26 17:27:08,427 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:27:08] "GET /get_transaction_metadata HTTP/1.1" 200 -
+2026-03-26 17:35:49,535 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:35:49] "[36mGET /static/style.css HTTP/1.1[0m" 304 -
+2026-03-26 17:35:49,535 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:35:49] "[36mGET /static/booking.css HTTP/1.1[0m" 304 -
+2026-03-26 17:35:49,535 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:35:49] "[36mGET /static/settle-later.css HTTP/1.1[0m" 304 -
+2026-03-26 17:35:49,556 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 17:35:49,557 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:35:49] "[33mGET /.well-known/appspecific/com.chrome.devtools.json HTTP/1.1[0m" 404 -
+2026-03-26 17:39:03,131 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 17:39:03,135 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 17:39:05,885 - config - INFO - [PERF] parallel fetch (rooms+totals+payments): 2.750s, 293 payment docs
+2026-03-26 17:39:05,887 - config - INFO - [PERF] /get_data TOTAL: 2.752s
+2026-03-26 17:39:05,891 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:39:05] "GET /get_data HTTP/1.1" 200 -
+2026-03-26 17:39:07,820 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:39:07] "GET /get_transaction_metadata HTTP/1.1" 200 -
+2026-03-26 17:40:20,026 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 17:40:20,031 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 17:40:22,459 - config - INFO - [PERF] parallel fetch (rooms+totals+payments): 2.432s, 295 payment docs
+2026-03-26 17:40:22,460 - config - INFO - [PERF] /get_data TOTAL: 2.433s
+2026-03-26 17:40:22,466 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:40:22] "GET /get_data HTTP/1.1" 200 -
+2026-03-26 17:40:24,381 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:40:24] "GET /get_transaction_metadata HTTP/1.1" 200 -
+2026-03-26 17:41:22,547 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 17:41:22,554 - config - INFO - === REGISTER: 2026-03-20 to 2026-03-26 ===
+2026-03-26 17:41:25,311 - config - INFO - [PERF] register parallel fetch: 2.757s, 458 payments
+2026-03-26 17:41:25,315 - config - INFO - [PERF] active rooms built: 0.004s, count: 18
+2026-03-26 17:41:26,375 - config - INFO - Completed bills: 133, skipped: 0
+2026-03-26 17:41:27,872 - config - INFO - [PERF] /get_register_data TOTAL: 5.318s, entries: 151
+2026-03-26 17:41:27,876 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:41:27] "POST /get_register_data HTTP/1.1" 200 -
+2026-03-26 17:41:27,936 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 17:41:28,733 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:41:28] "POST /batch_check_customer_docs HTTP/1.1" 200 -
+2026-03-26 17:49:44,519 - config - INFO - Firebase initialized successfully
+2026-03-26 17:49:44,519 - services.payment_service - INFO - PaymentService initialised (payments collection)
+2026-03-26 17:49:44,520 - services.customer_service - INFO - CustomerService initialised (customers collection)
+2026-03-26 17:49:44,523 - config - INFO - Checking Firebase data structure...
+2026-03-26 17:49:44,617 - config - INFO - Checking Firebase data structure...
+2026-03-26 17:49:44,647 - werkzeug - INFO - [31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:5000
+ * Running on http://192.168.1.47:5000
+2026-03-26 17:49:44,648 - werkzeug - INFO - [33mPress CTRL+C to quit[0m
+2026-03-26 17:49:46,210 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:49:46] "GET / HTTP/1.1" 200 -
+2026-03-26 17:49:46,815 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:49:46] "GET /static/style.css HTTP/1.1" 200 -
+2026-03-26 17:49:46,824 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:49:46] "[36mGET /static/shift.js HTTP/1.1[0m" 304 -
+2026-03-26 17:49:46,834 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:49:46] "[36mGET /static/analytics.js HTTP/1.1[0m" 304 -
+2026-03-26 17:49:46,840 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:49:46] "[36mGET /static/expense.js HTTP/1.1[0m" 304 -
+2026-03-26 17:49:46,849 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:49:46] "[36mGET /static/booking.js HTTP/1.1[0m" 304 -
+2026-03-26 17:49:46,855 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:49:46] "[36mGET /static/settle-later.js HTTP/1.1[0m" 304 -
+2026-03-26 17:49:46,864 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:49:46] "[36mGET /static/booking.css HTTP/1.1[0m" 304 -
+2026-03-26 17:49:46,865 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:49:46] "[36mGET /static/settle-later-fix.js HTTP/1.1[0m" 304 -
+2026-03-26 17:49:46,876 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:49:46] "[36mGET /static/revenue-protection.js HTTP/1.1[0m" 304 -
+2026-03-26 17:49:46,877 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:49:46] "GET /static/transaction-tracking.js HTTP/1.1" 200 -
+2026-03-26 17:49:46,884 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:49:46] "[36mGET /static/room-cleaning.js HTTP/1.1[0m" 304 -
+2026-03-26 17:49:46,888 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:49:46] "[36mGET /static/customer-docs.js HTTP/1.1[0m" 304 -
+2026-03-26 17:49:46,901 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:49:46] "[36mGET /static/google_sync.js HTTP/1.1[0m" 304 -
+2026-03-26 17:49:46,903 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:49:46] "[36mGET /static/settle-later.css HTTP/1.1[0m" 304 -
+2026-03-26 17:49:46,905 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:49:46] "[36mGET /static/register.js HTTP/1.1[0m" 304 -
+2026-03-26 17:49:46,910 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:49:46] "[36mGET /static/bills.js HTTP/1.1[0m" 304 -
+2026-03-26 17:49:46,915 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:49:46] "[36mGET /static/script.js HTTP/1.1[0m" 304 -
+2026-03-26 17:49:47,470 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 17:49:47,471 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 17:49:48,474 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 17:49:49,518 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:49:49] "GET /get_pending_settlements HTTP/1.1" 200 -
+2026-03-26 17:49:49,921 - config - INFO - [PERF] parallel fetch (rooms+totals+payments): 2.445s, 295 payment docs
+2026-03-26 17:49:49,922 - config - INFO - [PERF] /get_data TOTAL: 2.446s
+2026-03-26 17:49:49,926 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:49:49] "GET /get_data HTTP/1.1" 200 -
+2026-03-26 17:49:52,738 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:49:52] "GET /get_transaction_metadata HTTP/1.1" 200 -
+2026-03-26 17:49:52,865 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 17:49:52,866 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 17:49:55,380 - config - INFO - [PERF] parallel fetch (rooms+totals+payments): 2.514s, 295 payment docs
+2026-03-26 17:49:55,383 - config - INFO - [PERF] /get_data TOTAL: 2.516s
+2026-03-26 17:49:55,387 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:49:55] "GET /get_data HTTP/1.1" 200 -
+2026-03-26 17:49:56,660 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:49:56] "GET /get_transaction_metadata HTTP/1.1" 200 -
+2026-03-26 17:50:06,061 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 17:50:06,063 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 17:50:08,598 - config - INFO - [PERF] parallel fetch (rooms+totals+payments): 2.535s, 295 payment docs
+2026-03-26 17:50:08,599 - config - INFO - [PERF] /get_data TOTAL: 2.536s
+2026-03-26 17:50:08,604 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:50:08] "GET /get_data HTTP/1.1" 200 -
+2026-03-26 17:50:09,855 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:50:09] "GET /get_transaction_metadata HTTP/1.1" 200 -
+2026-03-26 17:50:13,964 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:50:13] "GET / HTTP/1.1" 200 -
+2026-03-26 17:50:14,042 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:50:14] "[36mGET /static/style.css HTTP/1.1[0m" 304 -
+2026-03-26 17:50:14,043 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:50:14] "[36mGET /static/booking.css HTTP/1.1[0m" 304 -
+2026-03-26 17:50:14,051 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:50:14] "[36mGET /static/settle-later.css HTTP/1.1[0m" 304 -
+2026-03-26 17:50:14,053 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:50:14] "[36mGET /static/bills.js HTTP/1.1[0m" 304 -
+2026-03-26 17:50:14,053 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:50:14] "[36mGET /static/register.js HTTP/1.1[0m" 304 -
+2026-03-26 17:50:14,061 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:50:14] "[36mGET /static/script.js HTTP/1.1[0m" 304 -
+2026-03-26 17:50:14,064 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:50:14] "[36mGET /static/shift.js HTTP/1.1[0m" 304 -
+2026-03-26 17:50:14,070 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:50:14] "[36mGET /static/analytics.js HTTP/1.1[0m" 304 -
+2026-03-26 17:50:14,074 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:50:14] "[36mGET /static/expense.js HTTP/1.1[0m" 304 -
+2026-03-26 17:50:14,078 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:50:14] "[36mGET /static/booking.js HTTP/1.1[0m" 304 -
+2026-03-26 17:50:14,083 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:50:14] "[36mGET /static/settle-later.js HTTP/1.1[0m" 304 -
+2026-03-26 17:50:14,087 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:50:14] "[36mGET /static/settle-later-fix.js HTTP/1.1[0m" 304 -
+2026-03-26 17:50:14,088 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:50:14] "[36mGET /static/revenue-protection.js HTTP/1.1[0m" 304 -
+2026-03-26 17:50:14,096 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:50:14] "[36mGET /static/transaction-tracking.js HTTP/1.1[0m" 304 -
+2026-03-26 17:50:14,099 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:50:14] "[36mGET /static/room-cleaning.js HTTP/1.1[0m" 304 -
+2026-03-26 17:50:14,104 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:50:14] "[36mGET /static/customer-docs.js HTTP/1.1[0m" 304 -
+2026-03-26 17:50:14,105 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:50:14] "[36mGET /static/google_sync.js HTTP/1.1[0m" 304 -
+2026-03-26 17:50:14,317 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 17:50:14,318 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 17:50:15,332 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 17:50:16,872 - config - INFO - [PERF] parallel fetch (rooms+totals+payments): 2.553s, 295 payment docs
+2026-03-26 17:50:16,874 - config - INFO - [PERF] /get_data TOTAL: 2.555s
+2026-03-26 17:50:16,879 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:50:16] "GET /get_data HTTP/1.1" 200 -
+2026-03-26 17:50:16,953 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:50:16] "GET /get_pending_settlements HTTP/1.1" 200 -
+2026-03-26 17:50:18,137 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:50:18] "GET /get_transaction_metadata HTTP/1.1" 200 -
+2026-03-26 17:50:57,141 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 17:50:57,142 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:50:57] "POST /verify_manager_password HTTP/1.1" 200 -
+2026-03-26 17:51:38,136 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 17:51:38,137 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 17:51:40,589 - config - INFO - [PERF] parallel fetch (rooms+totals+payments): 2.452s, 295 payment docs
+2026-03-26 17:51:40,592 - config - INFO - [PERF] /get_data TOTAL: 2.455s
+2026-03-26 17:51:40,596 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:51:40] "GET /get_data HTTP/1.1" 200 -
+2026-03-26 17:51:42,468 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:51:42] "GET /get_transaction_metadata HTTP/1.1" 200 -
+2026-03-26 17:52:52,021 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:52:52] "[36mGET /static/settle-later.css HTTP/1.1[0m" 304 -
+2026-03-26 17:52:52,022 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:52:52] "[36mGET /static/style.css HTTP/1.1[0m" 304 -
+2026-03-26 17:52:52,022 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:52:52] "[36mGET /static/booking.css HTTP/1.1[0m" 304 -
+2026-03-26 17:52:52,044 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 17:52:52,045 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:52:52] "[33mGET /.well-known/appspecific/com.chrome.devtools.json HTTP/1.1[0m" 404 -
+2026-03-26 17:57:57,295 - config - INFO - Firebase initialized successfully
+2026-03-26 17:57:57,296 - services.payment_service - INFO - PaymentService initialised (payments collection)
+2026-03-26 17:57:57,297 - services.customer_service - INFO - CustomerService initialised (customers collection)
+2026-03-26 17:57:57,300 - config - INFO - Checking Firebase data structure...
+2026-03-26 17:57:57,402 - config - INFO - Checking Firebase data structure...
+2026-03-26 17:57:57,413 - werkzeug - INFO - [31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:5000
+ * Running on http://192.168.1.47:5000
+2026-03-26 17:57:57,413 - werkzeug - INFO - [33mPress CTRL+C to quit[0m
+2026-03-26 17:57:58,980 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:57:58] "GET / HTTP/1.1" 200 -
+2026-03-26 17:57:59,646 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:57:59] "GET /static/style.css HTTP/1.1" 200 -
+2026-03-26 17:57:59,655 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:57:59] "[36mGET /static/shift.js HTTP/1.1[0m" 304 -
+2026-03-26 17:57:59,664 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:57:59] "[36mGET /static/analytics.js HTTP/1.1[0m" 304 -
+2026-03-26 17:57:59,671 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:57:59] "[36mGET /static/expense.js HTTP/1.1[0m" 304 -
+2026-03-26 17:57:59,673 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:57:59] "[36mGET /static/settle-later.css HTTP/1.1[0m" 304 -
+2026-03-26 17:57:59,678 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:57:59] "[36mGET /static/register.js HTTP/1.1[0m" 304 -
+2026-03-26 17:57:59,682 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:57:59] "[36mGET /static/booking.js HTTP/1.1[0m" 304 -
+2026-03-26 17:57:59,683 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:57:59] "[36mGET /static/settle-later.js HTTP/1.1[0m" 304 -
+2026-03-26 17:57:59,696 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:57:59] "[36mGET /static/settle-later-fix.js HTTP/1.1[0m" 304 -
+2026-03-26 17:57:59,697 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:57:59] "[36mGET /static/revenue-protection.js HTTP/1.1[0m" 304 -
+2026-03-26 17:57:59,698 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:57:59] "[36mGET /static/booking.css HTTP/1.1[0m" 304 -
+2026-03-26 17:57:59,701 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:57:59] "[36mGET /static/bills.js HTTP/1.1[0m" 304 -
+2026-03-26 17:57:59,703 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:57:59] "[36mGET /static/script.js HTTP/1.1[0m" 304 -
+2026-03-26 17:57:59,704 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:57:59] "GET /static/transaction-tracking.js HTTP/1.1" 200 -
+2026-03-26 17:57:59,714 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:57:59] "[36mGET /static/room-cleaning.js HTTP/1.1[0m" 304 -
+2026-03-26 17:57:59,722 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:57:59] "[36mGET /static/customer-docs.js HTTP/1.1[0m" 304 -
+2026-03-26 17:57:59,729 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:57:59] "[36mGET /static/google_sync.js HTTP/1.1[0m" 304 -
+2026-03-26 17:58:00,236 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 17:58:00,239 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 17:58:01,285 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 17:58:02,697 - config - INFO - [PERF] parallel fetch (rooms+totals+payments): 2.455s, 295 payment docs
+2026-03-26 17:58:02,699 - config - INFO - [PERF] /get_data TOTAL: 2.457s
+2026-03-26 17:58:02,702 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:58:02] "GET /get_data HTTP/1.1" 200 -
+2026-03-26 17:58:03,121 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:58:03] "GET /get_pending_settlements HTTP/1.1" 200 -
+2026-03-26 17:58:04,899 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:58:04] "GET /get_transaction_metadata HTTP/1.1" 200 -
+2026-03-26 17:58:17,264 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 17:58:17,264 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:58:17] "[31m[1mPOST /verify_manager_password HTTP/1.1[0m" 403 -
+2026-03-26 17:58:27,081 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 17:58:27,083 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:58:27] "POST /verify_manager_password HTTP/1.1" 200 -
+2026-03-26 17:58:30,701 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 17:58:33,427 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:58:33] "POST /get_transactions_range HTTP/1.1" 200 -
+2026-03-26 17:58:42,584 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 17:58:45,335 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:58:45] "POST /get_transactions_range HTTP/1.1" 200 -
+2026-03-26 17:58:59,909 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 17:58:59,911 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 17:58:59] "POST /verify_manager_password HTTP/1.1" 200 -
+2026-03-26 18:01:56,211 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 18:01:56,214 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 18:01:58,718 - config - INFO - [PERF] parallel fetch (rooms+totals+payments): 2.506s, 296 payment docs
+2026-03-26 18:01:58,719 - config - INFO - [PERF] /get_data TOTAL: 2.507s
+2026-03-26 18:01:58,724 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 18:01:58] "GET /get_data HTTP/1.1" 200 -
+2026-03-26 18:02:00,822 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 18:02:00] "GET /get_transaction_metadata HTTP/1.1" 200 -
+2026-03-26 18:06:37,548 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 18:06:37,551 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 18:06:40,192 - config - INFO - [PERF] parallel fetch (rooms+totals+payments): 2.643s, 296 payment docs
+2026-03-26 18:06:40,193 - config - INFO - [PERF] /get_data TOTAL: 2.645s
+2026-03-26 18:06:40,197 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 18:06:40] "GET /get_data HTTP/1.1" 200 -
+2026-03-26 18:06:42,211 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 18:06:42] "GET /get_transaction_metadata HTTP/1.1" 200 -
+2026-03-26 18:09:35,531 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 18:09:35,533 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 18:09:37,937 - config - INFO - [PERF] parallel fetch (rooms+totals+payments): 2.406s, 297 payment docs
+2026-03-26 18:09:37,939 - config - INFO - [PERF] /get_data TOTAL: 2.408s
+2026-03-26 18:09:37,943 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 18:09:37] "GET /get_data HTTP/1.1" 200 -
+2026-03-26 18:09:40,065 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 18:09:40] "GET /get_transaction_metadata HTTP/1.1" 200 -
+2026-03-26 18:10:57,872 - config - INFO - Firebase initialized successfully
+2026-03-26 18:10:57,873 - services.payment_service - INFO - PaymentService initialised (payments collection)
+2026-03-26 18:10:57,873 - services.customer_service - INFO - CustomerService initialised (customers collection)
+2026-03-26 18:10:57,876 - config - INFO - Checking Firebase data structure...
+2026-03-26 18:10:57,979 - config - INFO - Checking Firebase data structure...
+2026-03-26 18:10:57,992 - werkzeug - INFO - [31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:5000
+ * Running on http://192.168.1.47:5000
+2026-03-26 18:10:57,992 - werkzeug - INFO - [33mPress CTRL+C to quit[0m
+2026-03-26 18:10:59,708 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 18:10:59] "GET / HTTP/1.1" 200 -
+2026-03-26 18:11:00,335 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 18:11:00] "[36mGET /static/style.css HTTP/1.1[0m" 304 -
+2026-03-26 18:11:00,344 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 18:11:00] "[36mGET /static/shift.js HTTP/1.1[0m" 304 -
+2026-03-26 18:11:00,346 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 18:11:00] "[36mGET /static/booking.css HTTP/1.1[0m" 304 -
+2026-03-26 18:11:00,356 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 18:11:00] "[36mGET /static/expense.js HTTP/1.1[0m" 304 -
+2026-03-26 18:11:00,357 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 18:11:00] "[36mGET /static/analytics.js HTTP/1.1[0m" 304 -
+2026-03-26 18:11:00,359 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 18:11:00] "[36mGET /static/settle-later.css HTTP/1.1[0m" 304 -
+2026-03-26 18:11:00,363 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 18:11:00] "[36mGET /static/register.js HTTP/1.1[0m" 304 -
+2026-03-26 18:11:00,371 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 18:11:00] "[36mGET /static/booking.js HTTP/1.1[0m" 304 -
+2026-03-26 18:11:00,379 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 18:11:00] "[36mGET /static/settle-later.js HTTP/1.1[0m" 304 -
+2026-03-26 18:11:00,381 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 18:11:00] "[36mGET /static/settle-later-fix.js HTTP/1.1[0m" 304 -
+2026-03-26 18:11:00,388 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 18:11:00] "[36mGET /static/revenue-protection.js HTTP/1.1[0m" 304 -
+2026-03-26 18:11:00,391 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 18:11:00] "[36mGET /static/script.js HTTP/1.1[0m" 304 -
+2026-03-26 18:11:00,395 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 18:11:00] "[36mGET /static/bills.js HTTP/1.1[0m" 304 -
+2026-03-26 18:11:00,396 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 18:11:00] "GET /static/transaction-tracking.js HTTP/1.1" 200 -
+2026-03-26 18:11:00,399 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 18:11:00] "[36mGET /static/room-cleaning.js HTTP/1.1[0m" 304 -
+2026-03-26 18:11:00,403 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 18:11:00] "[36mGET /static/customer-docs.js HTTP/1.1[0m" 304 -
+2026-03-26 18:11:00,409 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 18:11:00] "[36mGET /static/google_sync.js HTTP/1.1[0m" 304 -
+2026-03-26 18:11:00,927 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 18:11:00,928 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 18:11:01,942 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 18:11:03,370 - config - INFO - [PERF] parallel fetch (rooms+totals+payments): 2.437s, 297 payment docs
+2026-03-26 18:11:03,372 - config - INFO - [PERF] /get_data TOTAL: 2.439s
+2026-03-26 18:11:03,376 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 18:11:03] "GET /get_data HTTP/1.1" 200 -
+2026-03-26 18:11:03,811 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 18:11:03] "GET /get_pending_settlements HTTP/1.1" 200 -
+2026-03-26 18:11:05,599 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 18:11:05] "GET /get_transaction_metadata HTTP/1.1" 200 -
+2026-03-26 18:11:29,317 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 18:11:29,318 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 18:11:29] "POST /verify_manager_password HTTP/1.1" 200 -
+2026-03-26 18:11:31,327 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 18:11:34,101 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 18:11:34] "POST /get_transactions_range HTTP/1.1" 200 -
+2026-03-26 18:11:59,764 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 18:11:59,765 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 18:11:59] "POST /verify_manager_password HTTP/1.1" 200 -
+2026-03-26 18:12:01,618 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 18:12:04,550 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 18:12:04] "POST /get_transactions_range HTTP/1.1" 200 -
+2026-03-26 18:12:24,240 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 18:12:24,241 - config - INFO - === REGISTER: 2026-03-20 to 2026-03-26 ===
+2026-03-26 18:12:24,716 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 18:12:26,666 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 18:12:26] "GET /get_bookings HTTP/1.1" 200 -
+2026-03-26 18:12:27,061 - config - INFO - [PERF] register parallel fetch: 2.821s, 460 payments
+2026-03-26 18:12:27,064 - config - INFO - [PERF] active rooms built: 0.002s, count: 17
+2026-03-26 18:12:28,157 - config - INFO - Completed bills: 135, skipped: 0
+2026-03-26 18:12:29,647 - config - INFO - [PERF] /get_register_data TOTAL: 5.406s, entries: 152
+2026-03-26 18:12:29,652 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 18:12:29] "POST /get_register_data HTTP/1.1" 200 -
+2026-03-26 18:12:29,715 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 18:12:30,609 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 18:12:30] "POST /batch_check_customer_docs HTTP/1.1" 200 -
+2026-03-26 18:15:45,510 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 18:15:45,511 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 18:15:48,002 - config - INFO - [PERF] parallel fetch (rooms+totals+payments): 2.491s, 298 payment docs
+2026-03-26 18:15:48,004 - config - INFO - [PERF] /get_data TOTAL: 2.494s
+2026-03-26 18:15:48,008 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 18:15:48] "GET /get_data HTTP/1.1" 200 -
+2026-03-26 18:15:50,154 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 18:15:50] "GET /get_transaction_metadata HTTP/1.1" 200 -
+2026-03-26 18:16:44,213 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 18:16:44] "GET / HTTP/1.1" 200 -
+2026-03-26 18:16:44,334 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 18:16:44] "[36mGET /static/style.css HTTP/1.1[0m" 304 -
+2026-03-26 18:16:44,336 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 18:16:44] "[36mGET /static/booking.css HTTP/1.1[0m" 304 -
+2026-03-26 18:16:44,338 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 18:16:44] "[36mGET /static/settle-later.css HTTP/1.1[0m" 304 -
+2026-03-26 18:16:44,344 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 18:16:44] "[36mGET /static/register.js HTTP/1.1[0m" 304 -
+2026-03-26 18:16:44,353 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 18:16:44] "[36mGET /static/bills.js HTTP/1.1[0m" 304 -
+2026-03-26 18:16:44,360 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 18:16:44] "[36mGET /static/script.js HTTP/1.1[0m" 304 -
+2026-03-26 18:16:44,362 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 18:16:44] "[36mGET /static/shift.js HTTP/1.1[0m" 304 -
+2026-03-26 18:16:44,365 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 18:16:44] "[36mGET /static/analytics.js HTTP/1.1[0m" 304 -
+2026-03-26 18:16:44,370 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 18:16:44] "[36mGET /static/expense.js HTTP/1.1[0m" 304 -
+2026-03-26 18:16:44,379 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 18:16:44] "[36mGET /static/booking.js HTTP/1.1[0m" 304 -
+2026-03-26 18:16:44,381 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 18:16:44] "[36mGET /static/settle-later.js HTTP/1.1[0m" 304 -
+2026-03-26 18:16:44,390 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 18:16:44] "[36mGET /static/settle-later-fix.js HTTP/1.1[0m" 304 -
+2026-03-26 18:16:44,398 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 18:16:44] "[36mGET /static/revenue-protection.js HTTP/1.1[0m" 304 -
+2026-03-26 18:16:44,402 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 18:16:44] "GET /static/transaction-tracking.js HTTP/1.1" 200 -
+2026-03-26 18:16:44,408 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 18:16:44] "[36mGET /static/room-cleaning.js HTTP/1.1[0m" 304 -
+2026-03-26 18:16:44,409 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 18:16:44] "[36mGET /static/customer-docs.js HTTP/1.1[0m" 304 -
+2026-03-26 18:16:44,413 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 18:16:44] "[36mGET /static/google_sync.js HTTP/1.1[0m" 304 -
+2026-03-26 18:16:44,734 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 18:16:44,735 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 18:16:45,742 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 18:16:46,672 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 18:16:46] "GET /get_pending_settlements HTTP/1.1" 200 -
+2026-03-26 18:16:47,164 - config - INFO - [PERF] parallel fetch (rooms+totals+payments): 2.428s, 298 payment docs
+2026-03-26 18:16:47,166 - config - INFO - [PERF] /get_data TOTAL: 2.429s
+2026-03-26 18:16:47,171 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 18:16:47] "GET /get_data HTTP/1.1" 200 -
+2026-03-26 18:16:49,533 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 18:16:49] "GET /get_transaction_metadata HTTP/1.1" 200 -
+2026-03-26 18:16:57,717 - config - INFO - Firebase initialized successfully
+2026-03-26 18:16:57,718 - services.payment_service - INFO - PaymentService initialised (payments collection)
+2026-03-26 18:16:57,719 - services.customer_service - INFO - CustomerService initialised (customers collection)
+2026-03-26 18:16:57,722 - config - INFO - Checking Firebase data structure...
+2026-03-26 18:16:57,795 - config - INFO - Checking Firebase data structure...
+2026-03-26 18:16:57,830 - werkzeug - INFO - [31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:5000
+ * Running on http://192.168.1.47:5000
+2026-03-26 18:16:57,831 - werkzeug - INFO - [33mPress CTRL+C to quit[0m
+2026-03-26 18:16:59,825 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 18:16:59] "GET / HTTP/1.1" 200 -
+2026-03-26 18:17:00,386 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 18:17:00] "[36mGET /static/style.css HTTP/1.1[0m" 304 -
+2026-03-26 18:17:00,396 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 18:17:00] "[36mGET /static/shift.js HTTP/1.1[0m" 304 -
+2026-03-26 18:17:00,407 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 18:17:00] "[36mGET /static/analytics.js HTTP/1.1[0m" 304 -
+2026-03-26 18:17:00,415 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 18:17:00] "[36mGET /static/expense.js HTTP/1.1[0m" 304 -
+2026-03-26 18:17:00,426 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 18:17:00] "[36mGET /static/booking.js HTTP/1.1[0m" 304 -
+2026-03-26 18:17:00,435 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 18:17:00] "[36mGET /static/settle-later.js HTTP/1.1[0m" 304 -
+2026-03-26 18:17:00,440 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 18:17:00] "[36mGET /static/booking.css HTTP/1.1[0m" 304 -
+2026-03-26 18:17:00,445 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 18:17:00] "[36mGET /static/settle-later-fix.js HTTP/1.1[0m" 304 -
+2026-03-26 18:17:00,447 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 18:17:00] "[36mGET /static/revenue-protection.js HTTP/1.1[0m" 304 -
+2026-03-26 18:17:00,455 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 18:17:00] "[36mGET /static/settle-later.css HTTP/1.1[0m" 304 -
+2026-03-26 18:17:00,457 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 18:17:00] "[36mGET /static/script.js HTTP/1.1[0m" 304 -
+2026-03-26 18:17:00,460 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 18:17:00] "[36mGET /static/transaction-tracking.js HTTP/1.1[0m" 304 -
+2026-03-26 18:17:00,467 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 18:17:00] "[36mGET /static/register.js HTTP/1.1[0m" 304 -
+2026-03-26 18:17:00,470 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 18:17:00] "[36mGET /static/room-cleaning.js HTTP/1.1[0m" 304 -
+2026-03-26 18:17:00,474 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 18:17:00] "[36mGET /static/bills.js HTTP/1.1[0m" 304 -
+2026-03-26 18:17:00,498 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 18:17:00] "[36mGET /static/customer-docs.js HTTP/1.1[0m" 304 -
+2026-03-26 18:17:00,505 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 18:17:00] "[36mGET /static/google_sync.js HTTP/1.1[0m" 304 -
+2026-03-26 18:17:01,049 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 18:17:01,051 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 18:17:02,061 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 18:17:03,491 - config - INFO - [PERF] parallel fetch (rooms+totals+payments): 2.435s, 298 payment docs
+2026-03-26 18:17:03,493 - config - INFO - [PERF] /get_data TOTAL: 2.437s
+2026-03-26 18:17:03,499 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 18:17:03] "GET /get_data HTTP/1.1" 200 -
+2026-03-26 18:17:03,662 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 18:17:03] "GET /get_pending_settlements HTTP/1.1" 200 -
+2026-03-26 18:17:06,090 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 18:17:06] "GET /get_transaction_metadata HTTP/1.1" 200 -
+2026-03-26 18:17:11,156 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 18:17:12,338 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 18:17:12] "GET /get_bookings HTTP/1.1" 200 -
+2026-03-26 18:17:13,300 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 18:17:14,419 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 18:17:14] "GET /get_bookings HTTP/1.1" 200 -
+2026-03-26 18:17:16,023 - config - WARNING - API_KEY env var not set — all routes are unprotected
+2026-03-26 18:17:16,348 - werkzeug - INFO - 127.0.0.1 - - [26/Mar/2026 18:17:16] "GET /get_ota_settlements HTTP/1.1" 200 -

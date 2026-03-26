@@ -36,6 +36,21 @@ document.addEventListener("DOMContentLoaded", function () {
     newBookingBtn.addEventListener("click", showNewBookingModal);
   }
 
+  // MMT Settlements Button
+  const mmtSettlementsBtn = document.getElementById("mmt-settlements-btn");
+  if (mmtSettlementsBtn) {
+    mmtSettlementsBtn.addEventListener("click", showMmtSettlementsModal);
+  }
+
+  // Close MMT Settlements Modal
+  const closeMmtSettlementsBtn = document.getElementById("close-mmt-settlements-btn");
+  if (closeMmtSettlementsBtn) {
+    closeMmtSettlementsBtn.addEventListener("click", function () {
+      const modal = document.getElementById("mmt-settlements-modal");
+      if (modal) modal.classList.remove("show");
+    });
+  }
+
   // Initialize Booking Form
   initializeBookingForm();
 
@@ -106,12 +121,22 @@ function initializeBookingForm() {
 
   function handleBookingSourceChange() {
     const source = bookingSourceSelect ? bookingSourceSelect.value : "normal";
+    const totalAmountInput = document.getElementById("booking-total-amount");
+    const otaTotalInput = document.getElementById("booking-ota-total");
     if (source === "mmt") {
       if (normalPaymentFields) normalPaymentFields.style.display = "none";
       if (mmtFields) mmtFields.style.display = "block";
+      // Remove required from hidden field so browser doesn't block submission silently
+      if (totalAmountInput) totalAmountInput.removeAttribute("required");
+      // Add required to visible MMT field
+      if (otaTotalInput) otaTotalInput.setAttribute("required", "");
     } else {
       if (normalPaymentFields) normalPaymentFields.style.display = "block";
       if (mmtFields) mmtFields.style.display = "none";
+      // Restore required on total amount for normal/booking.com
+      if (totalAmountInput) totalAmountInput.setAttribute("required", "");
+      // Remove required from hidden MMT field
+      if (otaTotalInput) otaTotalInput.removeAttribute("required");
     }
   }
 
@@ -633,68 +658,69 @@ function showBookingDetails(bookingId) {
   // Set booking details
   document.getElementById("details-booking-id").textContent = bookingId;
   document.getElementById("details-room-number").textContent = booking.room;
-  document.getElementById("details-guest-name").textContent =
-    booking.guest_name;
-  document.getElementById("details-guest-mobile").textContent =
-    booking.guest_mobile;
-  document.getElementById("details-guest-mobile-link").href =
-    `tel:${booking.guest_mobile}`;
+  document.getElementById("details-guest-name").textContent = booking.guest_name;
+  document.getElementById("details-guest-mobile").textContent = booking.guest_mobile;
+  document.getElementById("details-guest-mobile-link").href = `tel:${booking.guest_mobile}`;
   document.getElementById("details-check-in").textContent = formattedCheckIn;
-  document.getElementById("details-check-in-time").textContent = formattedTime;
+  document.getElementById("details-check-in-time").textContent = `Expected at ${formattedTime}`;
   document.getElementById("details-check-out").textContent = formattedCheckOut;
   document.getElementById("details-booking-date").textContent = bookingDate;
-  document.getElementById("details-nights").textContent = `${nights} night${
-    nights !== 1 ? "s" : ""
-  }`;
-  document.getElementById("details-guests").textContent =
-    booking.guest_count || 1;
-  document.getElementById("details-total-amount").textContent =
-    `₹${booking.total_amount}`;
-  document.getElementById("details-paid-amount").textContent =
-    `₹${booking.paid_amount}`;
-  document.getElementById("details-balance").textContent =
-    `₹${booking.balance}`;
-  document.getElementById("details-status").textContent =
-    booking.status.charAt(0).toUpperCase() + booking.status.slice(1);
-  document.getElementById("details-notes").textContent =
-    booking.notes || "No notes";
+  document.getElementById("details-nights").textContent = `${nights} night${nights !== 1 ? "s" : ""}`;
+  document.getElementById("details-guests").textContent = `${booking.guest_count || 1} guest${(booking.guest_count || 1) !== 1 ? "s" : ""}`;
+  document.getElementById("details-notes").textContent = booking.notes || "—";
 
-  // Set status class
+  // Status badge
   const statusEl = document.getElementById("details-status");
-  statusEl.className = ""; // Clear previous classes
-  statusEl.classList.add(`status-${booking.status}`);
+  if (statusEl) {
+    const statusLabels = { confirmed: "Confirmed", checked_in: "Checked In", cancelled: "Cancelled" };
+    const statusColors = { confirmed: "var(--primary)", checked_in: "var(--success)", cancelled: "var(--danger)" };
+    const s = booking.status;
+    statusEl.innerHTML = `<span style="background:${statusColors[s] || "var(--gray)"};color:#fff;font-size:0.7rem;font-weight:600;padding:2px 8px;border-radius:12px;">${statusLabels[s] || s}</span>`;
+  }
 
   // Display photo if available
   const photoContainer = document.getElementById("details-photo-container");
   if (photoContainer) {
     if (booking.photo_path) {
       const photoImg = document.getElementById("details-guest-photo");
-      if (photoImg) {
-        photoImg.src = booking.photo_path;
-        photoContainer.style.display = "block";
-      }
+      if (photoImg) photoImg.src = booking.photo_path;
+      photoContainer.style.display = "block";
     } else {
       photoContainer.style.display = "none";
     }
   }
 
+  // For MMT: hide the payment section (no money collected from guest)
+  const isMmt = booking.booking_source === "mmt";
+  const paymentSection = document.getElementById("details-payment-section");
+  if (paymentSection) paymentSection.style.display = isMmt ? "none" : "";
+
+  // Normal bookings: populate payment fields
+  if (!isMmt) {
+    document.getElementById("details-total-amount").textContent = `₹${booking.total_amount}`;
+    document.getElementById("details-paid-amount").textContent = `₹${booking.paid_amount}`;
+    document.getElementById("details-balance").textContent = `₹${booking.balance}`;
+  }
+
   // OTA Section
   const otaSection = document.getElementById("details-ota-section");
   if (otaSection) {
-    if (booking.booking_source === "mmt") {
+    if (isMmt) {
       otaSection.style.display = "block";
+      const srcEl = document.getElementById("details-booking-source");
+      if (srcEl) srcEl.textContent = "MMT Prepaid";
       const otaTotalEl = document.getElementById("details-ota-total");
-      const otaCommEl = document.getElementById("details-ota-commission");
-      const otaGstEl = document.getElementById("details-ota-gst");
-      const netRecvEl = document.getElementById("details-net-receivable");
+      const otaCommEl  = document.getElementById("details-ota-commission");
+      const netRecvEl  = document.getElementById("details-net-receivable");
       const settlStatusEl = document.getElementById("details-settlement-status");
       if (otaTotalEl) otaTotalEl.textContent = "₹" + (booking.ota_total_amount || 0);
-      if (otaCommEl) otaCommEl.textContent = "₹" + (booking.ota_commission || 0);
-      if (otaGstEl) otaGstEl.textContent = "₹" + (booking.ota_commission_gst || 0);
-      if (netRecvEl) netRecvEl.textContent = "₹" + (booking.net_receivable || 0);
+      if (otaCommEl)  otaCommEl.textContent  = "₹" + ((booking.ota_commission || 0) + (booking.ota_commission_gst || 0));
+      if (netRecvEl)  netRecvEl.textContent  = "₹" + (booking.net_receivable || 0);
       if (settlStatusEl) {
-        settlStatusEl.textContent = booking.settlement_status === "received" ? "Received" : "Pending";
-        settlStatusEl.className = booking.settlement_status === "received" ? "badge badge-success" : "badge badge-warning";
+        const received = booking.settlement_status === "received";
+        settlStatusEl.innerHTML = received
+          ? '<span style="background:var(--success);color:#fff;font-size:0.7rem;font-weight:600;padding:2px 8px;border-radius:12px;">✓ Received</span>'
+          : '<span style="background:#f39c12;color:#fff;font-size:0.7rem;font-weight:600;padding:2px 8px;border-radius:12px;">Pending</span>';
       }
     } else {
       otaSection.style.display = "none";
@@ -704,7 +730,7 @@ function showBookingDetails(bookingId) {
   // Mark Settlement Button
   const markSettlementBtn = document.getElementById("mark-settlement-btn");
   if (markSettlementBtn) {
-    const showSettle = booking.booking_source === "mmt" && booking.settlement_status !== "received";
+    const showSettle = isMmt && booking.settlement_status !== "received";
     markSettlementBtn.style.display = showSettle ? "block" : "none";
     if (showSettle) {
       markSettlementBtn.onclick = () => {
@@ -734,9 +760,10 @@ function showBookingDetails(bookingId) {
   if (cancelBtn)
     cancelBtn.style.display = booking.status === "confirmed" ? "block" : "none";
   if (addPaymentBtn) {
-    // Show add payment button for confirmed bookings with remaining balance
+    // MMT is prepaid — no payment to collect from guest
     addPaymentBtn.style.display =
-      booking.status === "confirmed" && booking.balance > 0 ? "block" : "none";
+      booking.status === "confirmed" && booking.balance > 0 && !isMmt
+        ? "block" : "none";
   }
 
   // Set up button event listeners
@@ -1191,34 +1218,70 @@ function showConvertBookingModal(bookingId) {
   document.getElementById("convert-check-in").textContent =
     `${formattedDate} at ${formattedTime}`;
 
-  document.getElementById("convert-total-amount").textContent =
-    `₹${booking.total_amount}`;
-  document.getElementById("convert-paid-amount").textContent =
-    `₹${booking.paid_amount}`;
-  document.getElementById("convert-balance").textContent =
-    `₹${booking.balance}`;
+  const isMmtBooking = booking.booking_source === "mmt";
 
-  // Set remaining payment input to the balance amount
-  const remainingPayment = document.getElementById("convert-remaining-payment");
-  if (remainingPayment) {
-    remainingPayment.max = booking.balance;
-    remainingPayment.value = booking.balance > 0 ? booking.balance : 0;
+  // Payment summary rows
+  const totalRow = document.getElementById("convert-total-amount")?.closest(".summary-row");
+  const paidRow = document.getElementById("convert-paid-amount")?.closest(".summary-row");
+  const balanceRow = document.getElementById("convert-balance")?.closest(".summary-row");
+  const paymentAmountGroup = document.getElementById("convert-remaining-payment")?.closest(".form-group");
+  const paymentMethodGroup = document.querySelector("#convert-booking-form .payment-options")?.closest(".form-group");
+
+  // MMT info banner (create once, reuse)
+  let mmtInfoBanner = document.getElementById("convert-mmt-info");
+  if (!mmtInfoBanner) {
+    mmtInfoBanner = document.createElement("div");
+    mmtInfoBanner.id = "convert-mmt-info";
+    mmtInfoBanner.style.cssText = "background:rgba(99,179,237,0.12);border:1px solid rgba(99,179,237,0.3);border-radius:8px;padding:0.6rem 0.9rem;margin-top:1rem;color:#63b3ed;font-size:0.85rem;text-align:center;";
+    mmtInfoBanner.innerHTML = '<i class="fas fa-info-circle"></i> MMT Prepaid — No payment to collect. Settlement will be received from MMT directly.';
+    document.querySelector("#convert-booking-form .summary-card")?.after(mmtInfoBanner);
   }
 
-  // Reset payment method to cash
-  document
-    .querySelectorAll("#convert-booking-form .payment-btn")
-    .forEach((btn) => {
-      btn.classList.remove("active");
-    });
+  if (isMmtBooking) {
+    // Hide payment-related rows and inputs for MMT
+    if (totalRow) totalRow.style.display = "none";
+    if (paidRow) paidRow.style.display = "none";
+    if (balanceRow) balanceRow.style.display = "none";
+    if (paymentAmountGroup) paymentAmountGroup.style.display = "none";
+    if (paymentMethodGroup) paymentMethodGroup.style.display = "none";
+    mmtInfoBanner.style.display = "block";
 
-  const cashBtn = document.querySelector(
-    "#convert-booking-form .payment-btn.cash",
-  );
-  if (cashBtn) cashBtn.classList.add("active");
+    // Force zero payment for MMT
+    const remainingPayment = document.getElementById("convert-remaining-payment");
+    if (remainingPayment) remainingPayment.value = 0;
+    const paymentMethodInput = document.getElementById("convert-payment-method");
+    if (paymentMethodInput) paymentMethodInput.value = "ota";
+  } else {
+    // Normal booking — show all payment fields
+    if (totalRow) totalRow.style.display = "";
+    if (paidRow) paidRow.style.display = "";
+    if (balanceRow) balanceRow.style.display = "";
+    if (paymentAmountGroup) paymentAmountGroup.style.display = "";
+    if (paymentMethodGroup) paymentMethodGroup.style.display = "";
+    mmtInfoBanner.style.display = "none";
 
-  const paymentMethodInput = document.getElementById("convert-payment-method");
-  if (paymentMethodInput) paymentMethodInput.value = "cash";
+    document.getElementById("convert-total-amount").textContent = `₹${booking.total_amount}`;
+    document.getElementById("convert-paid-amount").textContent = `₹${booking.paid_amount}`;
+    document.getElementById("convert-balance").textContent = `₹${booking.balance}`;
+
+    // Set remaining payment input to the balance amount
+    const remainingPayment = document.getElementById("convert-remaining-payment");
+    if (remainingPayment) {
+      remainingPayment.max = booking.balance;
+      remainingPayment.value = booking.balance > 0 ? booking.balance : 0;
+    }
+
+    // Reset payment method to cash
+    document
+      .querySelectorAll("#convert-booking-form .payment-btn")
+      .forEach((btn) => { btn.classList.remove("active"); });
+
+    const cashBtn = document.querySelector("#convert-booking-form .payment-btn.cash");
+    if (cashBtn) cashBtn.classList.add("active");
+
+    const paymentMethodInput = document.getElementById("convert-payment-method");
+    if (paymentMethodInput) paymentMethodInput.value = "cash";
+  }
 
   // Show modal
   modal.classList.add("show");
@@ -2791,5 +2854,77 @@ Thank you for choosing us! 🙏`;
   } catch (error) {
     console.error("Error sending WhatsApp confirmation:", error);
     showNotification("Error preparing message: " + error.message, "error");
+  }
+}
+
+// ─── MMT Settlements View ───────────────────────────────────────────────────
+
+async function showMmtSettlementsModal() {
+  const modal = document.getElementById("mmt-settlements-modal");
+  const listEl = document.getElementById("mmt-settlements-list");
+  if (!modal || !listEl) return;
+
+  // Show modal with loading state
+  listEl.innerHTML = `<div class="loading-indicator"><span class="loader"></span><p>Loading settlements...</p></div>`;
+  modal.classList.add("show");
+
+  try {
+    const response = await apiFetch("/get_ota_settlements");
+    const data = await response.json();
+
+    if (!data.success) {
+      listEl.innerHTML = `<p style="color:var(--danger);text-align:center;padding:1rem;">${data.message || "Failed to load settlements."}</p>`;
+      return;
+    }
+
+    const settlements = data.settlements || [];
+
+    if (settlements.length === 0) {
+      listEl.innerHTML = `
+        <div style="text-align:center;padding:2rem;color:var(--text-secondary);">
+          <i class="fas fa-university" style="font-size:2rem;margin-bottom:0.75rem;opacity:0.4;display:block;"></i>
+          No MMT settlements recorded yet.<br>
+          <small>Use "Mark Settlement" in a booking's details once MMT pays you.</small>
+        </div>`;
+      return;
+    }
+
+    // Calculate totals
+    const totalSettled = settlements.reduce((sum, s) => sum + (s.settlement_amount || 0), 0);
+
+    let html = `
+      <div style="display:flex;justify-content:space-between;align-items:center;
+                  background:rgba(12,111,205,0.07);border:1px solid rgba(12,111,205,0.2);
+                  border-radius:8px;padding:0.6rem 0.85rem;margin-bottom:0.75rem;font-size:0.85rem;">
+        <span style="color:var(--text-secondary);">${settlements.length} settlement${settlements.length !== 1 ? "s" : ""}</span>
+        <span style="font-weight:600;color:#0c6fcd;">Total: ₹${totalSettled.toLocaleString("en-IN")}</span>
+      </div>`;
+
+    settlements.forEach((s) => {
+      const guestName = s.guest_name || "—";
+      const room = s.room || "—";
+      const amount = s.settlement_amount != null ? `₹${s.settlement_amount.toLocaleString("en-IN")}` : "—";
+      const date = s.settlement_date || s.created_at || "—";
+      const bookingId = s.booking_id || "—";
+
+      html += `
+        <div style="border:1px solid var(--border);border-radius:8px;padding:0.65rem 0.85rem;
+                    margin-bottom:0.5rem;background:var(--surface);">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.3rem;">
+            <span style="font-weight:600;">${guestName}</span>
+            <span style="font-weight:700;color:var(--success);">${amount}</span>
+          </div>
+          <div style="display:flex;gap:1rem;font-size:0.78rem;color:var(--text-secondary);">
+            <span><i class="fas fa-door-open" style="margin-right:3px;"></i>Room ${room}</span>
+            <span><i class="fas fa-calendar" style="margin-right:3px;"></i>${date}</span>
+            <span style="margin-left:auto;font-family:monospace;font-size:0.72rem;">${bookingId.slice(-8)}</span>
+          </div>
+        </div>`;
+    });
+
+    listEl.innerHTML = html;
+  } catch (error) {
+    console.error("Error loading MMT settlements:", error);
+    listEl.innerHTML = `<p style="color:var(--danger);text-align:center;padding:1rem;">Error loading settlements: ${error.message}</p>`;
   }
 }

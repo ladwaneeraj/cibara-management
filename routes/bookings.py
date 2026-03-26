@@ -293,8 +293,8 @@ def convert_booking_to_checkin():
         current_datetime = datetime.now(IST)
         
         try:
-            expected_datetime = datetime.strptime(expected_datetime_str, "%Y-%m-%d %H:%M")
-            
+            expected_datetime = IST.localize(datetime.strptime(expected_datetime_str, "%Y-%m-%d %H:%M"))
+
             if current_datetime < expected_datetime:
                 checkin_datetime_str = expected_datetime_str
                 logger.info(f"Guest arriving early. Using expected check-in time: {expected_datetime_str}")

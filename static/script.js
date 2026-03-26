@@ -381,6 +381,7 @@ function renderRooms() {
       const isPremiumACRoom = roomNum >= 202 && roomNum <= 205;
       const isAcRoom = isPremiumACRoom && info.guest.isAC === true;
 
+      const isMmtRoom = info.guest.payment === "ota";
       roomContent += `
         <div class="room-number-row">
           ${
@@ -393,7 +394,9 @@ function renderRooms() {
             <i class="fas fa-user" style="font-size: 0.7rem; margin-right: 2px;"></i>${guestCount}
           </span>
         </div>
-        <div class="guest-name">${info.guest.name}</div>
+        <div class="guest-name">
+          ${isMmtRoom ? '<span style="background:#0c6fcd;color:#fff;font-size:0.6rem;font-weight:700;padding:1px 5px;border-radius:4px;margin-right:4px;letter-spacing:0.03em;vertical-align:middle;">MMT</span>' : ''}${info.guest.name}
+        </div>
       `;
 
       const renewalStatus = getRoomRenewalStatus(info);
@@ -430,7 +433,7 @@ function renderRooms() {
         `;
       }
 
-      if (info.balance > 0) {
+      if (info.balance > 0 && !isMmtRoom) {
         roomContent += `<div class="badge" style="background-color:#ff9191;">₹${info.balance}</div>`;
       } else if (info.balance < 0) {
         roomContent += `<div class="badge" style="background-color: var(--success);">₹${Math.abs(
@@ -1079,7 +1082,14 @@ function updateCheckoutModal(roomNumber) {
 
   const checkoutGuestName = document.getElementById("checkout-guest-name");
   if (checkoutGuestName) {
-    checkoutGuestName.textContent = roomInfo.guest.name;
+    const isMmtCheckout = roomInfo.guest && roomInfo.guest.payment === "ota";
+    if (isMmtCheckout) {
+      checkoutGuestName.innerHTML =
+        '<span style="background:#0c6fcd;color:#fff;font-size:0.65rem;font-weight:700;padding:1px 6px;border-radius:4px;margin-right:5px;vertical-align:middle;letter-spacing:0.03em;">MMT</span>' +
+        roomInfo.guest.name;
+    } else {
+      checkoutGuestName.textContent = roomInfo.guest.name;
+    }
   }
 
   const checkoutMobileNumber = document.getElementById(
@@ -1106,13 +1116,21 @@ function updateCheckoutModal(roomNumber) {
 
   // Update balance display with color coding
   const balanceEl = document.getElementById("checkout-balance");
+  const balanceRow = balanceEl ? balanceEl.closest(".detail-row") : null;
+  const isOtaRoom = roomInfo.guest && roomInfo.guest.payment === "ota";
   if (balanceEl) {
-    if (roomInfo.balance < 0) {
-      balanceEl.textContent = "₹" + Math.abs(roomInfo.balance) + " (refund)";
-      balanceEl.classList.add("negative-balance");
+    if (isOtaRoom) {
+      // MMT prepaid — hide balance row entirely
+      if (balanceRow) balanceRow.style.display = "none";
     } else {
-      balanceEl.textContent = "₹" + roomInfo.balance;
-      balanceEl.classList.remove("negative-balance");
+      if (balanceRow) balanceRow.style.display = "";
+      if (roomInfo.balance < 0) {
+        balanceEl.textContent = "₹" + Math.abs(roomInfo.balance) + " (refund)";
+        balanceEl.classList.add("negative-balance");
+      } else {
+        balanceEl.textContent = "₹" + roomInfo.balance;
+        balanceEl.classList.remove("negative-balance");
+      }
     }
   }
 
@@ -2033,7 +2051,20 @@ function updatePaymentOrRefundUI(roomNumber) {
     return;
   }
 
-  const balance = rooms[roomNumber].balance;
+  const roomInfo = rooms[roomNumber];
+  const balance = roomInfo.balance;
+
+  // MMT/OTA bookings: no payment to collect at hotel — settlement comes from OTA
+  const isOtaGuest = roomInfo.guest && roomInfo.guest.payment === "ota";
+  if (isOtaGuest) {
+    paymentOrRefundSection.innerHTML = `
+      <div style="background:rgba(99,179,237,0.12);border:1px solid rgba(99,179,237,0.3);
+                  border-radius:8px;padding:0.75rem 1rem;margin-top:1rem;
+                  color:#63b3ed;font-size:0.85rem;text-align:center;">
+        <i class="fas fa-info-circle"></i>&nbsp;MMT Prepaid — Settlement will be received from MMT directly.
+      </div>`;
+    return;
+  }
 
   // Clear previous content
   paymentOrRefundSection.innerHTML = "";

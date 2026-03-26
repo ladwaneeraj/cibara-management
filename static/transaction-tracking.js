@@ -195,48 +195,50 @@ class TransactionLogManager {
     this.transactionTracker = transactionTracker;
   }
 
-  renderEnhancedLogs() {
+  renderEnhancedLogs(fromDate, toDate, typeFilter, logsOverride) {
     const transactionLog = document.getElementById("transaction-log");
     if (!transactionLog) {
       console.log("Transaction log element not found");
       return;
     }
 
-    const today = new Date();
-    const yesterday = new Date(today);
-    yesterday.setDate(yesterday.getDate() - 1);
-    const dayBeforeYesterday = new Date(today);
-    dayBeforeYesterday.setDate(dayBeforeYesterday.getDate() - 2);
+    // Default: last 3 days if no range supplied
+    const todayStr = new Date().toISOString().split("T")[0];
+    if (!fromDate || !toDate) {
+      toDate = todayStr;
+      const d = new Date();
+      d.setDate(d.getDate() - 2);
+      fromDate = d.toISOString().split("T")[0];
+    }
+    typeFilter = typeFilter || "all";
 
-    const todayStr = today.toISOString().split("T")[0];
-    const yesterdayStr = yesterday.toISOString().split("T")[0];
-    const dayBeforeYesterdayStr = dayBeforeYesterday
-      .toISOString()
-      .split("T")[0];
+    // Use override logs (from server fetch) or fall back to the cached global
+    const src = logsOverride || logs;
+    const inRange = (date) => date >= fromDate && date <= toDate;
 
-    const recentDates = [todayStr, yesterdayStr, dayBeforeYesterdayStr];
-
-    const recentCashLogs = (logs.cash || []).filter((log) =>
-      recentDates.includes(log.date)
-    );
-    const recentOnlineLogs = (logs.online || []).filter((log) =>
-      recentDates.includes(log.date)
-    );
-    const recentRefundLogs = (logs.refunds || []).filter((log) =>
-      recentDates.includes(log.date)
+    const recentCashLogs    = (src.cash    || []).filter((log) => inRange(log.date));
+    const recentOnlineLogs  = (src.online  || []).filter((log) => inRange(log.date));
+    const recentRefundLogs  = (src.refunds || []).filter((log) => inRange(log.date));
+    // For cached global logs, filter to transaction-type expenses only.
+    // For server-fetched logsOverride, expenses are already pre-filtered by the backend.
+    const recentExpenseLogs = (src.expenses || []).filter(
+      (log) => inRange(log.date) && (logsOverride || log.expense_type === "transaction")
     );
 
-    const expensesLogs = logs.expenses || [];
-    const recentExpenseLogs = expensesLogs.filter(
-      (log) =>
-        recentDates.includes(log.date) && log.expense_type === "transaction"
-    );
+    // Always compute analytics from the full unfiltered set for the date range
+    this._updateAnalyticsCards(recentCashLogs, recentOnlineLogs, recentRefundLogs, recentExpenseLogs);
+
+    // Apply type filter for the list only
+    let cashForList    = typeFilter === "all" || typeFilter === "cash"     ? recentCashLogs    : [];
+    let onlineForList  = typeFilter === "all" || typeFilter === "online"   ? recentOnlineLogs  : [];
+    let refundForList  = typeFilter === "all" || typeFilter === "refunds"  ? recentRefundLogs  : [];
+    let expenseForList = typeFilter === "all" || typeFilter === "expenses" ? recentExpenseLogs : [];
 
     const allRecentLogs = [
-      ...recentCashLogs.map((log) => ({ ...log, logType: "cash" })),
-      ...recentOnlineLogs.map((log) => ({ ...log, logType: "online" })),
-      ...recentRefundLogs.map((log) => ({ ...log, logType: "refunds" })),
-      ...recentExpenseLogs.map((log) => ({ ...log, logType: "expenses" })),
+      ...cashForList.map((log) => ({ ...log, logType: "cash" })),
+      ...onlineForList.map((log) => ({ ...log, logType: "online" })),
+      ...refundForList.map((log) => ({ ...log, logType: "refunds" })),
+      ...expenseForList.map((log) => ({ ...log, logType: "expenses" })),
     ].sort((a, b) => {
       if (a.date !== b.date) {
         return new Date(b.date) - new Date(a.date);
@@ -263,54 +265,50 @@ class TransactionLogManager {
       return serialB - serialA;
     });
 
-    const cashTotal = document.getElementById("cash-total");
-    const onlineTotal = document.getElementById("online-total");
-    const refundTotal = document.getElementById("refund-total");
-    const totalRevenue = document.getElementById("total-revenue");
-
-    if (cashTotal) cashTotal.textContent = "₹" + totals.cash;
-    if (onlineTotal) onlineTotal.textContent = "₹" + totals.online;
-    if (refundTotal) refundTotal.textContent = "₹" + (totals.refunds || 0);
-    if (totalRevenue)
-      totalRevenue.textContent =
-        "₹" + (totals.cash + totals.online - (totals.refunds || 0));
+    // Legacy totals DOM elements (kept for backward compat with other code that may read them)
+    const cashTotalEl = document.getElementById("cash-total");
+    const onlineTotalEl = document.getElementById("online-total");
+    if (cashTotalEl) cashTotalEl.textContent = "₹" + totals.cash;
+    if (onlineTotalEl) onlineTotalEl.textContent = "₹" + totals.online;
 
     if (allRecentLogs.length === 0) {
-      transactionLog.innerHTML = `<div class="empty-state" style="padding: 2rem;">
-        <i class="fas fa-receipt fa-3x"></i>
-        <p>No transactions in the past 3 days</p>
+      transactionLog.innerHTML = `<div class="empty-state" style="padding: 2rem; text-align:center;">
+        <i class="fas fa-receipt fa-3x" style="opacity:0.4;margin-bottom:1rem;display:block;"></i>
+        <p>No transactions in this period</p>
       </div>`;
       return;
     }
 
     const logsByDate = {};
     allRecentLogs.forEach((log) => {
-      if (!logsByDate[log.date]) {
-        logsByDate[log.date] = [];
-      }
+      if (!logsByDate[log.date]) logsByDate[log.date] = [];
       logsByDate[log.date].push(log);
     });
 
     let logsHTML = "";
 
+    const _today = new Date().toISOString().split("T")[0];
+    const _yesterday = (() => { const d = new Date(); d.setDate(d.getDate() - 1); return d.toISOString().split("T")[0]; })();
+
     function formatDate(dateStr) {
-      const date = new Date(dateStr);
+      const date = new Date(dateStr + "T00:00:00");
       const options = { weekday: "long", month: "short", day: "numeric" };
-      return date.toLocaleDateString("en-US", options);
+      return date.toLocaleDateString("en-IN", options);
     }
 
     Object.keys(logsByDate)
       .sort((a, b) => new Date(b) - new Date(a))
       .forEach((date) => {
         let dateDisplay = formatDate(date);
+        if (date === _today) dateDisplay = "Today — " + dateDisplay;
+        else if (date === _yesterday) dateDisplay = "Yesterday — " + dateDisplay;
 
-        if (date === todayStr) {
-          dateDisplay = "Today (" + dateDisplay + ")";
-        } else if (date === yesterdayStr) {
-          dateDisplay = "Yesterday (" + dateDisplay + ")";
-        }
+        const dayTotal = logsByDate[date].reduce((sum, l) => {
+          if (l.logType === "refunds" || l.logType === "expenses") return sum;
+          return sum + (l.amount || 0);
+        }, 0);
 
-        logsHTML += `<div class="log-date-header">${dateDisplay}</div>`;
+        logsHTML += `<div class="log-date-header">${dateDisplay}<span class="log-date-total">₹${dayTotal.toLocaleString("en-IN")}</span></div>`;
 
         logsByDate[date].forEach((log) => {
           logsHTML += this.renderEnhancedLogItem(log, log.logType);
@@ -318,6 +316,22 @@ class TransactionLogManager {
       });
 
     transactionLog.innerHTML = logsHTML;
+  }
+
+  _updateAnalyticsCards(cashLogs, onlineLogs, refundLogs, expenseLogs) {
+    const cashSum = cashLogs.reduce((s, l) => s + (l.amount || 0), 0);
+    const upiSum = onlineLogs.reduce((s, l) => s + (l.amount || 0), 0);
+    const refundSum = refundLogs.reduce((s, l) => s + (l.amount || 0), 0);
+    const expenseSum = expenseLogs.reduce((s, l) => s + (l.amount || 0), 0);
+    const totalIn = cashSum + upiSum - refundSum;
+
+    const fmt = (n) => "₹" + n.toLocaleString("en-IN");
+    const set = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
+
+    set("txn-card-cash", fmt(cashSum));
+    set("txn-card-upi", fmt(upiSum));
+    set("txn-card-total", fmt(totalIn));
+    set("txn-card-expense", fmt(expenseSum));
   }
 
   renderEnhancedLogItem(log, logType) {
@@ -1040,28 +1054,279 @@ class TransactionFilterManager {
   }
 }
 
-let transactionFilterManagerInstance;
+// ─── Filter state ────────────────────────────────────────────────────────────
+let txnActiveDateRange = { fromDate: null, toDate: null };
+let txnActiveType    = "all";   // "all" | "cash" | "online" | "refunds" | "expenses"
+let txnDateUnlocked  = false;   // true after manager password verified
+let txnExtendedLogs  = null;    // cached logs from /get_transactions_range for current range
+
+function _getDateOffset(days) {
+  const d = new Date();
+  d.setDate(d.getDate() - days);
+  return d.toISOString().split("T")[0];
+}
+
+// Is fromDate within the last 3 days already cached by /get_data?
+function _isWithinCache(fromDate) {
+  const cutoff = _getDateOffset(3); // 3 days ago
+  return fromDate >= cutoff;
+}
+
+// Render using either cached logs or extended logs fetched from server.
+// logsObj is passed as the 4th arg so renderEnhancedLogs uses it directly
+// instead of reading the `let logs` global (window.logs swap doesn't work with let).
+function _renderWithLogs(fromDate, toDate, logsObj) {
+  if (transactionLogManager) {
+    transactionLogManager.renderEnhancedLogs(fromDate, toDate, txnActiveType, logsObj || null);
+  }
+}
+
+async function _triggerRender(fromDate, toDate) {
+  txnActiveDateRange = { fromDate, toDate };
+  txnExtendedLogs    = null;
+
+  // If range is within the 3-day cache, use it directly — no extra network call
+  if (_isWithinCache(fromDate)) {
+    _renderWithLogs(fromDate, toDate, null);
+    return;
+  }
+
+  // Extended range — fetch from server
+  const logEl = document.getElementById("transaction-log");
+  if (logEl) logEl.innerHTML = `<div class="loading-indicator"><span class="loader"></span><p>Loading transactions…</p></div>`;
+
+  try {
+    const res  = await apiFetch("/get_transactions_range", {
+      method:  "POST",
+      headers: { "Content-Type": "application/json" },
+      body:    JSON.stringify({ from_date: fromDate, to_date: toDate }),
+    });
+    const data = await res.json();
+    if (data.success && data.logs) {
+      txnExtendedLogs = data.logs;
+      _renderWithLogs(fromDate, toDate, txnExtendedLogs);
+    } else {
+      if (logEl) logEl.innerHTML = `<div class="empty-state" style="padding:2rem;text-align:center;"><i class="fas fa-exclamation-triangle fa-2x" style="color:var(--warning);margin-bottom:0.75rem;display:block;"></i><p>${data.message || "Failed to load data."}</p></div>`;
+    }
+  } catch (e) {
+    if (logEl) logEl.innerHTML = `<div class="empty-state" style="padding:2rem;text-align:center;"><p style="color:var(--danger);">Network error: ${e.message}</p></div>`;
+  }
+}
+
+// ── Date picker lock / unlock ─────────────────────────────────────────────────
+function _setDatePickerUnlocked() {
+  txnDateUnlocked = true;
+  const rangeEl  = document.getElementById("txn-date-range");
+  const icon     = document.getElementById("txn-date-lock-icon");
+  const lockBtn  = document.getElementById("txn-relock-btn");
+
+  if (rangeEl) { rangeEl.classList.remove("txn-date-locked"); rangeEl.placeholder = "Pick date range"; }
+  const altInput = window._txnPicker && window._txnPicker.altInput;
+  if (altInput)  { altInput.classList.remove("txn-date-locked"); altInput.placeholder = "Pick date range"; altInput.style.cursor = "pointer"; }
+  if (icon)      icon.innerHTML = '<i class="fas fa-lock-open" style="color:var(--success);font-size:0.75rem;"></i>';
+  if (lockBtn)   lockBtn.style.display = "flex"; // show re-lock button
+}
+
+function _relockDatePicker() {
+  txnDateUnlocked = false;
+  txnExtendedLogs = null;
+  const rangeEl  = document.getElementById("txn-date-range");
+  const icon     = document.getElementById("txn-date-lock-icon");
+  const lockBtn  = document.getElementById("txn-relock-btn");
+
+  if (rangeEl) { rangeEl.classList.add("txn-date-locked"); rangeEl.placeholder = "🔒 Custom range"; }
+  const altInput = window._txnPicker && window._txnPicker.altInput;
+  if (altInput)  { altInput.classList.add("txn-date-locked"); altInput.placeholder = "🔒 Custom range"; }
+  if (icon)      icon.innerHTML = '<i class="fas fa-lock" style="font-size:0.75rem;"></i>';
+  if (lockBtn)   lockBtn.style.display = "none";
+
+  // Snap back to last 3 days
+  const today = new Date().toISOString().split("T")[0];
+  const from  = _getDateOffset(2);
+  if (window._txnPicker) window._txnPicker.setDate([from, today]);
+  document.querySelectorAll(".txn-quick-btn").forEach((b) => b.classList.remove("active"));
+  const last3Btn = document.querySelector('.txn-quick-btn[data-range="3"]');
+  if (last3Btn) last3Btn.classList.add("active");
+  _triggerRender(from, today);
+}
+
+function _openTxnPasswordModal() {
+  const modal = document.getElementById("txn-date-pwd-modal");
+  const input = document.getElementById("txn-pwd-input");
+  const err   = document.getElementById("txn-pwd-error");
+  if (modal) modal.classList.add("show");
+  if (err)   { err.style.display = "none"; err.textContent = ""; }
+  if (input) { input.value = ""; setTimeout(() => input.focus(), 120); }
+}
+
+function _closeTxnPasswordModal() {
+  const modal = document.getElementById("txn-date-pwd-modal");
+  if (modal) modal.classList.remove("show");
+}
+
+async function _submitTxnPassword() {
+  const input  = document.getElementById("txn-pwd-input");
+  const err    = document.getElementById("txn-pwd-error");
+  const btn    = document.getElementById("txn-pwd-submit-btn");
+  const pass   = input ? input.value.trim() : "";
+
+  if (!pass) {
+    if (err) { err.textContent = "Please enter the password."; err.style.display = "block"; }
+    return;
+  }
+
+  if (btn) { btn.disabled = true; btn.textContent = "Verifying…"; }
+  if (err) err.style.display = "none";
+
+  try {
+    const res = await apiFetch("/verify_manager_password", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ password: pass }),
+    });
+
+    if (res.status === 403) {
+      if (err) { err.textContent = "Incorrect password. Try again."; err.style.display = "block"; }
+      if (input) { input.value = ""; input.focus(); }
+      return;
+    }
+
+    const data = await res.json();
+    if (!data.success) {
+      if (err) { err.textContent = data.message || "Incorrect password."; err.style.display = "block"; }
+      return;
+    }
+
+    // Password correct — unlock the date picker
+    _closeTxnPasswordModal();
+    _setDatePickerUnlocked();
+    // Open flatpickr immediately after unlock
+    if (window._txnPicker) window._txnPicker.open();
+
+  } catch (e) {
+    if (err) { err.textContent = "Network error. Please try again."; err.style.display = "block"; }
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = "Unlock"; }
+  }
+}
+
+function initTxnDateFilter() {
+  const todayStr    = new Date().toISOString().split("T")[0];
+  const defaultFrom = todayStr; // today only
+
+  // ── flatpickr — initialised but won't open until unlocked ─────────────────
+  const rangeEl = document.getElementById("txn-date-range");
+  if (rangeEl && window.flatpickr) {
+    window._txnPicker = flatpickr(rangeEl, {
+      mode: "range",
+      dateFormat: "Y-m-d",
+      altInput: true,
+      altFormat: "d M Y",
+      defaultDate: [todayStr, todayStr],
+      maxDate: todayStr,
+      disableMobile: true,
+      onReady: function (_d, _s, fp) {
+        // Keep the flatpickr-generated altInput also locked initially
+        if (fp.altInput) {
+          fp.altInput.readOnly = true;
+          fp.altInput.style.cursor = "pointer";
+        }
+      },
+      onChange: function (selectedDates) {
+        if (selectedDates.length === 2) {
+          const from = selectedDates[0].toISOString().split("T")[0];
+          const to   = selectedDates[1].toISOString().split("T")[0];
+          document.querySelectorAll(".txn-quick-btn").forEach((b) => b.classList.remove("active"));
+          _triggerRender(from, to);
+        }
+      }
+    });
+
+    // Intercept clicks on the altInput — show password modal if locked
+    setTimeout(() => {
+      const altInput = rangeEl._flatpickr && rangeEl._flatpickr.altInput;
+      const clickTarget = altInput || rangeEl;
+      const lockWrap = document.getElementById("txn-date-lock-wrap");
+
+      function handlePickerClick(e) {
+        if (!txnDateUnlocked) {
+          e.preventDefault();
+          e.stopPropagation();
+          if (window._txnPicker) window._txnPicker.close();
+          _openTxnPasswordModal();
+        }
+      }
+
+      clickTarget.addEventListener("click", handlePickerClick, true);
+      if (lockWrap) {
+        lockWrap.addEventListener("click", function(e) {
+          if (!txnDateUnlocked) handlePickerClick(e);
+        });
+      }
+    }, 300);
+  }
+
+  // ── Quick buttons ─────────────────────────────────────────────────────────
+  document.querySelectorAll(".txn-quick-btn").forEach((btn) => {
+    btn.addEventListener("click", function () {
+      document.querySelectorAll(".txn-quick-btn").forEach((b) => b.classList.remove("active"));
+      this.classList.add("active");
+
+      const range = this.dataset.range;
+      const today = new Date().toISOString().split("T")[0];
+      const from  = range === "today" ? today : _getDateOffset(parseInt(range, 10) - 1);
+      if (window._txnPicker) window._txnPicker.setDate([from, today]);
+      _triggerRender(from, today);
+    });
+  });
+
+  // ── Type filter buttons ───────────────────────────────────────────────────
+  document.querySelectorAll(".txn-type-btn").forEach((btn) => {
+    btn.addEventListener("click", function () {
+      document.querySelectorAll(".txn-type-btn").forEach((b) => b.classList.remove("active"));
+      this.classList.add("active");
+      txnActiveType = this.dataset.type;
+      const { fromDate, toDate } = txnActiveDateRange;
+      _triggerRender(fromDate, toDate);
+    });
+  });
+
+  // ── Re-lock button ────────────────────────────────────────────────────────
+  const relockBtn = document.getElementById("txn-relock-btn");
+  if (relockBtn) relockBtn.addEventListener("click", _relockDatePicker);
+
+  // ── Password modal events ─────────────────────────────────────────────────
+  const closeBtn  = document.getElementById("txn-pwd-close-btn");
+  const submitBtn = document.getElementById("txn-pwd-submit-btn");
+  const pwdInput  = document.getElementById("txn-pwd-input");
+
+  if (closeBtn)  closeBtn.addEventListener("click", _closeTxnPasswordModal);
+  if (submitBtn) submitBtn.addEventListener("click", _submitTxnPassword);
+  if (pwdInput)  pwdInput.addEventListener("keydown", (e) => { if (e.key === "Enter") _submitTxnPassword(); });
+
+  // Close modal on backdrop click
+  const pwdModal = document.getElementById("txn-date-pwd-modal");
+  if (pwdModal) {
+    pwdModal.addEventListener("click", function(e) {
+      if (e.target === pwdModal) _closeTxnPasswordModal();
+    });
+  }
+
+  // ── Initial render ────────────────────────────────────────────────────────
+  _triggerRender(defaultFrom, todayStr);
+}
+
+// window.renderEnhancedLogs is called externally after a data refresh.
+// If an extended range is active, re-use the cached server result (txnExtendedLogs).
+// Otherwise fall through to the cached 3-day global logs.
+window.renderEnhancedLogs = function () {
+  const { fromDate, toDate } = txnActiveDateRange;
+  _renderWithLogs(fromDate || null, toDate || null, txnExtendedLogs || null);
+};
 
 document.addEventListener("DOMContentLoaded", function () {
   setTimeout(() => {
-    transactionFilterManagerInstance = new TransactionFilterManager();
-    console.log("Transaction filters ready");
+    initTxnDateFilter();
+    console.log("Transaction date filter ready");
   }, 1000);
 });
-
-const originalRenderEnhancedLogs = window.renderEnhancedLogs;
-
-window.renderEnhancedLogs = function () {
-  if (typeof originalRenderEnhancedLogs === "function") {
-    originalRenderEnhancedLogs.apply(this, arguments);
-  }
-
-  if (
-    transactionFilterManagerInstance &&
-    transactionFilterManagerInstance.currentFilter === "all"
-  ) {
-    const categorizedLogs =
-      transactionFilterManagerInstance.getAllCategorizedTransactions();
-    transactionFilterManagerInstance.updateFilterCounts(categorizedLogs);
-  }
-};

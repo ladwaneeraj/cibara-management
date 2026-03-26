@@ -361,6 +361,7 @@ def checkout():
                 "checkin_time": None,
                 "balance": 0,
                 "add_ons": [],
+                "discounts": [],
                 "renewal_count": 0,
                 "last_renewal_time": None,
                 "cleaning_status": "in_progress",
@@ -779,6 +780,7 @@ def transfer_room():
             "checkin_time": None,
             "balance": 0,
             "add_ons": [],
+            "discounts": [],
             "renewal_count": 0,
             "last_renewal_time": None,
             "cleaning_status": None,
@@ -839,6 +841,7 @@ def mark_room_cleaned():
             "checkin_time": None,
             "balance": 0,
             "add_ons": [],
+            "discounts": [],
             "renewal_count": 0,
             "last_renewal_time": None
         })
@@ -1096,6 +1099,62 @@ def _check_manager_password(provided: str) -> bool:
     return provided == expected
 
 
+# ── Transaction logs for an arbitrary date range (manager-only) ───────────────
+@rooms_bp.route("/get_transactions_range", methods=["POST"])
+def get_transactions_range():
+    """
+    Return transaction logs for any date range.
+    Body: { from_date: "YYYY-MM-DD", to_date: "YYYY-MM-DD" }
+    Returns logs in the same shape as get_data's logs object.
+    """
+    try:
+        data = request.json or {}
+        from_date = data.get("from_date")
+        to_date   = data.get("to_date")
+        if not from_date or not to_date:
+            return jsonify(success=False, message="from_date and to_date required"), 400
+
+        # end_date is exclusive in the query, so add 1 day
+        from datetime import datetime as _dt, timedelta as _td
+        end_exclusive = (_dt.strptime(to_date, "%Y-%m-%d") + _td(days=1)).strftime("%Y-%m-%d")
+
+        payments = payment_service.query_payments_by_date_range(from_date, end_exclusive) or []
+
+        _refund_types = ("refund", "checkout_refund", "manual_refund", "booking_cancel_refund")
+
+        logs = {
+            "cash":     [p for p in payments if p.get("method") in ("cash", "pay_later")
+                         and p.get("type") not in _refund_types
+                         and p.get("type") not in ("expense", "discount")],
+            "online":   [p for p in payments if p.get("method") == "online"
+                         and p.get("type") not in _refund_types
+                         and p.get("type") not in ("expense", "discount")],
+            "refunds":  [p for p in payments if p.get("type") in _refund_types],
+            # Only transaction-type expenses (expense_type="transaction"), not report/accounting ones
+            "expenses": [p for p in payments
+                         if p.get("type") == "expense"
+                         and p.get("expense_type") == "transaction"],
+        }
+        return jsonify(success=True, logs=logs)
+    except Exception as e:
+        logger.error(f"get_transactions_range error: {e}", exc_info=True)
+        return jsonify(success=False, message=str(e)), 500
+
+
+# ── Simple password verification endpoint ─────────────────────────────────────
+@rooms_bp.route("/verify_manager_password", methods=["POST"])
+def verify_manager_password():
+    """Lightweight endpoint to verify the manager password client-side flows."""
+    try:
+        data = request.json or {}
+        password = data.get("password", "")
+        if _check_manager_password(password):
+            return jsonify(success=True)
+        return jsonify(success=False, message="Incorrect password"), 403
+    except Exception as e:
+        return jsonify(success=False, message=str(e)), 500
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # STAY PAYMENTS — view & edit payment records for a specific stay
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1181,24 +1240,26 @@ def get_stay_payments():
 @rooms_bp.route("/update_stay_payment", methods=["POST"])
 def update_stay_payment():
     """
-    Edit the method and/or date of a single payment record.
+    Edit the method, date, and/or amount of a single payment record.
 
     Body: {
         password: str,
         payment_id: str,        -- Firestore document ID in payments collection
         method: "cash"|"online",
         date: "YYYY-MM-DD",
-        time: "HH:MM"           -- optional, preserves original if omitted
+        time: "HH:MM",          -- optional, preserves original if omitted
+        amount: int             -- optional; only allowed for non-refund types
     }
 
     Side effects:
       - Updates the payment doc in the `payments` collection.
-      - If method changed: adjusts `current_totals` atomically
-        (decrements old method, increments new method).
+      - If method or amount changed: adjusts `current_totals` atomically
+        (net delta applied so cash/online totals stay correct).
+      - If amount changed and room is still occupied: adjusts room balance
+        so the outstanding balance reflects the corrected payment.
 
     Does NOT touch the legacy `logs` collection.
-    All operations are wrapped in a Firestore transaction / batch so they
-    are atomic.
+    All operations are wrapped in a Firestore batch so they are atomic.
     """
     try:
         data = request.json or {}
@@ -1207,6 +1268,7 @@ def update_stay_payment():
         new_method = data.get("method", "").strip().lower()
         new_date   = data.get("date", "").strip()
         new_time   = data.get("time", "").strip()
+        new_amount_raw = data.get("amount")   # None means "not provided"
 
         # ── Auth ──────────────────────────────────────────────────────────────
         if not _check_manager_password(password):
@@ -1231,6 +1293,15 @@ def update_stay_payment():
             except ValueError:
                 return jsonify(success=False, message="time must be HH:MM"), 400
 
+        new_amount = None
+        if new_amount_raw is not None:
+            try:
+                new_amount = int(new_amount_raw)
+                if new_amount <= 0:
+                    return jsonify(success=False, message="amount must be greater than 0"), 400
+            except (ValueError, TypeError):
+                return jsonify(success=False, message="amount must be a valid integer"), 400
+
         # ── Fetch the existing payment doc ────────────────────────────────────
         _payments_ref = db.collection("payments")
         pay_doc_ref   = _payments_ref.document(payment_id)
@@ -1242,6 +1313,17 @@ def update_stay_payment():
         old_data   = pay_snap.to_dict()
         old_method = old_data.get("method", "")
         old_amount = int(old_data.get("amount", 0))
+        pay_type   = old_data.get("type", "")
+
+        # Amount editing is not allowed for refund records
+        _refund_types = ("refund", "checkout_refund", "manual_refund", "booking_cancel_refund")
+        if new_amount is not None and pay_type in _refund_types:
+            return jsonify(success=False,
+                           message="Amount cannot be edited for refund records"), 400
+
+        # ── Determine final values ────────────────────────────────────────────
+        final_method = new_method if new_method else old_method
+        final_amount = new_amount if new_amount is not None else old_amount
 
         # ── Build update payload ──────────────────────────────────────────────
         update_fields = {}
@@ -1251,6 +1333,8 @@ def update_stay_payment():
             update_fields["date"] = new_date
         if new_time:
             update_fields["time"] = new_time
+        if new_amount is not None and new_amount != old_amount:
+            update_fields["amount"] = new_amount
 
         if not update_fields:
             return jsonify(success=True, message="No changes detected")
@@ -1261,26 +1345,50 @@ def update_stay_payment():
         # 1. Update payments doc
         batch.update(pay_doc_ref, update_fields)
 
-        # 2. If method changed, adjust current_totals
-        #    Only adjust for positive payment methods (cash/online).
-        #    Pay_later and balance entries don't affect cash/online totals directly.
+        # 2. Adjust current_totals (cash/online) for any method or amount change
+        #    Net delta approach: subtract the old contribution, add the new one.
+        valid_total_methods = ("cash", "online")
         totals_doc_ref = totals_ref.document("current_totals")
-        if new_method and new_method != old_method:
-            valid_total_methods = ("cash", "online")
-            totals_delta = {}
+
+        if final_method != old_method or final_amount != old_amount:
+            delta_map = {}
+            # Remove old entry's contribution
             if old_method in valid_total_methods:
-                totals_delta[old_method] = firestore.Increment(-old_amount)
-            if new_method in valid_total_methods:
-                totals_delta[new_method] = firestore.Increment(old_amount)
+                delta_map[old_method] = delta_map.get(old_method, 0) - old_amount
+            # Add new entry's contribution
+            if final_method in valid_total_methods:
+                delta_map[final_method] = delta_map.get(final_method, 0) + final_amount
+            totals_delta = {
+                field: firestore.Increment(delta)
+                for field, delta in delta_map.items()
+                if delta != 0
+            }
             if totals_delta:
                 batch.update(totals_doc_ref, totals_delta)
 
-        batch.commit()
+        # 3. If amount changed, adjust room balance (only if room still occupied)
+        if new_amount is not None and new_amount != old_amount:
+            room_id = str(old_data.get("room", ""))
+            if room_id:
+                room_snap = rooms_ref.document(room_id).get()
+                if room_snap.exists and room_snap.to_dict().get("status") == "occupied":
+                    current_balance = int(room_snap.to_dict().get("balance", 0))
+                    # Guest paid less than recorded → balance goes up (owes more)
+                    # Guest paid more than recorded → balance goes down (owes less)
+                    balance_adjustment = old_amount - new_amount
+                    new_room_balance = current_balance + balance_adjustment
+                    batch.update(rooms_ref.document(room_id), {"balance": new_room_balance})
+                    logger.info(
+                        f"update_stay_payment: room {room_id} balance adjusted "
+                        f"{current_balance} → {new_room_balance} "
+                        f"(amount {old_amount} → {new_amount})"
+                    )
 
+        batch.commit()
         invalidate_rooms_and_totals()
 
         logger.info(f"update_stay_payment: id={payment_id} "
-                    f"changes={update_fields} old_method={old_method}")
+                    f"changes={update_fields} old_method={old_method} old_amount={old_amount}")
         return jsonify(success=True, message="Payment updated successfully")
 
     except Exception as e:

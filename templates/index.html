@@ -301,43 +301,107 @@
         <!-- Transactions Tab Content -->
         <div class="tab-content hidden" id="transactions-tab">
           <div class="section-title">
-            <h2>Today's Transactions</h2>
+            <h2>Transactions</h2>
             <button id="add-expense-btn" class="action-btn btn-sm btn-danger">
               <i class="fas fa-plus"></i> Add Expense
             </button>
           </div>
 
-          <div class="transaction-filter-tabs">
-            <button class="transaction-filter-btn active" data-filter="all">
-              <span class="filter-label">All</span>
-              <span class="filter-count" id="count-all">0</span>
+          <!-- Date Range Filter -->
+          <div class="txn-date-filter">
+            <div class="txn-quick-btns">
+              <button class="txn-quick-btn active" data-range="today">Today</button>
+              <button class="txn-quick-btn" data-range="3">Last 3 days</button>
+            </div>
+            <div class="txn-custom-range">
+              <i class="fas fa-calendar-alt" style="color:#6c757d;font-size:0.8rem;"></i>
+              <div class="txn-date-lock-wrap" id="txn-date-lock-wrap">
+                <input type="text" id="txn-date-range" class="txn-date-range-input txn-date-locked" placeholder="🔒 Custom range" readonly />
+                <span class="txn-date-lock-icon" id="txn-date-lock-icon"><i class="fas fa-lock"></i></span>
+              </div>
+              <button id="txn-relock-btn" class="txn-relock-btn" title="Lock date range" style="display:none;">
+                <i class="fas fa-lock"></i> Lock
+              </button>
+            </div>
+          </div>
+
+          <!-- Type Filter -->
+          <div class="txn-type-filter">
+            <button class="txn-type-btn active" data-type="all">All</button>
+            <button class="txn-type-btn" data-type="cash">
+              <i class="fas fa-money-bill-wave"></i> Cash
             </button>
-            <button class="transaction-filter-btn" data-filter="fresh">
-              <span class="filter-label">Fresh</span>
-              <span class="filter-count" id="count-fresh">0</span>
+            <button class="txn-type-btn" data-type="online">
+              <i class="fas fa-mobile-alt"></i> Online
             </button>
-            <button class="transaction-filter-btn" data-filter="continue">
-              <span class="filter-label">Continue</span>
-              <span class="filter-count" id="count-continue">0</span>
+            <button class="txn-type-btn" data-type="refunds">
+              <i class="fas fa-undo"></i> Refund
             </button>
-            <button class="transaction-filter-btn" data-filter="service">
-              <span class="filter-label">Service</span>
-              <span class="filter-count" id="count-service">0</span>
+            <button class="txn-type-btn" data-type="expenses">
+              <i class="fas fa-arrow-circle-down"></i> Expense
             </button>
-            <button class="transaction-filter-btn" data-filter="expense">
-              <span class="filter-label">Expense</span>
-              <span class="filter-count" id="count-expense">0</span>
-            </button>
+          </div>
+
+          <!-- Analytics Cards -->
+          <div class="txn-analytics-cards" id="txn-analytics-cards">
+            <div class="txn-card txn-card-cash">
+              <div class="txn-card-icon"><i class="fas fa-money-bill-wave"></i></div>
+              <div class="txn-card-body">
+                <div class="txn-card-label">Cash</div>
+                <div class="txn-card-value" id="txn-card-cash">₹0</div>
+              </div>
+            </div>
+            <div class="txn-card txn-card-upi">
+              <div class="txn-card-icon"><i class="fas fa-mobile-alt"></i></div>
+              <div class="txn-card-body">
+                <div class="txn-card-label">UPI / Online</div>
+                <div class="txn-card-value" id="txn-card-upi">₹0</div>
+              </div>
+            </div>
+            <div class="txn-card txn-card-total">
+              <div class="txn-card-icon"><i class="fas fa-coins"></i></div>
+              <div class="txn-card-body">
+                <div class="txn-card-label">Total In</div>
+                <div class="txn-card-value" id="txn-card-total">₹0</div>
+              </div>
+            </div>
+            <div class="txn-card txn-card-expense">
+              <div class="txn-card-icon"><i class="fas fa-arrow-circle-down"></i></div>
+              <div class="txn-card-body">
+                <div class="txn-card-label">Expenses</div>
+                <div class="txn-card-value" id="txn-card-expense">₹0</div>
+              </div>
+            </div>
           </div>
 
           <!-- Logs -->
           <div class="logs-container">
-            <h3 style="margin-bottom: 1rem">Transaction Log</h3>
             <div id="transaction-log">
-              <!-- Logs will be dynamically populated here -->
               <div class="loading-indicator">
                 <span class="loader"></span>
                 <p>Loading transactions...</p>
+              </div>
+            </div>
+          </div>
+
+          <!-- Password modal for custom date range -->
+          <div class="modal-backdrop" id="txn-date-pwd-modal">
+            <div class="txn-pwd-modal-box">
+              <div class="txn-pwd-modal-icon">
+                <i class="fas fa-calendar-lock"></i>
+              </div>
+              <h3 class="txn-pwd-modal-title">Manager Access</h3>
+              <p class="txn-pwd-modal-sub">Enter your manager password to unlock the custom date range.</p>
+              <div class="txn-pwd-field-wrap">
+                <i class="fas fa-key txn-pwd-field-icon"></i>
+                <input type="password" id="txn-pwd-input" class="txn-pwd-field" placeholder="Enter password" autocomplete="off" />
+              </div>
+              <p id="txn-pwd-error" class="txn-pwd-error"></p>
+              <div class="txn-pwd-actions">
+                <button id="txn-pwd-close-btn" class="txn-pwd-cancel-btn">Cancel</button>
+                <button id="txn-pwd-submit-btn" class="txn-pwd-submit-btn">
+                  <i class="fas fa-unlock" style="margin-right:5px;"></i>Unlock
+                </button>
               </div>
             </div>
           </div>
@@ -481,9 +545,14 @@
         <div class="tab-content hidden" id="bookings-tab">
           <div class="section-title">
             <h2>Room Bookings</h2>
-            <button id="new-booking-btn" class="action-btn btn-sm btn-primary">
-              <i class="fas fa-plus"></i> New Booking
-            </button>
+            <div style="display:flex;gap:0.5rem;">
+              <button id="mmt-settlements-btn" class="action-btn btn-sm" style="background:rgba(12,111,205,0.12);color:#0c6fcd;border:1px solid rgba(12,111,205,0.3);">
+                <i class="fas fa-university"></i> MMT Settlements
+              </button>
+              <button id="new-booking-btn" class="action-btn btn-sm btn-primary">
+                <i class="fas fa-plus"></i> New Booking
+              </button>
+            </div>
           </div>
 
           <!-- Booking Filters -->
@@ -585,6 +654,22 @@
                 >
                   <i class="fas fa-plus"></i> New Booking for This Date
                 </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- MMT Settlements Modal -->
+        <div class="modal-backdrop" id="mmt-settlements-modal" style="z-index:1100;">
+          <div class="modal-content booking-modal-compact" style="max-width:640px;">
+            <div class="modal-header">
+              <h2 style="color:#0c6fcd;"><i class="fas fa-university" style="margin-right:6px;"></i>MMT Settlements</h2>
+              <button class="close-btn" id="close-mmt-settlements-btn" aria-label="Close">&times;</button>
+            </div>
+            <div id="mmt-settlements-list" style="padding:0.5rem 0;max-height:420px;overflow-y:auto;">
+              <div class="loading-indicator">
+                <span class="loader"></span>
+                <p>Loading settlements...</p>
               </div>
             </div>
           </div>
@@ -2208,130 +2293,122 @@
 
     <!-- Booking Details Modal -->
     <div class="modal-backdrop" id="booking-details-modal">
-      <div class="modal-content">
+      <div class="modal-content booking-modal-compact">
         <div class="modal-header">
-          <h2>Booking Details</h2>
+          <h2><i class="fas fa-bookmark" style="font-size:0.9rem;margin-right:0.4rem;"></i>Booking Details</h2>
           <button class="close-btn" aria-label="Close">&times;</button>
         </div>
 
         <div class="booking-details">
-          <div class="detail-row">
-            <div class="detail-label">Booking ID</div>
-            <div class="detail-value" id="details-booking-id"></div>
-          </div>
-          <div class="detail-row">
-            <div class="detail-label">Room</div>
-            <div class="detail-value" id="details-room-number"></div>
-          </div>
-          <div class="detail-row">
-            <div class="detail-label">Guest Name</div>
-            <div class="detail-value" id="details-guest-name"></div>
-          </div>
-          <div class="detail-row">
-            <div class="detail-label">Mobile</div>
-            <div class="detail-value">
-              <a href="tel:" id="details-guest-mobile-link" class="call-link">
-                <i class="fas fa-phone"></i>
-                <span id="details-guest-mobile"></span>
-              </a>
+
+          <!-- Guest + Room header card -->
+          <div class="summary-card" style="margin-bottom:0.75rem;">
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:0.5rem;">
+              <div>
+                <div style="font-size:0.7rem;color:var(--gray);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:2px;">Guest</div>
+                <div style="font-weight:700;font-size:1rem;" id="details-guest-name"></div>
+                <a href="tel:" id="details-guest-mobile-link" class="call-link" style="font-size:0.85rem;margin-top:2px;display:inline-flex;align-items:center;gap:4px;">
+                  <i class="fas fa-phone" style="font-size:0.75rem;"></i>
+                  <span id="details-guest-mobile"></span>
+                </a>
+              </div>
+              <div style="text-align:right;">
+                <div style="font-size:0.7rem;color:var(--gray);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:2px;">Room</div>
+                <div style="font-weight:700;font-size:1.1rem;color:var(--primary);" id="details-room-number"></div>
+                <div id="details-status" style="font-size:0.75rem;margin-top:2px;"></div>
+              </div>
             </div>
           </div>
-          <div class="detail-row">
-            <div class="detail-label">Check-in Date</div>
-            <div class="detail-value" id="details-check-in"></div>
-          </div>
-          <div class="detail-row">
-            <div class="detail-label">Expected Check-in Time</div>
-            <div class="detail-value" id="details-check-in-time"></div>
-          </div>
-          <div class="detail-row">
-            <div class="detail-label">Check-out Date</div>
-            <div class="detail-value" id="details-check-out"></div>
-          </div>
-          <div class="detail-row">
-            <div class="detail-label">Duration</div>
-            <div class="detail-value" id="details-nights"></div>
-          </div>
-          <div class="detail-row">
-            <div class="detail-label">Number of Guests</div>
-            <div class="detail-value" id="details-guests"></div>
-          </div>
-          <div class="detail-row">
-            <div class="detail-label">Booking Date</div>
-            <div class="detail-value" id="details-booking-date"></div>
-          </div>
-          <div class="detail-row">
-            <div class="detail-label">Total Amount</div>
-            <div class="detail-value" id="details-total-amount"></div>
-          </div>
-          <div class="detail-row">
-            <div class="detail-label">Paid Amount</div>
-            <div class="detail-value" id="details-paid-amount"></div>
-          </div>
-          <div class="detail-row">
-            <div class="detail-label">Balance</div>
-            <div class="detail-value" id="details-balance"></div>
-          </div>
-          <div class="detail-row">
-            <div class="detail-label">Status</div>
-            <div class="detail-value" id="details-status"></div>
-          </div>
-          <div class="detail-row">
-            <div class="detail-label">Notes</div>
-            <div class="detail-value" id="details-notes"></div>
-          </div>
-          <!-- OTA / MMT rows — hidden for normal bookings -->
-          <div id="details-ota-section" style="display:none;">
-            <div class="detail-row">
-              <div class="detail-label">Booking Source</div>
-              <div class="detail-value" id="details-booking-source"></div>
+
+          <!-- Dates section -->
+          <div class="bk-row" style="margin-bottom:0.5rem;">
+            <div class="form-group" style="margin-bottom:0;">
+              <label class="form-label">Check-in</label>
+              <div style="font-weight:600;font-size:0.9rem;" id="details-check-in"></div>
+              <div style="font-size:0.8rem;color:var(--gray);" id="details-check-in-time"></div>
             </div>
-            <div class="detail-row">
-              <div class="detail-label">OTA Total</div>
-              <div class="detail-value" id="details-ota-total"></div>
+            <div class="form-group" style="margin-bottom:0;">
+              <label class="form-label">Check-out</label>
+              <div style="font-weight:600;font-size:0.9rem;" id="details-check-out"></div>
+              <div style="font-size:0.8rem;color:var(--gray);" id="details-nights"></div>
             </div>
-            <div class="detail-row">
-              <div class="detail-label">MMT Commission</div>
-              <div class="detail-value" id="details-ota-commission"></div>
+          </div>
+
+          <!-- Meta info row -->
+          <div class="bk-row" style="margin-bottom:0.75rem;">
+            <div class="form-group" style="margin-bottom:0;">
+              <label class="form-label">Guests</label>
+              <div style="font-size:0.9rem;" id="details-guests"></div>
             </div>
-            <div class="detail-row">
-              <div class="detail-label">Net Receivable</div>
-              <div class="detail-value" id="details-net-receivable" style="font-weight:bold;"></div>
+            <div class="form-group" style="margin-bottom:0;">
+              <label class="form-label">Booked On</label>
+              <div style="font-size:0.85rem;color:var(--gray);" id="details-booking-date"></div>
             </div>
-            <div class="detail-row">
-              <div class="detail-label">Settlement Status</div>
-              <div class="detail-value" id="details-settlement-status"></div>
+          </div>
+
+          <!-- Payment section (hidden for MMT) -->
+          <div id="details-payment-section">
+            <div class="bk-row" style="margin-bottom:0.5rem;">
+              <div class="form-group" style="margin-bottom:0;">
+                <label class="form-label">Total</label>
+                <div style="font-weight:600;" id="details-total-amount"></div>
+              </div>
+              <div class="form-group" style="margin-bottom:0;">
+                <label class="form-label">Paid</label>
+                <div style="font-weight:600;color:var(--success);" id="details-paid-amount"></div>
+              </div>
             </div>
+            <div class="form-group" style="margin-bottom:0.5rem;">
+              <label class="form-label">Balance Due</label>
+              <div style="font-weight:700;font-size:0.95rem;color:var(--danger);" id="details-balance"></div>
+            </div>
+          </div>
+
+          <!-- MMT / OTA section (hidden for normal bookings) -->
+          <div id="details-ota-section" style="display:none;background:rgba(12,111,205,0.07);border:1px solid rgba(12,111,205,0.2);border-radius:8px;padding:0.7rem 0.85rem;margin-bottom:0.5rem;">
+            <div style="font-size:0.7rem;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;color:#0c6fcd;margin-bottom:0.5rem;">
+              <span id="details-booking-source"></span>
+            </div>
+            <div class="bk-row" style="margin-bottom:0.4rem;">
+              <div class="form-group" style="margin-bottom:0;">
+                <label class="form-label" style="font-size:0.7rem;">OTA Total</label>
+                <div style="font-weight:600;" id="details-ota-total"></div>
+              </div>
+              <div class="form-group" style="margin-bottom:0;">
+                <label class="form-label" style="font-size:0.7rem;">Commission</label>
+                <div id="details-ota-commission"></div>
+              </div>
+            </div>
+            <div class="bk-row">
+              <div class="form-group" style="margin-bottom:0;">
+                <label class="form-label" style="font-size:0.7rem;">Net Receivable</label>
+                <div style="font-weight:700;color:#0c6fcd;" id="details-net-receivable"></div>
+              </div>
+              <div class="form-group" style="margin-bottom:0;">
+                <label class="form-label" style="font-size:0.7rem;">Settlement</label>
+                <div id="details-settlement-status"></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Notes -->
+          <div class="form-group" style="margin-bottom:0.5rem;">
+            <label class="form-label">Notes</label>
+            <div style="font-size:0.85rem;color:var(--gray);" id="details-notes"></div>
+          </div>
+
+          <!-- Booking ID -->
+          <div style="font-size:0.7rem;color:var(--gray);margin-bottom:0.75rem;">
+            ID: <span id="details-booking-id" style="font-family:monospace;"></span>
           </div>
 
           <!-- Guest Photo -->
-          <div
-            id="details-photo-container"
-            style="margin-top: 1rem; text-align: center; display: none"
-          >
-            <h4
-              style="
-                margin-bottom: 0.5rem;
-                font-size: 0.9rem;
-                color: var(--gray);
-              "
-            >
-              Guest Photo
-            </h4>
-            <img
-              id="details-guest-photo"
-              style="
-                max-width: 100%;
-                max-height: 200px;
-                border-radius: 8px;
-                border: 1px solid #eee;
-              "
-              alt="Guest photo"
-            />
+          <div id="details-photo-container" style="margin-bottom:0.75rem;text-align:center;display:none;">
+            <img id="details-guest-photo" style="max-width:100%;max-height:160px;border-radius:8px;border:1px solid #eee;" alt="Guest photo" />
           </div>
         </div>
 
-        <div class="action-row" style="margin-top: 1.5rem">
+        <div class="action-row" style="margin-top:0.5rem;">
           <button class="action-btn btn-primary" id="update-booking-btn">
             <i class="fas fa-edit"></i> Edit
           </button>
@@ -2344,20 +2421,12 @@
           <button class="action-btn btn-danger" id="cancel-booking-btn">
             <i class="fas fa-times-circle"></i> Cancel
           </button>
-          <button class="action-btn btn-success" id="mark-settlement-btn" style="display:none; background:#17a2b8; border-color:#17a2b8;">
+          <button class="action-btn btn-success" id="mark-settlement-btn" style="display:none;background:#17a2b8;border-color:#17a2b8;">
             <i class="fas fa-university"></i> Mark Settlement
           </button>
-          <button
-            class="action-btn btn-sm"
-            style="
-              background-color: #25d366;
-              border-color: #25d366;
-              color: white;
-            "
-            onclick="sendWhatsAppBookingConfirmation()"
-            title="Send WhatsApp Confirmation"
-            id="send-whatsapp-btn"
-          >
+          <button class="action-btn btn-sm" id="send-whatsapp-btn"
+            style="background-color:#25d366;border-color:#25d366;color:white;"
+            onclick="sendWhatsAppBookingConfirmation()" title="Send WhatsApp Confirmation">
             <i class="fab fa-whatsapp"></i> WhatsApp
           </button>
         </div>

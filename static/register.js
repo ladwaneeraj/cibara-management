@@ -1263,6 +1263,7 @@
       const isEditing = (pmState.editId === p.id);
       const methodCls = p.method === "cash" ? "rp-method-cash" : "rp-method-online";
       const methodLbl = p.method === "cash" ? "Cash" : (p.method === "online" ? "Online" : p.method);
+      const isRefund  = REFUND_TYPES.has(p.type);
 
       if (isEditing) {
         rows += `
@@ -1276,6 +1277,10 @@
                 <option value="cash"   ${p.method === "cash"   ? "selected" : ""}>Cash</option>
                 <option value="online" ${p.method === "online" ? "selected" : ""}>Online</option>
               </select>
+              ${!isRefund ? `
+              <label style="font-size:.75rem;font-weight:600;color:#555;white-space:nowrap;">Amount (₹):</label>
+              <input type="number" id="rp-edit-amount-${p.id}" value="${p.amount || 0}" min="1" style="width:80px;" />
+              ` : `<span style="font-size:.72rem;color:#888;align-self:center;">(refund — amount locked)</span>`}
               <button class="rp-save-btn"        onclick="_rpSave('${p.id}')">Save</button>
               <button class="rp-cancel-edit-btn" onclick="_rpCancelEdit()">Cancel</button>
             </div>
@@ -1320,30 +1325,45 @@
   };
 
   window._rpSave = async function(payId) {
-    const dateInput = dom(`rp-edit-date-${payId}`);
-    const modeInput = dom(`rp-edit-mode-${payId}`);
-    const saveBtn   = document.querySelector(`.rp-edit-row[data-pid="${payId}"] .rp-save-btn`);
+    const dateInput   = dom(`rp-edit-date-${payId}`);
+    const modeInput   = dom(`rp-edit-mode-${payId}`);
+    const amountInput = dom(`rp-edit-amount-${payId}`);
+    const saveBtn     = document.querySelector(`.rp-edit-row[data-pid="${payId}"] .rp-save-btn`);
 
-    const newDate   = dateInput ? dateInput.value.trim() : "";
-    const newMethod = modeInput ? modeInput.value.trim() : "";
+    const newDate   = dateInput   ? dateInput.value.trim()  : "";
+    const newMethod = modeInput   ? modeInput.value.trim()  : "";
+    const newAmountStr = amountInput ? amountInput.value.trim() : "";
 
     if (!newDate || !newMethod) {
       _notify("Date and mode are required.", "error");
       return;
     }
 
+    // Validate amount if the field is present
+    let newAmount = null;
+    if (amountInput && newAmountStr !== "") {
+      newAmount = parseInt(newAmountStr, 10);
+      if (isNaN(newAmount) || newAmount <= 0) {
+        _notify("Amount must be a positive number.", "error");
+        return;
+      }
+    }
+
     if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = "Saving…"; }
 
     try {
+      const payload = {
+        password:   pmState.password,
+        payment_id: payId,
+        method:     newMethod,
+        date:       newDate,
+      };
+      if (newAmount !== null) payload.amount = newAmount;
+
       const res = await apiFetch("/update_stay_payment", {
         method:  "POST",
         headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify({
-          password:   pmState.password,
-          payment_id: payId,
-          method:     newMethod,
-          date:       newDate,
-        }),
+        body:    JSON.stringify(payload),
       });
 
       if (res.status === 403) {
@@ -1360,11 +1380,22 @@
 
       // Update local state so re-render is instant (no refetch needed)
       const p = pmState.payments.find(x => x.id === payId);
-      if (p) { p.method = newMethod; p.date = newDate; }
+      if (p) {
+        p.method = newMethod;
+        p.date   = newDate;
+        if (newAmount !== null) p.amount = newAmount;
+      }
 
       pmState.editId = null;
       _renderPaymentsTable(dom("rp-content"));
       _notify("Payment updated.", "success");
+
+      // If amount changed, refresh room data so balance in checkout modal updates
+      if (newAmount !== null && typeof window.fetchData === "function") {
+        window.fetchData().then(() => {
+          if (typeof window.renderRooms === "function") window.renderRooms();
+        }).catch(() => {});
+      }
 
     } catch (err) {
       _notify("Network error. Please try again.", "error");

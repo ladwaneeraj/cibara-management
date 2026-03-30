@@ -690,52 +690,50 @@ body {
 }
 
 /* Services Grid - NEW */
-.services-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
-  gap: 10px;
-}
-
-.service-btn {
+/* Service chips */
+.svc-chips {
   display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  background-color: #f5f7fb;
-  border: 1px solid #ddd;
-  border-radius: var(--border-radius);
-  padding: 0.8rem;
-  cursor: pointer;
-  transition: var(--transition);
-  height: 100px;
-}
-
-.service-btn:hover {
-  background-color: #e8f4fd;
-  transform: translateY(-2px);
-  box-shadow: var(--shadow-sm);
-}
-
-.service-btn.selected {
-  background-color: var(--primary);
-  color: white;
-  border-color: var(--primary);
-}
-
-.service-btn i {
-  font-size: 1.5rem;
+  flex-wrap: wrap;
+  gap: 8px;
   margin-bottom: 0.5rem;
 }
 
-.service-price {
-  font-size: 0.7rem;
-  margin-top: 0.3rem;
-  color: var(--gray);
+.svc-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: #f5f7fb;
+  border: 1.5px solid #dde1ea;
+  border-radius: 999px;
+  padding: 6px 14px;
+  font-size: 0.85rem;
   font-weight: 500;
+  cursor: pointer;
+  transition: var(--transition);
+  color: var(--dark);
+  white-space: nowrap;
 }
 
-.service-btn.selected .service-price {
-  color: white;
+.svc-chip:hover {
+  background: #e8f4fd;
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
+.svc-chip.selected {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #fff;
+}
+
+.svc-chip-price {
+  font-size: 0.78rem;
+  font-weight: 600;
+  opacity: 0.75;
+}
+
+.svc-chip.selected .svc-chip-price {
+  opacity: 0.9;
 }
 
 /* Reports Tab */
@@ -867,6 +865,29 @@ body {
 
 .negative-balance {
   color: var(--success);
+}
+
+.refund-add-payment-divider {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin: 1.25rem 0 0.75rem;
+  color: var(--gray);
+  font-size: 0.8rem;
+}
+.refund-add-payment-divider::before,
+.refund-add-payment-divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--border-color);
+}
+
+.refund-add-payment-section {
+  background: var(--card-bg);
+  border: 1px solid var(--border-color);
+  border-radius: var(--border-radius);
+  padding: 0.85rem 1rem;
 }
 
 /* Renewal styles */

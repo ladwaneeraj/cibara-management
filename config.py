@@ -324,10 +324,13 @@ def send_whatsapp_message(phone_number, message):
         logger.error(f"Error sending WhatsApp via Twilio: {str(e)}")
         return False
 
-def create_bill_record(room, room_data, checkout_time, batch=None):
+def create_bill_record(room, room_data, checkout_time, batch=None,
+                       settle_later=False, settlement_id=None):
     """
     Create bill record with original check-in serial number.
     Reads from payments collection as primary data source.
+    If settle_later=True the bill is stored with status='pending_settlement'
+    and settlement_id is embedded so it can be updated when collected.
     """
     try:
         guest = room_data.get("guest")
@@ -382,6 +385,8 @@ def create_bill_record(room, room_data, checkout_time, batch=None):
                     "quantity": p.get("quantity", 1),
                     "unit_price": p.get("unit_price", p.get("amount", 0)),
                     "price": p.get("amount", 0),
+                    # Accommodation charges (AC, Extra Bed) are taxable alongside room rent.
+                    "accommodation_charge": p.get("accommodation_charge", False),
                 })
                 services_total += p.get("amount", 0)
 
@@ -410,6 +415,36 @@ def create_bill_record(room, room_data, checkout_time, batch=None):
 
         total_amount = room_charges_total + services_total - total_discounts
         balance = total_amount - payment_cash - payment_online + total_refunds
+
+        # ── GST Calculation (SAC 9963 — Accommodation Services) ─────────────────
+        # GST slab is determined by the declared room tariff per night.
+        #   < ₹1,000   → Exempt (0%)
+        #   ₹1,000 – ₹7,500 → 5%
+        #   > ₹7,500   → 18%
+        #
+        # Taxable base = room_charges_total + accommodation add-ons (AC, Extra Bed).
+        # Water and miscellaneous services are NOT accommodation charges and are
+        # excluded from the GST taxable base.
+        #
+        # Note: If AC was selected at check-in, the room price already includes it.
+        # If AC / Extra Bed were added as services from the checkout modal they are
+        # stored with accommodation_charge=True and included here.
+        if room_price_per_night < 1000:
+            gst_rate = 0
+        elif room_price_per_night <= 7500:
+            gst_rate = 5
+        else:
+            gst_rate = 18
+
+        accommodation_addons_total = sum(
+            s["price"] for s in services if s.get("accommodation_charge", False)
+        )
+        non_accommodation_total = services_total - accommodation_addons_total
+
+        # Taxable accommodation value (exclusive of discount; discount applied pro-rata
+        # on the invoice for compliance; here we store gross taxable for reference).
+        accommodation_taxable = room_charges_total + accommodation_addons_total
+        gst_amount = round(accommodation_taxable * gst_rate / 100, 2)
 
         # bill_number is determined after invoice logic below
         bill_number = None
@@ -522,7 +557,7 @@ def create_bill_record(room, room_data, checkout_time, batch=None):
             "payment_cash": payment_cash,
             "payment_online": payment_online,
             "balance": balance,
-            "status": "completed",
+            "status": "pending_settlement" if settle_later else "completed",
             "created_at": checkout_time,
             "print_count": 0,
             "serial_number": serial_number,
@@ -537,6 +572,17 @@ def create_bill_record(room, room_data, checkout_time, batch=None):
             # GST invoice fields (separate from bill_number folio)
             "invoice_generated": invoice_generated,
             "invoice_number": invoice_number,
+            # Settle-later link
+            "settlement_id": settlement_id if settle_later else None,
+            # ── GST breakdown (SAC 9963 — Accommodation Services) ─────────────
+            # gst_rate     : 0 / 5 / 18 — determined by room_price_per_night slab
+            # accommodation_taxable : room charges + accommodation add-ons (AC, Extra Bed)
+            # non_accommodation_total : water, misc services (outside GST scope)
+            # gst_amount   : accommodation_taxable × gst_rate / 100 (exclusive of tariff)
+            "gst_rate": gst_rate,
+            "accommodation_taxable": accommodation_taxable,
+            "non_accommodation_total": non_accommodation_total,
+            "gst_amount": gst_amount,
         }
 
         return bill_record

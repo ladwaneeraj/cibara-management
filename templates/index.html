@@ -1476,43 +1476,47 @@
           </div>
         </div>
 
-        <!-- Add-on Services - Redesigned UI -->
+        <!-- Add-on Services - Chip UI -->
         <div class="add-on-section" style="margin-top: 1.5rem">
-          <h3 style="margin-bottom: 1rem">Add Services</h3>
-          <div class="services-grid">
-            <button class="service-btn" data-service="Water 2L" data-price="30">
-              <i class="fas fa-tint"></i>
-              <span>Water 2L</span>
-              <span class="service-price">₹30</span>
+          <h3 style="margin-bottom: 0.75rem">Add Services</h3>
+          <div class="svc-chips">
+            <button class="svc-chip" data-service="Water 2L" data-price="30">
+              <i class="fas fa-tint"></i> Water 2L
+              <span class="svc-chip-price">₹30</span>
             </button>
-            <button class="service-btn" data-service="Water 1L" data-price="20">
-              <i class="fas fa-tint"></i>
-              <span>Water 1L</span>
-              <span class="service-price">₹20</span>
+            <button class="svc-chip" data-service="Water 1L" data-price="20">
+              <i class="fas fa-tint"></i> Water 1L
+              <span class="svc-chip-price">₹20</span>
             </button>
-            <button class="service-btn" data-service="Extra Bed" data-price="">
-              <i class="fas fa-bed"></i>
-              <span>Extra Bed</span>
-              <span class="service-price">Custom</span>
+            <button class="svc-chip" data-service="Extra Bed" data-price="" data-accommodation="true">
+              <i class="fas fa-bed"></i> Extra Bed
+              <span class="svc-chip-price">₹ ?</span>
             </button>
-            <button class="service-btn" data-service="Other" data-price="">
-              <i class="fas fa-plus"></i>
-              <span>Other</span>
-              <span class="service-price">Custom</span>
+            <!-- AC service chip — shown only for rooms 200-206 when isAC is false -->
+            <button class="svc-chip" id="ac-service-btn" data-service="AC" data-price="" data-accommodation="true" style="display:none">
+              <i class="fas fa-snowflake"></i> Add AC
+              <span class="svc-chip-price">₹ ?</span>
+            </button>
+            <button class="svc-chip" data-service="" data-price="" data-custom="true">
+              <i class="fas fa-pen"></i> Custom
+              <span class="svc-chip-price">₹ ?</span>
             </button>
           </div>
 
           <div id="service-form" class="hidden">
-            <div class="form-row" style="margin-top: 1rem">
-              <div class="form-group half-width">
-                <label class="form-label" for="service-name">Service</label>
+            <!-- Service name row — shown only for Custom chip -->
+            <div id="svc-name-row" class="form-row" style="margin-top: 1rem; display:none">
+              <div class="form-group" style="flex:1">
+                <label class="form-label" for="service-name">Service Name</label>
                 <input
                   type="text"
                   id="service-name"
                   class="form-control"
-                  readonly
+                  placeholder="e.g. Breakfast, Laundry…"
                 />
               </div>
+            </div>
+            <div class="form-row" style="margin-top: 1rem">
               <div class="form-group half-width">
                 <label class="form-label" for="service-price">Price (₹)</label>
                 <input
@@ -1523,8 +1527,6 @@
                   required
                 />
               </div>
-            </div>
-            <div class="form-row">
               <div class="form-group half-width">
                 <label class="form-label" for="service-quantity">Qty</label>
                 <input
@@ -1536,10 +1538,9 @@
                   required
                 />
               </div>
-              <div class="form-group half-width">
-                <label class="form-label">Total</label>
-                <div class="form-value" id="service-total-price">₹0</div>
-              </div>
+            </div>
+            <div style="text-align:right; margin: 0.4rem 0 0.6rem; font-size:0.9rem; color:var(--dark)">
+              Total: <strong id="service-total-price">₹0</strong>
             </div>
             <div class="form-group">
               <label class="form-label">Payment Method</label>

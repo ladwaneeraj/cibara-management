@@ -150,6 +150,23 @@
 }
 .bl-bill-btn:hover { opacity: 0.82; }
 
+/* Pending settlement row */
+.bl-row-pending { background: #fffbf0; }
+.bl-row-pending:hover { background: #fff8e1; }
+.bl-pending-badge {
+  display: inline-block; margin-left: 0.35rem;
+  padding: 0.1rem 0.35rem; border-radius: 8px;
+  font-size: 0.63rem; font-weight: 700;
+  background: #fff3cd; color: #856404;
+  vertical-align: middle; text-transform: uppercase;
+}
+.bl-collect-btn {
+  padding: 0.22rem 0.55rem; background: #fd7e14;
+  color: #fff; border: none; border-radius: 4px;
+  cursor: pointer; font-size: 0.77rem;
+}
+.bl-collect-btn:hover { opacity: 0.82; }
+
 .bl-pay-split { display: flex; flex-direction: column; gap: 0.12rem; font-size: 0.77rem; }
 .bl-pay-item  { display: flex; justify-content: space-between; gap: 0.4rem; align-items: center; }
 .bl-pm-cash   { color: #28a745; font-weight: 700; font-size:.7rem; }
@@ -185,6 +202,72 @@
   .bills-table { font-size: 0.73rem; }
   .bills-table th, .bills-table td { padding: 0.35rem 0.25rem; }
 }
+
+/* ── Pay modal ── */
+.bl-pay-modal-backdrop {
+  display: none; position: fixed; inset: 0;
+  background: rgba(0,0,0,.45); z-index: 9999;
+  align-items: center; justify-content: center;
+}
+.bl-pay-modal-backdrop.bl-pay-open { display: flex; }
+.bl-pay-modal {
+  background: #fff; border-radius: 14px;
+  padding: 1.6rem 1.5rem; width: 340px; max-width: 94vw;
+  box-shadow: 0 8px 32px rgba(0,0,0,.18);
+  animation: bl-modal-in .18s ease;
+}
+@keyframes bl-modal-in { from { transform: scale(.92); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+.bl-pay-modal-title {
+  font-size: 1rem; font-weight: 700; color: var(--primary,#3f51b5);
+  margin-bottom: 1rem; display: flex; align-items: center; gap: .45rem;
+}
+.bl-pay-modal-info {
+  background: #f4f6fb; border-radius: 8px;
+  padding: .65rem .85rem; margin-bottom: 1rem; font-size: .82rem;
+}
+.bl-pay-modal-info .bl-pi-row {
+  display: flex; justify-content: space-between; gap: .5rem;
+  padding: .18rem 0;
+}
+.bl-pi-label { color: #888; }
+.bl-pi-val   { font-weight: 700; color: #333; }
+.bl-pi-val.due { color: #fd7e14; font-size: .95rem; }
+.bl-pay-modal label {
+  font-size: .78rem; font-weight: 600; color: #555;
+  display: block; margin-bottom: .3rem; margin-top: .8rem;
+}
+.bl-pay-modal input[type=number] {
+  width: 100%; padding: .5rem .65rem; border: 1px solid #d0d0d0;
+  border-radius: 7px; font-size: .9rem; outline: none;
+  transition: border-color .15s; box-sizing: border-box;
+}
+.bl-pay-modal input[type=number]:focus { border-color: var(--primary,#3f51b5); }
+.bl-pm-toggle { display: flex; gap: .5rem; margin-top: .75rem; }
+.bl-pm-btn {
+  flex: 1; padding: .45rem; border-radius: 8px; border: 2px solid #e0e0e0;
+  background: #fff; cursor: pointer; font-size: .8rem; font-weight: 700;
+  color: #777; transition: all .15s; display: flex; align-items: center;
+  justify-content: center; gap: .3rem;
+}
+.bl-pm-btn.bl-pm-active-cash  { border-color: #28a745; background: #e8f5e9; color: #28a745; }
+.bl-pm-btn.bl-pm-active-online{ border-color: #1565c0; background: #e3f2fd; color: #1565c0; }
+.bl-pay-modal-actions {
+  display: flex; gap: .6rem; margin-top: 1.1rem;
+}
+.bl-pay-cancel-btn {
+  flex: 1; padding: .55rem; border: 1px solid #d0d0d0;
+  border-radius: 8px; background: #fff; cursor: pointer;
+  font-size: .85rem; font-weight: 600; color: #666;
+}
+.bl-pay-confirm-btn {
+  flex: 2; padding: .55rem; border: none;
+  border-radius: 8px; background: #fd7e14; color: #fff;
+  cursor: pointer; font-size: .85rem; font-weight: 700;
+  transition: opacity .15s;
+}
+.bl-pay-confirm-btn:hover { opacity: .88; }
+.bl-pay-confirm-btn:disabled { opacity: .5; cursor: not-allowed; }
+.bl-pay-error { color: #dc3545; font-size: .75rem; margin-top: .4rem; min-height: 1rem; }
 `;
 
   function injectStyles() {
@@ -201,9 +284,12 @@
     filteredEntries: [],
     loading: false,
     dateRange: { start: null, end: null },
-    filters: { search: "", source: "all" },
+    filters: { search: "", source: "all", payment: "all" },
     lastLoadedRange: null,
     sort: { key: null, dir: "asc" },
+    // Pay modal state
+    payModal: { billId: null, billNumber: null, guestName: null,
+                balance: 0, mode: "cash" },
   };
 
   // ── Utilities ────────────────────────────────────────────────────────────────
@@ -315,6 +401,10 @@
       <div class="bl-label">Invoice Count</div>
       <div class="bl-value" id="bl-tc-count">0</div>
     </div>
+    <div class="bl-card" style="border-left:3px solid #fd7e14;">
+      <div class="bl-label">Pending Due</div>
+      <div class="bl-value" id="bl-tc-pending" style="color:#fd7e14;">0</div>
+    </div>
   </div>
 
   <!-- Filter bar -->
@@ -327,6 +417,13 @@
     <button class="bl-quick-btn" data-bq="today">Today</button>
     <button class="bl-quick-btn" data-bq="month">Month</button>
     <span class="bl-filter-divider"></span>
+    <select id="bl-payment-filter">
+      <option value="all">All Payments</option>
+      <option value="cash">Cash Only</option>
+      <option value="online">Online Only</option>
+      <option value="split">Split</option>
+      <option value="pending">Pending Balance</option>
+    </select>
     <select id="bl-source-filter">
       <option value="all">All Sources</option>
       <option value="normal">Normal</option>
@@ -362,6 +459,51 @@
         </td></tr>
       </tbody>
     </table>
+  </div>
+</div>
+
+<!-- Pay Modal — collect outstanding balance directly from Bills tab -->
+<div class="bl-pay-modal-backdrop" id="bl-pay-modal-backdrop">
+  <div class="bl-pay-modal">
+    <div class="bl-pay-modal-title">
+      <i class="fas fa-hand-holding-usd"></i> Collect Payment
+    </div>
+    <div class="bl-pay-modal-info">
+      <div class="bl-pi-row">
+        <span class="bl-pi-label">Guest</span>
+        <span class="bl-pi-val" id="bl-pm-guest">—</span>
+      </div>
+      <div class="bl-pi-row">
+        <span class="bl-pi-label">Bill No</span>
+        <span class="bl-pi-val" id="bl-pm-billno">—</span>
+      </div>
+      <div class="bl-pi-row">
+        <span class="bl-pi-label">Amount Due</span>
+        <span class="bl-pi-val due" id="bl-pm-due">₹0</span>
+      </div>
+    </div>
+
+    <label for="bl-pm-amount">Payment Amount (₹)</label>
+    <input type="number" id="bl-pm-amount" placeholder="Enter amount" min="1" />
+
+    <label>Payment Method</label>
+    <div class="bl-pm-toggle">
+      <button class="bl-pm-btn bl-pm-active-cash" id="bl-pm-cash-btn">
+        <i class="fas fa-money-bill"></i> Cash
+      </button>
+      <button class="bl-pm-btn" id="bl-pm-online-btn">
+        <i class="fas fa-mobile-alt"></i> Online
+      </button>
+    </div>
+
+    <div class="bl-pay-error" id="bl-pm-error"></div>
+
+    <div class="bl-pay-modal-actions">
+      <button class="bl-pay-cancel-btn" id="bl-pm-cancel">Cancel</button>
+      <button class="bl-pay-confirm-btn" id="bl-pm-confirm">
+        <i class="fas fa-check"></i> Confirm Payment
+      </button>
+    </div>
   </div>
 </div>
 
@@ -440,10 +582,35 @@
     });
 
     const srcf = dom("bl-source-filter");
+    const payf = dom("bl-payment-filter");
     const sr   = dom("bl-search");
 
-    if (srcf) srcf.addEventListener("change", () => { state.filters.source = srcf.value; applyFilters(); });
+    if (srcf) srcf.addEventListener("change", () => { state.filters.source  = srcf.value; applyFilters(); });
+    if (payf) payf.addEventListener("change", () => { state.filters.payment = payf.value; applyFilters(); });
     if (sr)   sr.addEventListener("input", debounce(() => { state.filters.search = sr.value.toLowerCase(); applyFilters(); }, 220));
+
+    // ── Pay modal wiring ──────────────────────────────────────────────────────
+    const pmCancel  = dom("bl-pm-cancel");
+    const pmConfirm = dom("bl-pm-confirm");
+    const pmCash    = dom("bl-pm-cash-btn");
+    const pmOnline  = dom("bl-pm-online-btn");
+    const pmBackdrop = dom("bl-pay-modal-backdrop");
+
+    if (pmCancel)  pmCancel.addEventListener("click", closePayModal);
+    if (pmBackdrop) pmBackdrop.addEventListener("click", (e) => {
+      if (e.target === pmBackdrop) closePayModal();
+    });
+    if (pmCash) pmCash.addEventListener("click", () => {
+      state.payModal.mode = "cash";
+      pmCash.className   = "bl-pm-btn bl-pm-active-cash";
+      pmOnline.className = "bl-pm-btn";
+    });
+    if (pmOnline) pmOnline.addEventListener("click", () => {
+      state.payModal.mode = "online";
+      pmOnline.className = "bl-pm-btn bl-pm-active-online";
+      pmCash.className   = "bl-pm-btn";
+    });
+    if (pmConfirm) pmConfirm.addEventListener("click", collectBillPayment);
 
     const rb = dom("bl-refresh-btn"), xb = dom("bl-export-btn");
     if (rb) rb.addEventListener("click", () => loadData(true));
@@ -475,12 +642,26 @@
     });
     if (bm)  bm.addEventListener("click", (e) => { if (e.target === bm) closeBill(); });
 
-    // Delegated clicks: bill view + group toggle
+    // Delegated clicks: bill view + collect settlement + group toggle
     const tbody = dom("bl-table-body");
     if (tbody) {
       tbody.addEventListener("click", (e) => {
         const billBtn = e.target.closest(".bl-bill-btn");
         if (billBtn) { e.stopPropagation(); openBill(billBtn.dataset.id); return; }
+
+        // Pending balance — open Bills tab pay modal directly
+        const collectBtn = e.target.closest(".bl-collect-btn");
+        if (collectBtn) {
+          e.stopPropagation();
+          openPayModal(
+            collectBtn.dataset.id,
+            collectBtn.dataset.billno,
+            collectBtn.dataset.guest,
+            parseInt(collectBtn.dataset.balance, 10) || 0
+          );
+          return;
+        }
+
         const hdr = e.target.closest(".bl-date-header");
         if (hdr) toggleGroup(hdr);
       });
@@ -569,20 +750,18 @@
     }
   }
 
-  // ── Filters — completed entries with a bill_number (CA filing) ─────────────
+  // ── Filters — completed + pending_settlement entries with a bill_number ──────
   function applyFilters() {
-    // All completed stays that have a bill number assigned — these are what CA files.
-    // NOTE: We do NOT rely on invoice_generated flag because older Firestore documents
-    // were created before that field was added. bill_number (CC/...) presence is the
-    // canonical indicator that a bill was generated.
+    // Include completed bills AND pending_settlement bills (settle-later checkouts).
+    // bill_number presence is the canonical indicator that a bill was generated.
     let f = state.allEntries.filter(e =>
-      e.status === "completed" &&
+      (e.status === "completed" || e.status === "pending_settlement") &&
       e.bill_number &&
       e.bill_number !== "-" &&
       e.bill_number.trim() !== ""
     );
 
-    const { search, source } = state.filters;
+    const { search, source, payment } = state.filters;
 
     if (search)
       f = f.filter((e) =>
@@ -596,15 +775,32 @@
     // MMT OTA has no invoice so won't appear here; only normal + booking.com
     if (source !== "all") f = f.filter((e) => (e.booking_source || "normal") === source);
 
+    // Payment method filter
+    if (payment !== "all") {
+      f = f.filter((e) => {
+        const c = e.payment_cash   || 0;
+        const o = e.payment_online || 0;
+        const b = e.balance        || 0;
+        switch (payment) {
+          case "cash":    return c > 0 && o === 0;
+          case "online":  return o > 0 && c === 0;
+          case "split":   return c > 0 && o > 0;
+          case "pending": return b > 0;
+          default:        return true;
+        }
+      });
+    }
+
     state.filteredEntries = f;
     renderTally(f);
     renderTable();
   }
 
-  // ── Tally — computed from filtered invoiced entries for the selected range ────
+  // ── Tally — computed from completed (paid) entries only ─────────────────────
   function renderTally(entries) {
-    let cash = 0, upi = 0;
+    let cash = 0, upi = 0, pending = 0;
     for (const e of entries) {
+      if ((e.balance || 0) > 0) { pending++; continue; }
       cash += e.payment_cash   || 0;
       upi  += e.payment_online || 0;
     }
@@ -613,8 +809,87 @@
     set("bl-tc-cash", cash);
     set("bl-tc-upi",  upi);
     set("bl-tc-rev",  revenue);
-    const countEl = dom("bl-tc-count");
-    if (countEl) countEl.textContent = entries.length;
+    const countEl   = dom("bl-tc-count");
+    const pendingEl = dom("bl-tc-pending");
+    if (countEl)   countEl.textContent   = entries.length;
+    if (pendingEl) pendingEl.textContent = pending || "0";
+  }
+
+  // ── Pay Modal ─────────────────────────────────────────────────────────────────
+  function openPayModal(billId, billNumber, guestName, balance) {
+    state.payModal = { billId, billNumber, guestName, balance, mode: "cash" };
+
+    const set = (id, val) => { const el = dom(id); if (el) el.textContent = val; };
+    set("bl-pm-guest",  guestName  || "—");
+    set("bl-pm-billno", billNumber || "—");
+    set("bl-pm-due",    "₹" + inr(balance));
+
+    const amtEl = dom("bl-pm-amount");
+    if (amtEl) { amtEl.value = balance; amtEl.max = balance; }
+
+    // Reset method buttons to Cash
+    const cashBtn   = dom("bl-pm-cash-btn");
+    const onlineBtn = dom("bl-pm-online-btn");
+    if (cashBtn)   cashBtn.className   = "bl-pm-btn bl-pm-active-cash";
+    if (onlineBtn) onlineBtn.className = "bl-pm-btn";
+
+    const errEl = dom("bl-pm-error");
+    if (errEl) errEl.textContent = "";
+
+    const confirmBtn = dom("bl-pm-confirm");
+    if (confirmBtn) { confirmBtn.disabled = false; confirmBtn.innerHTML = '<i class="fas fa-check"></i> Confirm Payment'; }
+
+    const backdrop = dom("bl-pay-modal-backdrop");
+    if (backdrop) backdrop.classList.add("bl-pay-open");
+  }
+
+  function closePayModal() {
+    const backdrop = dom("bl-pay-modal-backdrop");
+    if (backdrop) backdrop.classList.remove("bl-pay-open");
+  }
+
+  async function collectBillPayment() {
+    const { billId, balance, mode } = state.payModal;
+    const amtEl     = dom("bl-pm-amount");
+    const errEl     = dom("bl-pm-error");
+    const confirmBtn = dom("bl-pm-confirm");
+    const amount    = parseInt(amtEl?.value || "0", 10);
+
+    if (errEl) errEl.textContent = "";
+
+    if (!amount || amount <= 0) {
+      if (errEl) errEl.textContent = "Please enter a valid amount."; return;
+    }
+    if (amount > balance) {
+      if (errEl) errEl.textContent = `Cannot exceed outstanding balance ₹${inr(balance)}.`; return;
+    }
+
+    confirmBtn.disabled = true;
+    confirmBtn.innerHTML = '<span style="opacity:.6">Processing…</span>';
+
+    try {
+      const res = await apiFetch("/add_bill_payment", {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({ bill_id: billId, payment_mode: mode, amount }),
+      });
+      const data = await res.json();
+
+      if (data.success) {
+        closePayModal();
+        if (window.showNotification) showNotification(data.message, "success");
+        // Reload so row updates immediately
+        loadData(true);
+      } else {
+        if (errEl) errEl.textContent = data.message || "Payment failed.";
+        confirmBtn.disabled = false;
+        confirmBtn.innerHTML = '<i class="fas fa-check"></i> Confirm Payment';
+      }
+    } catch (err) {
+      if (errEl) errEl.textContent = "Network error. Please try again.";
+      confirmBtn.disabled = false;
+      confirmBtn.innerHTML = '<i class="fas fa-check"></i> Confirm Payment';
+    }
   }
 
   // ── Render ────────────────────────────────────────────────────────────────────
@@ -670,6 +945,7 @@
 
   function rowHTML(e, dk, rowIndex) {
     const days   = e.days_stayed || calcDays(e.checkin_time, e.checkout_time);
+    const isPending = e.status === "pending_settlement";
 
     const billNo = e.bill_number || "-";
 
@@ -687,9 +963,27 @@
     const srcCls   = src === "booking.com" ? "bl-src-bookingcom" : "bl-src-normal";
     const srcBadge = `<span class="bl-src-badge ${srcCls}">${srcLabel}</span>`;
 
-    return `<tr class="bl-date-row" data-date-group="${dk}">
+    // Any bill with outstanding balance — new (pending_settlement) or old (completed but balance > 0)
+    const hasBalance = (e.balance || 0) > 0;
+    const rowCls      = (isPending || hasBalance) ? "bl-date-row bl-row-pending" : "bl-date-row";
+    const pendingBadge = (isPending || hasBalance)
+      ? `<span class="bl-pending-badge">Pending</span>`
+      : "";
+    // Action cell: collect button if outstanding balance, else receipt
+    const actionCell = (isPending || hasBalance)
+      ? `<button class="bl-collect-btn"
+           data-id="${e.id}"
+           data-billno="${e.bill_number || ""}"
+           data-guest="${(e.guest_name || "").replace(/"/g, "&quot;")}"
+           data-balance="${e.balance || 0}"
+           title="Collect Payment">
+           <i class="fas fa-hand-holding-usd"></i>
+         </button>`
+      : `<button class="bl-bill-btn" data-id="${e.id}" title="View/Print Bill"><i class="fas fa-receipt"></i></button>`;
+
+    return `<tr class="${rowCls}" data-date-group="${dk}">
       <td style="color:#888;font-size:.75rem;">${rowIndex}</td>
-      <td style="font-size:.73rem;white-space:nowrap;font-family:monospace;">${billNo}</td>
+      <td style="font-size:.73rem;white-space:nowrap;font-family:monospace;">${billNo}${pendingBadge}</td>
       <td><strong>${e.guest_name || "-"}</strong></td>
       <td style="font-size:.78rem;">${e.guest_mobile || "-"}</td>
       <td><strong>${e.room || "-"}</strong></td>
@@ -700,7 +994,7 @@
       <td>${gstCell}</td>
       <td>${paymentHTML(e)}</td>
       <td>${srcBadge}</td>
-      <td><button class="bl-bill-btn" data-id="${e.id}" title="View/Print Bill"><i class="fas fa-receipt"></i></button></td>
+      <td>${actionCell}</td>
     </tr>`;
   }
 
@@ -762,118 +1056,222 @@
   }
 
   // ── Bill HTML builder ─────────────────────────────────────────────────────────
-  // Corrected GST rates + Karnataka place of supply + SAC 9963
+  // GST rates per 55th GST Council (eff. 22 Sep 2025) + Karnataka place of supply
+  // Always shows CGST and SGST rows — 0.00 when rate is exempt (tariff < ₹1,000).
   function buildBillHTML(b) {
-    const days     = b.days_stayed || calcDays(b.checkin_time, b.checkout_time);
-    const rate     = b.room_price_per_night || b.room_rent || 0;
-    const { base, cgst, sgst, total: roomTotal, cgstRate, sgstRate } = gstAmounts(rate, days);
-    const svcTotal  = b.services_total || 0;
-    const discounts = b.discounts || 0;
-    const grandTotal = roomTotal + svcTotal - discounts;
-    const cashPaid    = b.payment_cash   || 0;
-    const onlinePaid  = b.payment_online || 0;
-    const refunds     = b.refunds        || 0;
-    const refundCash  = b.refund_cash    || 0;
-    const refundOnline= b.refund_online  || 0;
-    const totalPaid   = cashPaid + onlinePaid;
-    const netCollected= totalPaid - refunds;
-    const balance     = b.balance || 0;
+    const days = b.days_stayed || calcDays(b.checkin_time, b.checkout_time);
+    const rate = b.room_price_per_night || b.room_rent || 0;
 
-    let svcRows = "";
-    if (b.services && b.services.length) {
-      svcRows = b.services.map(s => `
-        <tr>
-          <td>${s.item}</td><td class="b-tr">${s.quantity || 1}</td>
-          <td class="b-tr">${fix2(s.unit_price || s.price || 0)}</td>
-          <td class="b-tr">${fix2(s.price || 0)}</td>
-        </tr>`).join("");
-    } else if (svcTotal > 0) {
-      svcRows = `<tr><td>Services</td><td class="b-tr">—</td><td class="b-tr">—</td><td class="b-tr">${fix2(svcTotal)}</td></tr>`;
-    }
+    // ── Separate accommodation add-ons from other services ──────────────────────
+    const services          = b.services || [];
+    const accomAddons       = services.filter(s => s.accommodation_charge);
+    const otherServices     = services.filter(s => !s.accommodation_charge);
+    const accomAddonsTotal  = accomAddons.reduce((s, x) => s + (x.price || 0), 0);
+    const otherSvcTotal     = otherServices.reduce((s, x) => s + (x.price || 0), 0);
 
-    const billDate = fmtBillDT(b.checkout_time);
+    // ── GST calculation ──────────────────────────────────────────────────────────
+    // Use stored gst_rate from backend when available (includes accommodation add-ons
+    // in the taxable base). Fall back to on-the-fly calculation for older bills.
+    const gstRatePct  = (typeof b.gst_rate === "number") ? b.gst_rate
+                        : (rate > 7500 ? 18 : rate >= 1000 ? 5 : 0);
+    const cgstRate    = gstRatePct / 2;
+    const sgstRate    = gstRatePct / 2;
 
-    const displayBillNo = b.bill_number || "N/A";
+    // Total accommodation amount (GST-inclusive): room charges + accommodation add-ons.
+    const roomCharges   = rate * days;                         // GST-inclusive
+    const accomTotal    = roomCharges + accomAddonsTotal;      // GST-inclusive base
 
-    // GST rows: show rate or "Exempt" label
-    const gstRows = cgstRate > 0
-      ? `<tr><td style="padding-left:.7rem">CGST @ ${cgstRate}%</td><td class="b-tr">-</td><td class="b-tr">-</td><td class="b-tr">${fix2(cgst)}</td></tr>
-         <tr><td style="padding-left:.7rem">SGST @ ${sgstRate}%</td><td class="b-tr">-</td><td class="b-tr">-</td><td class="b-tr">${fix2(sgst)}</td></tr>`
-      : `<tr><td style="padding-left:.7rem;color:#888;">GST — Exempt (tariff &lt; ₹1,000/night)</td><td class="b-tr">-</td><td class="b-tr">-</td><td class="b-tr">0.00</td></tr>`;
+    // Back-calculate base and GST from GST-inclusive accommodation total.
+    const divisor       = 1 + gstRatePct / 100;
+    const accomBase     = accomTotal / divisor;                // excl. GST
+    const cgst          = (accomTotal - accomBase) / 2;
+    const sgst          = cgst;
+
+    // Grand total = accommodation (incl. GST) + other services − discounts.
+    const discounts     = b.discounts || 0;
+    const svcTotalAll   = (b.services_total || 0);            // includes both types
+    const grandTotal    = roomCharges + svcTotalAll - discounts;
+
+    // Payment
+    const cashPaid     = b.payment_cash   || 0;
+    const onlinePaid   = b.payment_online || 0;
+    const refunds      = b.refunds        || 0;
+    const refundCash   = b.refund_cash    || 0;
+    const refundOnline = b.refund_online  || 0;
+    const totalPaid    = cashPaid + onlinePaid;
+    const netCollected = totalPaid - refunds;
+    const balance      = b.balance || 0;
+
+    const displayBillNo  = b.bill_number || "N/A";
+    const displayInvNo   = b.invoice_number || null;
+    const billDate       = fmtBillDT(b.checkout_time);
+
+    // ── Accommodation add-on rows ────────────────────────────────────────────────
+    const accomAddonRows = accomAddons.map(s => `
+      <tr>
+        <td style="padding-left:.6rem">${s.item}</td>
+        <td class="b-tr">${s.quantity || 1}</td>
+        <td class="b-tr">${fix2(s.unit_price || s.price || 0)}</td>
+        <td class="b-tr">${fix2(s.price || 0)}</td>
+      </tr>`).join("");
+
+    // ── Other services rows ──────────────────────────────────────────────────────
+    const otherSvcRows = otherServices.map(s => `
+      <tr>
+        <td style="padding-left:.6rem">${s.item}</td>
+        <td class="b-tr">${s.quantity || 1}</td>
+        <td class="b-tr">${fix2(s.unit_price || s.price || 0)}</td>
+        <td class="b-tr">${fix2(s.price || 0)}</td>
+      </tr>`).join("");
+
+    // ── GST rows — always show, 0.00 when exempt ─────────────────────────────────
+    const gstRows = `
+      <tr class="b-gst-row">
+        <td style="padding-left:.6rem">CGST @ ${cgstRate}%</td>
+        <td class="b-tr">—</td><td class="b-tr">—</td>
+        <td class="b-tr">${fix2(cgst)}</td>
+      </tr>
+      <tr class="b-gst-row">
+        <td style="padding-left:.6rem">SGST @ ${sgstRate}%</td>
+        <td class="b-tr">—</td><td class="b-tr">—</td>
+        <td class="b-tr">${fix2(sgst)}</td>
+      </tr>`;
+
+    // Accommodation subtotal row (only when add-ons exist or multi-day)
+    const accomSubtotalRow = (accomAddons.length > 0 || days > 1)
+      ? `<tr class="b-subtotal">
+           <td colspan="3" class="b-tr">Accommodation Total (incl. GST)</td>
+           <td class="b-tr">${fix2(accomTotal)}</td>
+         </tr>`
+      : "";
+
+    // Other services section (non-accommodation)
+    const otherSvcSection = otherSvcRows
+      ? `<tr class="b-sec"><td colspan="4">Additional Services (Non-Taxable)</td></tr>
+         ${otherSvcRows}
+         <tr class="b-subtotal">
+           <td colspan="3" class="b-tr">Services Total</td>
+           <td class="b-tr">${fix2(otherSvcTotal)}</td>
+         </tr>`
+      : "";
+
+    // Discount row
+    const discountRow = discounts > 0
+      ? `<tr>
+           <td colspan="3" style="text-align:right;color:#2e7d32;font-weight:600;">
+             Discount
+           </td>
+           <td class="b-tr" style="color:#2e7d32;font-weight:700;">− ${fix2(discounts)}</td>
+         </tr>`
+      : "";
+
+    // Invoice number line (if generated)
+    const invNoRow = displayInvNo
+      ? `<div class="b-row"><span class="b-lbl">Invoice No:</span><span class="b-val" style="font-family:monospace;">${displayInvNo}</span></div>`
+      : "";
 
     return `
-<div class="b-lodge-name">CIBARA COMFORTS</div>
-<div class="b-lodge-sub">Opposite Bus Stand Road, Harihar, Karnataka – 577601</div>
-<div class="b-lodge-sub">Phone: +91 9482831381 &nbsp;|&nbsp; GSTIN: 29AAWFC1962B1Z9 &nbsp;|&nbsp; SAC: 9963</div>
-<div class="b-title">TAX INVOICE</div>
+<div class="b-bill-wrap">
 
-<div class="b-info-grid">
-  <div>
-    <div class="b-row"><span class="b-lbl">Bill No:</span><span style="font-family:monospace;">${displayBillNo}</span></div>
-    <div class="b-row"><span class="b-lbl">Guest Name:</span><span>${b.guest_name}</span></div>
-    <div class="b-row"><span class="b-lbl">Mobile:</span><span>${b.guest_mobile || "N/A"}</span></div>
-    <div class="b-row"><span class="b-lbl">Room No:</span><span>${b.room}</span></div>
+  <!-- ── Header ── -->
+  <div class="b-header-block">
+    <div class="b-lodge-name">CIBARA COMFORTS</div>
+    <div class="b-lodge-sub">Opposite Bus Stand Road, Harihar, Karnataka – 577601</div>
+    <div class="b-lodge-sub">Phone: +91 9482831381</div>
+    <div class="b-gstin-bar">GSTIN: 29AAWFC1962B1Z9 &nbsp;·&nbsp; SAC: 9963 &nbsp;·&nbsp; State: Karnataka (KA – 29)</div>
   </div>
-  <div>
-    <div class="b-row"><span class="b-lbl">Check-in:</span><span>${fmtBillDT(b.checkin_time)}</span></div>
-    <div class="b-row"><span class="b-lbl">Check-out:</span><span>${fmtBillDT(b.checkout_time)}</span></div>
-    <div class="b-row"><span class="b-lbl">Days Stayed:</span><span>${days}</span></div>
-    <div class="b-row"><span class="b-lbl">Bill Date:</span><span>${billDate}</span></div>
-    <div class="b-row"><span class="b-lbl">Place of Supply:</span><span>Karnataka (KA – 29)</span></div>
+  <div class="b-title">TAX INVOICE</div>
+
+  <!-- ── Bill & Guest Info ── -->
+  <div class="b-info-outer">
+    <div class="b-info-col">
+      <div class="b-row"><span class="b-lbl">Bill No:</span><span class="b-val" style="font-family:monospace;font-size:.85em;">${displayBillNo}</span></div>
+      ${invNoRow}
+      <div class="b-row"><span class="b-lbl">Guest Name:</span><span class="b-val">${b.guest_name}</span></div>
+      <div class="b-row"><span class="b-lbl">Mobile:</span><span class="b-val">${b.guest_mobile || "N/A"}</span></div>
+      <div class="b-row"><span class="b-lbl">Room No:</span><span class="b-val">${b.room}</span></div>
+      <div class="b-row"><span class="b-lbl">Guests:</span><span class="b-val">${b.guest_count || 1}</span></div>
+    </div>
+    <div class="b-info-col">
+      <div class="b-row"><span class="b-lbl">Check-in:</span><span class="b-val">${fmtBillDT(b.checkin_time)}</span></div>
+      <div class="b-row"><span class="b-lbl">Check-out:</span><span class="b-val">${fmtBillDT(b.checkout_time)}</span></div>
+      <div class="b-row"><span class="b-lbl">Days Stayed:</span><span class="b-val">${days}</span></div>
+      <div class="b-row"><span class="b-lbl">Bill Date:</span><span class="b-val">${billDate}</span></div>
+      <div class="b-row"><span class="b-lbl">Place of Supply:</span><span class="b-val">Karnataka (KA – 29)</span></div>
+    </div>
   </div>
-</div>
 
-<table class="b-tbl">
-  <thead>
-    <tr><th>Description</th><th class="b-tr">Qty</th><th class="b-tr">Rate (₹)</th><th class="b-tr">Amount (₹)</th></tr>
-  </thead>
-  <tbody>
-    <tr class="b-sec"><td colspan="4">Room Charges &nbsp;<span style="font-weight:400;font-size:.7rem;">(SAC: 9963)</span></td></tr>
-    <tr>
-      <td>Room Rent — Base Amount (excl. GST)</td>
-      <td class="b-tr">${days}</td>
-      <td class="b-tr">${fix2(rate)}</td>
-      <td class="b-tr">${fix2(base)}</td>
-    </tr>
-    ${gstRows}
-    <tr style="font-weight:700;">
-      <td colspan="3" class="b-tr">Total Room Charges (incl. GST):</td>
-      <td class="b-tr">${fix2(roomTotal)}</td>
-    </tr>
-    ${svcRows ? `<tr class="b-sec"><td colspan="4">Additional Services</td></tr>${svcRows}<tr style="font-weight:700;"><td colspan="3" class="b-tr">Total Services:</td><td class="b-tr">${fix2(svcTotal)}</td></tr>` : ""}
-    ${discounts > 0 ? `<tr class="b-sec"><td colspan="4">Discounts</td></tr><tr><td>Discount Applied</td><td class="b-tr">—</td><td class="b-tr">—</td><td class="b-tr" style="color:green;">-${fix2(discounts)}</td></tr>` : ""}
-    <tr class="b-grand">
-      <td colspan="3" class="b-tr"><strong>GRAND TOTAL</strong></td>
-      <td class="b-tr"><strong>${fix2(grandTotal)}</strong></td>
-    </tr>
-  </tbody>
-</table>
-
-<div class="b-pay-section">
-  <strong>Payment Details</strong>
-  <table class="b-tbl" style="margin-top:.25rem;">
+  <!-- ── Items Table ── -->
+  <table class="b-tbl" style="margin-top:.5rem;">
+    <thead>
+      <tr>
+        <th>Description</th>
+        <th class="b-tr">Qty</th>
+        <th class="b-tr">Rate (₹)</th>
+        <th class="b-tr">Amount (₹)</th>
+      </tr>
+    </thead>
     <tbody>
-      <tr><td>Cash Paid</td><td class="b-tr">${fix2(cashPaid)}</td></tr>
-      <tr><td>Online / UPI Paid</td><td class="b-tr">${fix2(onlinePaid)}</td></tr>
-      <tr style="font-weight:700;"><td>Total Paid</td><td class="b-tr">${fix2(totalPaid)}</td></tr>
-      ${refunds > 0 ? (() => {
-        const rCashLbl   = refundCash   > 0 ? `<tr><td>Refund Given (Cash)</td><td class="b-tr">- ${fix2(refundCash)}</td></tr>` : "";
-        const rOnlineLbl = refundOnline > 0 ? `<tr><td>Refund Given (UPI)</td><td class="b-tr">- ${fix2(refundOnline)}</td></tr>` : "";
-        const fallback   = (!refundCash && !refundOnline) ? `<tr><td>Refund Given</td><td class="b-tr">- ${fix2(refunds)}</td></tr>` : "";
-        return rCashLbl + rOnlineLbl + fallback + `<tr style="font-weight:700;"><td>Net Collected</td><td class="b-tr">${fix2(netCollected)}</td></tr>`;
-      })() : ""}
-      ${balance > 0 ? `<tr style="font-weight:bold;color:#dc3545"><td>Balance Due</td><td class="b-tr">${fix2(balance)}</td></tr>` : ""}
+      <!-- Accommodation Section -->
+      <tr class="b-sec">
+        <td colspan="4">Accommodation Charges &nbsp;<span style="font-weight:400;text-transform:none;font-size:.9em;">(SAC: 9963)</span></td>
+      </tr>
+      <tr>
+        <td style="padding-left:.6rem">Room Rent — Base Amount (excl. GST)</td>
+        <td class="b-tr">${days}</td>
+        <td class="b-tr">${fix2(accomBase / (days || 1))}</td>
+        <td class="b-tr">${fix2(accomBase)}</td>
+      </tr>
+      ${gstRows}
+      ${accomAddonRows}
+      ${accomSubtotalRow}
+
+      <!-- Other Services -->
+      ${otherSvcSection}
+
+      <!-- Discount -->
+      ${discountRow}
+
+      <!-- Grand Total -->
+      <tr class="b-grand">
+        <td colspan="3" class="b-tr">GRAND TOTAL</td>
+        <td class="b-tr">₹ ${fix2(grandTotal)}</td>
+      </tr>
     </tbody>
   </table>
-</div>
 
-<div class="b-sig">
-  <div class="b-sig-line">Guest Signature</div>
-  <div class="b-sig-line">Authorised Signatory</div>
-</div>
-<div class="b-footer">
-  <p>Thank you for choosing Cibara Comforts, Harihar!</p>
-  <p>Computer-generated invoice · No physical signature required</p>
+  <!-- ── Payment Summary ── -->
+  <div class="b-pay-section">
+    <div class="b-pay-title">Payment Summary</div>
+    <table class="b-tbl">
+      <tbody>
+        <tr><td>Cash Paid</td><td class="b-tr">₹ ${fix2(cashPaid)}</td></tr>
+        <tr><td>Online / UPI Paid</td><td class="b-tr">₹ ${fix2(onlinePaid)}</td></tr>
+        <tr class="b-subtotal"><td>Total Paid</td><td class="b-tr">₹ ${fix2(totalPaid)}</td></tr>
+        ${refunds > 0 ? (() => {
+          const rc = refundCash   > 0 ? `<tr><td>Refund Given (Cash)</td><td class="b-tr" style="color:#c00;">− ₹ ${fix2(refundCash)}</td></tr>`   : "";
+          const ro = refundOnline > 0 ? `<tr><td>Refund Given (UPI)</td><td class="b-tr" style="color:#c00;">− ₹ ${fix2(refundOnline)}</td></tr>` : "";
+          const rf = (!refundCash && !refundOnline) ? `<tr><td>Refund Given</td><td class="b-tr" style="color:#c00;">− ₹ ${fix2(refunds)}</td></tr>` : "";
+          return rc + ro + rf + `<tr class="b-subtotal"><td>Net Collected</td><td class="b-tr">₹ ${fix2(netCollected)}</td></tr>`;
+        })() : ""}
+        ${balance > 0 ? `<tr><td style="font-weight:800;color:#c62828;">Balance Due</td><td class="b-tr" style="font-weight:800;color:#c62828;">₹ ${fix2(balance)}</td></tr>` : ""}
+        ${balance <= 0 && refunds <= 0 ? `<tr><td style="color:#2e7d32;font-weight:700;">Payment Status</td><td class="b-tr" style="color:#2e7d32;font-weight:700;">PAID IN FULL ✓</td></tr>` : ""}
+      </tbody>
+    </table>
+  </div>
+
+  <!-- ── Signature ── -->
+  <div class="b-sig">
+    <div class="b-sig-line">Guest Signature</div>
+    <div class="b-sig-line">Authorised Signatory</div>
+  </div>
+
+  <!-- ── Footer ── -->
+  <div class="b-footer">
+    <p>Thank you for staying at Cibara Comforts, Harihar. We look forward to welcoming you again!</p>
+    <p>This is a computer-generated invoice. No physical signature is required.</p>
+  </div>
+
 </div>`;
   }
 

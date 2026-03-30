@@ -11,10 +11,11 @@ from firebase_admin import firestore
 from config import (
     db, totals_ref, IST, logger,
     invalidate_rooms_and_totals,
+    generate_sequential_invoice_number,
 )
 
-# settlements_ref defined in config but import it
-from config import settlements_ref
+# settlements_ref and bills_ref defined in config
+from config import settlements_ref, bills_ref
 
 from services import payment_service
 
@@ -131,7 +132,69 @@ def collect_settlement():
                 "serial_number": original_serial,
             })
 
-        if payment_amount == settlement["amount"]:
+        # ── Update the linked bill record ────────────────────────────────────────
+        try:
+            bill_q = bills_ref \
+                .where("settlement_id", "==", settlement_id) \
+                .limit(1).stream()
+            for bill_doc in bill_q:
+                bill_data   = bill_doc.to_dict()
+                bill_update = {}
+
+                # Apply payment to the correct bucket
+                if payment_mode == "cash":
+                    bill_update["payment_cash"] = (bill_data.get("payment_cash", 0)
+                                                   + payment_amount)
+                else:
+                    bill_update["payment_online"] = (bill_data.get("payment_online", 0)
+                                                     + payment_amount)
+
+                # Apply discount if any
+                if discount_amount > 0:
+                    bill_update["discounts"] = (bill_data.get("discounts", 0)
+                                                + discount_amount)
+
+                # Recalculate remaining balance
+                new_cash   = bill_update.get("payment_cash",
+                                             bill_data.get("payment_cash", 0))
+                new_online = bill_update.get("payment_online",
+                                             bill_data.get("payment_online", 0))
+                new_disc   = bill_update.get("discounts",
+                                             bill_data.get("discounts", 0))
+                new_balance = (bill_data.get("total_amount", 0)
+                               - new_cash - new_online
+                               - new_disc
+                               + bill_data.get("refunds", 0))
+                bill_update["balance"] = new_balance
+
+                # If fully settled, close the bill
+                if new_balance <= 0:
+                    bill_update["status"] = "completed"
+
+                    # Generate invoice if UPI payment and no invoice yet
+                    if (payment_mode == "online"
+                            and not bill_data.get("invoice_generated")):
+                        try:
+                            checkout_dt = datetime.strptime(
+                                bill_data["checkout_time"], "%Y-%m-%d %H:%M"
+                            )
+                            inv_num = generate_sequential_invoice_number(checkout_dt)
+                            bill_update["invoice_generated"] = True
+                            bill_update["invoice_number"]    = inv_num
+                        except Exception as _ie:
+                            logger.warning(f"Could not generate invoice on settlement: {_ie}")
+
+                bills_ref.document(bill_doc.id).update(bill_update)
+                logger.info(f"Bill {bill_doc.id} updated after settlement collection "
+                            f"(balance now ₹{new_balance})")
+                break
+        except Exception as _be:
+            logger.warning(f"Could not update bill for settlement {settlement_id}: {_be}")
+
+        # ─────────────────────────────────────────────────────────────────────────
+
+        is_full = (payment_amount == settlement.get("amount", payment_amount))
+        if is_full:
             message = f"Full payment of ₹{payment_amount} collected successfully"
         else:
             message = f"Partial payment of ₹{payment_amount} collected. Remaining: ₹{settlement['amount']}"
@@ -140,7 +203,7 @@ def collect_settlement():
             success=True,
             message=message,
             payment_mode=payment_mode,
-            remaining=settlement["amount"],
+            remaining=settlement.get("amount", 0),
         )
 
     except Exception as e:

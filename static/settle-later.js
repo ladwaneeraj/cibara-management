@@ -424,10 +424,19 @@ async function showPendingSettlementsModal() {
 
 // Show the collect settlement modal
 function showCollectSettlementModal(settlementId) {
-  // Find the settlement
-  const settlement = pendingSettlements.find((s) => s.id === settlementId);
+  // Find the settlement — if pendingSettlements not loaded yet (called from Bills tab),
+  // fetch first then retry
+  let settlement = pendingSettlements.find((s) => s.id === settlementId);
   if (!settlement) {
-    showNotification("Settlement not found", "error");
+    fetchPendingSettlements().then((list) => {
+      pendingSettlements = list || [];
+      const found = pendingSettlements.find((s) => s.id === settlementId);
+      if (found) {
+        showCollectSettlementModal(settlementId);
+      } else {
+        showNotification("Settlement not found", "error");
+      }
+    });
     return;
   }
 

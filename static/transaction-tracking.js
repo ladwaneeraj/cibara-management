@@ -1233,6 +1233,8 @@ function initTxnDateFilter() {
         }
       },
       onChange: function (selectedDates) {
+        // Guard: only act on manual selections after unlock
+        if (!txnDateUnlocked) return;
         if (selectedDates.length === 2) {
           const from = selectedDates[0].toISOString().split("T")[0];
           const to   = selectedDates[1].toISOString().split("T")[0];

@@ -175,56 +175,166 @@
   border-radius: 0 0 10px 10px;
 }
 
+/* ── Bill print area (screen) ── */
 #reg-bill-print-area,
 #bl-bill-print-area {
-  padding: 1rem 1.4rem;
-  font-family: 'Courier New', monospace;
-  font-size: 0.78rem; line-height: 1.42;
+  padding: 1.2rem 1.5rem;
+  font-family: Arial, Helvetica, sans-serif;
+  font-size: 0.80rem; line-height: 1.45;
+  color: #1a1a1a;
 }
-.b-lodge-name  { font-size:1.1rem; font-weight:bold; text-align:center; }
-.b-lodge-sub   { font-size:.72rem; color:#555; text-align:center; margin-bottom:.1rem; }
-.b-title       { text-align:center; font-size:.88rem; font-weight:bold;
-                 margin:.4rem 0; border-top:1px solid #aaa; border-bottom:1px solid #aaa;
-                 padding:.2rem 0; }
-.b-info-grid   { display:grid; grid-template-columns:1fr 1fr; gap:.25rem .8rem;
-                 margin:.5rem 0; font-size:.75rem; }
-.b-row         { display:flex; justify-content:space-between; gap:.3rem; margin-bottom:.15rem; }
-.b-lbl         { font-weight:700; white-space:nowrap; }
-.b-tbl         { width:100%; border-collapse:collapse; font-size:.75rem; margin-bottom:.4rem; }
-.b-tbl th, .b-tbl td { padding:.25rem .28rem; border:1px solid #ddd; }
-.b-tbl th      { background:#f5f5f5; font-weight:700; }
-.b-tr          { text-align:right; }
-.b-sec td      { background:#e8ecf0; font-weight:700; font-size:.72rem; padding:.22rem .28rem; }
-.b-grand       { font-weight:bold; border-top:2px solid #333; }
-.b-pay-section { margin-top:.6rem; padding-top:.4rem; border-top:2px dashed #999; font-size:.75rem; }
-.b-sig         { display:flex; justify-content:space-between; margin-top:1rem; }
-.b-sig-line    { border-top:1px solid #555; margin-top:.9rem; padding-top:.25rem;
-                 width:120px; text-align:center; font-size:.7rem; }
-.b-footer      { margin-top:.6rem; border-top:1px solid #eee; padding-top:.35rem;
-                 font-size:.68rem; color:#999; text-align:center; }
+
+/* ── Bill structure ── */
+.b-bill-wrap { max-width: 680px; margin: 0 auto; }
+
+/* Header band */
+.b-header-block {
+  background: #1a237e; color: #fff;
+  padding: .7rem 1rem .55rem;
+  border-radius: 4px 4px 0 0;
+  margin-bottom: 0;
+}
+.b-lodge-name {
+  font-size: 1.25rem; font-weight: 800;
+  text-align: center; letter-spacing: .04em;
+  color: #fff;
+}
+.b-lodge-sub {
+  font-size: .72rem; text-align: center;
+  margin-top: .12rem; color: #c5cae9;
+}
+.b-gstin-bar {
+  font-size: .68rem; text-align: center;
+  margin-top: .2rem; color: #9fa8da;
+  letter-spacing: .01em;
+}
+
+/* Title bar */
+.b-title {
+  text-align: center; font-size: .85rem; font-weight: 800;
+  letter-spacing: .12em; color: #fff;
+  background: #283593;
+  padding: .28rem 0; margin: 0;
+}
+
+/* Info grid */
+.b-info-outer {
+  border: 1px solid #c5cae9; border-top: none;
+  display: grid; grid-template-columns: 1fr 1fr;
+}
+.b-info-col {
+  padding: .5rem .75rem;
+  font-size: .76rem;
+}
+.b-info-col:first-child {
+  border-right: 1px solid #c5cae9;
+}
+.b-row {
+  display: flex; gap: .35rem; margin-bottom: .2rem;
+  align-items: baseline;
+}
+.b-lbl {
+  font-weight: 700; color: #555; white-space: nowrap;
+  min-width: 85px; flex-shrink: 0;
+}
+.b-val { color: #1a1a1a; }
+
+/* Main items table */
+.b-tbl {
+  width: 100%; border-collapse: collapse;
+  font-size: .78rem; margin-bottom: .35rem;
+  border: 1px solid #c5cae9;
+}
+.b-tbl th {
+  background: #e8eaf6; color: #1a237e;
+  font-weight: 700; padding: .35rem .4rem;
+  border: 1px solid #c5cae9;
+  text-transform: uppercase; font-size: .69rem;
+  letter-spacing: .03em;
+}
+.b-tbl td { padding: .28rem .4rem; border: 1px solid #e0e0e0; }
+.b-tr { text-align: right; }
+
+/* Section header rows */
+.b-sec td {
+  background: #f3f4f9; font-weight: 700;
+  font-size: .71rem; color: #283593;
+  padding: .22rem .4rem;
+  border-color: #c5cae9;
+  letter-spacing: .02em;
+  text-transform: uppercase;
+}
+
+/* GST sub-rows */
+.b-gst-row td { color: #555; font-size: .73rem; }
+
+/* Grand total row */
+.b-grand {
+  background: #e8eaf6;
+  border-top: 2px solid #1a237e !important;
+}
+.b-grand td { font-weight: 800; color: #1a237e; padding: .38rem .4rem; }
+
+/* Subtotal rows */
+.b-subtotal td { font-weight: 700; background: #fafafa; }
+
+/* Payment section */
+.b-pay-section {
+  margin-top: .6rem;
+  border: 1px solid #c5cae9; border-radius: 0 0 4px 4px;
+}
+.b-pay-title {
+  background: #e8eaf6; color: #1a237e;
+  font-weight: 700; font-size: .71rem;
+  padding: .22rem .5rem;
+  letter-spacing: .04em; text-transform: uppercase;
+}
+.b-pay-section .b-tbl {
+  margin-bottom: 0; border: none;
+}
+.b-pay-section .b-tbl td {
+  border-color: #eee; padding: .25rem .5rem;
+}
+
+/* Signature */
+.b-sig {
+  display: flex; justify-content: space-between;
+  margin-top: .9rem; padding: 0 .5rem;
+}
+.b-sig-line {
+  border-top: 1px solid #555; margin-top: .8rem;
+  padding-top: .22rem; width: 130px;
+  text-align: center; font-size: .7rem; color: #555;
+}
+
+/* Footer */
+.b-footer {
+  margin-top: .5rem; border-top: 1px solid #e0e0e0;
+  padding-top: .3rem; font-size: .65rem;
+  color: #999; text-align: center;
+}
 
 /* ── PRINT: force single A4 page ── */
 @media print {
-  @page { size: A4 portrait; margin: 6mm; }
+  @page { size: A4 portrait; margin: 8mm 10mm; }
 
   html, body { height: auto !important; overflow: visible !important; }
 
-  /* ── Clone-based print (bills module): body gets .bl-printing class ──
-     Hide every direct child of body EXCEPT the injected #bl-print-clone.
-     Uses display:none so no layout space is reserved → zero blank pages. */
+  /* Clone-based print (bills module) — body gets .bl-printing class.
+     Hide every direct child of body EXCEPT the injected #bl-print-clone. */
   body.bl-printing > *:not(#bl-print-clone) { display: none !important; }
 
   #bl-print-clone {
     display: block !important;
-    padding: 0;
-    font-size: 8.5pt !important;
-    line-height: 1.28 !important;
-    font-family: 'Courier New', monospace;
+    padding: 0 !important;
     width: 100%;
+    font-family: Arial, Helvetica, sans-serif !important;
+    font-size: 8pt !important;
+    line-height: 1.3 !important;
+    color: #000 !important;
   }
 
-  /* ── Fallback: rooms-module bill modal (visibility approach kept for
-     the existing #bill-modal in index.html that uses printBill()) ── */
+  /* Fallback: rooms-module bill modal */
   body:not(.bl-printing) * { visibility: hidden !important; }
   body:not(.bl-printing) .bill-modal.show,
   body:not(.bl-printing) .bill-modal.show .bill-content,
@@ -235,49 +345,83 @@
     visibility: visible !important;
   }
   body:not(.bl-printing) .bill-modal.show {
-    position: absolute !important; top:0 !important; left:0 !important;
-    width:100% !important; height:auto !important;
-    background: white !important; padding:0 !important;
-    overflow: visible !important; z-index:9999 !important;
+    position: absolute !important; top: 0 !important; left: 0 !important;
+    width: 100% !important; height: auto !important;
+    background: white !important; padding: 0 !important;
+    overflow: visible !important; z-index: 9999 !important;
     display: block !important;
   }
   .bill-content {
-    box-shadow: none !important; border-radius:0 !important;
+    box-shadow: none !important; border-radius: 0 !important;
     max-height: none !important; overflow: visible !important;
     width: 100% !important; max-width: 100% !important;
-    margin:0 !important; padding:0 !important;
+    margin: 0 !important; padding: 0 !important;
   }
   .bill-header  { display: none !important; }
   .bill-actions { display: none !important; }
 
-  /* ── Bill element sizing (applies in both print modes) ── */
+  /* Bill area sizing */
   #bl-print-clone,
   #reg-bill-print-area,
   #bill-print-area {
     padding: 0 !important;
-    font-size: 8.5pt !important;
-    line-height: 1.28 !important;
+    font-size: 8pt !important;
+    line-height: 1.3 !important;
     width: 100% !important;
   }
-  .b-lodge-name  { font-size:12pt !important; }
-  .b-lodge-sub   { font-size:7.5pt !important; }
-  .b-title       { font-size:9pt !important; margin:1.5mm 0 !important; padding:1mm 0 !important; }
-  .b-info-grid   { font-size:8pt !important; gap:1mm 3mm !important; margin:1.5mm 0 !important; }
-  .b-tbl         { font-size:8pt !important; margin-bottom:1.5mm !important; }
-  .b-tbl th,
-  .b-tbl td      { padding:.8mm !important; }
-  .b-pay-section { margin-top:2.5mm !important; padding-top:1.5mm !important; font-size:8pt !important; }
-  .b-sig         { margin-top:5mm !important; }
-  .b-sig-line    { margin-top:4mm !important; width:35mm !important; font-size:7.5pt !important; }
-  .b-footer      { margin-top:3mm !important; padding-top:2mm !important; font-size:7pt !important; }
 
-  .b-tbl, .b-info-grid, .b-pay-section, .b-sig, .b-footer {
+  /* Header block — keep colours in print */
+  .b-header-block {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+    padding: 3mm 4mm 2.5mm !important;
+  }
+  .b-lodge-name { font-size: 13pt !important; }
+  .b-lodge-sub  { font-size: 7pt !important; }
+  .b-gstin-bar  { font-size: 6.5pt !important; }
+  .b-title      { font-size: 8.5pt !important; padding: 1.2mm 0 !important;
+                  -webkit-print-color-adjust: exact !important;
+                  print-color-adjust: exact !important; }
+  .b-info-outer { font-size: 7.5pt !important; }
+  .b-info-col   { padding: 1.5mm 2.5mm !important; }
+  .b-lbl        { min-width: 60px !important; }
+
+  .b-tbl        { font-size: 7.5pt !important; margin-bottom: 1mm !important; }
+  .b-tbl th     {
+    font-size: 6.5pt !important; padding: .8mm !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+  .b-tbl td     { padding: .7mm .8mm !important; }
+  .b-sec td     {
+    font-size: 6.5pt !important; padding: .6mm .8mm !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+  .b-grand td   {
+    padding: .9mm .8mm !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+  .b-pay-title  {
+    font-size: 6.5pt !important; padding: .6mm .8mm !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+  .b-pay-section { margin-top: 2mm !important; }
+  .b-pay-section .b-tbl td { padding: .6mm .8mm !important; }
+  .b-sig        { margin-top: 4mm !important; padding: 0 !important; }
+  .b-sig-line   { margin-top: 3.5mm !important; width: 32mm !important;
+                  font-size: 6.5pt !important; }
+  .b-footer     { margin-top: 2mm !important; padding-top: 1.5mm !important;
+                  font-size: 6pt !important; }
+
+  /* Prevent page breaks inside bill sections */
+  .b-tbl, .b-info-outer, .b-pay-section, .b-sig, .b-footer {
     page-break-inside: avoid !important;
     break-inside: avoid !important;
   }
-  #bl-print-clone,
-  #reg-bill-print-area,
-  #bill-print-area {
+  #bl-print-clone, #reg-bill-print-area, #bill-print-area {
     page-break-after: avoid !important;
     break-after: avoid !important;
   }

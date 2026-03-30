@@ -72,6 +72,7 @@ def checkin():
                 "add_ons": [],
                 "renewal_count": 0,
                 "last_renewal_time": None,
+                "last_renewal_date": None,
             })
 
         try:
@@ -348,11 +349,18 @@ def checkout():
             # Save to bills collection
             checkout_time = datetime.now(IST).strftime("%Y-%m-%d %H:%M")
             bill_id = f"{room}_{int(datetime.now(IST).timestamp())}"
-            bill_record = create_bill_record(room, room_data, checkout_time, batch)
+            # Pass settle_later context so bill gets correct status + settlement link
+            _sid = settlement_id if (balance > 0 and settle_later) else None
+            bill_record = create_bill_record(
+                room, room_data, checkout_time, batch,
+                settle_later=(balance > 0 and settle_later),
+                settlement_id=_sid
+            )
 
             if bill_record:
                 batch.set(bills_ref.document(bill_id), bill_record)
-                logger.info(f"Bill saved for room {room}: {bill_record.get('bill_number')}")
+                logger.info(f"Bill saved for room {room}: {bill_record.get('bill_number')}, "
+                            f"status={bill_record.get('status')}")
 
             # Mark room as cleaning
             batch.update(rooms_ref.document(room), {
@@ -364,6 +372,7 @@ def checkout():
                 "discounts": [],
                 "renewal_count": 0,
                 "last_renewal_time": None,
+                "last_renewal_date": None,
                 "cleaning_status": "in_progress",
                 "cleaning_start_time": datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S")
             })
@@ -401,6 +410,10 @@ def add_on():
         unit_price = data_json.get("unit_price", price)
         quantity = data_json.get("quantity", 1)
 
+        # Accommodation charges (AC, Extra Bed) are taxable under GST alongside room rent.
+        # The frontend sends this flag for those specific service types.
+        accommodation_charge = bool(data_json.get("accommodation_charge", False))
+
         room_doc = rooms_ref.document(room).get()
         if not room_doc.exists:
             return jsonify(success=False, message="Room not found")
@@ -417,7 +430,9 @@ def add_on():
             "time": datetime.now(IST).strftime("%H:%M"),
             "date": datetime.now(IST).strftime("%Y-%m-%d"),
             "payment_method": payment_method,
-            "transaction_type": "service"
+            "transaction_type": "service",
+            # Mark whether this add-on is an accommodation charge for GST purposes.
+            "accommodation_charge": accommodation_charge,
         }
 
         # Build atomic update for totals
@@ -430,9 +445,16 @@ def add_on():
             batch.update(rooms_ref.document(room), {"balance": new_balance})
             totals_update["balance"] = firestore.Increment(price)
 
-        batch.update(rooms_ref.document(room), {
-            "add_ons": firestore.ArrayUnion([add_on_entry])
-        })
+        room_update = {"add_ons": firestore.ArrayUnion([add_on_entry])}
+
+        # If this is an AC service charge, mark the room's guest as AC-enabled.
+        # This causes the snowflake (❄️) indicator to appear on the room card
+        # after the next data refresh.
+        is_ac_service = accommodation_charge and item.upper().startswith("AC")
+        if is_ac_service:
+            room_update["guest.isAC"] = True
+
+        batch.update(rooms_ref.document(room), room_update)
 
         batch.update(totals_ref.document('current_totals'), totals_update)
         batch.commit()
@@ -447,6 +469,7 @@ def add_on():
             "time": datetime.now(IST).strftime("%H:%M"),
             "item": item, "unit_price": unit_price, "quantity": quantity,
             "transaction_type": "service",
+            "accommodation_charge": accommodation_charge,
             "stay_room_key": f"{room}_{room_data.get('checkin_time', '')}",
         })
 
@@ -478,14 +501,29 @@ def renew_rent():
         guest = room_data["guest"]
         price = guest["price"]
 
+        # ── Fix 1: Verify renewal_count is exactly current + 1 ──────────────────
+        incoming_count = data_json.get("renewal_count", 0)
+        current_count  = room_data.get("renewal_count", 0)
+        if incoming_count != current_count + 1:
+            return jsonify(success=False,
+                           message="Renewal already processed. Please refresh and try again.")
+
+        # ── Fix 2: Prevent double-renewal on the same calendar day ──────────────
+        today_str = datetime.now(IST).strftime("%Y-%m-%d")
+        last_renewal_date = room_data.get("last_renewal_date", "")
+        if last_renewal_date == today_str:
+            return jsonify(success=False,
+                           message="Rent already renewed today for this room.")
+
+        renewal_count = incoming_count
         new_balance = room_data["balance"] + price
-        renewal_count = data_json.get("renewal_count", 0)
 
         batch = db.batch()
 
         batch.update(rooms_ref.document(room), {
             "balance": new_balance,
-            "renewal_count": renewal_count
+            "renewal_count": renewal_count,
+            "last_renewal_date": today_str
         })
 
         batch.update(totals_ref.document('current_totals'), {"balance": firestore.Increment(price)})
@@ -615,7 +653,8 @@ def update_checkin_time():
         rooms_ref.document(room).update({
             "checkin_time": new_checkin_time,
             "renewal_count": 0,
-            "last_renewal_time": None
+            "last_renewal_time": None,
+            "last_renewal_date": None
         })
 
         invalidate_cache()
@@ -843,7 +882,8 @@ def mark_room_cleaned():
             "add_ons": [],
             "discounts": [],
             "renewal_count": 0,
-            "last_renewal_time": None
+            "last_renewal_time": None,
+            "last_renewal_date": None
         })
 
         invalidate_rooms_and_totals()

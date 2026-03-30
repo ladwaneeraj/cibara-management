@@ -24,6 +24,7 @@ let uploadedPhotoUrl = null; // For storing uploaded photo URL
 let mediaStream = null; // For camera access
 let selectedService = null; // For tracking selected service
 let servicePaymentMethod = "cash"; // Default payment method for services
+let isAccommodationCharge = false; // Whether the selected service is an accommodation charge (AC/Extra Bed)
 
 // DOM Elements - with null checks
 const roomsGrid = document.getElementById("rooms-grid");
@@ -378,7 +379,7 @@ function renderRooms() {
     else if (info.status === "occupied" && info.guest) {
       const guestCount = info.guest.guests || 1;
       const roomNum = parseInt(roomNumber);
-      const isPremiumACRoom = roomNum >= 202 && roomNum <= 205;
+      const isPremiumACRoom = roomNum >= 200 && roomNum <= 206;
       const isAcRoom = isPremiumACRoom && info.guest.isAC === true;
 
       const isMmtRoom = info.guest.payment === "ota";
@@ -1185,6 +1186,18 @@ function updateCheckoutModal(roomNumber) {
   // Reset the service form
   resetServiceForm();
 
+  // Show / hide the AC service button based on room type and current AC status.
+  // The button appears only for rooms 200–206 where the guest has NOT yet
+  // activated AC (isAC === false).  Once AC is added the flag flips server-side
+  // and the button disappears after the next fetchData() → updateCheckoutModal().
+  const acServiceBtn = document.getElementById("ac-service-btn");
+  if (acServiceBtn) {
+    const roomNum = parseInt(roomNumber, 10);
+    const isAcCapableRoom = roomNum >= 200 && roomNum <= 206;
+    const guestHasAc = roomInfo.guest && roomInfo.guest.isAC === true;
+    acServiceBtn.style.display = (isAcCapableRoom && !guestHasAc) ? "" : "none";
+  }
+
   // Update renewal history
   updateRenewalHistory(roomNumber);
 
@@ -1394,11 +1407,18 @@ function resetServiceForm() {
 
   serviceForm.classList.add("hidden");
   selectedService = null;
+  isAccommodationCharge = false;
 
-  // Deselect all service buttons
-  document.querySelectorAll(".service-btn").forEach((btn) => {
+  // Deselect all service chips
+  document.querySelectorAll(".svc-chip").forEach((btn) => {
     btn.classList.remove("selected");
   });
+
+  // Hide custom name row and clear it
+  const svcNameRow = document.getElementById("svc-name-row");
+  if (svcNameRow) svcNameRow.style.display = "none";
+  const svcNameInput = document.getElementById("service-name");
+  if (svcNameInput) { svcNameInput.value = ""; svcNameInput.readOnly = false; }
 
   // Reset payment method
   document.querySelectorAll(".payment-options .payment-btn").forEach((btn) => {
@@ -1429,31 +1449,55 @@ function resetServiceForm() {
 // Initialize service buttons
 function initServiceButtons() {
   debugLog("Initializing service buttons");
-  // Service buttons
-  const serviceButtons = document.querySelectorAll(".service-btn");
+  // Service chips
+  const serviceButtons = document.querySelectorAll(".svc-chip");
   if (serviceButtons.length === 0) {
-    debugLog("No service buttons found");
+    debugLog("No service chips found");
   }
 
   serviceButtons.forEach((btn) => {
     btn.addEventListener("click", function () {
-      const service = this.dataset.service;
+      const isCustom = this.dataset.custom === "true";
+      const service = isCustom ? "" : this.dataset.service;
       const price = this.dataset.price;
 
-      debugLog(`Service clicked: ${service}, price: ${price}`);
+      debugLog(`Service chip clicked: ${service || "(custom)"}, price: ${price}`);
 
       // Clear previous selection
-      document.querySelectorAll(".service-btn").forEach((b) => {
+      document.querySelectorAll(".svc-chip").forEach((b) => {
         b.classList.remove("selected");
       });
 
-      // Select this button
+      // Select this chip
       this.classList.add("selected");
       selectedService = service;
 
+      // Track accommodation charge flag
+      isAccommodationCharge = this.dataset.accommodation === "true";
+
+      // Name row: show for custom chip, hide for presets
+      const svcNameRow = document.getElementById("svc-name-row");
+      const svcNameInput = document.getElementById("service-name");
+
+      if (svcNameRow) {
+        if (isCustom) {
+          svcNameRow.style.display = "flex";
+          if (svcNameInput) {
+            svcNameInput.value = "";
+            svcNameInput.readOnly = false;
+            setTimeout(() => svcNameInput.focus(), 50);
+          }
+        } else {
+          svcNameRow.style.display = "none";
+          if (svcNameInput) {
+            svcNameInput.value = service;
+            svcNameInput.readOnly = true;
+          }
+        }
+      }
+
       // Populate service form
-      if (serviceForm && serviceName && servicePrice) {
-        serviceName.value = service;
+      if (serviceForm && servicePrice) {
         servicePrice.value = price;
 
         // Reset quantity to 1
@@ -1466,7 +1510,7 @@ function initServiceButtons() {
           servicePrice.readOnly = true;
         } else {
           servicePrice.readOnly = false;
-          servicePrice.focus();
+          if (!isCustom) servicePrice.focus();
         }
 
         // Update total price
@@ -1477,7 +1521,6 @@ function initServiceButtons() {
       } else {
         debugLog("Service form elements not found");
         if (!serviceForm) debugLog("- serviceForm not found");
-        if (!serviceName) debugLog("- serviceName not found");
         if (!servicePrice) debugLog("- servicePrice not found");
       }
     });
@@ -1600,6 +1643,7 @@ async function addService() {
         unit_price: price,
         quantity: quantity,
         payment_method: servicePaymentMethod,
+        accommodation_charge: isAccommodationCharge,
       }),
     });
 
@@ -2197,6 +2241,36 @@ function updatePaymentOrRefundUI(roomNumber) {
           Process Refund
         </button>
       </div>
+
+      <div class="refund-add-payment-divider">
+        <span>or add a payment</span>
+      </div>
+
+      <div class="form-group refund-add-payment-section">
+        <label class="form-label">Add Payment</label>
+        <div class="payment-button-wrapper">
+          <input
+            type="number"
+            class="form-control payment-amount-input"
+            id="checkout-payment-amount"
+            placeholder="Amount"
+            min="1"
+          />
+          <div class="payment-options" style="margin-top: 0.5rem;">
+            <button type="button" class="payment-btn cash active" id="checkout-cash-btn">
+              <i class="fas fa-money-bill"></i> Cash
+            </button>
+            <button type="button" class="payment-btn online" id="checkout-online-btn">
+              <i class="fas fa-mobile-alt"></i> Online
+            </button>
+            <div class="payment-button-row">
+              <button type="button" class="payment-add-btn" id="add-payment-btn">
+                <i class="fas fa-plus-circle"></i> Add Payment
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
     `;
 
     // Refund method selection
@@ -2235,6 +2309,31 @@ function updatePaymentOrRefundUI(roomNumber) {
             errorElement.style.display = "none";
           }
         }
+      });
+    }
+
+    // Add payment section handlers (below refund)
+    const cashBtn = document.getElementById("checkout-cash-btn");
+    const onlineBtn = document.getElementById("checkout-online-btn");
+    const addPaymentBtn = document.getElementById("add-payment-btn");
+
+    if (cashBtn) {
+      cashBtn.addEventListener("click", function () {
+        onlineBtn && onlineBtn.classList.remove("active");
+        cashBtn.classList.add("active");
+      });
+    }
+    if (onlineBtn) {
+      onlineBtn.addEventListener("click", function () {
+        cashBtn && cashBtn.classList.remove("active");
+        onlineBtn.classList.add("active");
+      });
+    }
+    if (addPaymentBtn) {
+      addPaymentBtn.addEventListener("click", function () {
+        const activeMethod =
+          cashBtn && cashBtn.classList.contains("active") ? "cash" : "online";
+        addPayment(activeMethod);
       });
     }
   }

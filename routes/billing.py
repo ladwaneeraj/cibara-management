@@ -8,12 +8,14 @@ Old `logs` collection is NOT used for reads anymore.
 from flask import Blueprint, request, jsonify
 from datetime import datetime, timedelta
 from google.cloud.firestore_v1.base_query import FieldFilter
+from firebase_admin import firestore
 
 from config import (
     db, rooms_ref, bills_ref, logs_ref, totals_ref, counters_ref,
     metadata_ref, IST, logger, settlements_ref,
     _build_active_entry_fast, _find_serial_fast, _batch_fill_serials,
-    get_all_rooms,
+    get_all_rooms, invalidate_rooms_and_totals,
+    generate_sequential_invoice_number,
 )
 from services import payment_service
 
@@ -503,3 +505,136 @@ def debug_bills():
     except Exception as e:
         logger.error(f"Error in debug: {str(e)}")
         return jsonify(success=False, message=str(e))
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ADD BILL PAYMENT — collect outstanding balance directly from the Bills tab
+# ══════════════════════════════════════════════════════════════════════════════
+
+@billing_bp.route("/add_bill_payment", methods=["POST"])
+def add_bill_payment():
+    """
+    Record a payment against a bill that has an outstanding balance.
+    Works for both new bills (have settlement_id) and old bills (no settlement_id).
+    When a settlement_id exists the linked settlement record is updated too so
+    the Pending Settlements tab stays in sync.
+    """
+    try:
+        data_json    = request.json
+        bill_id      = data_json.get("bill_id", "")
+        payment_mode = data_json.get("payment_mode", "cash")   # "cash" | "online"
+        amount       = int(data_json.get("amount", 0))
+
+        if not bill_id:
+            return jsonify(success=False, message="bill_id is required")
+        if amount <= 0:
+            return jsonify(success=False, message="Amount must be greater than 0")
+
+        # ── Fetch bill ────────────────────────────────────────────────────────
+        bill_doc = bills_ref.document(bill_id).get()
+        if not bill_doc.exists:
+            return jsonify(success=False, message="Bill not found")
+
+        bill_data       = bill_doc.to_dict()
+        current_balance = int(bill_data.get("balance", 0))
+
+        if current_balance <= 0:
+            return jsonify(success=False, message="No outstanding balance on this bill")
+        if amount > current_balance:
+            return jsonify(success=False,
+                           message=f"Amount ₹{amount} exceeds outstanding balance ₹{current_balance}")
+
+        # ── Build bill update ─────────────────────────────────────────────────
+        bill_update = {}
+        if payment_mode == "cash":
+            bill_update["payment_cash"] = bill_data.get("payment_cash", 0) + amount
+        else:
+            bill_update["payment_online"] = bill_data.get("payment_online", 0) + amount
+
+        new_balance = current_balance - amount
+        bill_update["balance"] = new_balance
+
+        invoice_number = None
+        if new_balance <= 0:
+            bill_update["status"] = "completed"
+            # Generate invoice for UPI payment if not issued yet
+            if payment_mode == "online" and not bill_data.get("invoice_generated"):
+                try:
+                    checkout_dt = datetime.strptime(
+                        bill_data["checkout_time"], "%Y-%m-%d %H:%M")
+                    invoice_number = generate_sequential_invoice_number(checkout_dt)
+                    bill_update["invoice_generated"] = True
+                    bill_update["invoice_number"]    = invoice_number
+                except Exception as _ie:
+                    logger.warning(f"Invoice generation failed: {_ie}")
+
+        bills_ref.document(bill_id).update(bill_update)
+        logger.info(f"Bill {bill_id} payment ₹{amount} ({payment_mode}), "
+                    f"balance now ₹{new_balance}")
+
+        # ── Update totals ─────────────────────────────────────────────────────
+        batch = db.batch()
+        batch.update(totals_ref.document("current_totals"),
+                     {payment_mode: firestore.Increment(amount)})
+        batch.commit()
+        invalidate_rooms_and_totals()
+
+        # ── Write to payments collection ──────────────────────────────────────
+        payment_service.write_payment({
+            "room":             bill_data.get("room", ""),
+            "name":             bill_data.get("guest_name", ""),
+            "amount":           amount,
+            "method":           payment_mode,
+            "type":             "settlement_payment",
+            "date":             datetime.now(IST).strftime("%Y-%m-%d"),
+            "time":             datetime.now(IST).strftime("%H:%M"),
+            "transaction_type": "settlement_payment",
+            "bill_id":          bill_id,
+            "bill_number":      bill_data.get("bill_number", ""),
+        })
+
+        # ── Sync linked settlement (if any) ───────────────────────────────────
+        settlement_id = bill_data.get("settlement_id")
+        if settlement_id:
+            try:
+                s_doc = settlements_ref.document(settlement_id).get()
+                if s_doc.exists:
+                    s_data   = s_doc.to_dict()
+                    s_amount = int(s_data.get("amount", 0))
+                    s_update = {}
+                    if amount >= s_amount:
+                        s_update["status"]       = "paid"
+                        s_update["payment_date"] = datetime.now(IST).strftime("%Y-%m-%d")
+                        s_update["payment_time"] = datetime.now(IST).strftime("%H:%M")
+                        s_update["payment_mode"] = payment_mode
+                    else:
+                        s_update["status"] = "partial"
+                        s_update["amount"] = s_amount - amount
+                        prev = s_data.get("payments", [])
+                        s_update["payments"] = prev + [{
+                            "amount": amount,
+                            "date":   datetime.now(IST).strftime("%Y-%m-%d"),
+                            "time":   datetime.now(IST).strftime("%H:%M"),
+                            "mode":   payment_mode,
+                        }]
+                    settlements_ref.document(settlement_id).update(s_update)
+                    logger.info(f"Settlement {settlement_id} synced from bill payment")
+            except Exception as _se:
+                logger.warning(f"Could not sync settlement {settlement_id}: {_se}")
+
+        msg = f"Payment of ₹{amount} recorded."
+        if new_balance > 0:
+            msg += f" Remaining balance: ₹{new_balance}"
+        else:
+            msg += " Bill settled."
+
+        return jsonify(
+            success=True,
+            message=msg,
+            new_balance=new_balance,
+            invoice_number=invoice_number,
+        )
+
+    except Exception as e:
+        logger.error(f"Error in add_bill_payment: {str(e)}")
+        return jsonify(success=False, message=f"Error: {str(e)}")

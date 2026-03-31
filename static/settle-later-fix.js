@@ -124,7 +124,13 @@
               checkoutModal.classList.remove("show");
             }
 
-            await fetchData();
+            // Mark room locally for immediate UI update
+            if (rooms[roomNumber]) {
+              rooms[roomNumber].status = "cleaning";
+              rooms[roomNumber].guest = null;
+            }
+            if (typeof renderRooms === "function") renderRooms();
+            debouncedFetchData(); // background sync
 
             // Show appropriate success message
             if (settleLaterEnabled && balance > 0) {

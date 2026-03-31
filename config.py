@@ -331,7 +331,13 @@ def create_bill_record(room, room_data, checkout_time, batch=None,
     Reads from payments collection as primary data source.
     If settle_later=True the bill is stored with status='pending_settlement'
     and settlement_id is embedded so it can be updated when collected.
+
+    OPTIMISED: the three independent Firestore reads (payments, metadata doc,
+    booking-source lookup) now run concurrently via ThreadPoolExecutor.
+    Serial number is extracted from the already-fetched payments list instead
+    of making a duplicate query via find_serial_number().
     """
+    from concurrent.futures import ThreadPoolExecutor as _TPE
     try:
         guest = room_data.get("guest")
         if not guest:
@@ -343,26 +349,68 @@ def create_bill_record(room, room_data, checkout_time, batch=None,
 
         checkin_dt = datetime.strptime(checkin_time, "%Y-%m-%d %H:%M")
         checkout_dt = datetime.strptime(checkout_time, "%Y-%m-%d %H:%M")
+        checkin_date_str = checkin_dt.strftime("%Y-%m-%d")
 
-        # Read from payments collection
-        stay_payments = payment_service.query_payments_for_stay(
-            room, guest["name"], checkin_dt
-        ) or []
+        # ── Parallel Firestore reads ──────────────────────────────────────────
+        # Previously: query_payments_for_stay → find_serial_number (which
+        # re-runs query_payments_for_stay internally) → metadata get → booking
+        # query — all sequential, 4-6 round-trips.
+        # Now: all three independent reads fire at once, serial is extracted
+        # from the already-fetched payments list (no duplicate query).
 
-        serial_number = payment_service.find_serial_number(
-            room, guest["name"], checkin_dt
-        )
-        # Metadata fallback for serial
-        if not serial_number:
-            checkin_date = checkin_dt.strftime("%Y-%m-%d")
+        def _fetch_payments():
+            return payment_service.query_payments_for_stay(
+                room, guest["name"], checkin_dt
+            ) or []
+
+        def _fetch_meta_serial():
+            """Read the metadata doc for a serial-number fallback."""
             try:
-                meta_doc = metadata_ref.document(f"{checkin_date}_{room}").get()
+                meta_doc = metadata_ref.document(f"{checkin_date_str}_{room}").get()
                 if meta_doc.exists:
                     sn = meta_doc.to_dict().get("serial_number")
                     if sn and sn != 0:
-                        serial_number = int(sn)
+                        return int(sn)
             except Exception:
                 pass
+            return None
+
+        def _fetch_booking_doc():
+            """Return the raw booking dict (or None) for OTA / source fields."""
+            try:
+                bq = (
+                    bookings_ref
+                    .where("room", "==", room)
+                    .where("guest_name", "==", guest["name"])
+                    .where("check_in_date", "==", checkin_date_str)
+                    .limit(1)
+                    .stream()
+                )
+                for bdoc in bq:
+                    return bdoc.to_dict()
+            except Exception as _be:
+                logger.warning(f"Could not fetch booking source for room {room}: {_be}")
+            return None
+
+        with _TPE(max_workers=3) as _pool:
+            _f_pay  = _pool.submit(_fetch_payments)
+            _f_meta = _pool.submit(_fetch_meta_serial)
+            _f_book = _pool.submit(_fetch_booking_doc)
+
+        stay_payments  = _f_pay.result()
+        meta_serial    = _f_meta.result()
+        booking_doc    = _f_book.result()
+
+        # Extract serial from the already-fetched payments (no extra DB call)
+        serial_number = None
+        for _p in stay_payments:
+            _sn = _p.get("serial_number")
+            if _sn and _sn != 0:
+                serial_number = int(_sn)
+                break
+        # Fall back to metadata doc value
+        if not serial_number:
+            serial_number = meta_serial
 
         _exclude = ("refund", "checkout_refund", "manual_refund",
                      "booking_cancel_refund", "discount", "expense")
@@ -449,35 +497,22 @@ def create_bill_record(room, room_data, checkout_time, batch=None,
         # bill_number is determined after invoice logic below
         bill_number = None
 
-        # ── Booking source / OTA fields ─────────────────────────────────────
-        # Try to find the original booking record for this stay to pull OTA data
-        booking_source = "normal"
-        payment_source = "hotel"
-        ota_total_amount = 0
-        ota_commission = 0.0
+        # ── Booking source / OTA fields (from parallel-fetched booking_doc) ──
+        booking_source    = "normal"
+        payment_source    = "hotel"
+        ota_total_amount  = 0
+        ota_commission    = 0.0
         ota_commission_gst = 0.0
-        net_receivable = 0
+        net_receivable    = 0
         settlement_status = None
-        try:
-            # Match by room + guest + check_in_date (checkin_time date portion)
-            checkin_date_str = checkin_dt.strftime("%Y-%m-%d")
-            bq = bookings_ref \
-                .where("room", "==", room) \
-                .where("guest_name", "==", guest["name"]) \
-                .where("check_in_date", "==", checkin_date_str) \
-                .limit(1).stream()
-            for bdoc in bq:
-                bd = bdoc.to_dict()
-                booking_source = bd.get("booking_source", "normal")
-                payment_source = bd.get("payment_source", "hotel")
-                ota_total_amount = bd.get("ota_total_amount", 0)
-                ota_commission = bd.get("ota_commission", 0.0)
-                ota_commission_gst = bd.get("ota_commission_gst", 0.0)
-                net_receivable = bd.get("net_receivable", 0)
-                settlement_status = bd.get("settlement_status")
-                break
-        except Exception as _be:
-            logger.warning(f"Could not fetch booking source for room {room}: {_be}")
+        if booking_doc:
+            booking_source     = booking_doc.get("booking_source", "normal")
+            payment_source     = booking_doc.get("payment_source", "hotel")
+            ota_total_amount   = booking_doc.get("ota_total_amount", 0)
+            ota_commission     = booking_doc.get("ota_commission", 0.0)
+            ota_commission_gst = booking_doc.get("ota_commission_gst", 0.0)
+            net_receivable     = booking_doc.get("net_receivable", 0)
+            settlement_status  = booking_doc.get("settlement_status")
 
         # ── Invoice logic (Section 3 of spec) ───────────────────────────────────
         # invoice_number (INV/YYYY/MM/XXXXX) is the GST tax invoice — separate from

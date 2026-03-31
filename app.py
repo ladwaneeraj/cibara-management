@@ -1,4 +1,5 @@
 from flask import Flask, render_template, send_from_directory, jsonify, request
+from flask_compress import Compress
 from config import initialize_data, logger, db, UPLOAD_FOLDER
 from routes.rooms import rooms_bp
 from routes.bookings import bookings_bp
@@ -11,6 +12,9 @@ import os
 import threading
 
 app = Flask(__name__, static_folder='static', template_folder='templates')
+
+# Gzip-compress all JSON/HTML responses automatically (~70% smaller payloads)
+Compress(app)
 
 # ---------------------------------------------------------------------------
 # API Key Authentication

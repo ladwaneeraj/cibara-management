@@ -559,8 +559,6 @@ class TransactionLogManager {
       return;
     }
 
-    paymentLogsContainer.innerHTML = `<div class="loading-indicator"><span class="loader"></span></div>`;
-
     const roomInfo = rooms[roomNumber];
     if (!roomInfo || !roomInfo.guest) {
       paymentLogsContainer.innerHTML =
@@ -568,125 +566,129 @@ class TransactionLogManager {
       return;
     }
 
-    // Fetch full payment history from the server — /get_history queries
-    // Firestore directly and is NOT limited to the 3-day window that
-    // /get_data uses for the main logs cache.
+    // ── Cache hit: render instantly, no network call ──────────────────────
+    const cacheKey = `${roomNumber}:${roomInfo.checkin_time || ""}`;
+    const cached = _payCache[cacheKey];
+    if (cached && (Date.now() - cached.ts < _PAY_CACHE_TTL)) {
+      this._renderPaymentData(paymentLogsContainer, cached.data);
+      return;
+    }
+
+    // Cache miss: show spinner and fetch
+    paymentLogsContainer.innerHTML = `<div class="loading-indicator"><span class="loader"></span></div>`;
+
     apiFetch("/get_history", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ room: roomNumber, name: roomInfo.guest.name }),
+      body: JSON.stringify({
+        room: roomNumber,
+        name: roomInfo.guest.name,
+        checkin_time: roomInfo.checkin_time || null,
+      }),
     })
       .then((res) => res.json())
       .then((data) => {
-        if (!data.success) {
-          paymentLogsContainer.innerHTML =
-            '<div class="log-item">Could not load payment history</div>';
-          return;
-        }
-
-        const _refundTypes = new Set([
-          "refund", "checkout_refund", "manual_refund", "booking_cancel_refund"
-        ]);
-
-        // Combine all payment types from the response.
-        // Renewals are excluded — this tab shows cash, online, service and shift payments only.
-        const allPayments = [
-          ...(data.cash || []).map((p) => ({ ...p, _source: "cash" })),
-          ...(data.online || []).map((p) => ({ ...p, _source: "online" })),
-          ...(data.refunds || []).map((p) => ({ ...p, _source: "refund" })),
-          ...(data.addons || []).map((p) => ({ ...p, _source: "addon" })),
-          ...(data.shifts || []).map((p) => ({ ...p, _source: "shift" })),
-        ].sort((a, b) => {
-          const da = a.date ? new Date(`${a.date} ${a.time || "00:00"}`) : new Date(0);
-          const db = b.date ? new Date(`${b.date} ${b.time || "00:00"}`) : new Date(0);
-          return db - da;
-        });
-
-        if (allPayments.length === 0) {
-          paymentLogsContainer.innerHTML =
-            '<div class="log-item">No payments recorded</div>';
-          return;
-        }
-
-        // Deduplicate by a stable key
-        const seen = new Set();
-        let logsHtml = "";
-
-        allPayments.forEach((payment) => {
-          const key = `${payment.date}-${payment.time}-${payment.amount || 0}-${payment.type || ""}-${payment.item || ""}`;
-          if (seen.has(key)) return;
-          seen.add(key);
-
-          let paymentType = "Payment";
-          let colorStyle = "";
-          let amountText = `₹${payment.amount || 0}`;
-          let badgeHtml = "";
-
-          const src = payment._source;
-          const ptype = payment.type || "";
-
-          if (src === "refund" || _refundTypes.has(ptype)) {
-            paymentType = "Refund";
-            colorStyle = "style='color: var(--danger)'";
-
-          } else if (src === "addon" || ptype === "addon") {
-            const itemName = payment.item || payment.note || "Add-on";
-            paymentType = `Add-on: ${itemName}`;
-            colorStyle = "style='color: var(--warning)'";
-            const method = payment.method || payment.payment_method || "balance";
-            badgeHtml = `<span class="service-payment-badge ${method}">${method}</span>`;
-            amountText = `₹${payment.amount || payment.price || 0}`;
-
-          } else if (src === "shift" || ptype === "room_shift") {
-            const oldRoom = payment.old_room || "?";
-            paymentType = `Room Shifted from Room ${oldRoom}`;
-            colorStyle = "style='color: var(--info, #17a2b8)'";
-            amountText = "";   // no monetary amount for a shift
-
-          } else if (ptype === "booking_advance" || ptype === "booking_payment") {
-            const method = (payment.method || "cash");
-            paymentType = `Booking Advance (${method})`;
-            colorStyle = "style='color: var(--info, #17a2b8)'";
-
-          } else if (ptype === "booking_conversion") {
-            if (payment.amount === 0) {
-              paymentType = "Booking — Fully Paid";
-              colorStyle = "style='color: var(--warning)'";
-            } else {
-              const method = (payment.method || "cash");
-              paymentType = `Booking Final Payment (${method})`;
-            }
-
-          } else if (src === "cash" || payment.method === "cash") {
-            if (payment.payment_method === "pay_later" || payment.amount === 0) {
-              paymentType = "Pay Later";
-              colorStyle = "style='color: var(--warning)'";
-            } else {
-              paymentType = "Cash Payment";
-            }
-
-          } else if (src === "online" || payment.method === "online") {
-            paymentType = "Online Payment";
-          }
-
-          logsHtml += `
-            <div class="log-item">
-              <div class="log-details">
-                <div class="log-title">${paymentType}${badgeHtml}</div>
-                <div class="log-subtitle">${payment.time || "N/A"} on ${payment.date || "N/A"}</div>
-              </div>
-              <div class="log-amount" ${colorStyle}>${amountText}</div>
-            </div>
-          `;
-        });
-
-        paymentLogsContainer.innerHTML = logsHtml;
+        if (data.success) _payCache[cacheKey] = { data, ts: Date.now() };
+        this._renderPaymentData(paymentLogsContainer, data);
       })
       .catch((err) => {
         console.error("Error loading payment history:", err);
         paymentLogsContainer.innerHTML =
           '<div class="log-item">Error loading payment history</div>';
       });
+  }
+
+  _renderPaymentData(container, data) {
+    if (!data.success) {
+      container.innerHTML = '<div class="log-item">Could not load payment history</div>';
+      return;
+    }
+
+    const _refundTypes = new Set([
+      "refund", "checkout_refund", "manual_refund", "booking_cancel_refund"
+    ]);
+
+    const allPayments = [
+      ...(data.cash || []).map((p) => ({ ...p, _source: "cash" })),
+      ...(data.online || []).map((p) => ({ ...p, _source: "online" })),
+      ...(data.refunds || []).map((p) => ({ ...p, _source: "refund" })),
+      ...(data.addons || []).map((p) => ({ ...p, _source: "addon" })),
+      ...(data.shifts || []).map((p) => ({ ...p, _source: "shift" })),
+    ].sort((a, b) => {
+      const da = a.date ? new Date(`${a.date} ${a.time || "00:00"}`) : new Date(0);
+      const db = b.date ? new Date(`${b.date} ${b.time || "00:00"}`) : new Date(0);
+      return db - da;
+    });
+
+    if (allPayments.length === 0) {
+      container.innerHTML = '<div class="log-item">No payments recorded</div>';
+      return;
+    }
+
+    const seen = new Set();
+    let logsHtml = "";
+
+    allPayments.forEach((payment) => {
+      const key = `${payment.date}-${payment.time}-${payment.amount || 0}-${payment.type || ""}-${payment.item || ""}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+
+      let paymentType = "Payment";
+      let colorStyle = "";
+      let amountText = `₹${payment.amount || 0}`;
+      let badgeHtml = "";
+
+      const src = payment._source;
+      const ptype = payment.type || "";
+
+      if (src === "refund" || _refundTypes.has(ptype)) {
+        paymentType = "Refund";
+        colorStyle = "style='color: var(--danger)'";
+      } else if (src === "addon" || ptype === "addon") {
+        const itemName = payment.item || payment.note || "Add-on";
+        paymentType = `Add-on: ${itemName}`;
+        colorStyle = "style='color: var(--warning)'";
+        const method = payment.method || payment.payment_method || "balance";
+        badgeHtml = `<span class="service-payment-badge ${method}">${method}</span>`;
+        amountText = `₹${payment.amount || payment.price || 0}`;
+      } else if (src === "shift" || ptype === "room_shift") {
+        const oldRoom = payment.old_room || "?";
+        paymentType = `Room Shifted from Room ${oldRoom}`;
+        colorStyle = "style='color: var(--info, #17a2b8)'";
+        amountText = "";
+      } else if (ptype === "booking_advance" || ptype === "booking_payment") {
+        paymentType = `Booking Advance (${payment.method || "cash"})`;
+        colorStyle = "style='color: var(--info, #17a2b8)'";
+      } else if (ptype === "booking_conversion") {
+        if (payment.amount === 0) {
+          paymentType = "Booking — Fully Paid";
+          colorStyle = "style='color: var(--warning)'";
+        } else {
+          paymentType = `Booking Final Payment (${payment.method || "cash"})`;
+        }
+      } else if (src === "cash" || payment.method === "cash") {
+        if (payment.payment_method === "pay_later" || payment.amount === 0) {
+          paymentType = "Pay Later";
+          colorStyle = "style='color: var(--warning)'";
+        } else {
+          paymentType = "Cash Payment";
+        }
+      } else if (src === "online" || payment.method === "online") {
+        paymentType = "Online Payment";
+      }
+
+      logsHtml += `
+        <div class="log-item">
+          <div class="log-details">
+            <div class="log-title">${paymentType}${badgeHtml}</div>
+            <div class="log-subtitle">${payment.time || "N/A"} on ${payment.date || "N/A"}</div>
+          </div>
+          <div class="log-amount" ${colorStyle}>${amountText}</div>
+        </div>
+      `;
+    });
+
+    container.innerHTML = logsHtml;
   }
 }
 
@@ -869,6 +871,36 @@ window.renderEnhancedLogs = function () {
   if (transactionLogManager) {
     transactionLogManager.renderEnhancedLogs();
   }
+};
+
+// ── Payment history cache ─────────────────────────────────────────────────────
+// Key: "${room}:${checkin_time}"   Value: { data, ts }
+// TTL: 5 minutes. Invalidated on any write via invalidatePayHistoryCache().
+const _payCache = {};
+const _PAY_CACHE_TTL = 5 * 60 * 1000;
+
+function _payCacheKey(roomNumber) {
+  const r = (typeof rooms !== "undefined" && rooms[roomNumber]) ? rooms[roomNumber] : {};
+  return `${roomNumber}:${r.checkin_time || ""}`;
+}
+
+window.invalidatePayHistoryCache = function (roomNumber) {
+  delete _payCache[_payCacheKey(roomNumber)];
+};
+
+// Prefetch in background so data is ready when modal opens.
+window.prefetchPaymentLogs = function (roomNumber) {
+  const key = _payCacheKey(roomNumber);
+  if (_payCache[key] && (Date.now() - _payCache[key].ts < _PAY_CACHE_TTL)) return;
+  const roomInfo = (typeof rooms !== "undefined") ? rooms[roomNumber] : null;
+  if (!roomInfo || !roomInfo.guest) return;
+  apiFetch("/get_history", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ room: roomNumber, name: roomInfo.guest.name, checkin_time: roomInfo.checkin_time || null }),
+  }).then((r) => r.json())
+    .then((data) => { if (data.success) _payCache[key] = { data, ts: Date.now() }; })
+    .catch(() => {});
 };
 
 window.updatePaymentLogs = function (roomNumber) {
@@ -1066,10 +1098,12 @@ function _getDateOffset(days) {
   return d.toISOString().split("T")[0];
 }
 
-// Is fromDate within the last 3 days already cached by /get_data?
+// Is fromDate covered by the /get_data cache?
+// /get_data now fetches TODAY only — so only "today" is in the cache.
+// Any range that starts before today must be fetched from /get_transactions_range.
 function _isWithinCache(fromDate) {
-  const cutoff = _getDateOffset(3); // 3 days ago
-  return fromDate >= cutoff;
+  const today = new Date().toISOString().split("T")[0];
+  return fromDate === today;
 }
 
 // Render using either cached logs or extended logs fetched from server.
@@ -1140,14 +1174,13 @@ function _relockDatePicker() {
   if (icon)      icon.innerHTML = '<i class="fas fa-lock" style="font-size:0.75rem;"></i>';
   if (lockBtn)   lockBtn.style.display = "none";
 
-  // Snap back to last 3 days
+  // Snap back to Today
   const today = new Date().toISOString().split("T")[0];
-  const from  = _getDateOffset(2);
-  if (window._txnPicker) window._txnPicker.setDate([from, today]);
+  if (window._txnPicker) window._txnPicker.setDate([today, today]);
   document.querySelectorAll(".txn-quick-btn").forEach((b) => b.classList.remove("active"));
-  const last3Btn = document.querySelector('.txn-quick-btn[data-range="3"]');
-  if (last3Btn) last3Btn.classList.add("active");
-  _triggerRender(from, today);
+  const todayBtn = document.querySelector('.txn-quick-btn[data-range="today"]');
+  if (todayBtn) todayBtn.classList.add("active");
+  _triggerRender(today, today);
 }
 
 function _openTxnPasswordModal() {
@@ -1276,7 +1309,8 @@ function initTxnDateFilter() {
 
       const range = this.dataset.range;
       const today = new Date().toISOString().split("T")[0];
-      const from  = range === "today" ? today : _getDateOffset(parseInt(range, 10) - 1);
+      // "today" → same day; "3" → last 3 days (today + 2 days back)
+      const from = range === "today" ? today : _getDateOffset(parseInt(range, 10) - 1);
       if (window._txnPicker) window._txnPicker.setDate([from, today]);
       _triggerRender(from, today);
     });

@@ -3,3 +3,4 @@ firebase-admin==6.3.0
 pytz==2024.1
 werkzeug==3.0.1
 gunicorn==21.2.0
+flask-compress==1.15

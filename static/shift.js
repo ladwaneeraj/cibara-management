@@ -329,8 +329,8 @@ async function processEnhancedRoomTransfer(
         }
       }
 
-      // Refresh data
-      await fetchData();
+      // Refresh data in background (modals already closed above)
+      debouncedFetchData();
 
       let successMessage = `Guest transferred from Room ${oldRoom} to Room ${newRoom}`;
       if (newPrice) {

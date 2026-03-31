@@ -2838,23 +2838,28 @@
         return fetch(url, options);
       }
     </script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/flatpickr/4.6.13/flatpickr.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-    <script src="/static/register.js"></script>
-    <script src="/static/bills.js"></script>
-    <script src="/static/script.js"></script>
-    <script src="/static/shift.js"></script>
-    <script src="/static/analytics.js"></script>
-    <script src="/static/expense.js"></script>
-    <script src="/static/booking.js"></script>
-    <script src="/static/settle-later.js"></script>
-    <script src="/static/settle-later-fix.js"></script>
-    <script src="/static/revenue-protection.js"></script>
-    <script src="/static/transaction-tracking.js"></script>
-    <script src="/static/room-cleaning.js"></script>
+    <!-- defer: browser downloads all scripts in parallel while parsing HTML,
+         then executes them IN ORDER after parsing completes.
+         The inline apiFetch block above runs synchronously first, so it is
+         available when these deferred scripts execute. Saves 200-400 ms on
+         first paint by not blocking the HTML parser. -->
+    <script defer src="https://cdnjs.cloudflare.com/ajax/libs/flatpickr/4.6.13/flatpickr.min.js"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script defer src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <script defer src="/static/register.js"></script>
+    <script defer src="/static/bills.js"></script>
+    <script defer src="/static/script.js"></script>
+    <script defer src="/static/shift.js"></script>
+    <script defer src="/static/analytics.js"></script>
+    <script defer src="/static/expense.js"></script>
+    <script defer src="/static/booking.js"></script>
+    <script defer src="/static/settle-later.js"></script>
+    <script defer src="/static/settle-later-fix.js"></script>
+    <script defer src="/static/revenue-protection.js"></script>
+    <script defer src="/static/transaction-tracking.js"></script>
+    <script defer src="/static/room-cleaning.js"></script>
     <!-- Enhanced check-in: document capture + customer flagging -->
-    <script src="/static/customer-docs.js"></script>
+    <script defer src="/static/customer-docs.js"></script>
     <script
       type="module"
       src="{{ url_for('static', filename='google_sync.js') }}"
@@ -2897,8 +2902,6 @@
       }
     });
     </script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-
     <!-- ── Document photo viewer overlay ─────────────────────────────── -->
     <div id="doc-photo-viewer">
       <div style="

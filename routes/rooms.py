@@ -8,6 +8,7 @@ from flask import Blueprint, request, jsonify
 from datetime import datetime, timedelta
 import logging
 import uuid
+import time as _time
 
 from firebase_admin import firestore
 from google.cloud.firestore_v1.base_query import FieldFilter
@@ -165,11 +166,17 @@ def checkout():
         process_refund = data_json.get("process_refund", False)
         settle_later = data_json.get("settle_later", False)
 
-        room_doc = rooms_ref.document(room).get()
-        if not room_doc.exists:
-            return jsonify(success=False, message="Room not found")
+        # Use room_data sent by the frontend (saves a Firestore read).
+        # Fall back to fetching from Firestore only when it's missing.
+        _client_room_data = data_json.get("room_data")
+        if _client_room_data and isinstance(_client_room_data, dict) and _client_room_data.get("guest"):
+            room_data = _client_room_data
+        else:
+            room_doc = rooms_ref.document(room).get()
+            if not room_doc.exists:
+                return jsonify(success=False, message="Room not found")
+            room_data = room_doc.to_dict()
 
-        room_data = room_doc.to_dict()
         batch = db.batch()
 
         # Handle payment additions (not final checkout)
@@ -323,20 +330,22 @@ def checkout():
                 totals_update["refunds"] = firestore.Increment(refund_amount)
                 refund_processed = True
 
-                # --- Dual-write: checkout refund to payments ---
-                payment_service.write_payment({
+                # --- Dual-write: checkout refund (background thread) ---
+                _refund_payload = {
                     "room": room, "name": guest_name, "amount": refund_amount,
                     "method": refund_method, "type": "checkout_refund",
                     "date": datetime.now(IST).strftime("%Y-%m-%d"),
                     "time": datetime.now(IST).strftime("%H:%M"),
                     "transaction_type": "checkout_refund",
                     "stay_room_key": f"{room}_{room_data.get('checkin_time', '')}",
-                })
-                logger.info(f"Checkout refund of ₹{refund_amount} processed for room {room}")
+                }
+                import threading as _thr
+                _thr.Thread(target=payment_service.write_payment, args=(_refund_payload,), daemon=True).start()
+                logger.info(f"Checkout refund of ₹{refund_amount} queued for room {room}")
 
-            # --- Dual-write: settlement to payments ---
+            # --- Dual-write: settlement (background thread) ---
             if balance > 0 and settle_later:
-                payment_service.write_payment({
+                _settle_payload = {
                     "room": room, "name": guest_info["name"],
                     "amount": -balance, "method": "settlement",
                     "type": "settlement", "date": datetime.now(IST).strftime("%Y-%m-%d"),
@@ -344,12 +353,13 @@ def checkout():
                     "transaction_type": "settlement",
                     "settlement_id": settlement_id,
                     "stay_room_key": f"{room}_{room_data.get('checkin_time', '')}",
-                })
+                }
+                import threading as _thr
+                _thr.Thread(target=payment_service.write_payment, args=(_settle_payload,), daemon=True).start()
 
-            # Save to bills collection
+            # Save to bills + mark room cleaning — all in one batch commit
             checkout_time = datetime.now(IST).strftime("%Y-%m-%d %H:%M")
             bill_id = f"{room}_{int(datetime.now(IST).timestamp())}"
-            # Pass settle_later context so bill gets correct status + settlement link
             _sid = settlement_id if (balance > 0 and settle_later) else None
             bill_record = create_bill_record(
                 room, room_data, checkout_time, batch,
@@ -915,6 +925,23 @@ def get_totals_only():
         logger.error(f"Error getting totals: {str(e)}")
         return jsonify(success=False, message=str(e))
 
+# ── /get_data 30-second in-memory cache ─────────────────────────────────────
+# Serves multiple rapid page loads / background debounce calls from cache.
+# Invalidated by invalidate_rooms_and_totals() (called on every write).
+_GET_DATA_CACHE: dict = {"payload": None, "ts": 0.0}
+_GET_DATA_TTL = 30  # seconds
+
+def _invalidate_get_data_cache():
+    _GET_DATA_CACHE["payload"] = None
+    _GET_DATA_CACHE["ts"] = 0.0
+
+# Monkey-patch invalidate_rooms_and_totals so writes bust this cache too
+_orig_invalidate = invalidate_rooms_and_totals
+def invalidate_rooms_and_totals():   # noqa: F811
+    _invalidate_get_data_cache()
+    return _orig_invalidate()
+# ─────────────────────────────────────────────────────────────────────────────
+
 @rooms_bp.route("/get_data")
 def get_data():
     """
@@ -929,27 +956,36 @@ def get_data():
     returns nothing (pre-migration scenario).
     """
     try:
-        import time as _t
         from concurrent.futures import ThreadPoolExecutor
-        t0 = _t.time()
+        t0 = _time.time()
+
+        # Serve from cache if fresh
+        if _GET_DATA_CACHE["payload"] and (_time.time() - _GET_DATA_CACHE["ts"] < _GET_DATA_TTL):
+            logger.info("[PERF] /get_data served from cache")
+            return _GET_DATA_CACHE["payload"]
 
         today = datetime.now(IST)
-        three_days_ago = (today - timedelta(days=3)).strftime("%Y-%m-%d")
-        tomorrow = (today + timedelta(days=1)).strftime("%Y-%m-%d")
+        today_str   = today.strftime("%Y-%m-%d")
+        tomorrow    = (today + timedelta(days=1)).strftime("%Y-%m-%d")
 
+        # Fix 4: fetch only TODAY's payments instead of 3 days back.
+        # Transaction-tab modules (register.js, bills.js) lazy-load their own
+        # data when the tab is opened.  The only live use of `logs` on the rooms
+        # tab is the renewal-history badge, which is covered by today's renewals.
+        # Totals are accurate from the `totals` collection regardless of date range.
         # Run all 3 Firestore queries in parallel (saves ~2s)
         with ThreadPoolExecutor(max_workers=3) as pool:
             f_rooms = pool.submit(get_all_rooms)
             f_totals = pool.submit(get_totals)
             f_payments = pool.submit(
                 payment_service.query_payments_by_date_range,
-                three_days_ago, tomorrow
+                today_str, tomorrow
             )
 
         rooms = f_rooms.result()
         totals = f_totals.result()
         recent_payments = f_payments.result() or []
-        t1 = _t.time()
+        t1 = _time.time()
         logger.info(f"[PERF] parallel fetch (rooms+totals+payments): {t1-t0:.3f}s, {len(recent_payments)} payment docs")
 
         _refund_types = ("refund", "checkout_refund", "manual_refund",
@@ -997,9 +1033,15 @@ def get_data():
             "room_shifts": [],
         }
 
-        t4 = _t.time()
+        t4 = _time.time()
         logger.info(f"[PERF] /get_data TOTAL: {t4-t0:.3f}s")
-        return jsonify(rooms=rooms, logs=logs, totals=totals)
+        response = jsonify(rooms=rooms, logs=logs, totals=totals)
+
+        # Store in cache for next 30 seconds
+        _GET_DATA_CACHE["payload"] = response
+        _GET_DATA_CACHE["ts"] = _time.time()
+
+        return response
     except Exception as e:
         logger.error(f"Error getting data: {str(e)}")
         return jsonify(success=False, message=f"Error getting data: {str(e)}")
@@ -1019,16 +1061,26 @@ def get_history():
         if not room or not guest_name:
             return jsonify(success=False, message="Room and guest name are required.")
 
-        # Try to get checkin_dt for this room to scope the query
-        room_doc = rooms_ref.document(room).get()
+        # Prefer checkin_time sent by the frontend (already in local state)
+        # to avoid an extra Firestore room-doc read.
         checkin_dt = None
-        if room_doc.exists:
-            ct = room_doc.to_dict().get("checkin_time")
-            if ct:
-                try:
-                    checkin_dt = datetime.strptime(ct, "%Y-%m-%d %H:%M")
-                except ValueError:
-                    pass
+        ct = data_json.get("checkin_time")
+        if ct:
+            try:
+                checkin_dt = datetime.strptime(ct, "%Y-%m-%d %H:%M")
+            except ValueError:
+                pass
+
+        # Fallback: fetch from Firestore only if frontend didn't send it
+        if not checkin_dt:
+            room_doc = rooms_ref.document(room).get()
+            if room_doc.exists:
+                ct = room_doc.to_dict().get("checkin_time")
+                if ct:
+                    try:
+                        checkin_dt = datetime.strptime(ct, "%Y-%m-%d %H:%M")
+                    except ValueError:
+                        pass
 
         # Fast path: payments collection
         if checkin_dt:

@@ -95,7 +95,13 @@ function initSettleLater() {
             checkoutModal.classList.remove("show");
           }
 
-          await fetchData();
+          // Mark room locally for immediate UI update
+          if (rooms[roomNumber]) {
+            rooms[roomNumber].status = "cleaning";
+            rooms[roomNumber].guest = null;
+          }
+          if (typeof renderRooms === "function") renderRooms();
+          debouncedFetchData(); // background sync
 
           // If settled later, let the user know
           if (settleLaterEnabled && balance > 0) {
@@ -831,11 +837,37 @@ document.addEventListener("DOMContentLoaded", function () {
     initSettleLater();
     enhanceCheckoutConfirmation();
 
-    // Fetch pending settlements on startup
-    fetchPendingSettlements().then(() => {
-      updateStatsWithSettlements();
-      updateDashboardWithSettlements();
-    });
+    // Lazy-load settlements: only fetch when the transactions tab is first opened.
+    // Previously this fetched on every page load — even when the user never visits
+    // the transactions tab. Now we watch for the tab to become visible.
+    let settlementsLoaded = false;
+    const transactionsTab = document.getElementById("transactions-tab");
+    if (transactionsTab) {
+      new MutationObserver(function (mutations) {
+        mutations.forEach(function (mutation) {
+          if (
+            mutation.attributeName === "class" &&
+            !transactionsTab.classList.contains("hidden") &&
+            !settlementsLoaded
+          ) {
+            settlementsLoaded = true;
+            fetchPendingSettlements().then(() => {
+              updateStatsWithSettlements();
+              updateDashboardWithSettlements();
+            });
+          }
+        });
+      }).observe(transactionsTab, { attributes: true, attributeFilter: ["class"] });
+
+      // Also handle the case where transactions is already the active tab on load
+      if (!transactionsTab.classList.contains("hidden") && !settlementsLoaded) {
+        settlementsLoaded = true;
+        fetchPendingSettlements().then(() => {
+          updateStatsWithSettlements();
+          updateDashboardWithSettlements();
+        });
+      }
+    }
   }, 1000);
 });
 // Render the pending settlements list

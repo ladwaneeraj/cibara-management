@@ -276,8 +276,8 @@ async function submitExpense(e) {
         expenseModal.classList.remove("show");
       }
 
-      // Refresh data
-      await fetchData();
+      // Refresh data in background (expense modal closed, no blocking needed)
+      debouncedFetchData();
 
       // If this was a report expense and we're on the reports tab, regenerate the report
       if (

@@ -466,6 +466,9 @@ function renderRooms() {
       if (info.status === "vacant") {
         showCheckinModal(roomNumber);
       } else if (info.status === "occupied") {
+        // Prefetch payment history as soon as user taps the room card
+        // so data is ready (or loading) by the time the modal opens.
+        if (typeof prefetchPaymentLogs === "function") prefetchPaymentLogs(roomNumber);
         showCheckoutModal(roomNumber);
       }
     });
@@ -524,6 +527,19 @@ function renderRooms() {
 function handleCleanedClick(event, roomNumber) {
   event.stopPropagation();
   markRoomAsCleaned(roomNumber);
+}
+
+// Debounced background sync — prevents 3 rapid actions (e.g. add service ×3)
+// from each firing a full Firestore reload. Only the LAST call within 2 s runs.
+let _fetchDebounceTimer = null;
+function debouncedFetchData(delay = 2000, roomNumber = null) {
+  // Invalidate payment history cache for this room so the next modal
+  // open fetches fresh data instead of showing stale history.
+  if (roomNumber && typeof invalidatePayHistoryCache === "function") {
+    invalidatePayHistoryCache(roomNumber);
+  }
+  clearTimeout(_fetchDebounceTimer);
+  _fetchDebounceTimer = setTimeout(fetchData, delay);
 }
 
 // Fetch data from the server
@@ -838,8 +854,9 @@ async function triggerRentRenewal(roomNumber) {
         day: newRenewalCount + 1,
       });
 
-      // Refresh data from server
-      await fetchData();
+      // Update room grid immediately with local data, then sync totals in background
+      renderRooms();
+      debouncedFetchData(); // background refresh for totals
 
       showNotification(
         `Room ${roomNumber} rent renewed for Day ${newRenewalCount + 1}!`,
@@ -1306,9 +1323,13 @@ function showCheckoutModal(roomNumber) {
             checkoutModal.classList.remove("show");
           }
 
-          // Refresh data
-          await fetchData();
+          // Mark room vacant locally so room grid updates immediately
+          if (rooms[currentRoomNumber]) {
+            rooms[currentRoomNumber].status = "cleaning";
+            rooms[currentRoomNumber].guest = null;
+          }
           renderRooms();
+          debouncedFetchData(); // background sync
 
           showNotification(
             result.message || "Checkout successful! Room marked for cleaning.",
@@ -1653,8 +1674,30 @@ async function addService() {
 
     const result = await response.json();
     if (result.success) {
-      await fetchData();
+      // Patch local room state immediately — no need to wait for a full server round-trip
+      if (rooms[roomNumber]) {
+        if (!rooms[roomNumber].add_ons) rooms[roomNumber].add_ons = [];
+        const nowDt = new Date();
+        rooms[roomNumber].add_ons.push({
+          room: roomNumber,
+          item: serviceWithQuantity,
+          price: totalPrice,
+          unit_price: price,
+          quantity: quantity,
+          time: nowDt.toTimeString().slice(0, 5),
+          date: nowDt.toISOString().split("T")[0],
+          payment_method: servicePaymentMethod,
+          transaction_type: "service",
+          accommodation_charge: isAccommodationCharge,
+        });
+        // Balance increases only when service is billed to room (not paid now)
+        if (servicePaymentMethod === "balance") {
+          rooms[roomNumber].balance = (rooms[roomNumber].balance || 0) + totalPrice;
+        }
+      }
       updateCheckoutModal(roomNumber);
+      renderRooms();
+      debouncedFetchData(2000, roomNumber); // background sync + bust pay history cache
 
       // Show an appropriate message based on the payment method
       if (servicePaymentMethod === "balance") {
@@ -1758,7 +1801,12 @@ function showEditTimeModal(roomNumber, currentCheckInTime) {
       const result = await response.json();
       if (result.success) {
         editTimeModal.classList.remove("show");
-        await fetchData();
+
+        // Patch local state directly — no server round-trip needed for a simple time edit
+        if (rooms[roomNumber]) {
+          rooms[roomNumber].checkin_time = newCheckInTime;
+        }
+        renderRooms();
 
         // Update the checkout modal with new data
         const checkoutCheckinTime = document.getElementById(
@@ -2432,8 +2480,11 @@ async function processRefund() {
       // Refund was successful
       debugLog(`Refund processed successfully: ${JSON.stringify(result)}`);
 
-      // Refresh data to get updated room and log information
-      await fetchData();
+      // Patch local balance immediately (refund increases balance back toward 0)
+      if (rooms[roomNumber]) {
+        rooms[roomNumber].balance = (rooms[roomNumber].balance || 0) + refundAmount;
+      }
+      debouncedFetchData(2000, roomNumber); // background sync + bust pay history cache
 
       // Update the checkout modal with new data
       updateCheckoutModal(roomNumber);
@@ -2535,7 +2586,15 @@ async function addPayment(mode) {
 
     const result = await response.json();
     if (result.success) {
-      await fetchData(); // This will refresh all data including transaction logs
+      // Patch local balance immediately
+      if (rooms[roomNumber]) {
+        const currentBalance = rooms[roomNumber].balance || 0;
+        const newBalance = currentBalance > 0
+          ? Math.max(currentBalance - amount, currentBalance - amount) // may go negative (overpayment)
+          : currentBalance - amount;
+        rooms[roomNumber].balance = newBalance;
+      }
+      debouncedFetchData(2000, roomNumber); // background sync + bust pay history cache
 
       // Update the checkout modal
       updateCheckoutModal(roomNumber);
@@ -3441,8 +3500,25 @@ async function applyDiscount() {
       // Close discount modal
       document.getElementById("discount-modal").classList.remove("show");
 
-      // Update room data
-      await fetchData();
+      // Patch local room state immediately
+      if (rooms[roomNumber]) {
+        if (!rooms[roomNumber].discounts) rooms[roomNumber].discounts = [];
+        const nowDt = new Date();
+        rooms[roomNumber].discounts.push({
+          amount: discountAmount,
+          reason: reason,
+          date: nowDt.toISOString().split("T")[0],
+          time: nowDt.toTimeString().slice(0, 5),
+        });
+        // Reduce balance (discount applies against outstanding balance first)
+        const currentBalance = rooms[roomNumber].balance || 0;
+        if (currentBalance > 0) {
+          rooms[roomNumber].balance = Math.max(0, currentBalance - discountAmount);
+        } else {
+          rooms[roomNumber].balance = currentBalance - discountAmount;
+        }
+      }
+      debouncedFetchData(2000, roomNumber); // background sync + bust pay history cache
 
       // Update checkout modal UI
       updateCheckoutModal(roomNumber);
@@ -3663,63 +3739,63 @@ function setupCheckoutConfirmation() {
         return;
       }
 
-      // Only proceed if balance is exactly 0
-      try {
-        console.log("Sending checkout request to server");
+      // ── Optimistic checkout — close modals and update room grid immediately ──
+      // Bill generation takes 5-8s on the server. Don't block the UI for that.
+      // Close everything now, flip the room to "cleaning", then let the server
+      // finish in the background. If it fails, roll back and show an error.
 
-        const response = await apiFetch("/checkout", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            room: roomNumber,
-            final_checkout: true,
-          }),
-        });
+      const checkoutConfirmModal = document.getElementById("checkout-confirm-modal");
+      if (checkoutConfirmModal) checkoutConfirmModal.classList.remove("show");
+      const checkoutModal = document.getElementById("checkout-modal");
+      if (checkoutModal) checkoutModal.classList.remove("show");
 
-        if (!response.ok) {
-          throw new Error(`Server responded with status: ${response.status}`);
-        }
+      // Snapshot current room state for rollback if server returns an error
+      const prevRoomState = rooms[roomNumber] ? { ...rooms[roomNumber] } : null;
 
-        const result = await response.json();
-        if (result.success) {
-          console.log("Checkout successful");
-
-          // Close both modals immediately — don't block on data reload
-          const checkoutConfirmModal = document.getElementById(
-            "checkout-confirm-modal",
-          );
-          if (checkoutConfirmModal) {
-            checkoutConfirmModal.classList.remove("show");
-          }
-
-          const checkoutModal = document.getElementById("checkout-modal");
-          if (checkoutModal) {
-            checkoutModal.classList.remove("show");
-          }
-
-          // Reset button state immediately
-          checkoutInProgress = false;
-          this.disabled = false;
-          this.innerHTML = "Yes, Checkout";
-
-          showNotification(result.message || "Checkout successful!", "success");
-
-          // Reload data in the background — UI is already unblocked
-          fetchData();
-        } else {
-          console.error("Checkout failed:", result.message);
-          showNotification(result.message || "Error during checkout", "error");
-          checkoutInProgress = false;
-          this.disabled = false;
-          this.innerHTML = "Yes, Checkout";
-        }
-      } catch (error) {
-        console.error("Error during checkout:", error);
-        showNotification(`Error during checkout: ${error.message}`, "error");
-        checkoutInProgress = false;
-        this.disabled = false;
-        this.innerHTML = "Yes, Checkout";
+      // Immediately flip room to cleaning in local state
+      if (rooms[roomNumber]) {
+        rooms[roomNumber].status = "cleaning";
+        rooms[roomNumber].guest  = null;
       }
+      renderRooms();
+      showNotification("Checkout processing…", "info");
+
+      // Reset button so it's ready for the next use
+      checkoutInProgress = false;
+      this.disabled = false;
+      this.innerHTML = "Yes, Checkout";
+
+      // Fire request in background — no await
+      apiFetch("/checkout", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          room: roomNumber,
+          final_checkout: true,
+          room_data: prevRoomState, // pass to server so it can skip a Firestore read
+        }),
+      })
+        .then((r) => r.json())
+        .then((result) => {
+          if (result.success) {
+            showNotification(result.message || "Checkout successful!", "success");
+            debouncedFetchData(3000, roomNumber);
+          } else {
+            // Rollback local state and show error
+            console.error("Checkout failed:", result.message);
+            if (prevRoomState) rooms[roomNumber] = prevRoomState;
+            renderRooms();
+            showNotification(result.message || "Checkout failed — please try again.", "error");
+            checkoutInProgress = false;
+          }
+        })
+        .catch((err) => {
+          console.error("Checkout network error:", err);
+          if (prevRoomState) rooms[roomNumber] = prevRoomState;
+          renderRooms();
+          showNotification("Network error during checkout — please try again.", "error");
+          checkoutInProgress = false;
+        });
     });
   } else {
     console.error("Proceed checkout button not found");
@@ -3779,6 +3855,9 @@ document.addEventListener("DOMContentLoaded", function () {
 
   // Fetch initial data
   fetchData();
+
+  // Room grid and totals are kept in sync by Firestore onSnapshot listeners
+  // in google_sync.js — no polling interval needed here.
 
   // Initialize the stats toggle functionality
   initCollapsibleStats();
@@ -4090,8 +4169,8 @@ document.addEventListener("DOMContentLoaded", function () {
           }
           showNotification(message, "success");
 
-          // Reload data in the background — UI is already unblocked
-          fetchData();
+          // Check-in adds new guest data — let background fetch hydrate the room
+          debouncedFetchData();
         } else {
           showNotification(result.message || "Error during check-in", "error");
           submitBtn.disabled = false;

@@ -1393,7 +1393,7 @@ function initializeConvertBookingForm() {
 
         // Refresh bookings and rooms
         fetchBookings();
-        fetchData();
+        debouncedFetchData();
       } else {
         showNotification(result.message || "Error converting booking", "error");
       }

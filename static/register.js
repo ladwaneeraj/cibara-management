@@ -184,139 +184,121 @@
   color: #1a1a1a;
 }
 
-/* ── Bill structure ── */
-.b-bill-wrap { max-width: 680px; margin: 0 auto; }
+/* ── Bill structure — full width so it fills the A4 sheet ── */
+.b-bill-wrap { width: 100%; margin: 0 auto; }
 
-/* Header band */
+/* Header — clean centered text, no background */
 .b-header-block {
-  background: #1a237e; color: #fff;
-  padding: .7rem 1rem .55rem;
-  border-radius: 4px 4px 0 0;
+  text-align: center;
+  padding-bottom: .6rem;
+  border-bottom: 2px solid #333;
   margin-bottom: 0;
 }
 .b-lodge-name {
-  font-size: 1.25rem; font-weight: 800;
-  text-align: center; letter-spacing: .04em;
-  color: #fff;
+  font-size: 1.45rem; font-weight: 800;
+  letter-spacing: .05em;
+}
+.b-lodge-entity {
+  font-size: .82rem; color: #444; font-style: italic; margin-top: .15rem;
 }
 .b-lodge-sub {
-  font-size: .72rem; text-align: center;
-  margin-top: .12rem; color: #c5cae9;
+  font-size: .78rem; color: #555; margin-top: .15rem;
 }
 .b-gstin-bar {
-  font-size: .68rem; text-align: center;
-  margin-top: .2rem; color: #9fa8da;
-  letter-spacing: .01em;
+  font-size: .72rem; color: #777; margin-top: .18rem;
 }
-
-/* Title bar */
 .b-title {
-  text-align: center; font-size: .85rem; font-weight: 800;
-  letter-spacing: .12em; color: #fff;
-  background: #283593;
-  padding: .28rem 0; margin: 0;
+  font-size: .82rem; font-weight: 700;
+  letter-spacing: .1em; margin-top: .4rem;
 }
 
-/* Info grid */
+/* Info table */
 .b-info-outer {
-  border: 1px solid #c5cae9; border-top: none;
-  display: grid; grid-template-columns: 1fr 1fr;
+  border: 1px solid #ccc; border-top: none;
+  width: 100%; border-collapse: collapse;
+  margin-bottom: .6rem;
 }
 .b-info-col {
-  padding: .5rem .75rem;
-  font-size: .76rem;
+  padding: .55rem .8rem;
+  font-size: .82rem;
+  width: 50%;
+  vertical-align: top;
 }
-.b-info-col:first-child {
-  border-right: 1px solid #c5cae9;
-}
-.b-row {
-  display: flex; gap: .35rem; margin-bottom: .2rem;
-  align-items: baseline;
-}
+.b-info-col-r { border-left: 1px solid #ccc; }
+.b-row { margin-bottom: .22rem; }
 .b-lbl {
-  font-weight: 700; color: #555; white-space: nowrap;
-  min-width: 85px; flex-shrink: 0;
+  font-weight: 700; color: #444; white-space: nowrap;
+  display: inline-block; min-width: 100px; margin-right: .3rem;
 }
 .b-val { color: #1a1a1a; }
 
 /* Main items table */
 .b-tbl {
   width: 100%; border-collapse: collapse;
-  font-size: .78rem; margin-bottom: .35rem;
-  border: 1px solid #c5cae9;
+  font-size: .82rem; margin-bottom: .5rem;
 }
 .b-tbl th {
-  background: #e8eaf6; color: #1a237e;
-  font-weight: 700; padding: .35rem .4rem;
-  border: 1px solid #c5cae9;
-  text-transform: uppercase; font-size: .69rem;
-  letter-spacing: .03em;
+  background: #efefef; font-weight: 700;
+  padding: .38rem .5rem; border: 1px solid #bbb;
 }
-.b-tbl td { padding: .28rem .4rem; border: 1px solid #e0e0e0; }
+.b-tbl td { padding: .32rem .5rem; border: 1px solid #ddd; }
 .b-tr { text-align: right; }
 
 /* Section header rows */
 .b-sec td {
-  background: #f3f4f9; font-weight: 700;
-  font-size: .71rem; color: #283593;
-  padding: .22rem .4rem;
-  border-color: #c5cae9;
-  letter-spacing: .02em;
+  background: #f5f5f5; font-weight: 700;
+  font-size: .77rem; color: #333;
+  padding: .28rem .5rem; border-color: #bbb;
   text-transform: uppercase;
 }
 
 /* GST sub-rows */
-.b-gst-row td { color: #555; font-size: .73rem; }
+.b-gst-row td { color: #666; font-size: .79rem; }
 
 /* Grand total row */
-.b-grand {
-  background: #e8eaf6;
-  border-top: 2px solid #1a237e !important;
-}
-.b-grand td { font-weight: 800; color: #1a237e; padding: .38rem .4rem; }
+.b-grand { border-top: 2px solid #333 !important; }
+.b-grand td { font-weight: 800; background: #eee; padding: .4rem .5rem; }
 
 /* Subtotal rows */
 .b-subtotal td { font-weight: 700; background: #fafafa; }
 
 /* Payment section */
 .b-pay-section {
-  margin-top: .6rem;
-  border: 1px solid #c5cae9; border-radius: 0 0 4px 4px;
+  margin-top: .7rem;
+  border: 1px solid #ccc;
 }
 .b-pay-title {
-  background: #e8eaf6; color: #1a237e;
-  font-weight: 700; font-size: .71rem;
-  padding: .22rem .5rem;
+  background: #efefef; font-weight: 700; font-size: .77rem;
+  padding: .28rem .5rem;
   letter-spacing: .04em; text-transform: uppercase;
 }
-.b-pay-section .b-tbl {
-  margin-bottom: 0; border: none;
-}
-.b-pay-section .b-tbl td {
-  border-color: #eee; padding: .25rem .5rem;
-}
+.b-pay-section .b-tbl { margin-bottom: 0; }
+.b-pay-section .b-tbl td { border-color: #eee; padding: .3rem .5rem; }
 
 /* Signature */
 .b-sig {
-  display: flex; justify-content: space-between;
-  margin-top: .9rem; padding: 0 .5rem;
+  margin-top: 2rem; width: 100%;
+  border-collapse: collapse;
 }
+.b-sig td { padding-top: .9rem; }
+.b-sig td:last-child { text-align: right; }
 .b-sig-line {
-  border-top: 1px solid #555; margin-top: .8rem;
-  padding-top: .22rem; width: 130px;
-  text-align: center; font-size: .7rem; color: #555;
+  display: inline-block;
+  border-top: 1px solid #555;
+  padding-top: .22rem; width: 140px;
+  text-align: center; font-size: .75rem; color: #555;
 }
 
 /* Footer */
 .b-footer {
-  margin-top: .5rem; border-top: 1px solid #e0e0e0;
-  padding-top: .3rem; font-size: .65rem;
+  margin-top: .8rem; border-top: 1px solid #ddd;
+  padding-top: .4rem; font-size: .7rem;
   color: #999; text-align: center;
 }
 
 /* ── PRINT: force single A4 page ── */
 @media print {
-  @page { size: A4 portrait; margin: 8mm 10mm; }
+  @page { size: A4 portrait; margin: 15mm 15mm; }
 
   html, body { height: auto !important; overflow: visible !important; }
 
@@ -329,8 +311,8 @@
     padding: 0 !important;
     width: 100%;
     font-family: Arial, Helvetica, sans-serif !important;
-    font-size: 8pt !important;
-    line-height: 1.3 !important;
+    font-size: 10pt !important;
+    line-height: 1.4 !important;
     color: #000 !important;
   }
 
@@ -365,15 +347,13 @@
   #reg-bill-print-area,
   #bill-print-area {
     padding: 0 !important;
-    font-size: 8pt !important;
-    line-height: 1.3 !important;
+    font-size: 10pt !important;
+    line-height: 1.4 !important;
     width: 100% !important;
   }
 
-  /* Header block — keep colours in print */
+  /* Header block */
   .b-header-block {
-    -webkit-print-color-adjust: exact !important;
-    print-color-adjust: exact !important;
     padding: 3mm 4mm 2.5mm !important;
   }
   .b-lodge-name { font-size: 13pt !important; }

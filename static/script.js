@@ -1292,60 +1292,57 @@ function showCheckoutModal(roomNumber) {
         return;
       }
 
-      try {
-        const response = await apiFetch("/checkout", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            room: currentRoomNumber,
-            final_checkout: true,
-          }),
-        });
+      // ── Close modals & update UI immediately — don't wait for the server ──────
+      const checkoutConfirmModal = document.getElementById("checkout-confirm-modal");
+      if (checkoutConfirmModal) checkoutConfirmModal.classList.remove("show");
+      if (checkoutModal) checkoutModal.classList.remove("show");
 
-        if (!response.ok) {
-          throw new Error(`Server responded with status: ${response.status}`);
-        }
+      // Snapshot for rollback if the server later reports failure
+      const prevRoomState = rooms[currentRoomNumber] ? { ...rooms[currentRoomNumber] } : null;
 
-        const result = await response.json();
-        if (result.success) {
-          // Mark room for cleaning
-          await markRoomForCleaning(currentRoomNumber);
-
-          // Close modals
-          const checkoutConfirmModal = document.getElementById(
-            "checkout-confirm-modal",
-          );
-          if (checkoutConfirmModal) {
-            checkoutConfirmModal.classList.remove("show");
-          }
-
-          if (checkoutModal) {
-            checkoutModal.classList.remove("show");
-          }
-
-          // Mark room vacant locally so room grid updates immediately
-          if (rooms[currentRoomNumber]) {
-            rooms[currentRoomNumber].status = "cleaning";
-            rooms[currentRoomNumber].guest = null;
-          }
-          renderRooms();
-          debouncedFetchData(); // background sync
-
-          showNotification(
-            result.message || "Checkout successful! Room marked for cleaning.",
-            "success",
-          );
-        } else {
-          showNotification(result.message || "Error during checkout", "error");
-        }
-      } catch (error) {
-        console.error("Error during checkout:", error);
-        showNotification(`Error during checkout: ${error.message}`, "error");
-      } finally {
-        checkoutInProgress = false;
-        this.disabled = false;
-        this.innerHTML = "Yes, Checkout";
+      // Flip room to cleaning in local state immediately
+      if (rooms[currentRoomNumber]) {
+        rooms[currentRoomNumber].status = "cleaning";
+        rooms[currentRoomNumber].guest  = null;
       }
+      renderRooms();
+      // Reset button right away
+      checkoutInProgress = false;
+      this.disabled = false;
+      this.innerHTML = "Yes, Checkout";
+
+      // ── Fire checkout + marking + PDF in background — no await ───────────────
+      apiFetch("/checkout", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ room: currentRoomNumber, final_checkout: true }),
+      })
+        .then(r => r.json())
+        .then(result => {
+          if (result.success) {
+            markRoomForCleaning(currentRoomNumber); // fire and forget
+            debouncedFetchData(3000, currentRoomNumber);
+            showNotification(
+              result.message || "Checkout successful! Room marked for cleaning.",
+              "success",
+            );
+            // Auto-generate & store PDF in background (non-blocking)
+            if (result.bill_id && typeof window._cibaraBillsAutoGenerate === "function") {
+              window._cibaraBillsAutoGenerate(result.bill_id);
+            }
+          } else {
+            // Rollback local state on failure
+            if (prevRoomState) rooms[currentRoomNumber] = prevRoomState;
+            renderRooms();
+            showNotification(result.message || "Checkout failed — please try again.", "error");
+          }
+        })
+        .catch(err => {
+          console.error("Checkout error:", err);
+          if (prevRoomState) rooms[currentRoomNumber] = prevRoomState;
+          renderRooms();
+          showNotification("Network error during checkout — please try again.", "error");
+        });
     };
   }
 }
@@ -3687,10 +3684,9 @@ function setupCheckoutConfirmation() {
 
       checkoutInProgress = true;
 
-      // Disable button and show loading state
+      // Disable only to prevent double-clicks — no "Processing..." text;
+      // the room grid flips to cleaning immediately below for instant feedback.
       this.disabled = true;
-      this.innerHTML =
-        '<span class="loader" style="width: 20px; height: 20px;"></span> Processing...';
 
       const roomNumberElement = document.getElementById("checkout-room-number");
       if (!roomNumberElement) {
@@ -3758,7 +3754,6 @@ function setupCheckoutConfirmation() {
         rooms[roomNumber].guest  = null;
       }
       renderRooms();
-      showNotification("Checkout processing…", "info");
 
       // Reset button so it's ready for the next use
       checkoutInProgress = false;
@@ -3780,6 +3775,10 @@ function setupCheckoutConfirmation() {
           if (result.success) {
             showNotification(result.message || "Checkout successful!", "success");
             debouncedFetchData(3000, roomNumber);
+            // Auto-generate & store PDF in background (non-blocking)
+            if (result.bill_id && typeof window._cibaraBillsAutoGenerate === "function") {
+              window._cibaraBillsAutoGenerate(result.bill_id);
+            }
           } else {
             // Rollback local state and show error
             console.error("Checkout failed:", result.message);

@@ -17,7 +17,7 @@ from config import (
     get_all_rooms, invalidate_rooms_and_totals,
     generate_sequential_invoice_number,
 )
-from services import payment_service
+from services import payment_service, pdf_service
 
 billing_bp = Blueprint('billing', __name__)
 
@@ -182,7 +182,11 @@ def get_register_data():
                 checkout_time = bill_data.get("checkout_time")
 
                 bill_status = bill_data.get("status", "completed")
-                if bill_status not in ("completed", "checked_out", ""):
+                # "pending_settlement" = settle-later checkout; include these so
+                # the guest still appears in the register / bills module with the
+                # outstanding balance visible.
+                if bill_status not in ("completed", "checked_out",
+                                       "pending_settlement", ""):
                     skipped_count += 1
                     continue
 
@@ -231,7 +235,9 @@ def get_register_data():
                     "refund_cash": bill_data.get("refund_cash", 0),
                     "refund_online": bill_data.get("refund_online", 0),
                     "balance": bill_data.get("balance", 0),
-                    "status": "completed",
+                    # Use real Firestore status — "pending_settlement" for
+                    # settle-later checkouts so the frontend can badge them.
+                    "status": bill_status,
                     "serial_number": serial_num,
                     # OTA / booking source fields
                     "booking_source": bill_data.get("booking_source", "normal"),
@@ -241,6 +247,15 @@ def get_register_data():
                     # GST invoice fields
                     "invoice_generated": bill_data.get("invoice_generated", False),
                     "invoice_number": bill_data.get("invoice_number"),
+                    # PDF — must be included so the WhatsApp button stays dark
+                    # after a page refresh (icon colour is driven by pdf_url presence)
+                    "pdf_url": bill_data.get("pdf_url", ""),
+                    # GST rate stored at checkout time (used by buildBillHTML)
+                    "gst_rate": bill_data.get("gst_rate"),
+                    # Discount and services detail needed for bill re-render
+                    "discounts": bill_data.get("discounts", 0),
+                    "services": bill_data.get("services", []),
+                    "guest_count": bill_data.get("guest_count", 1),
                 }
                 register_entries.append(entry)
                 completed_count += 1
@@ -523,12 +538,17 @@ def add_bill_payment():
         data_json    = request.json
         bill_id      = data_json.get("bill_id", "")
         payment_mode = data_json.get("payment_mode", "cash")   # "cash" | "online"
-        amount       = int(data_json.get("amount", 0))
+        amount       = int(data_json.get("amount",   0))
+        discount     = int(data_json.get("discount", 0))
 
         if not bill_id:
             return jsonify(success=False, message="bill_id is required")
-        if amount <= 0:
-            return jsonify(success=False, message="Amount must be greater than 0")
+        if amount < 0:
+            return jsonify(success=False, message="Amount cannot be negative")
+        if discount < 0:
+            return jsonify(success=False, message="Discount cannot be negative")
+        if amount == 0 and discount == 0:
+            return jsonify(success=False, message="Provide a payment amount or discount")
 
         # ── Fetch bill ────────────────────────────────────────────────────────
         bill_doc = bills_ref.document(bill_id).get()
@@ -540,18 +560,26 @@ def add_bill_payment():
 
         if current_balance <= 0:
             return jsonify(success=False, message="No outstanding balance on this bill")
-        if amount > current_balance:
+        if discount > current_balance:
             return jsonify(success=False,
-                           message=f"Amount ₹{amount} exceeds outstanding balance ₹{current_balance}")
+                           message=f"Discount ₹{discount} exceeds outstanding balance ₹{current_balance}")
+        net_payable = current_balance - discount
+        if amount > net_payable:
+            return jsonify(success=False,
+                           message=f"Amount ₹{amount} exceeds net payable ₹{net_payable} after discount")
 
         # ── Build bill update ─────────────────────────────────────────────────
         bill_update = {}
-        if payment_mode == "cash":
-            bill_update["payment_cash"] = bill_data.get("payment_cash", 0) + amount
-        else:
-            bill_update["payment_online"] = bill_data.get("payment_online", 0) + amount
+        if amount > 0:
+            if payment_mode == "cash":
+                bill_update["payment_cash"] = bill_data.get("payment_cash", 0) + amount
+            else:
+                bill_update["payment_online"] = bill_data.get("payment_online", 0) + amount
 
-        new_balance = current_balance - amount
+        if discount > 0:
+            bill_update["discounts"] = bill_data.get("discounts", 0) + discount
+
+        new_balance = current_balance - amount - discount
         bill_update["balance"] = new_balance
 
         invoice_number = None
@@ -580,18 +608,33 @@ def add_bill_payment():
         invalidate_rooms_and_totals()
 
         # ── Write to payments collection ──────────────────────────────────────
-        payment_service.write_payment({
-            "room":             bill_data.get("room", ""),
-            "name":             bill_data.get("guest_name", ""),
-            "amount":           amount,
-            "method":           payment_mode,
-            "type":             "settlement_payment",
-            "date":             datetime.now(IST).strftime("%Y-%m-%d"),
-            "time":             datetime.now(IST).strftime("%H:%M"),
-            "transaction_type": "settlement_payment",
-            "bill_id":          bill_id,
-            "bill_number":      bill_data.get("bill_number", ""),
-        })
+        now_date = datetime.now(IST).strftime("%Y-%m-%d")
+        now_time = datetime.now(IST).strftime("%H:%M")
+        _base = {
+            "room":        bill_data.get("room", ""),
+            "name":        bill_data.get("guest_name", ""),
+            "date":        now_date,
+            "time":        now_time,
+            "bill_id":     bill_id,
+            "bill_number": bill_data.get("bill_number", ""),
+        }
+        if amount > 0:
+            payment_service.write_payment({
+                **_base,
+                "amount":           amount,
+                "method":           payment_mode,
+                "type":             "settlement_payment",
+                "transaction_type": "settlement_payment",
+            })
+        if discount > 0:
+            payment_service.write_payment({
+                **_base,
+                "amount":           discount,
+                "method":           "discount",
+                "type":             "discount",
+                "transaction_type": "discount",
+            })
+            logger.info(f"Bill {bill_id} discount ₹{discount} applied by staff")
 
         # ── Sync linked settlement (if any) ───────────────────────────────────
         settlement_id = bill_data.get("settlement_id")
@@ -599,30 +642,34 @@ def add_bill_payment():
             try:
                 s_doc = settlements_ref.document(settlement_id).get()
                 if s_doc.exists:
-                    s_data   = s_doc.to_dict()
-                    s_amount = int(s_data.get("amount", 0))
+                    s_data        = s_doc.to_dict()
+                    s_amount      = int(s_data.get("amount", 0))
+                    # Total reduction = payment + discount
+                    total_reduced = amount + discount
                     s_update = {}
-                    if amount >= s_amount:
+                    if total_reduced >= s_amount:
                         s_update["status"]       = "paid"
-                        s_update["payment_date"] = datetime.now(IST).strftime("%Y-%m-%d")
-                        s_update["payment_time"] = datetime.now(IST).strftime("%H:%M")
+                        s_update["payment_date"] = now_date
+                        s_update["payment_time"] = now_time
                         s_update["payment_mode"] = payment_mode
                     else:
                         s_update["status"] = "partial"
-                        s_update["amount"] = s_amount - amount
+                        s_update["amount"] = s_amount - total_reduced
                         prev = s_data.get("payments", [])
-                        s_update["payments"] = prev + [{
-                            "amount": amount,
-                            "date":   datetime.now(IST).strftime("%Y-%m-%d"),
-                            "time":   datetime.now(IST).strftime("%H:%M"),
-                            "mode":   payment_mode,
-                        }]
+                        entry = {"date": now_date, "time": now_time, "mode": payment_mode}
+                        if amount   > 0: entry["amount"]   = amount
+                        if discount > 0: entry["discount"] = discount
+                        s_update["payments"] = prev + [entry]
                     settlements_ref.document(settlement_id).update(s_update)
                     logger.info(f"Settlement {settlement_id} synced from bill payment")
             except Exception as _se:
                 logger.warning(f"Could not sync settlement {settlement_id}: {_se}")
 
-        msg = f"Payment of ₹{amount} recorded."
+        # Build human-readable message
+        parts = []
+        if amount   > 0: parts.append(f"Payment ₹{amount}")
+        if discount > 0: parts.append(f"Discount ₹{discount}")
+        msg = " + ".join(parts) + " recorded."
         if new_balance > 0:
             msg += f" Remaining balance: ₹{new_balance}"
         else:
@@ -638,3 +685,243 @@ def add_bill_payment():
     except Exception as e:
         logger.error(f"Error in add_bill_payment: {str(e)}")
         return jsonify(success=False, message=f"Error: {str(e)}")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SAVE BILL PDF — upload generated PDF to Firebase Storage, store URL in bill
+# ══════════════════════════════════════════════════════════════════════════════
+
+@billing_bp.route("/save_bill_pdf", methods=["POST"])
+def save_bill_pdf():
+    """
+    Accept a base64-encoded PDF from the browser, upload it to Firebase Storage
+    under bills/{invoice_no}/v{n}.pdf, and save the download URL in the bill
+    document (pdf_url field + versions array for audit history).
+
+    Request JSON:
+        bill_id     — Firestore document ID of the bill
+        invoice_no  — used as the Storage folder name (e.g. "INV/2026/03/00045")
+        pdf_base64  — base64-encoded PDF bytes (without data-URI prefix)
+
+    Response JSON:
+        success, pdf_url, version
+    """
+    import base64
+
+    try:
+        data = request.json or {}
+        bill_id    = (data.get("bill_id") or "").strip()
+        invoice_no = (data.get("invoice_no") or "").strip()
+        pdf_b64    = (data.get("pdf_base64") or "").strip()
+
+        if not bill_id:
+            return jsonify(success=False, message="bill_id is required")
+        if not pdf_b64:
+            return jsonify(success=False, message="pdf_base64 is required")
+
+        # Strip data-URI prefix if the client accidentally included it
+        if pdf_b64.startswith("data:"):
+            pdf_b64 = pdf_b64.split(",", 1)[-1]
+
+        try:
+            pdf_bytes = base64.b64decode(pdf_b64)
+        except Exception:
+            return jsonify(success=False, message="Invalid base64 PDF data")
+
+        # Use bill_id as folder name fallback when invoice_no is absent
+        folder = invoice_no or bill_id
+        result = pdf_service.upload_bill_pdf(bill_id, folder, pdf_bytes)
+
+        if not result["url"]:
+            return jsonify(
+                success=False,
+                message="PDF upload to Firebase Storage failed. Check server logs."
+            )
+
+        return jsonify(
+            success=True,
+            pdf_url=result["url"],
+            version=result["version"],
+            message=f"PDF v{result['version']} saved successfully",
+        )
+
+    except Exception as e:
+        logger.error(f"Error in save_bill_pdf: {e}", exc_info=True)
+        return jsonify(success=False, message=f"Server error: {str(e)}")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# RENDER BILL PDF — server-side HTML→PDF using xhtml2pdf (no browser canvas)
+# ══════════════════════════════════════════════════════════════════════════════
+
+# ── Bill CSS for PDF ─────────────────────────────────────────────────────────
+# CSS for xhtml2pdf / ReportLab PDF rendering. Uses pt units (better for print).
+# Key difference from browser CSS: border-bottom is placed on .b-title (last element
+# in the header block) instead of .b-header-block. xhtml2pdf has a bug where
+# border-bottom on a div container gets incorrectly applied to every child block
+# element, creating multiple unwanted horizontal lines in the header.
+_BILL_PDF_CSS = """
+@page { size: A4 portrait; margin: 15mm 15mm; }
+
+body { font-family: Arial, Helvetica, sans-serif; font-size: 10pt;
+       color: #1a1a1a; margin: 0; padding: 0; }
+
+/* Full A4 width — margins set via @page, no artificial max-width cap */
+.b-bill-wrap { width: 100%; margin: 0 auto; }
+
+/* Header — centered text, NO border on the container div (xhtml2pdf bug: border-bottom
+   on a div gets applied to every child block element, creating unwanted extra lines).
+   Instead, the border lives on .b-title, the last element in the header. */
+.b-header-block { text-align: center; padding-bottom: 0; margin-bottom: 0; }
+.b-lodge-name   { font-size: 20pt; font-weight: bold; letter-spacing: 1px; }
+.b-lodge-entity { font-size: 10pt; color: #444; font-style: italic; margin-top: 2px; }
+.b-lodge-sub    { font-size: 9.5pt; color: #555; margin-top: 2px; }
+.b-gstin-bar    { font-size: 9pt; color: #777; margin-top: 3px; }
+.b-title        { font-size: 10pt; font-weight: bold; letter-spacing: 2px;
+                  margin-top: 6px; padding-bottom: 7px;
+                  border-bottom: 2px solid #333; }
+
+/* Info table — all 4 borders so it sits cleanly below the header rule */
+.b-info-outer { border: 1px solid #ccc;
+                width: 100%; border-collapse: collapse; margin-bottom: 8px; }
+.b-info-col   { padding: 7px 10px; font-size: 9.5pt; width: 50%;
+                vertical-align: top; }
+.b-info-col-r { border-left: 1px solid #ccc; }
+.b-row  { margin-bottom: 3px; }
+.b-lbl  { font-weight: bold; color: #444; display: inline-block;
+          min-width: 100px; margin-right: 4px; }
+.b-val  { color: #1a1a1a; }
+
+/* Items table */
+.b-tbl    { width: 100%; border-collapse: collapse; font-size: 9.5pt; margin-bottom: 6px; }
+.b-tbl th { background: #efefef; font-weight: bold; padding: 5px 6px;
+            border: 1px solid #bbb; }
+.b-tbl td { padding: 4px 6px; border: 1px solid #ddd; }
+.b-tr     { text-align: right; }
+
+/* Section / subtotal / GST rows */
+.b-sec td      { background: #f5f5f5; font-weight: bold; font-size: 9pt;
+                 color: #333; padding: 4px 6px;
+                 border-color: #bbb; text-transform: uppercase; }
+.b-gst-row td  { color: #666; font-size: 9pt; }
+.b-subtotal td { font-weight: bold; background: #fafafa; }
+
+/* Grand total */
+.b-grand    { border-top: 2px solid #333; }
+.b-grand td { font-weight: bold; background: #eeeeee; padding: 5px 6px; font-size: 10pt; }
+
+/* Payment section */
+.b-pay-section { margin-top: 8px; border: 1px solid #ccc; }
+.b-pay-title   { background: #efefef; font-weight: bold;
+                 font-size: 9pt; padding: 5px 6px; text-transform: uppercase; }
+.b-pay-section .b-tbl    { margin-bottom: 0; }
+.b-pay-section .b-tbl td { border-color: #eeeeee; padding: 4px 6px; }
+
+/* Signature */
+.b-sig       { width: 100%; margin-top: 30px; border-collapse: collapse; }
+.b-sig td    { padding-top: 10px; }
+.b-sig td:last-child { text-align: right; }
+.b-sig-line  { display: inline-block; border-top: 1px solid #555;
+               padding-top: 3px; width: 140px; text-align: center;
+               font-size: 9pt; color: #555; }
+
+/* Footer */
+.b-footer { margin-top: 12px; border-top: 1px solid #ddd;
+            padding-top: 5px; font-size: 8.5pt; color: #999;
+            text-align: center; }
+"""
+
+
+def _build_pdf_html(html_body: str) -> str:
+    """Wrap the bill HTML fragment in a complete HTML document for xhtml2pdf.
+    The HTML uses <table> for the info grid and signature (same as the browser
+    modal), so no regex manipulation is needed — the markup is already correct.
+
+    xhtml2pdf / ReportLab cannot render the Unicode Rupee sign (U+20B9 ₹).
+    Replace it with 'Rs.' before passing to the PDF engine.
+    """
+    html_body = html_body.replace('\u20b9', 'Rs.')
+    return f"""<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <style>{_BILL_PDF_CSS}</style>
+</head>
+<body>
+  {html_body}
+</body>
+</html>"""
+
+
+@billing_bp.route("/render_bill_pdf", methods=["POST"])
+def render_bill_pdf():
+    """
+    Server-side HTML→PDF conversion using xhtml2pdf.
+    Accepts the bill HTML fragment from the browser, wraps it in a
+    complete document with PDF-safe CSS, converts to PDF bytes,
+    uploads to Firebase Storage, and returns the download URL.
+
+    Skips generation if a PDF URL already exists in Firestore.
+
+    Request JSON:  { bill_id, invoice_no, html_content }
+    Response JSON: { success, pdf_url, version, skipped? }
+    """
+    try:
+        data       = request.json or {}
+        bill_id    = (data.get("bill_id") or "").strip()
+        invoice_no = (data.get("invoice_no") or "").strip()
+        html_body  = (data.get("html_content") or "").strip()
+
+        if not bill_id or not html_body:
+            return jsonify(success=False,
+                           message="bill_id and html_content are required"), 400
+
+        # ── Guard: never create a v2 if a PDF already exists ─────────────────
+        bill_snap = bills_ref.document(bill_id).get()
+        if bill_snap.exists:
+            existing_url = (bill_snap.to_dict() or {}).get("pdf_url")
+            if existing_url:
+                logger.info(f"render_bill_pdf: PDF already exists for {bill_id}, skipping")
+                return jsonify(success=True, pdf_url=existing_url,
+                               version=None, skipped=True)
+
+        # ── Convert HTML → PDF bytes ──────────────────────────────────────────
+        try:
+            from xhtml2pdf import pisa
+        except ImportError:
+            return jsonify(
+                success=False,
+                message="xhtml2pdf not installed. Run: pip install xhtml2pdf==0.2.16"
+            ), 500
+
+        full_html = _build_pdf_html(html_body)
+
+        import io
+        pdf_buf = io.BytesIO()
+        result  = pisa.CreatePDF(full_html, dest=pdf_buf)
+
+        if result.err:
+            logger.error(f"render_bill_pdf: xhtml2pdf error for {bill_id}: {result.err}")
+            return jsonify(success=False,
+                           message=f"PDF conversion error (code {result.err})"), 500
+
+        pdf_bytes = pdf_buf.getvalue()
+
+        # ── Upload to Firebase Storage ────────────────────────────────────────
+        folder = invoice_no or bill_id
+        upload = pdf_service.upload_bill_pdf(bill_id, folder, pdf_bytes)
+
+        if not upload.get("url"):
+            return jsonify(success=False,
+                           message="PDF upload to Firebase Storage failed"), 500
+
+        return jsonify(
+            success=True,
+            pdf_url=upload["url"],
+            version=upload["version"],
+            message=f"PDF v{upload['version']} generated and saved",
+        )
+
+    except Exception as e:
+        logger.error(f"render_bill_pdf error: {e}", exc_info=True)
+        return jsonify(success=False, message=str(e)), 500

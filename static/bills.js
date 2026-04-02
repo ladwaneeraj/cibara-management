@@ -251,6 +251,13 @@
 }
 .bl-pm-btn.bl-pm-active-cash  { border-color: #28a745; background: #e8f5e9; color: #28a745; }
 .bl-pm-btn.bl-pm-active-online{ border-color: #1565c0; background: #e3f2fd; color: #1565c0; }
+.bl-pm-net-row {
+  display: flex; justify-content: space-between; align-items: center;
+  background: #e8f5e9; border-radius: 7px; padding: .35rem .65rem;
+  margin-top: .35rem; margin-bottom: .5rem;
+}
+.bl-pm-net-label { color: #2e7d32; font-size: .78rem; font-weight: 600; }
+.bl-pm-net-val   { color: #2e7d32; font-size: .95rem; font-weight: 700; }
 .bl-pay-modal-actions {
   display: flex; gap: .6rem; margin-top: 1.1rem;
 }
@@ -268,6 +275,117 @@
 .bl-pay-confirm-btn:hover { opacity: .88; }
 .bl-pay-confirm-btn:disabled { opacity: .5; cursor: not-allowed; }
 .bl-pay-error { color: #dc3545; font-size: .75rem; margin-top: .4rem; min-height: 1rem; }
+
+/* ── PDF generation overlay ── */
+#bl-pdf-gen-overlay {
+  display: none; position: fixed; inset: 0;
+  background: #000; z-index: 100001;
+  align-items: center; justify-content: center;
+  flex-direction: column; gap: 1.2rem;
+}
+#bl-pdf-gen-overlay.active { display: flex; }
+.bl-pdf-spinner {
+  width: 56px; height: 56px;
+  border: 5px solid rgba(255,255,255,.25);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: bl-spin 0.85s linear infinite;
+}
+@keyframes bl-spin { to { transform: rotate(360deg); } }
+.bl-pdf-overlay-text {
+  color: #fff; font-size: 1rem; font-weight: 600;
+  letter-spacing: .03em; text-align: center; line-height: 1.5;
+}
+.bl-pdf-overlay-sub {
+  color: rgba(255,255,255,.65); font-size: .78rem; margin-top: -.6rem;
+}
+
+/* ── WhatsApp action button (in table rows) ── */
+.bl-wa-btn {
+  width: 28px; height: 28px; border: none;
+  border-radius: 6px; cursor: pointer;
+  display: inline-flex; align-items: center;
+  justify-content: center; font-size: 0.82rem;
+  transition: opacity 0.15s; margin-left: 4px;
+  background: #25D366; color: #fff; vertical-align: middle;
+}
+.bl-wa-btn:hover { opacity: 0.78; }
+.bl-wa-btn.bl-wa-pending { background: #c8e6c9; color: #388e3c; cursor: pointer; }
+.bl-wa-btn.bl-wa-loading { background: #e0e0e0; color: #9e9e9e; cursor: wait; }
+
+/* ── WhatsApp send modal ── */
+.bl-wa-backdrop {
+  display: none; position: fixed; inset: 0;
+  background: rgba(0,0,0,.45); z-index: 10000;
+  align-items: center; justify-content: center;
+}
+.bl-wa-backdrop.bl-wa-open { display: flex; }
+.bl-wa-modal {
+  background: #fff; border-radius: 14px;
+  padding: 1.5rem 1.4rem; width: 390px; max-width: 94vw;
+  box-shadow: 0 8px 32px rgba(0,0,0,.2);
+  animation: bl-modal-in .18s ease;
+}
+.bl-wa-modal-title {
+  font-size: 1rem; font-weight: 700; color: #128C7E;
+  margin-bottom: 1rem; display: flex; align-items: center; gap: .45rem;
+}
+.bl-wa-msg-preview {
+  background: #e8f5e9; border-radius: 10px;
+  padding: .7rem .9rem; font-size: .78rem; line-height: 1.55;
+  color: #333; margin-bottom: 1rem; border: 1px solid #c8e6c9;
+  white-space: pre-wrap; word-break: break-word;
+}
+.bl-wa-section-label {
+  font-size: .73rem; font-weight: 700; color: #555;
+  text-transform: uppercase; letter-spacing: .04em; margin-bottom: .4rem;
+}
+.bl-wa-options { display: flex; flex-direction: column; gap: .4rem; margin-bottom: .8rem; }
+.bl-wa-option {
+  display: flex; align-items: center; gap: .6rem;
+  padding: .45rem .7rem; border-radius: 8px; cursor: pointer;
+  border: 1.5px solid #e0e0e0; font-size: .82rem;
+  transition: border-color .15s, background .15s;
+}
+.bl-wa-option.selected { border-color: #25D366; background: #f1fff4; }
+.bl-wa-option input[type=radio] { accent-color: #25D366; margin: 0; flex-shrink: 0; }
+.bl-wa-custom-wrap { margin-bottom: .5rem; }
+.bl-wa-custom-input {
+  width: 100%; padding: .45rem .65rem;
+  border: 1.5px solid #d0d0d0; border-radius: 7px;
+  font-size: .9rem; outline: none; box-sizing: border-box;
+  transition: border-color .15s;
+}
+.bl-wa-custom-input:focus { border-color: #25D366; }
+.bl-wa-custom-input.input-error { border-color: #dc3545; }
+.bl-wa-error { color: #dc3545; font-size: .73rem; min-height: 1rem; margin-bottom: .3rem; }
+.bl-wa-actions { display: flex; gap: .6rem; margin-top: .6rem; }
+.bl-wa-cancel-btn {
+  flex: 1; padding: .5rem; border: 1px solid #d0d0d0;
+  border-radius: 8px; background: #fff; cursor: pointer;
+  font-size: .85rem; font-weight: 600; color: #666;
+}
+.bl-wa-send-btn {
+  flex: 2; padding: .5rem; border: none;
+  border-radius: 8px; background: #25D366; color: #fff;
+  cursor: pointer; font-size: .85rem; font-weight: 700;
+  display: flex; align-items: center; justify-content: center;
+  gap: .4rem; transition: opacity .15s;
+}
+.bl-wa-send-btn:hover { opacity: .88; }
+
+/* ── Bill modal "Save & Share" button — matches action-btn sizing in flex context ── */
+.bl-bill-save-btn {
+  /* Same visual weight as action-btn in .bill-actions flex container */
+  width: 100%; padding: 1rem; margin-top: 1rem;
+  border: none; border-radius: var(--border-radius, 8px);
+  background: #128C7E; color: #fff; font-size: .9rem;
+  font-weight: 600; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  gap: .45rem; transition: opacity .15s; white-space: nowrap;
+}
+.bl-bill-save-btn:hover { opacity: .85; }
+.bl-bill-save-btn:disabled { opacity: .5; cursor: wait; }
 `;
 
   function injectStyles() {
@@ -288,21 +406,52 @@
     lastLoadedRange: null,
     sort: { key: null, dir: "asc" },
     // Pay modal state
-    payModal: { billId: null, billNumber: null, guestName: null,
-                balance: 0, mode: "cash" },
+    payModal: {
+      billId: null,
+      billNumber: null,
+      guestName: null,
+      balance: 0,
+      mode: "cash",
+    },
+    // WhatsApp modal state
+    waModal: {
+      billId: null,
+      pdfUrl: null,
+      guestName: null,
+      guestMobile: null,
+      invoiceNo: null,
+      amount: 0,
+      numberMode: "registered", // "registered" | "custom"
+    },
   };
 
   // ── Utilities ────────────────────────────────────────────────────────────────
-  function pad(n) { return String(n).padStart(2, "0"); }
+  function pad(n) {
+    return String(n).padStart(2, "0");
+  }
   function todayStr() {
     const d = new Date();
-    return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
   }
   function nDaysAgoStr(n) {
-    const d = new Date(); d.setDate(d.getDate() - n);
-    return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+    const d = new Date();
+    d.setDate(d.getDate() - n);
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
   }
-  const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  const MONTHS = [
+    "Jan",
+    "Feb",
+    "Mar",
+    "Apr",
+    "May",
+    "Jun",
+    "Jul",
+    "Aug",
+    "Sep",
+    "Oct",
+    "Nov",
+    "Dec",
+  ];
 
   // Parse the sequential number out of bill numbers like "CC/2026/03/00091" → 91
   // Always take the last segment since the format can vary in number of parts.
@@ -313,12 +462,12 @@
   }
   function fmtDate(s) {
     const [y, m, d] = s.split("-");
-    return `${parseInt(d)} ${MONTHS[parseInt(m)-1]} ${y}`;
+    return `${parseInt(d)} ${MONTHS[parseInt(m) - 1]} ${y}`;
   }
   function fmtDT(dtStr) {
     if (!dtStr) return "-";
-    const [dp, tp=""] = dtStr.split(" ");
-    return `${fmtDate(dp)}${tp ? " "+tp : ""}`;
+    const [dp, tp = ""] = dtStr.split(" ");
+    return `${fmtDate(dp)}${tp ? " " + tp : ""}`;
   }
   function fmtBillDT(dtStr) {
     if (!dtStr) return "-";
@@ -337,15 +486,28 @@
   }
   function calcDays(ci, co) {
     if (!co) return 1;
-    const diff = Math.ceil((new Date(co.replace(" ","T")) - new Date(ci.replace(" ","T"))) / 86400000);
+    const diff = Math.ceil(
+      (new Date(co.replace(" ", "T")) - new Date(ci.replace(" ", "T"))) /
+        86400000,
+    );
     return diff > 0 ? diff : 1;
   }
-  function inr(n) { return (+(n||0)).toLocaleString("en-IN"); }
-  function fix2(n) { return (+(n || 0)).toFixed(2); }
-  function debounce(fn, ms) {
-    let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); };
+  function inr(n) {
+    return (+(n || 0)).toLocaleString("en-IN");
   }
-  function dom(id) { return document.getElementById(id); }
+  function fix2(n) {
+    return (+(n || 0)).toFixed(2);
+  }
+  function debounce(fn, ms) {
+    let t;
+    return (...a) => {
+      clearTimeout(t);
+      t = setTimeout(() => fn(...a), ms);
+    };
+  }
+  function dom(id) {
+    return document.getElementById(id);
+  }
 
   // ── GST rates per 55th GST Council (effective 22 Sep 2025), SAC 9963 ─────────
   // < ₹1,000/night  → Exempt (0%)
@@ -355,12 +517,26 @@
     const total = (ratePerNight || 0) * (days || 1);
     if (ratePerNight > 7500) {
       const base = total / 1.18;
-      const gst  = total - base;
-      return { base, cgst: gst/2, sgst: gst/2, total, cgstRate: 9, sgstRate: 9 };
+      const gst = total - base;
+      return {
+        base,
+        cgst: gst / 2,
+        sgst: gst / 2,
+        total,
+        cgstRate: 9,
+        sgstRate: 9,
+      };
     } else if (ratePerNight >= 1000) {
       const base = total / 1.05;
-      const gst  = total - base;
-      return { base, cgst: gst/2, sgst: gst/2, total, cgstRate: 2.5, sgstRate: 2.5 };
+      const gst = total - base;
+      return {
+        base,
+        cgst: gst / 2,
+        sgst: gst / 2,
+        total,
+        cgstRate: 2.5,
+        sgstRate: 2.5,
+      };
     }
     return { base: total, cgst: 0, sgst: 0, total, cgstRate: 0, sgstRate: 0 };
   }
@@ -483,8 +659,16 @@
       </div>
     </div>
 
+    <label for="bl-pm-discount">Discount (₹) <span style="color:#aaa;font-weight:400;font-size:.72rem;">— optional</span></label>
+    <input type="number" id="bl-pm-discount" placeholder="0" min="0" value="0" />
+
+    <div class="bl-pm-net-row" id="bl-pm-net-row">
+      <span class="bl-pm-net-label">Net Payable</span>
+      <span class="bl-pm-net-val" id="bl-pm-net">₹0</span>
+    </div>
+
     <label for="bl-pm-amount">Payment Amount (₹)</label>
-    <input type="number" id="bl-pm-amount" placeholder="Enter amount" min="1" />
+    <input type="number" id="bl-pm-amount" placeholder="Enter amount" min="0" />
 
     <label>Payment Method</label>
     <div class="bl-pm-toggle">
@@ -517,8 +701,56 @@
     <div id="bl-bill-print-area"></div>
     <div class="bill-actions">
       <button class="action-btn btn-secondary" id="bl-bill-close2">Close</button>
+      <button class="bl-bill-save-btn" id="bl-bill-save-pdf" title="Save PDF to cloud &amp; share on WhatsApp">
+        <i class="fab fa-whatsapp"></i> Save &amp; Share
+      </button>
       <button class="action-btn btn-primary" id="bl-bill-print">
         <i class="fas fa-print"></i> Print
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- PDF Generation Overlay -->
+<div id="bl-pdf-gen-overlay">
+  <div class="bl-pdf-spinner"></div>
+  <div class="bl-pdf-overlay-text" id="bl-pdf-overlay-text">Generating PDF…</div>
+  <div class="bl-pdf-overlay-sub">Please wait, this takes a few seconds</div>
+</div>
+
+<!-- WhatsApp Send Modal -->
+<div class="bl-wa-backdrop" id="bl-wa-backdrop">
+  <div class="bl-wa-modal">
+    <div class="bl-wa-modal-title">
+      <i class="fab fa-whatsapp" style="font-size:1.2rem;"></i> Send Invoice via WhatsApp
+    </div>
+
+    <div class="bl-wa-section-label">Message Preview</div>
+    <div class="bl-wa-msg-preview" id="bl-wa-preview"></div>
+
+    <div class="bl-wa-section-label">Send To</div>
+    <div class="bl-wa-options">
+      <label class="bl-wa-option selected" id="bl-wa-opt-registered">
+        <input type="radio" name="bl-wa-num" value="registered" checked />
+        <span id="bl-wa-registered-label">Guest number</span>
+      </label>
+      <label class="bl-wa-option" id="bl-wa-opt-custom">
+        <input type="radio" name="bl-wa-num" value="custom" />
+        <span>Enter different number</span>
+      </label>
+    </div>
+
+    <div class="bl-wa-custom-wrap" id="bl-wa-custom-wrap" style="display:none;">
+      <input type="tel" class="bl-wa-custom-input" id="bl-wa-custom-number"
+             placeholder="10-digit mobile number" maxlength="10" inputmode="numeric" />
+    </div>
+
+    <div class="bl-wa-error" id="bl-wa-error"></div>
+
+    <div class="bl-wa-actions">
+      <button class="bl-wa-cancel-btn" id="bl-wa-cancel">Cancel</button>
+      <button class="bl-wa-send-btn" id="bl-wa-send">
+        <i class="fab fa-whatsapp"></i> Send via WhatsApp
       </button>
     </div>
   </div>
@@ -527,14 +759,19 @@
 
   // ── Date helpers ──────────────────────────────────────────────────────────────
   function dateToYMD(d) {
-    return d.getFullYear() + '-' +
-      String(d.getMonth() + 1).padStart(2, '0') + '-' +
-      String(d.getDate()).padStart(2, '0');
+    return (
+      d.getFullYear() +
+      "-" +
+      String(d.getMonth() + 1).padStart(2, "0") +
+      "-" +
+      String(d.getDate()).padStart(2, "0")
+    );
   }
 
   // ── Date defaults + flatpickr init ────────────────────────────────────────────
   function setDefaults() {
-    const today = todayStr(), week = nDaysAgoStr(6);
+    const today = todayStr(),
+      week = nDaysAgoStr(6);
     state.dateRange.start = week;
     state.dateRange.end = today;
 
@@ -543,39 +780,43 @@
 
     state._datePicker = flatpickr(el, {
       mode: "range",
-      dateFormat: "Y-m-d",   // internal ISO format — avoids maxDate mis-parsing
-      altInput: true,         // show human-friendly text to user
-      altFormat: "d M Y",     // display: "17 Mar 2026"
+      dateFormat: "Y-m-d", // internal ISO format — avoids maxDate mis-parsing
+      altInput: true, // show human-friendly text to user
+      altFormat: "d M Y", // display: "17 Mar 2026"
       defaultDate: [week, today],
       maxDate: today,
       disableMobile: true,
       onChange: function (selectedDates) {
         if (selectedDates.length === 2) {
           state.dateRange.start = dateToYMD(selectedDates[0]);
-          state.dateRange.end   = dateToYMD(selectedDates[1]);
-          document.querySelectorAll(".bl-quick-btn").forEach(b => b.classList.remove("bq-active"));
+          state.dateRange.end = dateToYMD(selectedDates[1]);
+          document
+            .querySelectorAll(".bl-quick-btn")
+            .forEach((b) => b.classList.remove("bq-active"));
           loadData(true);
         }
-      }
+      },
     });
   }
 
   // ── Events ────────────────────────────────────────────────────────────────────
   function wireEvents() {
     // Quick-range buttons
-    document.querySelectorAll(".bl-quick-btn").forEach(btn => {
+    document.querySelectorAll(".bl-quick-btn").forEach((btn) => {
       btn.addEventListener("click", () => {
         const range = btn.dataset.bq;
         const today = todayStr();
         let start;
-        if (range === "today")  start = today;
-        else if (range === "week")  start = nDaysAgoStr(6);
+        if (range === "today") start = today;
+        else if (range === "week") start = nDaysAgoStr(6);
         else if (range === "month") start = nDaysAgoStr(29);
         else start = today;
         state.dateRange.start = start;
-        state.dateRange.end   = today;
+        state.dateRange.end = today;
         if (state._datePicker) state._datePicker.setDate([start, today]);
-        document.querySelectorAll(".bl-quick-btn").forEach(b => b.classList.remove("bq-active"));
+        document
+          .querySelectorAll(".bl-quick-btn")
+          .forEach((b) => b.classList.remove("bq-active"));
         btn.classList.add("bq-active");
         loadData(true);
       });
@@ -583,71 +824,140 @@
 
     const srcf = dom("bl-source-filter");
     const payf = dom("bl-payment-filter");
-    const sr   = dom("bl-search");
+    const sr = dom("bl-search");
 
-    if (srcf) srcf.addEventListener("change", () => { state.filters.source  = srcf.value; applyFilters(); });
-    if (payf) payf.addEventListener("change", () => { state.filters.payment = payf.value; applyFilters(); });
-    if (sr)   sr.addEventListener("input", debounce(() => { state.filters.search = sr.value.toLowerCase(); applyFilters(); }, 220));
+    if (srcf)
+      srcf.addEventListener("change", () => {
+        state.filters.source = srcf.value;
+        applyFilters();
+      });
+    if (payf)
+      payf.addEventListener("change", () => {
+        state.filters.payment = payf.value;
+        applyFilters();
+      });
+    if (sr)
+      sr.addEventListener(
+        "input",
+        debounce(() => {
+          state.filters.search = sr.value.toLowerCase();
+          applyFilters();
+        }, 220),
+      );
 
     // ── Pay modal wiring ──────────────────────────────────────────────────────
-    const pmCancel  = dom("bl-pm-cancel");
+    const pmCancel = dom("bl-pm-cancel");
     const pmConfirm = dom("bl-pm-confirm");
-    const pmCash    = dom("bl-pm-cash-btn");
-    const pmOnline  = dom("bl-pm-online-btn");
+    const pmCash = dom("bl-pm-cash-btn");
+    const pmOnline = dom("bl-pm-online-btn");
     const pmBackdrop = dom("bl-pay-modal-backdrop");
 
-    if (pmCancel)  pmCancel.addEventListener("click", closePayModal);
-    if (pmBackdrop) pmBackdrop.addEventListener("click", (e) => {
-      if (e.target === pmBackdrop) closePayModal();
-    });
-    if (pmCash) pmCash.addEventListener("click", () => {
-      state.payModal.mode = "cash";
-      pmCash.className   = "bl-pm-btn bl-pm-active-cash";
-      pmOnline.className = "bl-pm-btn";
-    });
-    if (pmOnline) pmOnline.addEventListener("click", () => {
-      state.payModal.mode = "online";
-      pmOnline.className = "bl-pm-btn bl-pm-active-online";
-      pmCash.className   = "bl-pm-btn";
-    });
+    if (pmCancel) pmCancel.addEventListener("click", closePayModal);
+    if (pmBackdrop)
+      pmBackdrop.addEventListener("click", (e) => {
+        if (e.target === pmBackdrop) closePayModal();
+      });
+    if (pmCash)
+      pmCash.addEventListener("click", () => {
+        state.payModal.mode = "cash";
+        pmCash.className = "bl-pm-btn bl-pm-active-cash";
+        pmOnline.className = "bl-pm-btn";
+      });
+    if (pmOnline)
+      pmOnline.addEventListener("click", () => {
+        state.payModal.mode = "online";
+        pmOnline.className = "bl-pm-btn bl-pm-active-online";
+        pmCash.className = "bl-pm-btn";
+      });
     if (pmConfirm) pmConfirm.addEventListener("click", collectBillPayment);
 
-    const rb = dom("bl-refresh-btn"), xb = dom("bl-export-btn");
+    const rb = dom("bl-refresh-btn"),
+      xb = dom("bl-export-btn");
     if (rb) rb.addEventListener("click", () => loadData(true));
     if (xb) xb.addEventListener("click", exportToExcel);
 
     // Bill modal controls
-    const bc  = dom("bl-bill-close");
+    const bc = dom("bl-bill-close");
     const bc2 = dom("bl-bill-close2");
-    const bp  = dom("bl-bill-print");
-    const bm  = dom("bl-bill-modal");
-    if (bc)  bc.addEventListener("click", closeBill);
+    const bp = dom("bl-bill-print");
+    const bm = dom("bl-bill-modal");
+    if (bc) bc.addEventListener("click", closeBill);
     if (bc2) bc2.addEventListener("click", closeBill);
-    if (bp)  bp.addEventListener("click", function() {
-      const area = dom("bl-bill-print-area");
-      if (!area || !area.innerHTML.trim()) return;
-      // Remove any stale clone from a previous print
-      var old = document.getElementById("bl-print-clone");
-      if (old) old.remove();
-      // Append bill HTML as a direct <body> child — only content in the page during print
-      var clone = document.createElement("div");
-      clone.id = "bl-print-clone";
-      clone.innerHTML = area.innerHTML;
-      document.body.appendChild(clone);
-      document.body.classList.add("bl-printing");
-      try { window.print(); } finally {
-        document.body.classList.remove("bl-printing");
-        clone.remove();
-      }
-    });
-    if (bm)  bm.addEventListener("click", (e) => { if (e.target === bm) closeBill(); });
+    if (bp)
+      bp.addEventListener("click", function () {
+        const area = dom("bl-bill-print-area");
+        if (!area || !area.innerHTML.trim()) return;
+        // Remove any stale clone from a previous print
+        var old = document.getElementById("bl-print-clone");
+        if (old) old.remove();
+        // Append bill HTML as a direct <body> child — only content in the page during print
+        var clone = document.createElement("div");
+        clone.id = "bl-print-clone";
+        clone.innerHTML = area.innerHTML;
+        document.body.appendChild(clone);
+        document.body.classList.add("bl-printing");
+        try {
+          window.print();
+        } finally {
+          document.body.classList.remove("bl-printing");
+          clone.remove();
+        }
+      });
+    if (bm)
+      bm.addEventListener("click", (e) => {
+        if (e.target === bm) closeBill();
+      });
 
-    // Delegated clicks: bill view + collect settlement + group toggle
+    // ── "Save & Share" button in bill modal ───────────────────────────────────
+    const bSave = dom("bl-bill-save-pdf");
+    if (bSave) {
+      bSave.addEventListener("click", async function () {
+        if (!_openBillId || !_openBillData) return;
+        bSave.disabled = true;
+        bSave.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Saving PDF…';
+        try {
+          // Check if a PDF already exists (don't re-upload unnecessarily)
+          const existingEntry = state.allEntries.find(
+            (x) => x.id === _openBillId,
+          );
+          let pdfUrl = existingEntry?.pdf_url || null;
+
+          if (!pdfUrl) {
+            pdfUrl = await generateAndUploadPDF(_openBillId, _openBillData);
+          }
+
+          if (pdfUrl) {
+            // Build synthetic entry for the WhatsApp modal
+            const entry = {
+              ...(existingEntry || {}),
+              id: _openBillId,
+              pdf_url: pdfUrl,
+              guest_name: _openBillData.guest_name,
+              guest_mobile: _openBillData.guest_mobile,
+              invoice_number: _openBillData.invoice_number,
+              bill_number: _openBillData.bill_number,
+              total_amount: _openBillData.total_amount,
+            };
+            closeBill();
+            openWhatsAppModal(entry);
+          }
+        } finally {
+          bSave.disabled = false;
+          bSave.innerHTML = '<i class="fab fa-whatsapp"></i> Save &amp; Share';
+        }
+      });
+    }
+
+    // Delegated clicks: bill view + collect settlement + group toggle + WhatsApp
     const tbody = dom("bl-table-body");
     if (tbody) {
-      tbody.addEventListener("click", (e) => {
+      tbody.addEventListener("click", async (e) => {
         const billBtn = e.target.closest(".bl-bill-btn");
-        if (billBtn) { e.stopPropagation(); openBill(billBtn.dataset.id); return; }
+        if (billBtn) {
+          e.stopPropagation();
+          openBill(billBtn.dataset.id);
+          return;
+        }
 
         // Pending balance — open Bills tab pay modal directly
         const collectBtn = e.target.closest(".bl-collect-btn");
@@ -657,8 +967,58 @@
             collectBtn.dataset.id,
             collectBtn.dataset.billno,
             collectBtn.dataset.guest,
-            parseInt(collectBtn.dataset.balance, 10) || 0
+            parseInt(collectBtn.dataset.balance, 10) || 0,
           );
+          return;
+        }
+
+        // WhatsApp share button
+        const waBtn = e.target.closest(".bl-wa-btn");
+        if (waBtn) {
+          e.stopPropagation();
+          const billId = waBtn.dataset.id;
+          const pdfUrl = waBtn.dataset.pdfurl;
+          const entry = state.allEntries.find((x) => x.id === billId);
+          if (!entry) return;
+
+          if (pdfUrl) {
+            // PDF already saved — open modal directly
+            openWhatsAppModal(entry);
+          } else {
+            // No PDF yet — generate + upload first, then open modal
+            if (
+              !confirm(
+                "No PDF saved yet.\n\nGenerate and save a PDF now, then open WhatsApp?\n(This may take a few seconds)",
+              )
+            )
+              return;
+
+            waBtn.classList.add("bl-wa-loading");
+            waBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+
+            // Fetch bill data from backend to generate PDF
+            try {
+              const res = await apiFetch(`/generate_bill/${billId}`);
+              const data = await res.json();
+              if (!data.success) {
+                alert("Could not load bill data.");
+                return;
+              }
+
+              const url = await generateAndUploadPDF(billId, data.bill);
+              if (url) {
+                entry.pdf_url = url;
+                renderTable(); // re-render so btn turns green
+                openWhatsAppModal(entry);
+              }
+            } catch (err) {
+              console.error("[Bills] WA btn generate error:", err);
+              alert("Error generating PDF: " + err.message);
+            } finally {
+              waBtn.classList.remove("bl-wa-loading");
+              waBtn.innerHTML = '<i class="fab fa-whatsapp"></i>';
+            }
+          }
           return;
         }
 
@@ -667,11 +1027,47 @@
       });
     }
 
+    // ── WhatsApp modal wiring ─────────────────────────────────────────────────
+    const waCancel = dom("bl-wa-cancel");
+    const waSend = dom("bl-wa-send");
+    const waBackdrop = dom("bl-wa-backdrop");
+    const waOptReg = dom("bl-wa-opt-registered");
+    const waOptCus = dom("bl-wa-opt-custom");
+    const waCustomWrap = dom("bl-wa-custom-wrap");
+
+    if (waCancel) waCancel.addEventListener("click", closeWhatsAppModal);
+    if (waSend) waSend.addEventListener("click", sendWhatsApp);
+    if (waBackdrop)
+      waBackdrop.addEventListener("click", (e) => {
+        if (e.target === waBackdrop) closeWhatsAppModal();
+      });
+
+    if (waOptReg)
+      waOptReg.addEventListener("click", () => {
+        state.waModal.numberMode = "registered";
+        waOptReg.classList.add("selected");
+        if (waOptCus) waOptCus.classList.remove("selected");
+        if (waCustomWrap) waCustomWrap.style.display = "none";
+        const errEl = dom("bl-wa-error");
+        if (errEl) errEl.textContent = "";
+      });
+    if (waOptCus)
+      waOptCus.addEventListener("click", () => {
+        state.waModal.numberMode = "custom";
+        waOptCus.classList.add("selected");
+        if (waOptReg) waOptReg.classList.remove("selected");
+        if (waCustomWrap) waCustomWrap.style.display = "block";
+        const inp = dom("bl-wa-custom-number");
+        if (inp) inp.focus();
+        const errEl = dom("bl-wa-error");
+        if (errEl) errEl.textContent = "";
+      });
+
     _wireSortHeaders();
   }
 
   function _wireSortHeaders() {
-    const btnDate   = dom("bl-view-date");
+    const btnDate = dom("bl-view-date");
     const btnBillNo = dom("bl-view-billno");
     if (!btnDate || !btnBillNo) return;
 
@@ -697,7 +1093,7 @@
   }
 
   function _updateSortArrows() {
-    const btnDate   = dom("bl-view-date");
+    const btnDate = dom("bl-view-date");
     const btnBillNo = dom("bl-view-billno");
     if (!btnDate || !btnBillNo) return;
 
@@ -720,8 +1116,13 @@
     if (!start || !end) return;
 
     const rangeKey = `${start}_${end}`;
-    if (!force && state.lastLoadedRange === rangeKey && state.allEntries.length >= 0) {
-      applyFilters(); return;
+    if (
+      !force &&
+      state.lastLoadedRange === rangeKey &&
+      state.allEntries.length >= 0
+    ) {
+      applyFilters();
+      return;
     }
 
     state.loading = true;
@@ -754,39 +1155,46 @@
   function applyFilters() {
     // Include completed bills AND pending_settlement bills (settle-later checkouts).
     // bill_number presence is the canonical indicator that a bill was generated.
-    let f = state.allEntries.filter(e =>
-      (e.status === "completed" || e.status === "pending_settlement") &&
-      e.bill_number &&
-      e.bill_number !== "-" &&
-      e.bill_number.trim() !== ""
+    let f = state.allEntries.filter(
+      (e) =>
+        (e.status === "completed" || e.status === "pending_settlement") &&
+        e.bill_number &&
+        e.bill_number !== "-" &&
+        e.bill_number.trim() !== "",
     );
 
     const { search, source, payment } = state.filters;
 
     if (search)
-      f = f.filter((e) =>
-        (e.guest_name || "").toLowerCase().includes(search) ||
-        (e.guest_mobile || "").includes(search) ||
-        String(e.room || "").includes(search) ||
-        (e.bill_number || "").toLowerCase().includes(search) ||
-        (e.invoice_number || "").toLowerCase().includes(search),
+      f = f.filter(
+        (e) =>
+          (e.guest_name || "").toLowerCase().includes(search) ||
+          (e.guest_mobile || "").includes(search) ||
+          String(e.room || "").includes(search) ||
+          (e.bill_number || "").toLowerCase().includes(search),
       );
 
     // MMT OTA has no invoice so won't appear here; only normal + booking.com
-    if (source !== "all") f = f.filter((e) => (e.booking_source || "normal") === source);
+    if (source !== "all")
+      f = f.filter((e) => (e.booking_source || "normal") === source);
 
     // Payment method filter
     if (payment !== "all") {
       f = f.filter((e) => {
-        const c = e.payment_cash   || 0;
+        const c = e.payment_cash || 0;
         const o = e.payment_online || 0;
-        const b = e.balance        || 0;
+        const b = e.balance || 0;
         switch (payment) {
-          case "cash":    return c > 0 && o === 0;
-          case "online":  return o > 0 && c === 0;
-          case "split":   return c > 0 && o > 0;
-          case "pending": return b > 0;
-          default:        return true;
+          case "cash":
+            return c > 0 && o === 0;
+          case "online":
+            return o > 0 && c === 0;
+          case "split":
+            return c > 0 && o > 0;
+          case "pending":
+            return b > 0;
+          default:
+            return true;
         }
       });
     }
@@ -798,46 +1206,85 @@
 
   // ── Tally — computed from completed (paid) entries only ─────────────────────
   function renderTally(entries) {
-    let cash = 0, upi = 0, pending = 0;
+    let cash = 0,
+      upi = 0,
+      pending = 0;
     for (const e of entries) {
-      if ((e.balance || 0) > 0) { pending++; continue; }
-      cash += e.payment_cash   || 0;
-      upi  += e.payment_online || 0;
+      if ((e.balance || 0) > 0) {
+        pending++;
+        continue;
+      }
+      cash += e.payment_cash || 0;
+      upi += e.payment_online || 0;
     }
     const revenue = cash + upi;
-    const set = (id, val) => { const el = dom(id); if (el) el.textContent = "₹" + inr(val || 0); };
+    const set = (id, val) => {
+      const el = dom(id);
+      if (el) el.textContent = "₹" + inr(val || 0);
+    };
     set("bl-tc-cash", cash);
-    set("bl-tc-upi",  upi);
-    set("bl-tc-rev",  revenue);
-    const countEl   = dom("bl-tc-count");
+    set("bl-tc-upi", upi);
+    set("bl-tc-rev", revenue);
+    const countEl = dom("bl-tc-count");
     const pendingEl = dom("bl-tc-pending");
-    if (countEl)   countEl.textContent   = entries.length;
+    if (countEl) countEl.textContent = entries.length;
     if (pendingEl) pendingEl.textContent = pending || "0";
   }
 
   // ── Pay Modal ─────────────────────────────────────────────────────────────────
+  // Recomputes Net Payable and clamps payment amount whenever discount changes.
+  function _updatePayModalNet() {
+    const { balance } = state.payModal;
+    const discountEl = dom("bl-pm-discount");
+    const amtEl = dom("bl-pm-amount");
+    const netValEl = dom("bl-pm-net");
+    const discount = Math.max(0, parseInt(discountEl?.value || "0", 10) || 0);
+    const clamped = Math.min(discount, balance); // can't exceed balance
+    if (discountEl && clamped !== discount) discountEl.value = clamped;
+    const net = balance - clamped;
+    if (netValEl) netValEl.textContent = "₹" + inr(net);
+    if (amtEl) {
+      amtEl.value = net;
+      amtEl.max = net;
+    }
+  }
+
   function openPayModal(billId, billNumber, guestName, balance) {
     state.payModal = { billId, billNumber, guestName, balance, mode: "cash" };
 
-    const set = (id, val) => { const el = dom(id); if (el) el.textContent = val; };
-    set("bl-pm-guest",  guestName  || "—");
+    const set = (id, val) => {
+      const el = dom(id);
+      if (el) el.textContent = val;
+    };
+    set("bl-pm-guest", guestName || "—");
     set("bl-pm-billno", billNumber || "—");
-    set("bl-pm-due",    "₹" + inr(balance));
+    set("bl-pm-due", "₹" + inr(balance));
 
-    const amtEl = dom("bl-pm-amount");
-    if (amtEl) { amtEl.value = balance; amtEl.max = balance; }
+    // Reset discount to 0 and recompute net / payment
+    const discountEl = dom("bl-pm-discount");
+    if (discountEl) {
+      discountEl.value = 0;
+      // Wire live update (attach once via replacing with clone to avoid duplicates)
+      const fresh = discountEl.cloneNode(true);
+      discountEl.parentNode.replaceChild(fresh, discountEl);
+      fresh.addEventListener("input", _updatePayModalNet);
+    }
+    _updatePayModalNet();
 
     // Reset method buttons to Cash
-    const cashBtn   = dom("bl-pm-cash-btn");
+    const cashBtn = dom("bl-pm-cash-btn");
     const onlineBtn = dom("bl-pm-online-btn");
-    if (cashBtn)   cashBtn.className   = "bl-pm-btn bl-pm-active-cash";
+    if (cashBtn) cashBtn.className = "bl-pm-btn bl-pm-active-cash";
     if (onlineBtn) onlineBtn.className = "bl-pm-btn";
 
     const errEl = dom("bl-pm-error");
     if (errEl) errEl.textContent = "";
 
     const confirmBtn = dom("bl-pm-confirm");
-    if (confirmBtn) { confirmBtn.disabled = false; confirmBtn.innerHTML = '<i class="fas fa-check"></i> Confirm Payment'; }
+    if (confirmBtn) {
+      confirmBtn.disabled = false;
+      confirmBtn.innerHTML = '<i class="fas fa-check"></i> Confirm Payment';
+    }
 
     const backdrop = dom("bl-pay-modal-backdrop");
     if (backdrop) backdrop.classList.add("bl-pay-open");
@@ -850,18 +1297,37 @@
 
   async function collectBillPayment() {
     const { billId, balance, mode } = state.payModal;
-    const amtEl     = dom("bl-pm-amount");
-    const errEl     = dom("bl-pm-error");
+    const amtEl = dom("bl-pm-amount");
+    const discountEl = dom("bl-pm-discount");
+    const errEl = dom("bl-pm-error");
     const confirmBtn = dom("bl-pm-confirm");
-    const amount    = parseInt(amtEl?.value || "0", 10);
+    const amount = parseInt(amtEl?.value || "0", 10) || 0;
+    const discount = parseInt(discountEl?.value || "0", 10) || 0;
 
     if (errEl) errEl.textContent = "";
 
-    if (!amount || amount <= 0) {
-      if (errEl) errEl.textContent = "Please enter a valid amount."; return;
+    if (discount < 0) {
+      if (errEl) errEl.textContent = "Discount cannot be negative.";
+      return;
     }
-    if (amount > balance) {
-      if (errEl) errEl.textContent = `Cannot exceed outstanding balance ₹${inr(balance)}.`; return;
+    if (discount > balance) {
+      if (errEl)
+        errEl.textContent = `Discount ₹${inr(discount)} exceeds balance ₹${inr(balance)}.`;
+      return;
+    }
+    const net = balance - discount;
+    if (amount < 0) {
+      if (errEl) errEl.textContent = "Amount cannot be negative.";
+      return;
+    }
+    if (amount > net) {
+      if (errEl)
+        errEl.textContent = `Payment ₹${inr(amount)} exceeds net payable ₹${inr(net)}.`;
+      return;
+    }
+    if (discount === 0 && amount === 0) {
+      if (errEl) errEl.textContent = "Enter a payment amount or discount.";
+      return;
     }
 
     confirmBtn.disabled = true;
@@ -869,9 +1335,14 @@
 
     try {
       const res = await apiFetch("/add_bill_payment", {
-        method:  "POST",
+        method: "POST",
         headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify({ bill_id: billId, payment_mode: mode, amount }),
+        body: JSON.stringify({
+          bill_id: billId,
+          payment_mode: mode,
+          amount,
+          discount,
+        }),
       });
       const data = await res.json();
 
@@ -892,11 +1363,243 @@
     }
   }
 
+  // ══════════════════════════════════════════════════════════════════════════════
+  // PDF GENERATION + UPLOAD
+  // ══════════════════════════════════════════════════════════════════════════════
+
+  // ── PDF overlay helpers ───────────────────────────────────────────────────────
+  function showPdfOverlay(text) {
+    const ov = dom("bl-pdf-gen-overlay");
+    const tx = dom("bl-pdf-overlay-text");
+    if (tx) tx.textContent = text || "Generating PDF…";
+    if (ov) ov.classList.add("active");
+  }
+  function hidePdfOverlay() {
+    const ov = dom("bl-pdf-gen-overlay");
+    if (ov) ov.classList.remove("active");
+  }
+  function updatePdfOverlayText(text) {
+    const tx = dom("bl-pdf-overlay-text");
+    if (tx) tx.textContent = text;
+  }
+
+  /**
+   * Generate bill PDF server-side (xhtml2pdf via Flask /render_bill_pdf).
+   * Sends the bill HTML fragment to the server; server adds CSS, converts to
+   * PDF bytes, uploads to Firebase Storage, and returns the download URL.
+   * No html2canvas, no DOM tricks, no blank-page issues.
+   */
+  // silent=true → no overlay, no alert; used when auto-triggered after checkout.
+  async function generateAndUploadPDF(billId, billData, silent = false) {
+    const folderNo = billData.bill_number || billData.invoice_number || billId;
+
+    if (!silent) showPdfOverlay("Generating invoice PDF…");
+
+    try {
+      if (!silent) updatePdfOverlayText("Converting to PDF…");
+
+      const res = await apiFetch("/render_bill_pdf", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          bill_id: billId,
+          invoice_no: folderNo,
+          html_content: buildBillHTML(billData),
+        }),
+      });
+
+      const data = await res.json();
+
+      if (!data.success) {
+        console.error("[Bills] render_bill_pdf failed:", data.message);
+        if (!silent)
+          alert("PDF generation failed: " + (data.message || "unknown error"));
+        return "";
+      }
+
+      // Server may return skipped:true if PDF already existed — use that URL
+      const pdfUrl = data.pdf_url;
+
+      // Sync in-memory state so WhatsApp button turns dark green immediately
+      const entry = state.allEntries.find((e) => e.id === billId);
+      const fEntry = state.filteredEntries.find((e) => e.id === billId);
+      if (entry) entry.pdf_url = pdfUrl;
+      if (fEntry) fEntry.pdf_url = pdfUrl;
+      renderTable();
+
+      return pdfUrl;
+    } catch (err) {
+      console.error("[Bills] generateAndUploadPDF error:", err);
+      if (!silent) alert("PDF generation failed: " + err.message);
+      return "";
+    } finally {
+      if (!silent) hidePdfOverlay();
+    }
+  }
+
+  // Expose globally so other modules (e.g. script.js after checkout) can trigger
+  // PDF generation without coupling to the bills.js IIFE internals.
+  window._cibaraBillsGeneratePDF = generateAndUploadPDF;
+
+  /**
+   * Auto-generate PDF after checkout — called from script.js with just the bill_id.
+   * Fetches bill data from the backend, then generates + uploads the PDF silently.
+   * Uses the same loading overlay so user sees a smooth animation.
+   */
+  window._cibaraBillsAutoGenerate = async function (billId) {
+    if (!billId) return;
+    try {
+      const res = await apiFetch(`/generate_bill/${billId}`);
+      const data = await res.json();
+      if (!data.success || !data.bill) {
+        console.warn("[Bills] auto-generate: could not fetch bill", billId);
+        return;
+      }
+      // Skip generation if a PDF already exists — never create duplicate versions
+      if (data.bill.pdf_url) {
+        console.log(
+          "[Bills] auto-generate: PDF already exists, skipping generation for",
+          billId,
+        );
+        return;
+      }
+      // silent=true → no overlay, no alert; runs fully in background
+      await generateAndUploadPDF(billId, data.bill, true);
+    } catch (err) {
+      console.error("[Bills] _cibaraBillsAutoGenerate error:", err);
+      // Silent fail — don't alert, don't block checkout flow
+    }
+  };
+
+  // ══════════════════════════════════════════════════════════════════════════════
+  // WHATSAPP MODAL
+  // ══════════════════════════════════════════════════════════════════════════════
+
+  function _buildWaMessage(guestName, invoiceNo, amount, pdfUrl) {
+    return `Hi ${guestName || "Guest"}, your invoice #${invoiceNo} for ₹${inr(amount)} from Cibara Comforts is ready.\n\nView / Download: ${pdfUrl}\n\nThank you for staying with us!`;
+  }
+
+  function _updateWaPreview() {
+    const s = state.waModal;
+    const preview = dom("bl-wa-preview");
+    if (!preview) return;
+    preview.textContent = _buildWaMessage(
+      s.guestName,
+      s.invoiceNo,
+      s.amount,
+      s.pdfUrl || "(PDF URL)",
+    );
+  }
+
+  function openWhatsAppModal(entry) {
+    const s = state.waModal;
+    s.billId = entry.id;
+    s.pdfUrl = entry.pdf_url || null;
+    s.guestName = entry.guest_name || "Guest";
+    s.guestMobile = entry.guest_mobile || "";
+    s.invoiceNo = entry.bill_number || "";
+    s.amount = entry.total_amount || 0;
+    s.numberMode = "registered";
+
+    // Update registered number label
+    const regLabel = dom("bl-wa-registered-label");
+    if (regLabel) {
+      regLabel.textContent = s.guestMobile
+        ? `Guest number: +91 ${s.guestMobile}`
+        : "Guest number (not available)";
+    }
+
+    // Reset to registered option
+    const optReg = dom("bl-wa-opt-registered");
+    const optCus = dom("bl-wa-opt-custom");
+    const customWrap = dom("bl-wa-custom-wrap");
+    const customInp = dom("bl-wa-custom-number");
+    const errEl = dom("bl-wa-error");
+    if (optReg) {
+      optReg.classList.add("selected");
+      optReg.querySelector("input").checked = true;
+    }
+    if (optCus) {
+      optCus.classList.remove("selected");
+      optCus.querySelector("input").checked = false;
+    }
+    if (customWrap) customWrap.style.display = "none";
+    if (customInp) {
+      customInp.value = "";
+      customInp.classList.remove("input-error");
+    }
+    if (errEl) errEl.textContent = "";
+
+    _updateWaPreview();
+
+    const backdrop = dom("bl-wa-backdrop");
+    if (backdrop) backdrop.classList.add("bl-wa-open");
+  }
+
+  function closeWhatsAppModal() {
+    const backdrop = dom("bl-wa-backdrop");
+    if (backdrop) backdrop.classList.remove("bl-wa-open");
+  }
+
+  function sendWhatsApp() {
+    const s = state.waModal;
+    const errEl = dom("bl-wa-error");
+    const customInp = dom("bl-wa-custom-number");
+    if (errEl) errEl.textContent = "";
+    if (customInp) customInp.classList.remove("input-error");
+
+    if (!s.pdfUrl) {
+      if (errEl)
+        errEl.textContent =
+          "No PDF URL found. Please save the PDF first using the bill modal.";
+      return;
+    }
+
+    let targetMobile = "";
+
+    if (s.numberMode === "registered") {
+      if (!s.guestMobile) {
+        if (errEl)
+          errEl.textContent =
+            "No registered mobile number found for this guest.";
+        return;
+      }
+      // Normalise: strip leading country code, keep last 10 digits
+      const digits = s.guestMobile.replace(/\D/g, "");
+      targetMobile = digits.length >= 10 ? digits.slice(-10) : digits;
+    } else {
+      const raw = (customInp?.value || "").trim().replace(/\D/g, "");
+      if (!/^\d{10}$/.test(raw)) {
+        if (errEl)
+          errEl.textContent =
+            "Please enter a valid 10-digit Indian mobile number.";
+        if (customInp) customInp.classList.add("input-error");
+        return;
+      }
+      targetMobile = raw;
+    }
+
+    const message = _buildWaMessage(
+      s.guestName,
+      s.invoiceNo,
+      s.amount,
+      s.pdfUrl,
+    );
+    const encoded = encodeURIComponent(message);
+    const waUrl = `https://wa.me/91${targetMobile}?text=${encoded}`;
+
+    window.open(waUrl, "_blank", "noopener,noreferrer");
+    closeWhatsAppModal();
+  }
+
   // ── Render ────────────────────────────────────────────────────────────────────
   function renderTable() {
     const tbody = dom("bl-table-body");
     if (!tbody) return;
-    if (!state.filteredEntries.length) { showEmpty(); return; }
+    if (!state.filteredEntries.length) {
+      showEmpty();
+      return;
+    }
 
     // Sorted flat view — no date group headers
     if (state.sort.key) {
@@ -910,7 +1613,7 @@
           vb = b.checkout_time || "";
         }
         if (va < vb) return state.sort.dir === "asc" ? -1 : 1;
-        if (va > vb) return state.sort.dir === "asc" ?  1 : -1;
+        if (va > vb) return state.sort.dir === "asc" ? 1 : -1;
         return 0;
       });
       let html = "";
@@ -931,20 +1634,25 @@
     });
 
     let html = "";
-    let rowNum = 0;  // sequential counter across all date groups
-    Object.keys(byDate).sort((a, b) => b.localeCompare(a)).forEach((dk) => {
-      const entries = byDate[dk];
-      const label = dk !== "unknown" ? fmtDate(dk) : "Unknown Date";
-      html += `<tr class="bl-date-header" data-group="${dk}">
+    let rowNum = 0; // sequential counter across all date groups
+    Object.keys(byDate)
+      .sort((a, b) => b.localeCompare(a))
+      .forEach((dk) => {
+        const entries = byDate[dk];
+        const label = dk !== "unknown" ? fmtDate(dk) : "Unknown Date";
+        html += `<tr class="bl-date-header" data-group="${dk}">
         <td colspan="13"><i class="fas fa-chevron-down"></i>${label}&nbsp;<span style="font-weight:400;opacity:.65;">(${entries.length})</span></td>
       </tr>`;
-      entries.forEach((e) => { rowNum++; html += rowHTML(e, dk, rowNum); });
-    });
+        entries.forEach((e) => {
+          rowNum++;
+          html += rowHTML(e, dk, rowNum);
+        });
+      });
     tbody.innerHTML = html;
   }
 
   function rowHTML(e, dk, rowIndex) {
-    const days   = e.days_stayed || calcDays(e.checkin_time, e.checkout_time);
+    const days = e.days_stayed || calcDays(e.checkin_time, e.checkout_time);
     const isPending = e.status === "pending_settlement";
 
     const billNo = e.bill_number || "-";
@@ -953,25 +1661,30 @@
     const rate = e.room_rent || e.room_price_per_night || 0;
     const { cgst, sgst, cgstRate } = gstAmounts(rate, days);
     const gstTotal = cgst + sgst;
-    const gstCell = gstTotal > 0
-      ? `<span style="font-size:.73rem;">₹${inr(Math.round(gstTotal))}<br><span style="font-size:.65rem;color:#888;">${cgstRate*2}% GST</span></span>`
-      : `<span style="color:#aaa;font-size:.73rem;">Exempt</span>`;
+    const gstCell =
+      gstTotal > 0
+        ? `<span style="font-size:.73rem;">₹${inr(Math.round(gstTotal))}<br><span style="font-size:.65rem;color:#888;">${cgstRate * 2}% GST</span></span>`
+        : `<span style="color:#aaa;font-size:.73rem;">Exempt</span>`;
 
     // Source badge
-    const src      = e.booking_source || "normal";
+    const src = e.booking_source || "normal";
     const srcLabel = src === "booking.com" ? "Booking.com" : "Normal";
-    const srcCls   = src === "booking.com" ? "bl-src-bookingcom" : "bl-src-normal";
+    const srcCls =
+      src === "booking.com" ? "bl-src-bookingcom" : "bl-src-normal";
     const srcBadge = `<span class="bl-src-badge ${srcCls}">${srcLabel}</span>`;
 
     // Any bill with outstanding balance — new (pending_settlement) or old (completed but balance > 0)
     const hasBalance = (e.balance || 0) > 0;
-    const rowCls      = (isPending || hasBalance) ? "bl-date-row bl-row-pending" : "bl-date-row";
-    const pendingBadge = (isPending || hasBalance)
-      ? `<span class="bl-pending-badge">Pending</span>`
-      : "";
+    const rowCls =
+      isPending || hasBalance ? "bl-date-row bl-row-pending" : "bl-date-row";
+    const pendingBadge =
+      isPending || hasBalance
+        ? `<span class="bl-pending-badge">Pending</span>`
+        : "";
     // Action cell: collect button if outstanding balance, else receipt
-    const actionCell = (isPending || hasBalance)
-      ? `<button class="bl-collect-btn"
+    const mainBtn =
+      isPending || hasBalance
+        ? `<button class="bl-collect-btn"
            data-id="${e.id}"
            data-billno="${e.bill_number || ""}"
            data-guest="${(e.guest_name || "").replace(/"/g, "&quot;")}"
@@ -979,7 +1692,26 @@
            title="Collect Payment">
            <i class="fas fa-hand-holding-usd"></i>
          </button>`
-      : `<button class="bl-bill-btn" data-id="${e.id}" title="View/Print Bill"><i class="fas fa-receipt"></i></button>`;
+        : `<button class="bl-bill-btn" data-id="${e.id}" title="View/Print Bill"><i class="fas fa-receipt"></i></button>`;
+
+    // WhatsApp share button — green if PDF already saved, light-green "generate first" if not
+    const hasPdf = !!e.pdf_url;
+    const waBtnCls = hasPdf ? "bl-wa-btn" : "bl-wa-btn bl-wa-pending";
+    const waTitle = hasPdf
+      ? "Send invoice via WhatsApp"
+      : "Save PDF first, then share on WhatsApp";
+    const waBtn = `<button class="${waBtnCls}"
+      data-id="${e.id}"
+      data-pdfurl="${(e.pdf_url || "").replace(/"/g, "&quot;")}"
+      data-guest="${(e.guest_name || "").replace(/"/g, "&quot;")}"
+      data-mobile="${(e.guest_mobile || "").replace(/"/g, "&quot;")}"
+      data-invoiceno="${(e.bill_number || "").replace(/"/g, "&quot;")}"
+      data-amount="${e.total_amount || 0}"
+      title="${waTitle}">
+      <i class="fab fa-whatsapp"></i>
+    </button>`;
+
+    const actionCell = mainBtn + waBtn;
 
     return `<tr class="${rowCls}" data-date-group="${dk}">
       <td style="color:#888;font-size:.75rem;">${rowIndex}</td>
@@ -999,38 +1731,56 @@
   }
 
   function paymentHTML(e) {
-    const c = e.payment_cash || 0, o = e.payment_online || 0,
-          r = e.refunds || 0,    b = e.balance || 0;
+    const c = e.payment_cash || 0,
+      o = e.payment_online || 0,
+      r = e.refunds || 0,
+      b = e.balance || 0;
     if (!c && !o && !r && !b) return '<span style="color:#ccc;">—</span>';
     let h = '<div class="bl-pay-split">';
-    if (c) h += `<div class="bl-pay-item"><span class="bl-pm-cash">Cash</span><span>₹${inr(c)}</span></div>`;
-    if (o) h += `<div class="bl-pay-item"><span class="bl-pm-upi">Online</span><span>₹${inr(o)}</span></div>`;
+    if (c)
+      h += `<div class="bl-pay-item"><span class="bl-pm-cash">Cash</span><span>₹${inr(c)}</span></div>`;
+    if (o)
+      h += `<div class="bl-pay-item"><span class="bl-pm-upi">Online</span><span>₹${inr(o)}</span></div>`;
     if (r > 0) {
-      const rc = e.refund_cash || 0, ro = e.refund_online || 0;
-      const rLabel = rc > 0 && ro > 0 ? "Refund" : rc > 0 ? "Refund (Cash)" : ro > 0 ? "Refund (UPI)" : "Refund";
+      const rc = e.refund_cash || 0,
+        ro = e.refund_online || 0;
+      const rLabel =
+        rc > 0 && ro > 0
+          ? "Refund"
+          : rc > 0
+            ? "Refund (Cash)"
+            : ro > 0
+              ? "Refund (UPI)"
+              : "Refund";
       h += `<div class="bl-pay-item"><span class="bl-pm-bal">${rLabel}</span><span>-₹${inr(r)}</span></div>`;
     }
-    if (b > 0) h += `<div class="bl-pay-item"><span class="bl-pm-bal">Due</span><span>₹${inr(b)}</span></div>`;
+    if (b > 0)
+      h += `<div class="bl-pay-item"><span class="bl-pm-bal">Due</span><span>₹${inr(b)}</span></div>`;
     return h + "</div>";
   }
 
   function toggleGroup(hdr) {
     const key = hdr.dataset.group;
     const col = hdr.classList.toggle("collapsed");
-    document.querySelectorAll(`.bl-date-row[data-date-group="${key}"]`).forEach((r) => r.classList.toggle("bl-hidden", col));
+    document
+      .querySelectorAll(`.bl-date-row[data-date-group="${key}"]`)
+      .forEach((r) => r.classList.toggle("bl-hidden", col));
   }
 
   function showLoading() {
     const t = dom("bl-table-body");
-    if (t) t.innerHTML = `<tr><td colspan="13"><div class="bl-state"><div class="bl-loader"></div><p>Loading…</p></div></td></tr>`;
+    if (t)
+      t.innerHTML = `<tr><td colspan="13"><div class="bl-state"><div class="bl-loader"></div><p>Loading…</p></div></td></tr>`;
   }
   function showEmpty() {
     const t = dom("bl-table-body");
-    if (t) t.innerHTML = `<tr><td colspan="13"><div class="bl-state"><i class="fas fa-inbox"></i><p>No invoiced bills found for this period</p></div></td></tr>`;
+    if (t)
+      t.innerHTML = `<tr><td colspan="13"><div class="bl-state"><i class="fas fa-inbox"></i><p>No invoiced bills found for this period</p></div></td></tr>`;
   }
   function showError(msg) {
     const t = dom("bl-table-body");
-    if (t) t.innerHTML = `<tr><td colspan="13"><div class="bl-state" style="color:#dc3545"><i class="fas fa-exclamation-circle"></i><p>${msg}</p></div></td></tr>`;
+    if (t)
+      t.innerHTML = `<tr><td colspan="13"><div class="bl-state" style="color:#dc3545"><i class="fas fa-exclamation-circle"></i><p>${msg}</p></div></td></tr>`;
   }
 
   // ── Bill modal — self-contained, no register.js dependency ───────────────────
@@ -1039,19 +1789,53 @@
     if (m) m.classList.remove("show");
   }
 
+  // Track currently-open bill for the "Save & Share" button
+  let _openBillId = null;
+  let _openBillData = null;
+
   async function openBill(id) {
-    const m = dom("bl-bill-modal"), area = dom("bl-bill-print-area");
+    const m = dom("bl-bill-modal"),
+      area = dom("bl-bill-print-area");
     if (!m || !area) return;
     area.innerHTML = `<div class="bl-state"><div class="bl-loader"></div><p>Generating…</p></div>`;
     m.classList.add("show");
+
+    // Reset save btn while loading
+    const saveBtn = dom("bl-bill-save-pdf");
+    if (saveBtn) {
+      saveBtn.disabled = true;
+      saveBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Loading…';
+    }
+
+    _openBillId = null;
+    _openBillData = null;
+
     try {
-      const res  = await apiFetch(`/generate_bill/${id}`);
+      const res = await apiFetch(`/generate_bill/${id}`);
       const data = await res.json();
-      area.innerHTML = data.success
-        ? buildBillHTML(data.bill)
-        : `<div class="bl-state" style="color:#c00"><i class="fas fa-times-circle"></i><p>${data.message}</p></div>`;
+      if (data.success) {
+        area.innerHTML = buildBillHTML(data.bill);
+        _openBillId = id;
+        _openBillData = data.bill;
+        if (saveBtn) {
+          saveBtn.disabled = false;
+          saveBtn.innerHTML =
+            '<i class="fab fa-whatsapp"></i> Save &amp; Share';
+        }
+      } else {
+        area.innerHTML = `<div class="bl-state" style="color:#c00"><i class="fas fa-times-circle"></i><p>${data.message}</p></div>`;
+        if (saveBtn) {
+          saveBtn.disabled = true;
+          saveBtn.innerHTML =
+            '<i class="fab fa-whatsapp"></i> Save &amp; Share';
+        }
+      }
     } catch {
       area.innerHTML = `<div class="bl-state" style="color:#c00"><i class="fas fa-times-circle"></i><p>Network error</p></div>`;
+      if (saveBtn) {
+        saveBtn.disabled = true;
+        saveBtn.innerHTML = '<i class="fab fa-whatsapp"></i> Save &amp; Share';
+      }
     }
   }
 
@@ -1063,87 +1847,104 @@
     const rate = b.room_price_per_night || b.room_rent || 0;
 
     // ── Separate accommodation add-ons from other services ──────────────────────
-    const services          = b.services || [];
-    const accomAddons       = services.filter(s => s.accommodation_charge);
-    const otherServices     = services.filter(s => !s.accommodation_charge);
-    const accomAddonsTotal  = accomAddons.reduce((s, x) => s + (x.price || 0), 0);
-    const otherSvcTotal     = otherServices.reduce((s, x) => s + (x.price || 0), 0);
+    const services = b.services || [];
+    const accomAddons = services.filter((s) => s.accommodation_charge);
+    const otherServices = services.filter((s) => !s.accommodation_charge);
+    const accomAddonsTotal = accomAddons.reduce(
+      (s, x) => s + (x.price || 0),
+      0,
+    );
+    const otherSvcTotal = otherServices.reduce((s, x) => s + (x.price || 0), 0);
 
     // ── GST calculation ──────────────────────────────────────────────────────────
     // Use stored gst_rate from backend when available (includes accommodation add-ons
     // in the taxable base). Fall back to on-the-fly calculation for older bills.
-    const gstRatePct  = (typeof b.gst_rate === "number") ? b.gst_rate
-                        : (rate > 7500 ? 18 : rate >= 1000 ? 5 : 0);
-    const cgstRate    = gstRatePct / 2;
-    const sgstRate    = gstRatePct / 2;
+    const gstRatePct =
+      typeof b.gst_rate === "number"
+        ? b.gst_rate
+        : rate > 7500
+          ? 18
+          : rate >= 1000
+            ? 5
+            : 0;
+    const cgstRate = gstRatePct / 2;
+    const sgstRate = gstRatePct / 2;
 
     // Total accommodation amount (GST-inclusive): room charges + accommodation add-ons.
-    const roomCharges   = rate * days;                         // GST-inclusive
-    const accomTotal    = roomCharges + accomAddonsTotal;      // GST-inclusive base
+    const roomCharges = rate * days; // GST-inclusive
+    const accomTotal = roomCharges + accomAddonsTotal; // GST-inclusive base
 
     // Back-calculate base and GST from GST-inclusive accommodation total.
-    const divisor       = 1 + gstRatePct / 100;
-    const accomBase     = accomTotal / divisor;                // excl. GST
-    const cgst          = (accomTotal - accomBase) / 2;
-    const sgst          = cgst;
+    const divisor = 1 + gstRatePct / 100;
+    const accomBase = accomTotal / divisor; // excl. GST
+    const cgst = (accomTotal - accomBase) / 2;
+    const sgst = cgst;
 
     // Grand total = accommodation (incl. GST) + other services − discounts.
-    const discounts     = b.discounts || 0;
-    const svcTotalAll   = (b.services_total || 0);            // includes both types
-    const grandTotal    = roomCharges + svcTotalAll - discounts;
+    const discounts = b.discounts || 0;
+    const svcTotalAll = b.services_total || 0; // includes both types
+    const grandTotal = roomCharges + svcTotalAll - discounts;
 
     // Payment
-    const cashPaid     = b.payment_cash   || 0;
-    const onlinePaid   = b.payment_online || 0;
-    const refunds      = b.refunds        || 0;
-    const refundCash   = b.refund_cash    || 0;
-    const refundOnline = b.refund_online  || 0;
-    const totalPaid    = cashPaid + onlinePaid;
+    const cashPaid = b.payment_cash || 0;
+    const onlinePaid = b.payment_online || 0;
+    const refunds = b.refunds || 0;
+    const refundCash = b.refund_cash || 0;
+    const refundOnline = b.refund_online || 0;
+    const totalPaid = cashPaid + onlinePaid;
     const netCollected = totalPaid - refunds;
-    const balance      = b.balance || 0;
+    const balance = b.balance || 0;
 
-    const displayBillNo  = b.bill_number || "N/A";
-    const displayInvNo   = b.invoice_number || null;
-    const billDate       = fmtBillDT(b.checkout_time);
+    const displayBillNo = b.bill_number || "N/A";
+    const billDate = fmtBillDT(b.checkout_time);
 
     // ── Accommodation add-on rows ────────────────────────────────────────────────
-    const accomAddonRows = accomAddons.map(s => `
+    const accomAddonRows = accomAddons
+      .map(
+        (s) => `
       <tr>
-        <td style="padding-left:.6rem">${s.item}</td>
+        <td>${s.item}</td>
         <td class="b-tr">${s.quantity || 1}</td>
         <td class="b-tr">${fix2(s.unit_price || s.price || 0)}</td>
         <td class="b-tr">${fix2(s.price || 0)}</td>
-      </tr>`).join("");
+      </tr>`,
+      )
+      .join("");
 
     // ── Other services rows ──────────────────────────────────────────────────────
-    const otherSvcRows = otherServices.map(s => `
+    const otherSvcRows = otherServices
+      .map(
+        (s) => `
       <tr>
-        <td style="padding-left:.6rem">${s.item}</td>
+        <td>${s.item}</td>
         <td class="b-tr">${s.quantity || 1}</td>
         <td class="b-tr">${fix2(s.unit_price || s.price || 0)}</td>
         <td class="b-tr">${fix2(s.price || 0)}</td>
-      </tr>`).join("");
+      </tr>`,
+      )
+      .join("");
 
     // ── GST rows — always show, 0.00 when exempt ─────────────────────────────────
     const gstRows = `
       <tr class="b-gst-row">
-        <td style="padding-left:.6rem">CGST @ ${cgstRate}%</td>
+        <td>CGST @ ${cgstRate}%</td>
         <td class="b-tr">—</td><td class="b-tr">—</td>
         <td class="b-tr">${fix2(cgst)}</td>
       </tr>
       <tr class="b-gst-row">
-        <td style="padding-left:.6rem">SGST @ ${sgstRate}%</td>
+        <td>SGST @ ${sgstRate}%</td>
         <td class="b-tr">—</td><td class="b-tr">—</td>
         <td class="b-tr">${fix2(sgst)}</td>
       </tr>`;
 
     // Accommodation subtotal row (only when add-ons exist or multi-day)
-    const accomSubtotalRow = (accomAddons.length > 0 || days > 1)
-      ? `<tr class="b-subtotal">
+    const accomSubtotalRow =
+      accomAddons.length > 0 || days > 1
+        ? `<tr class="b-subtotal">
            <td colspan="3" class="b-tr">Accommodation Total (incl. GST)</td>
            <td class="b-tr">${fix2(accomTotal)}</td>
          </tr>`
-      : "";
+        : "";
 
     // Other services section (non-accommodation)
     const otherSvcSection = otherSvcRows
@@ -1156,19 +1957,15 @@
       : "";
 
     // Discount row
-    const discountRow = discounts > 0
-      ? `<tr>
+    const discountRow =
+      discounts > 0
+        ? `<tr>
            <td colspan="3" style="text-align:right;color:#2e7d32;font-weight:600;">
              Discount
            </td>
            <td class="b-tr" style="color:#2e7d32;font-weight:700;">− ${fix2(discounts)}</td>
          </tr>`
-      : "";
-
-    // Invoice number line (if generated)
-    const invNoRow = displayInvNo
-      ? `<div class="b-row"><span class="b-lbl">Invoice No:</span><span class="b-val" style="font-family:monospace;">${displayInvNo}</span></div>`
-      : "";
+        : "";
 
     return `
 <div class="b-bill-wrap">
@@ -1176,33 +1973,35 @@
   <!-- ── Header ── -->
   <div class="b-header-block">
     <div class="b-lodge-name">CIBARA COMFORTS</div>
+    <div class="b-lodge-entity">A Unit of Cibara Enterprise</div>
     <div class="b-lodge-sub">Opposite Bus Stand Road, Harihar, Karnataka – 577601</div>
-    <div class="b-lodge-sub">Phone: +91 9482831381</div>
-    <div class="b-gstin-bar">GSTIN: 29AAWFC1962B1Z9 &nbsp;·&nbsp; SAC: 9963 &nbsp;·&nbsp; State: Karnataka (KA – 29)</div>
+    <div class="b-lodge-sub">Ph: +91 9482831381</div>
+    <div class="b-gstin-bar">GSTIN: 29AAWFC1962B1Z9 &nbsp;·&nbsp; SAC: 9963 &nbsp;·&nbsp; Karnataka (KA – 29)</div>
+    <div class="b-title">TAX INVOICE</div>
   </div>
-  <div class="b-title">TAX INVOICE</div>
 
-  <!-- ── Bill & Guest Info ── -->
-  <div class="b-info-outer">
-    <div class="b-info-col">
-      <div class="b-row"><span class="b-lbl">Bill No:</span><span class="b-val" style="font-family:monospace;font-size:.85em;">${displayBillNo}</span></div>
-      ${invNoRow}
-      <div class="b-row"><span class="b-lbl">Guest Name:</span><span class="b-val">${b.guest_name}</span></div>
-      <div class="b-row"><span class="b-lbl">Mobile:</span><span class="b-val">${b.guest_mobile || "N/A"}</span></div>
-      <div class="b-row"><span class="b-lbl">Room No:</span><span class="b-val">${b.room}</span></div>
-      <div class="b-row"><span class="b-lbl">Guests:</span><span class="b-val">${b.guest_count || 1}</span></div>
-    </div>
-    <div class="b-info-col">
-      <div class="b-row"><span class="b-lbl">Check-in:</span><span class="b-val">${fmtBillDT(b.checkin_time)}</span></div>
-      <div class="b-row"><span class="b-lbl">Check-out:</span><span class="b-val">${fmtBillDT(b.checkout_time)}</span></div>
-      <div class="b-row"><span class="b-lbl">Days Stayed:</span><span class="b-val">${days}</span></div>
-      <div class="b-row"><span class="b-lbl">Bill Date:</span><span class="b-val">${billDate}</span></div>
-      <div class="b-row"><span class="b-lbl">Place of Supply:</span><span class="b-val">Karnataka (KA – 29)</span></div>
-    </div>
-  </div>
+  <!-- ── Bill & Guest Info — HTML table so xhtml2pdf + browser both render identically ── -->
+  <table class="b-info-outer">
+    <tr>
+      <td class="b-info-col">
+        <div class="b-row"><span class="b-lbl">Bill No:</span> ${displayBillNo}</div>
+        <div class="b-row"><span class="b-lbl">Guest Name:</span> ${b.guest_name}</div>
+        <div class="b-row"><span class="b-lbl">Mobile:</span> ${b.guest_mobile || "N/A"}</div>
+        <div class="b-row"><span class="b-lbl">Room No:</span> ${b.room}</div>
+        <div class="b-row"><span class="b-lbl">Guests:</span> ${b.guest_count || 1}</div>
+      </td>
+      <td class="b-info-col b-info-col-r">
+        <div class="b-row"><span class="b-lbl">Check-in:</span> ${fmtBillDT(b.checkin_time)}</div>
+        <div class="b-row"><span class="b-lbl">Check-out:</span> ${fmtBillDT(b.checkout_time)}</div>
+        <div class="b-row"><span class="b-lbl">Days Stayed:</span> ${days}</div>
+        <div class="b-row"><span class="b-lbl">Bill Date:</span> ${billDate}</div>
+        <div class="b-row"><span class="b-lbl">Place of Supply:</span> Karnataka (KA – 29)</div>
+      </td>
+    </tr>
+  </table>
 
   <!-- ── Items Table ── -->
-  <table class="b-tbl" style="margin-top:.5rem;">
+  <table class="b-tbl">
     <thead>
       <tr>
         <th>Description</th>
@@ -1212,12 +2011,9 @@
       </tr>
     </thead>
     <tbody>
-      <!-- Accommodation Section -->
-      <tr class="b-sec">
-        <td colspan="4">Accommodation Charges &nbsp;<span style="font-weight:400;text-transform:none;font-size:.9em;">(SAC: 9963)</span></td>
-      </tr>
+      <tr class="b-sec"><td colspan="4">Accommodation Charges (SAC: 9963)</td></tr>
       <tr>
-        <td style="padding-left:.6rem">Room Rent — Base Amount (excl. GST)</td>
+        <td>Room Rent — Base Amount (excl. GST)</td>
         <td class="b-tr">${days}</td>
         <td class="b-tr">${fix2(accomBase / (days || 1))}</td>
         <td class="b-tr">${fix2(accomBase)}</td>
@@ -1225,14 +2021,8 @@
       ${gstRows}
       ${accomAddonRows}
       ${accomSubtotalRow}
-
-      <!-- Other Services -->
       ${otherSvcSection}
-
-      <!-- Discount -->
       ${discountRow}
-
-      <!-- Grand Total -->
       <tr class="b-grand">
         <td colspan="3" class="b-tr">GRAND TOTAL</td>
         <td class="b-tr">₹ ${fix2(grandTotal)}</td>
@@ -1242,34 +2032,54 @@
 
   <!-- ── Payment Summary ── -->
   <div class="b-pay-section">
-    <div class="b-pay-title">Payment Summary</div>
+    <div class="b-pay-title">Payment Details</div>
     <table class="b-tbl">
       <tbody>
         <tr><td>Cash Paid</td><td class="b-tr">₹ ${fix2(cashPaid)}</td></tr>
         <tr><td>Online / UPI Paid</td><td class="b-tr">₹ ${fix2(onlinePaid)}</td></tr>
         <tr class="b-subtotal"><td>Total Paid</td><td class="b-tr">₹ ${fix2(totalPaid)}</td></tr>
-        ${refunds > 0 ? (() => {
-          const rc = refundCash   > 0 ? `<tr><td>Refund Given (Cash)</td><td class="b-tr" style="color:#c00;">− ₹ ${fix2(refundCash)}</td></tr>`   : "";
-          const ro = refundOnline > 0 ? `<tr><td>Refund Given (UPI)</td><td class="b-tr" style="color:#c00;">− ₹ ${fix2(refundOnline)}</td></tr>` : "";
-          const rf = (!refundCash && !refundOnline) ? `<tr><td>Refund Given</td><td class="b-tr" style="color:#c00;">− ₹ ${fix2(refunds)}</td></tr>` : "";
-          return rc + ro + rf + `<tr class="b-subtotal"><td>Net Collected</td><td class="b-tr">₹ ${fix2(netCollected)}</td></tr>`;
-        })() : ""}
+        ${
+          refunds > 0
+            ? (() => {
+                const rc =
+                  refundCash > 0
+                    ? `<tr><td>Refund Given (Cash)</td><td class="b-tr" style="color:#c00;">− ₹ ${fix2(refundCash)}</td></tr>`
+                    : "";
+                const ro =
+                  refundOnline > 0
+                    ? `<tr><td>Refund Given (UPI)</td><td class="b-tr" style="color:#c00;">− ₹ ${fix2(refundOnline)}</td></tr>`
+                    : "";
+                const rf =
+                  !refundCash && !refundOnline
+                    ? `<tr><td>Refund Given</td><td class="b-tr" style="color:#c00;">− ₹ ${fix2(refunds)}</td></tr>`
+                    : "";
+                return (
+                  rc +
+                  ro +
+                  rf +
+                  `<tr class="b-subtotal"><td>Net Collected</td><td class="b-tr">₹ ${fix2(netCollected)}</td></tr>`
+                );
+              })()
+            : ""
+        }
         ${balance > 0 ? `<tr><td style="font-weight:800;color:#c62828;">Balance Due</td><td class="b-tr" style="font-weight:800;color:#c62828;">₹ ${fix2(balance)}</td></tr>` : ""}
-        ${balance <= 0 && refunds <= 0 ? `<tr><td style="color:#2e7d32;font-weight:700;">Payment Status</td><td class="b-tr" style="color:#2e7d32;font-weight:700;">PAID IN FULL ✓</td></tr>` : ""}
+        ${balance <= 0 && refunds <= 0 ? `<tr><td style="color:#2e7d32;font-weight:700;">Payment Status</td><td class="b-tr" style="color:#2e7d32;font-weight:700;">PAID IN FULL</td></tr>` : ""}
       </tbody>
     </table>
   </div>
 
   <!-- ── Signature ── -->
-  <div class="b-sig">
-    <div class="b-sig-line">Guest Signature</div>
-    <div class="b-sig-line">Authorised Signatory</div>
-  </div>
+  <table class="b-sig">
+    <tr>
+      <td><div class="b-sig-line">Guest Signature</div></td>
+      <td style="text-align:right"><div class="b-sig-line">Authorised Signatory</div></td>
+    </tr>
+  </table>
 
   <!-- ── Footer ── -->
   <div class="b-footer">
-    <p>Thank you for staying at Cibara Comforts, Harihar. We look forward to welcoming you again!</p>
-    <p>This is a computer-generated invoice. No physical signature is required.</p>
+    <p>Thank you for staying at Cibara Comforts. We look forward to welcoming you again!</p>
+    <p>This is a computer-generated invoice.</p>
   </div>
 
 </div>`;
@@ -1277,54 +2087,84 @@
 
   // ── Export — CA-ready GST report ─────────────────────────────────────────────
   function exportToExcel() {
-    if (!state.filteredEntries.length) { alert("No invoiced bills to export."); return; }
-    if (typeof XLSX === "undefined") { alert("Excel library not loaded. Refresh and retry."); return; }
+    if (!state.filteredEntries.length) {
+      alert("No invoiced bills to export.");
+      return;
+    }
+    if (typeof XLSX === "undefined") {
+      alert("Excel library not loaded. Refresh and retry.");
+      return;
+    }
 
     const rows = state.filteredEntries.map((e, i) => {
-      const days = typeof e.days_stayed === "number" ? e.days_stayed : calcDays(e.checkin_time, e.checkout_time);
+      const days =
+        typeof e.days_stayed === "number"
+          ? e.days_stayed
+          : calcDays(e.checkin_time, e.checkout_time);
       const rate = e.room_rent || 0;
       const { base, cgst, sgst, cgstRate } = gstAmounts(rate, days);
-      const gstRatePct = cgstRate * 2;  // total GST %
+      const gstRatePct = cgstRate * 2; // total GST %
       return {
-        "Sr No"              : e.serial_number || i + 1,
-        "Bill No"            : e.bill_number || "-",
-        "Guest Name"         : e.guest_name || "-",
-        "Contact"            : e.guest_mobile || "-",
-        "Room"               : e.room || "-",
-        "Check-in"           : fmtDT(e.checkin_time),
-        "Check-out"          : e.checkout_time ? fmtDT(e.checkout_time) : "-",
-        "Days"               : days,
-        "Room Rate/Night"    : rate,
+        "Sr No": e.serial_number || i + 1,
+        "Bill No": e.bill_number || "-",
+        "Guest Name": e.guest_name || "-",
+        Contact: e.guest_mobile || "-",
+        Room: e.room || "-",
+        "Check-in": fmtDT(e.checkin_time),
+        "Check-out": e.checkout_time ? fmtDT(e.checkout_time) : "-",
+        Days: days,
+        "Room Rate/Night": rate,
         "Base Amt (excl GST)": +base.toFixed(2),
-        "GST Rate %"         : gstRatePct,
-        "CGST Amount"        : +cgst.toFixed(2),
-        "SGST Amount"        : +sgst.toFixed(2),
-        "Total GST"          : +(cgst + sgst).toFixed(2),
+        "GST Rate %": gstRatePct,
+        "CGST Amount": +cgst.toFixed(2),
+        "SGST Amount": +sgst.toFixed(2),
+        "Total GST": +(cgst + sgst).toFixed(2),
         "Room Charges (incl GST)": rate * days,
-        "Services"           : e.services_total || 0,
-        "Grand Total"        : e.total_amount || 0,
-        "Cash Paid"          : e.payment_cash || 0,
-        "Online/UPI Paid"    : e.payment_online || 0,
-        "Refund"             : e.refunds || 0,
-        "Balance Due"        : e.balance || 0,
-        "Booking Source"     : e.booking_source || "normal",
-        "Place of Supply"    : "Karnataka (KA-29)",
-        "SAC Code"           : "9963",
+        Services: e.services_total || 0,
+        "Grand Total": e.total_amount || 0,
+        "Cash Paid": e.payment_cash || 0,
+        "Online/UPI Paid": e.payment_online || 0,
+        Refund: e.refunds || 0,
+        "Balance Due": e.balance || 0,
+        "Booking Source": e.booking_source || "normal",
+        "Place of Supply": "Karnataka (KA-29)",
+        "SAC Code": "9963",
       };
     });
 
     try {
       const ws = XLSX.utils.json_to_sheet(rows);
       ws["!cols"] = [
-        {wch:6},{wch:20},{wch:22},{wch:14},
-        {wch:6},{wch:20},{wch:20},{wch:5},{wch:14},
-        {wch:20},{wch:10},{wch:13},{wch:13},{wch:12},
-        {wch:20},{wch:10},{wch:13},{wch:10},{wch:14},
-        {wch:12},{wch:16},{wch:18},{wch:10},
+        { wch: 6 },
+        { wch: 20 },
+        { wch: 22 },
+        { wch: 14 },
+        { wch: 6 },
+        { wch: 20 },
+        { wch: 20 },
+        { wch: 5 },
+        { wch: 14 },
+        { wch: 20 },
+        { wch: 10 },
+        { wch: 13 },
+        { wch: 13 },
+        { wch: 12 },
+        { wch: 20 },
+        { wch: 10 },
+        { wch: 13 },
+        { wch: 10 },
+        { wch: 14 },
+        { wch: 12 },
+        { wch: 16 },
+        { wch: 18 },
+        { wch: 10 },
       ];
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, "CA_Invoice_Report");
-      XLSX.writeFile(wb, `CA_Bills_${state.dateRange.start}_to_${state.dateRange.end}.xlsx`);
+      XLSX.writeFile(
+        wb,
+        `CA_Bills_${state.dateRange.start}_to_${state.dateRange.end}.xlsx`,
+      );
     } catch (err) {
       console.error("[Bills] export error:", err);
       alert("Export failed: " + err.message);

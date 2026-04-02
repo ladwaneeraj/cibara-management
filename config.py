@@ -15,7 +15,7 @@ import threading
 import pytz
 import base64
 
-from services import payment_service, customer_service
+from services import payment_service, customer_service, pdf_service
 
 # Configure logging
 logging.basicConfig(
@@ -49,9 +49,10 @@ try:
     bucket = storage.bucket()
     logger.info("Firebase initialized successfully")
 
-    # Initialise optimisation services (payments + customers collections)
+    # Initialise optimisation services (payments + customers + pdf collections)
     payment_service.init(db)
     customer_service.init(db)
+    pdf_service.init(db)
 except Exception as e:
     logger.error(f"Error initializing Firebase: {str(e)}")
     raise

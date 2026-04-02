@@ -400,7 +400,14 @@ def checkout():
                 message = "Checkout successful"
 
             logger.info(f"Room {room} checked out. Guest: {guest_name}")
-            return jsonify(success=True, message=message)
+            # Return bill_id so the frontend can auto-generate and store the PDF
+            has_bill = bool(bill_record)
+            return jsonify(
+                success=True,
+                message=message,
+                bill_id=bill_id if has_bill else None,
+                has_bill=has_bill,
+            )
 
         return jsonify(success=False, message="Invalid request parameters")
 

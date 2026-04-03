@@ -458,9 +458,28 @@ def create_bill_record(room, room_data, checkout_time, batch=None,
         )
 
         room_price_per_night = guest.get("price", 0)
-        renewal_count = room_data.get("renewal_count", 0)
-        days_stayed = renewal_count + 1
-        room_charges_total = room_price_per_night * days_stayed
+        renewal_count        = room_data.get("renewal_count", 0)
+
+        # ── Room transfer: build charges per price segment ───────────────────────
+        # renewal_count is a running total across the whole stay (never reset on
+        # transfer).  transfer_day_offset records how many days were spent in all
+        # previous rooms, so we can isolate days in the current room:
+        #
+        #   days_in_current_room = (renewal_count + 1) - transfer_day_offset
+        #
+        # pre_transfer_charges: [{days, price, total, from_room}, ...]
+        # Each entry was written by transfer_room() before the price changed.
+        pre_transfer_charges  = guest.get("pre_transfer_charges", [])
+        transfer_day_offset   = guest.get("transfer_day_offset", 0)
+
+        days_in_current_room  = (renewal_count + 1) - transfer_day_offset
+        pre_transfer_total    = sum(entry.get("total", 0) for entry in pre_transfer_charges)
+        pre_transfer_days     = sum(entry.get("days",  0) for entry in pre_transfer_charges)
+
+        current_room_charges  = room_price_per_night * days_in_current_room
+        room_charges_total    = pre_transfer_total + current_room_charges
+        days_stayed           = pre_transfer_days  + days_in_current_room
+        # ────────────────────────────────────────────────────────────────────────
 
         total_amount = room_charges_total + services_total - total_discounts
         balance = total_amount - payment_cash - payment_online + total_refunds
@@ -475,25 +494,41 @@ def create_bill_record(room, room_data, checkout_time, batch=None,
         # Water and miscellaneous services are NOT accommodation charges and are
         # excluded from the GST taxable base.
         #
+        # When a room transfer occurred, each price segment is taxed at its own
+        # slab rate (correct per GST rules), then summed.
+        #
         # Note: If AC was selected at check-in, the room price already includes it.
         # If AC / Extra Bed were added as services from the checkout modal they are
         # stored with accommodation_charge=True and included here.
-        if room_price_per_night < 1000:
-            gst_rate = 0
-        elif room_price_per_night <= 7500:
-            gst_rate = 5
-        else:
-            gst_rate = 18
+
+        def _gst_rate_for_price(price):
+            if price < 1000:
+                return 0
+            elif price <= 7500:
+                return 5
+            else:
+                return 18
 
         accommodation_addons_total = sum(
             s["price"] for s in services if s.get("accommodation_charge", False)
         )
         non_accommodation_total = services_total - accommodation_addons_total
 
+        # GST on pre-transfer segments (each segment at its own slab)
+        pre_transfer_gst = sum(
+            round(entry.get("total", 0) * _gst_rate_for_price(entry.get("price", 0)) / 100, 2)
+            for entry in pre_transfer_charges
+        )
+        # GST on current room segment + accommodation add-ons
+        gst_rate = _gst_rate_for_price(room_price_per_night)
+        current_gst = round(
+            (current_room_charges + accommodation_addons_total) * gst_rate / 100, 2
+        )
+        gst_amount = pre_transfer_gst + current_gst
+
         # Taxable accommodation value (exclusive of discount; discount applied pro-rata
         # on the invoice for compliance; here we store gross taxable for reference).
         accommodation_taxable = room_charges_total + accommodation_addons_total
-        gst_amount = round(accommodation_taxable * gst_rate / 100, 2)
 
         # bill_number is determined after invoice logic below
         bill_number = None

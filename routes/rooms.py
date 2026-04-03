@@ -23,6 +23,7 @@ from config import (
     _batch_fill_serials
 )
 from services import payment_service, customer_service
+from routes.billing import auto_generate_bill_pdf
 
 rooms_bp = Blueprint('rooms', __name__)
 
@@ -400,8 +401,20 @@ def checkout():
                 message = "Checkout successful"
 
             logger.info(f"Room {room} checked out. Guest: {guest_name}")
-            # Return bill_id so the frontend can auto-generate and store the PDF
+
+            # ── Auto-generate PDF in background (non-blocking) ───────────────
+            # Runs server-side so the PDF is saved to Firebase Storage regardless
+            # of which page the staff is on when they do the checkout.
             has_bill = bool(bill_record)
+            if has_bill:
+                import threading
+                threading.Thread(
+                    target=auto_generate_bill_pdf,
+                    args=(bill_id, bill_record),
+                    daemon=True,
+                ).start()
+            # ────────────────────────────────────────────────────────────────
+
             return jsonify(
                 success=True,
                 message=message,
@@ -470,6 +483,38 @@ def add_on():
         is_ac_service = accommodation_charge and item.upper().startswith("AC")
         if is_ac_service:
             room_update["guest.isAC"] = True
+
+        # ── Mid-stay price change for accommodation add-ons ──────────────────────
+        # When an accommodation_charge add-on is added (AC, Extra Bed, etc.) it
+        # represents a permanent per-night increase going forward.  We snapshot
+        # the current days at the old price (using the same pre_transfer_charges
+        # mechanism as room transfers), then bump guest.price so the next renewal
+        # shows the correct updated nightly rate automatically.
+        #
+        # Example: 2 days at ₹1200, then AC (₹600/night) enabled.
+        #   → pre_transfer_charges: [{days:2, price:1200, total:2400}]
+        #   → guest.price: ₹1800
+        #   → Day 3 renewal modal shows ₹1800 ✓
+        if accommodation_charge:
+            guest        = room_data.get("guest", {})
+            old_price    = guest.get("price", 0)
+            renewal_count = room_data.get("renewal_count", 0)
+            existing_offset = guest.get("transfer_day_offset", 0)
+            old_days     = (renewal_count + 1) - existing_offset
+
+            existing_pre = list(guest.get("pre_transfer_charges", []) or [])
+            existing_pre.append({
+                "days":      old_days,
+                "price":     old_price,
+                "total":     old_price * old_days,
+                "from_room": room,          # same room — price change, not room change
+            })
+            new_price = old_price + int(unit_price)
+
+            room_update["guest.pre_transfer_charges"] = existing_pre
+            room_update["guest.transfer_day_offset"]  = existing_offset + old_days
+            room_update["guest.price"]                = new_price
+        # ─────────────────────────────────────────────────────────────────────────
 
         batch.update(rooms_ref.document(room), room_update)
 
@@ -817,6 +862,31 @@ def transfer_room():
         checkin_time = rooms_dict[old_room]["checkin_time"]
 
         new_room_data = rooms_dict[old_room].copy()
+
+        # ── Snapshot pre-transfer charges before changing price ──────────────────
+        # renewal_count is a running total across the whole stay (not reset on
+        # transfer).  We use transfer_day_offset to track how many days were
+        # spent in rooms BEFORE the current one, so billing can calculate:
+        #   days_in_current_room = (renewal_count + 1) - transfer_day_offset
+        # and apply the correct price only to those days.
+        old_price         = new_room_data["guest"].get("price", 0)
+        old_renewal_count = new_room_data.get("renewal_count", 0)
+        existing_offset   = new_room_data["guest"].get("transfer_day_offset", 0)
+        old_days          = (old_renewal_count + 1) - existing_offset  # days in THIS room only
+
+        existing_pre_transfer = new_room_data["guest"].get("pre_transfer_charges", [])
+        existing_pre_transfer.append({
+            "days":      old_days,
+            "price":     old_price,
+            "total":     old_price * old_days,
+            "from_room": old_room,
+        })
+        new_room_data["guest"]["pre_transfer_charges"] = existing_pre_transfer
+        # Advance the offset so the new room knows where to start counting
+        new_room_data["guest"]["transfer_day_offset"] = existing_offset + old_days
+        # renewal_count carries over unchanged — it keeps incrementing for every
+        # renewal across the whole stay, regardless of how many rooms were used.
+        # ────────────────────────────────────────────────────────────────────────
 
         if new_price:
             new_room_data["guest"]["price"] = int(new_price)

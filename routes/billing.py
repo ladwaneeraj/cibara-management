@@ -754,6 +754,300 @@ def save_bill_pdf():
 # RENDER BILL PDF — server-side HTML→PDF using xhtml2pdf (no browser canvas)
 # ══════════════════════════════════════════════════════════════════════════════
 
+# ── Server-side bill HTML builder ───────────────────────────────────────────
+# Python port of buildBillHTML() from bills.js.
+# Called by auto_generate_bill_pdf() so the PDF can be created at checkout
+# without needing the browser to be on the bills page.
+
+_MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
+
+def _fmt_bill_dt(dt_str):
+    """Format '2026-04-02 14:30' → 'Apr 2, 2026, 02:30 PM' (mirrors fmtBillDT in JS)."""
+    if not dt_str:
+        return "-"
+    parts = dt_str.split(" ")
+    y, m, d = parts[0].split("-")
+    month_name = _MONTHS[int(m) - 1]
+    time_str = ""
+    if len(parts) > 1:
+        hh, mm = parts[1].split(":")
+        h = int(hh)
+        ampm = "PM" if h >= 12 else "AM"
+        h12 = 12 if h == 0 else (h - 12 if h > 12 else h)
+        time_str = f", {h12:02d}:{mm} {ampm}"
+    return f"{month_name} {int(d)}, {y}{time_str}"
+
+def _f2(n):
+    """Format a number to 2 decimal places."""
+    return f"{float(n or 0):.2f}"
+
+def _build_bill_html(b: dict) -> str:
+    """Build the bill HTML fragment from a bill record dict.
+
+    Mirrors the JS buildBillHTML() function in bills.js so the server-generated
+    PDF is visually identical to what the browser modal shows.
+    """
+    days       = b.get("days_stayed", 1)
+    rate       = b.get("room_price_per_night") or b.get("room_rent") or 0
+    services   = b.get("services") or []
+
+    accom_addons   = [s for s in services if s.get("accommodation_charge")]
+    other_services = [s for s in services if not s.get("accommodation_charge")]
+    accom_addons_total = sum(s.get("price", 0) for s in accom_addons)
+    other_svc_total    = sum(s.get("price", 0) for s in other_services)
+
+    gst_rate_pct = b.get("gst_rate", 0)
+    cgst_rate    = gst_rate_pct / 2
+    sgst_rate    = gst_rate_pct / 2
+
+    # Use the stored room_charges_total when available — this is always correct,
+    # including when the room price changed mid-stay (room transfer or AC add-on).
+    # Fall back to rate × days only for old bills that pre-date this field.
+    room_charges  = b.get("room_charges_total") or (rate * days)
+    accom_total   = room_charges + accom_addons_total
+
+    # Use stored gst_amount when available (correctly computed per-segment).
+    # Derive CGST/SGST from it; fall back to back-calculation for old bills.
+    stored_gst    = b.get("gst_amount")
+    if stored_gst is not None:
+        cgst      = stored_gst / 2
+        sgst      = cgst
+        accom_base = accom_total - stored_gst
+    else:
+        divisor   = 1 + gst_rate_pct / 100
+        accom_base = accom_total / divisor if divisor else accom_total
+        cgst      = (accom_total - accom_base) / 2
+        sgst      = cgst
+
+    discounts    = b.get("discounts") or 0
+    svc_total_all = b.get("services_total") or 0
+    # Use stored total_amount when available (authoritative figure from billing).
+    grand_total  = b.get("total_amount") or (room_charges + svc_total_all - discounts)
+
+    cash_paid    = b.get("payment_cash") or 0
+    online_paid  = b.get("payment_online") or 0
+    refunds      = b.get("refunds") or 0
+    refund_cash  = b.get("refund_cash") or 0
+    refund_online = b.get("refund_online") or 0
+    total_paid   = cash_paid + online_paid
+    net_collected = total_paid - refunds
+    balance      = b.get("balance") or 0
+
+    display_bill_no = b.get("bill_number") or "N/A"
+    bill_date    = _fmt_bill_dt(b.get("checkout_time"))
+
+    # ── Accommodation add-on rows ──
+    accom_addon_rows = "".join(
+        f'<tr><td>{s.get("item","Service")}</td>'
+        f'<td class="b-tr">{s.get("quantity",1)}</td>'
+        f'<td class="b-tr">{_f2(s.get("unit_price") or s.get("price",0))}</td>'
+        f'<td class="b-tr">{_f2(s.get("price",0))}</td></tr>'
+        for s in accom_addons
+    )
+
+    # ── Other service rows ──
+    other_svc_rows = "".join(
+        f'<tr><td>{s.get("item","Service")}</td>'
+        f'<td class="b-tr">{s.get("quantity",1)}</td>'
+        f'<td class="b-tr">{_f2(s.get("unit_price") or s.get("price",0))}</td>'
+        f'<td class="b-tr">{_f2(s.get("price",0))}</td></tr>'
+        for s in other_services
+    )
+
+    # ── GST rows ──
+    gst_rows = (
+        f'<tr class="b-gst-row"><td>CGST @ {cgst_rate}%</td>'
+        f'<td class="b-tr">—</td><td class="b-tr">—</td>'
+        f'<td class="b-tr">{_f2(cgst)}</td></tr>'
+        f'<tr class="b-gst-row"><td>SGST @ {sgst_rate}%</td>'
+        f'<td class="b-tr">—</td><td class="b-tr">—</td>'
+        f'<td class="b-tr">{_f2(sgst)}</td></tr>'
+    )
+
+    accom_subtotal_row = (
+        f'<tr class="b-subtotal">'
+        f'<td colspan="3" class="b-tr">Accommodation Total (incl. GST)</td>'
+        f'<td class="b-tr">{_f2(accom_total)}</td></tr>'
+        if accom_addons or days > 1 else ""
+    )
+
+    other_svc_section = (
+        f'<tr class="b-sec"><td colspan="4">Additional Services (Non-Taxable)</td></tr>'
+        f'{other_svc_rows}'
+        f'<tr class="b-subtotal"><td colspan="3" class="b-tr">Services Total</td>'
+        f'<td class="b-tr">{_f2(other_svc_total)}</td></tr>'
+        if other_svc_rows else ""
+    )
+
+    discount_row = (
+        f'<tr><td colspan="3" style="text-align:right;color:#2e7d32;font-weight:600;">'
+        f'Discount</td>'
+        f'<td class="b-tr" style="color:#2e7d32;font-weight:700;">- {_f2(discounts)}</td></tr>'
+        if discounts > 0 else ""
+    )
+
+    # ── Refund rows ──
+    refund_rows = ""
+    if refunds > 0:
+        if refund_cash > 0:
+            refund_rows += (
+                f'<tr><td>Refund Given (Cash)</td>'
+                f'<td class="b-tr" style="color:#c00;">- Rs. {_f2(refund_cash)}</td></tr>'
+            )
+        if refund_online > 0:
+            refund_rows += (
+                f'<tr><td>Refund Given (UPI)</td>'
+                f'<td class="b-tr" style="color:#c00;">- Rs. {_f2(refund_online)}</td></tr>'
+            )
+        if not refund_cash and not refund_online:
+            refund_rows += (
+                f'<tr><td>Refund Given</td>'
+                f'<td class="b-tr" style="color:#c00;">- Rs. {_f2(refunds)}</td></tr>'
+            )
+        refund_rows += (
+            f'<tr class="b-subtotal"><td>Net Collected</td>'
+            f'<td class="b-tr">Rs. {_f2(net_collected)}</td></tr>'
+        )
+
+    balance_row = (
+        f'<tr><td style="font-weight:800;color:#c62828;">Balance Due</td>'
+        f'<td class="b-tr" style="font-weight:800;color:#c62828;">Rs. {_f2(balance)}</td></tr>'
+        if balance > 0 else ""
+    )
+
+    paid_full_row = (
+        f'<tr><td style="color:#2e7d32;font-weight:700;">Payment Status</td>'
+        f'<td class="b-tr" style="color:#2e7d32;font-weight:700;">PAID IN FULL</td></tr>'
+        if balance <= 0 and refunds <= 0 else ""
+    )
+
+    per_night_base = _f2(accom_base / (days or 1))
+
+    return f"""
+<div class="b-bill-wrap">
+  <div class="b-header-block">
+    <div class="b-lodge-name">CIBARA COMFORTS</div>
+    <div class="b-lodge-entity">A Unit of Cibara Enterprise</div>
+    <div class="b-lodge-sub">Opposite Bus Stand Road, Harihar, Karnataka - 577601</div>
+    <div class="b-lodge-sub">Ph: +91 9482831381</div>
+    <div class="b-gstin-bar">GSTIN: 29AAWFC1962B1Z9 &nbsp;.&nbsp; SAC: 9963 &nbsp;.&nbsp; Karnataka (KA - 29)</div>
+    <div class="b-title">TAX INVOICE</div>
+  </div>
+  <table class="b-info-outer">
+    <tr>
+      <td class="b-info-col">
+        <div class="b-row"><span class="b-lbl">Bill No:</span> {display_bill_no}</div>
+        <div class="b-row"><span class="b-lbl">Guest Name:</span> {b.get("guest_name","")}</div>
+        <div class="b-row"><span class="b-lbl">Mobile:</span> {b.get("guest_mobile","") or "N/A"}</div>
+        <div class="b-row"><span class="b-lbl">Room No:</span> {b.get("room","")}</div>
+        <div class="b-row"><span class="b-lbl">Guests:</span> {b.get("guest_count",1)}</div>
+      </td>
+      <td class="b-info-col b-info-col-r">
+        <div class="b-row"><span class="b-lbl">Check-in:</span> {_fmt_bill_dt(b.get("checkin_time"))}</div>
+        <div class="b-row"><span class="b-lbl">Check-out:</span> {_fmt_bill_dt(b.get("checkout_time"))}</div>
+        <div class="b-row"><span class="b-lbl">Days Stayed:</span> {days}</div>
+        <div class="b-row"><span class="b-lbl">Bill Date:</span> {bill_date}</div>
+        <div class="b-row"><span class="b-lbl">Place of Supply:</span> Karnataka (KA - 29)</div>
+      </td>
+    </tr>
+  </table>
+  <table class="b-tbl">
+    <thead>
+      <tr>
+        <th>Description</th><th class="b-tr">Qty</th>
+        <th class="b-tr">Rate (Rs.)</th><th class="b-tr">Amount (Rs.)</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr class="b-sec"><td colspan="4">Accommodation Charges (SAC: 9963)</td></tr>
+      <tr>
+        <td>Room Rent - Base Amount (excl. GST)</td>
+        <td class="b-tr">{days}</td>
+        <td class="b-tr">{per_night_base}</td>
+        <td class="b-tr">{_f2(accom_base)}</td>
+      </tr>
+      {gst_rows}
+      {accom_addon_rows}
+      {accom_subtotal_row}
+      {other_svc_section}
+      {discount_row}
+      <tr class="b-grand">
+        <td colspan="3" class="b-tr">GRAND TOTAL</td>
+        <td class="b-tr">Rs. {_f2(grand_total)}</td>
+      </tr>
+    </tbody>
+  </table>
+  <div class="b-pay-section">
+    <div class="b-pay-title">Payment Details</div>
+    <table class="b-tbl">
+      <tbody>
+        <tr><td>Cash Paid</td><td class="b-tr">Rs. {_f2(cash_paid)}</td></tr>
+        <tr><td>Online / UPI Paid</td><td class="b-tr">Rs. {_f2(online_paid)}</td></tr>
+        <tr class="b-subtotal"><td>Total Paid</td><td class="b-tr">Rs. {_f2(total_paid)}</td></tr>
+        {refund_rows}
+        {balance_row}
+        {paid_full_row}
+      </tbody>
+    </table>
+  </div>
+  <table class="b-sig">
+    <tr>
+      <td><div class="b-sig-line">Guest Signature</div></td>
+      <td style="text-align:right"><div class="b-sig-line">Authorised Signatory</div></td>
+    </tr>
+  </table>
+  <div class="b-footer">
+    <p>Thank you for staying at Cibara Comforts. We look forward to welcoming you again!</p>
+    <p>This is a computer-generated invoice.</p>
+  </div>
+</div>"""
+
+
+def auto_generate_bill_pdf(bill_id: str, bill_record: dict):
+    """Generate and upload a PDF for a bill in a background thread.
+
+    Called right after checkout commits. Runs silently — errors are logged but
+    never propagate back to the checkout response.
+    """
+    try:
+        # Skip if no bill was created (same-day cash / MMT OTA)
+        if not bill_id or not bill_record:
+            return
+        # Skip if a PDF already exists (shouldn't happen on fresh checkout,
+        # but guard against duplicate calls)
+        bill_snap = bills_ref.document(bill_id).get()
+        if bill_snap.exists and (bill_snap.to_dict() or {}).get("pdf_url"):
+            logger.info(f"[auto_pdf] Bill {bill_id} already has a PDF, skipping.")
+            return
+
+        html_body  = _build_bill_html(bill_record)
+        full_html  = _build_pdf_html(html_body)
+
+        from xhtml2pdf import pisa
+        import io
+        pdf_buf = io.BytesIO()
+        result  = pisa.CreatePDF(full_html, dest=pdf_buf)
+        if result.err:
+            logger.error(f"[auto_pdf] xhtml2pdf error for bill {bill_id}: code {result.err}")
+            return
+
+        folder = (
+            bill_record.get("invoice_number")
+            or bill_record.get("bill_number")
+            or bill_id
+        )
+        upload = pdf_service.upload_bill_pdf(bill_id, folder, pdf_buf.getvalue())
+        if upload.get("url"):
+            logger.info(
+                f"[auto_pdf] PDF auto-generated for bill {bill_id} "
+                f"(v{upload['version']}): {upload['url']}"
+            )
+        else:
+            logger.error(f"[auto_pdf] Storage upload failed for bill {bill_id}")
+    except Exception as exc:
+        logger.error(f"[auto_pdf] Unhandled error for bill {bill_id}: {exc}", exc_info=True)
+
+
 # ── Bill CSS for PDF ─────────────────────────────────────────────────────────
 # CSS for xhtml2pdf / ReportLab PDF rendering. Uses pt units (better for print).
 # Key difference from browser CSS: border-bottom is placed on .b-title (last element

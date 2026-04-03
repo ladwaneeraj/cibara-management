@@ -144,9 +144,12 @@
 .bl-src-bookingcom { background: #e3f2fd; color: #1565c0; }
 
 .bl-bill-btn {
-  padding: 0.22rem 0.5rem; background: var(--primary, #3f51b5);
-  color: #fff; border: none; border-radius: 4px;
-  cursor: pointer; font-size: 0.77rem;
+  width: 28px; height: 28px; padding: 0;
+  background: var(--primary, #3f51b5);
+  color: #fff; border: none; border-radius: 6px;
+  cursor: pointer; font-size: 0.8rem;
+  display: inline-flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
 }
 .bl-bill-btn:hover { opacity: 0.82; }
 
@@ -161,9 +164,12 @@
   vertical-align: middle; text-transform: uppercase;
 }
 .bl-collect-btn {
-  padding: 0.22rem 0.55rem; background: #fd7e14;
-  color: #fff; border: none; border-radius: 4px;
-  cursor: pointer; font-size: 0.77rem;
+  width: 28px; height: 28px; padding: 0;
+  background: #fd7e14;
+  color: #fff; border: none; border-radius: 6px;
+  cursor: pointer; font-size: 0.8rem;
+  display: inline-flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
 }
 .bl-collect-btn:hover { opacity: 0.82; }
 
@@ -306,8 +312,8 @@
   border-radius: 6px; cursor: pointer;
   display: inline-flex; align-items: center;
   justify-content: center; font-size: 0.82rem;
-  transition: opacity 0.15s; margin-left: 4px;
-  background: #25D366; color: #fff; vertical-align: middle;
+  transition: opacity 0.15s;
+  background: #25D366; color: #fff; flex-shrink: 0;
 }
 .bl-wa-btn:hover { opacity: 0.78; }
 .bl-wa-btn.bl-wa-pending { background: #c8e6c9; color: #388e3c; cursor: pointer; }
@@ -1711,7 +1717,7 @@
       <i class="fab fa-whatsapp"></i>
     </button>`;
 
-    const actionCell = mainBtn + waBtn;
+    const actionCell = `<div style="display:flex;gap:5px;align-items:center;flex-wrap:nowrap;justify-content:center;">${mainBtn}${waBtn}</div>`;
 
     return `<tr class="${rowCls}" data-date-group="${dk}">
       <td style="color:#888;font-size:.75rem;">${rowIndex}</td>
@@ -1870,20 +1876,34 @@
     const cgstRate = gstRatePct / 2;
     const sgstRate = gstRatePct / 2;
 
-    // Total accommodation amount (GST-inclusive): room charges + accommodation add-ons.
-    const roomCharges = rate * days; // GST-inclusive
-    const accomTotal = roomCharges + accomAddonsTotal; // GST-inclusive base
+    // Use stored room_charges_total when available — this is always correct,
+    // including when the room price changed mid-stay (room transfer or AC add-on).
+    // Fall back to rate × days only for old bills that pre-date this field.
+    const roomCharges = (typeof b.room_charges_total === "number" && b.room_charges_total > 0)
+      ? b.room_charges_total
+      : rate * days;
+    const accomTotal = roomCharges + accomAddonsTotal;
 
-    // Back-calculate base and GST from GST-inclusive accommodation total.
-    const divisor = 1 + gstRatePct / 100;
-    const accomBase = accomTotal / divisor; // excl. GST
-    const cgst = (accomTotal - accomBase) / 2;
-    const sgst = cgst;
+    // Use stored gst_amount when available (correctly computed per-segment).
+    // Derive CGST/SGST from it; fall back to back-calculation for old bills.
+    let cgst, sgst, accomBase;
+    if (typeof b.gst_amount === "number") {
+      cgst      = b.gst_amount / 2;
+      sgst      = cgst;
+      accomBase = accomTotal - b.gst_amount;
+    } else {
+      const divisor = 1 + gstRatePct / 100;
+      accomBase = accomTotal / divisor;
+      cgst      = (accomTotal - accomBase) / 2;
+      sgst      = cgst;
+    }
 
-    // Grand total = accommodation (incl. GST) + other services − discounts.
+    // Grand total — use stored total_amount (authoritative figure from billing).
     const discounts = b.discounts || 0;
     const svcTotalAll = b.services_total || 0; // includes both types
-    const grandTotal = roomCharges + svcTotalAll - discounts;
+    const grandTotal = (typeof b.total_amount === "number" && b.total_amount > 0)
+      ? b.total_amount
+      : roomCharges + svcTotalAll - discounts;
 
     // Payment
     const cashPaid = b.payment_cash || 0;
@@ -2184,7 +2204,7 @@
     if (!tab.classList.contains("hidden")) loadData(true);
   }
 
-  // ── Init ──────────────────────────────────────────────────────────────────────
+  // ── Init ─────────────────────────────────────────────────────────────────
   function init() {
     injectStyles();
     buildHTML();

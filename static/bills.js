@@ -595,8 +595,8 @@
       <i class="fas fa-calendar-alt"></i>
       <input type="text" id="bl-date-range" class="bl-date-range-input" placeholder="Select date range" readonly />
     </div>
-    <button class="bl-quick-btn bq-active" data-bq="week">Week</button>
-    <button class="bl-quick-btn" data-bq="today">Today</button>
+    <button class="bl-quick-btn bq-active" data-bq="today">Today</button>
+    <button class="bl-quick-btn" data-bq="week">Week</button>
     <button class="bl-quick-btn" data-bq="month">Month</button>
     <span class="bl-filter-divider"></span>
     <select id="bl-payment-filter">
@@ -776,9 +776,8 @@
 
   // ── Date defaults + flatpickr init ────────────────────────────────────────────
   function setDefaults() {
-    const today = todayStr(),
-      week = nDaysAgoStr(6);
-    state.dateRange.start = week;
+    const today = todayStr();
+    state.dateRange.start = today;
     state.dateRange.end = today;
 
     const el = dom("bl-date-range");
@@ -789,7 +788,7 @@
       dateFormat: "Y-m-d", // internal ISO format — avoids maxDate mis-parsing
       altInput: true, // show human-friendly text to user
       altFormat: "d M Y", // display: "17 Mar 2026"
-      defaultDate: [week, today],
+      defaultDate: [today, today],
       maxDate: today,
       disableMobile: true,
       onChange: function (selectedDates) {
@@ -2203,6 +2202,19 @@
 
     if (!tab.classList.contains("hidden")) loadData(true);
   }
+
+  // ── Live refresh on checkin / checkout ────────────────────────────────────────
+  window.addEventListener("cibaraRoomUpdate", function (e) {
+    const tab = dom("bills-tab");
+    if (tab && !tab.classList.contains("hidden")) {
+      const today = todayStr();
+      if (state.dateRange.end === today) {
+        loadData(true);
+      }
+    } else {
+      state.lastLoadedRange = null;
+    }
+  });
 
   // ── Init ─────────────────────────────────────────────────────────────────
   function init() {

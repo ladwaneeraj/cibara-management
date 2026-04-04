@@ -477,14 +477,65 @@ async function lookupAndFillCustomer(mobile) {
       _applyIndicator(data.customer);
       _applyDocViewBtn(data.customer);
       _showCheckinStoredDocs(data.customer);
+      _applyFlagAlert(data.customer);
     } else {
       _currentCheckinCustomer = null;
       clearNameMismatch();
       hideDocViewBtn();
       _setIndicator('yellow');
       _hideCheckinStoredDocs();
+      _hideFlagAlert();
     }
   } catch (err) { console.error('[customer-docs] Mobile lookup error:', err); }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Flag alert helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+function _applyFlagAlert(customer) {
+  const alertEl  = document.getElementById('checkin-flag-alert');
+  const notesEl  = document.getElementById('checkin-flag-alert-notes');
+  const dateEl   = document.getElementById('checkin-flag-alert-date');
+  if (!alertEl) return;
+
+  if (customer && customer.is_flagged) {
+    const notes = (customer.flag_notes || '').trim();
+    if (notesEl) notesEl.textContent = notes || 'No details provided.';
+
+    // Format flagged_at date for display
+    if (dateEl) {
+      const raw = customer.flagged_at || '';
+      if (raw) {
+        try {
+          const d = new Date(raw);
+          const day   = String(d.getDate()).padStart(2, '0');
+          const month = d.toLocaleString('en-IN', { month: 'short' });
+          const year  = d.getFullYear();
+          dateEl.textContent = `Flagged on: ${day} ${month} ${year}`;
+        } catch (e) {
+          dateEl.textContent = '';
+        }
+      } else {
+        dateEl.textContent = '';
+      }
+    }
+
+    alertEl.style.display = 'block';
+  } else {
+    alertEl.style.display = 'none';
+    if (notesEl) notesEl.textContent = '';
+    if (dateEl)  dateEl.textContent  = '';
+  }
+}
+
+function _hideFlagAlert() {
+  const alertEl = document.getElementById('checkin-flag-alert');
+  if (alertEl) alertEl.style.display = 'none';
+  const notesEl = document.getElementById('checkin-flag-alert-notes');
+  if (notesEl) notesEl.textContent = '';
+  const dateEl = document.getElementById('checkin-flag-alert-date');
+  if (dateEl) dateEl.textContent = '';
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1447,6 +1498,7 @@ function resetCheckinDocState() {
   resetDocCaptureUI();
   hideDocViewBtn();
   _hideCheckinStoredDocs();
+  _hideFlagAlert();
   _setIndicator('grey');
   hideMobileSuggestions();
   clearNameMismatch();

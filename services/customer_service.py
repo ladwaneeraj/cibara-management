@@ -265,6 +265,64 @@ def get_customer(mobile: str):
 
 
 # ---------------------------------------------------------------------------
+# FLAG
+# ---------------------------------------------------------------------------
+
+def update_flag(mobile: str, is_flagged: bool, flag_notes: str = "", *, sync: bool = False):
+    """
+    Set or clear the flag on a customer record.
+
+    Args:
+        mobile      – 10-digit mobile number (customer key)
+        is_flagged  – True to flag, False to unflag
+        flag_notes  – Free-text reason / notes (stored even when unflagging,
+                      so history isn't lost — pass "" to clear notes explicitly)
+        sync        – If True, blocks until Firestore write completes.
+                      Default False (fire-and-forget daemon thread).
+    """
+    if _customers_ref is None:
+        return
+
+    clean = _clean_mobile(mobile)
+    if not clean:
+        return
+
+    if sync:
+        _write_flag(clean, is_flagged, flag_notes)
+    else:
+        threading.Thread(
+            target=_write_flag,
+            args=(clean, is_flagged, flag_notes),
+            daemon=True,
+        ).start()
+
+
+def _write_flag(mobile: str, is_flagged: bool, flag_notes: str):
+    try:
+        now_str = datetime.now(timezone.utc).isoformat()
+        doc_ref = _customers_ref.document(mobile)
+
+        updates = {
+            "is_flagged": bool(is_flagged),
+            "flag_notes": flag_notes.strip() if flag_notes else "",
+            "flag_updated_at": now_str,
+        }
+        # Set flagged_at only the first time a flag is turned ON.
+        # Works whether the document already exists or not.
+        if is_flagged:
+            snap = doc_ref.get()
+            if not snap.exists or not snap.to_dict().get("flagged_at"):
+                updates["flagged_at"] = now_str
+
+        doc_ref.set(updates, merge=True)
+        logger.info(
+            f"CustomerService: flag updated for {mobile} → is_flagged={is_flagged}"
+        )
+    except Exception as e:
+        logger.error(f"CustomerService update_flag failed for {mobile}: {e}")
+
+
+# ---------------------------------------------------------------------------
 # HELPERS
 # ---------------------------------------------------------------------------
 

@@ -10,24 +10,49 @@
     />
     <link rel="stylesheet" href="/static/style.css" />
     <link rel="stylesheet" href="/static/booking.css" />
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/flatpickr/4.6.13/flatpickr.min.css" />
+    <link
+      rel="stylesheet"
+      href="https://cdnjs.cloudflare.com/ajax/libs/flatpickr/4.6.13/flatpickr.min.css"
+    />
     <style>
       /* ── Compact booking modal ── */
-      .booking-modal-compact { max-width: 520px; }
-      .bk-row { display: grid; grid-template-columns: 1fr 1fr; gap: 0.6rem; }
-      .bk-row .form-group { margin-bottom: 0.5rem; }
-      .bk-full { grid-column: 1 / -1; }
-      #new-booking-modal .form-group { margin-bottom: 0.7rem; }
-      #new-booking-modal .form-label { font-size: 0.78rem; margin-bottom: 0.25rem; }
-      #new-booking-modal .form-control { font-size: 0.85rem; padding: 0.35rem 0.5rem; }
-      #new-booking-modal textarea.form-control { padding: 0.35rem 0.5rem; }
+      .booking-modal-compact {
+        max-width: 520px;
+      }
+      .bk-row {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 0.6rem;
+      }
+      .bk-row .form-group {
+        margin-bottom: 0.5rem;
+      }
+      .bk-full {
+        grid-column: 1 / -1;
+      }
+      #new-booking-modal .form-group {
+        margin-bottom: 0.7rem;
+      }
+      #new-booking-modal .form-label {
+        font-size: 0.78rem;
+        margin-bottom: 0.25rem;
+      }
+      #new-booking-modal .form-control {
+        font-size: 0.85rem;
+        padding: 0.35rem 0.5rem;
+      }
+      #new-booking-modal textarea.form-control {
+        padding: 0.35rem 0.5rem;
+      }
       .booking-date-range-wrap {
         position: relative;
       }
       .booking-date-range-wrap input[type="text"] {
         padding-left: 2rem;
         cursor: pointer;
-        background: #fff url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%23888' stroke-width='2'%3E%3Crect x='3' y='4' width='18' height='18' rx='2' ry='2'%3E%3C/rect%3E%3Cline x1='16' y1='2' x2='16' y2='6'%3E%3C/line%3E%3Cline x1='8' y1='2' x2='8' y2='6'%3E%3C/line%3E%3Cline x1='3' y1='10' x2='21' y2='10'%3E%3C/line%3E%3C/svg%3E") no-repeat 0.5rem center;
+        background: #fff
+          url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%23888' stroke-width='2'%3E%3Crect x='3' y='4' width='18' height='18' rx='2' ry='2'%3E%3C/rect%3E%3Cline x1='16' y1='2' x2='16' y2='6'%3E%3C/line%3E%3Cline x1='8' y1='2' x2='8' y2='6'%3E%3C/line%3E%3Cline x1='3' y1='10' x2='21' y2='10'%3E%3C/line%3E%3C/svg%3E")
+          no-repeat 0.5rem center;
       }
     </style>
     <link rel="stylesheet" href="/static/settle-later.css" />
@@ -98,19 +123,30 @@
         border-radius: 8px;
         object-fit: cover;
         cursor: pointer;
-        border: 2px solid rgba(255,255,255,0.1);
+        border: 2px solid rgba(255, 255, 255, 0.1);
         flex-shrink: 0;
-        transition: border-color 0.15s, opacity 0.15s, transform 0.15s;
+        transition:
+          border-color 0.15s,
+          opacity 0.15s,
+          transform 0.15s;
         opacity: 0.55;
       }
-      .doc-thumb:hover { opacity: 0.85; transform: scale(1.05); }
+      .doc-thumb:hover {
+        opacity: 0.85;
+        transform: scale(1.05);
+      }
       .doc-thumb.active {
         border-color: #42a5f5;
         opacity: 1;
       }
       @keyframes pulse-dot {
-        0%, 100% { box-shadow: 0 0 0 3px rgba(245,158,11,0.2); }
-        50%       { box-shadow: 0 0 0 5px rgba(245,158,11,0.05); }
+        0%,
+        100% {
+          box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.2);
+        }
+        50% {
+          box-shadow: 0 0 0 5px rgba(245, 158, 11, 0.05);
+        }
       }
 
       /* ── Camera modal — mobile bottom-sheet ── */
@@ -144,7 +180,10 @@
         color: #555;
         cursor: pointer;
         font-weight: 500;
-        transition: background 0.15s, color 0.15s, border-color 0.15s;
+        transition:
+          background 0.15s,
+          color 0.15s,
+          border-color 0.15s;
       }
       .doc-type-btn.active {
         background: #1565c0;
@@ -168,7 +207,9 @@
         display: block;
         transition: border-color 0.15s;
       }
-      .doc-strip-thumb:hover img { border-color: #2e7d32; }
+      .doc-strip-thumb:hover img {
+        border-color: #2e7d32;
+      }
       .doc-strip-thumb-remove {
         position: absolute;
         top: -5px;
@@ -204,7 +245,10 @@
         font-size: 0.62rem;
         font-weight: 600;
         flex-shrink: 0;
-        transition: border-color 0.15s, background 0.15s, color 0.15s;
+        transition:
+          border-color 0.15s,
+          background 0.15s,
+          color 0.15s;
       }
       #doc-add-more-btn:hover {
         border-color: #1565c0;
@@ -240,7 +284,10 @@
             class="header-icon-btn"
             aria-label="Settings"
             title="Settings"
-          ></button>
+            onclick="openSettingsModal()"
+          >
+            <i class="fas fa-cog"></i>
+          </button>
         </div>
       </header>
 
@@ -260,32 +307,29 @@
           </div>
 
           <!-- Filters -->
-          <div
-            class="filter-container"
-            style="margin-top: 1rem; flex-wrap: wrap"
-          >
+          <div class="filter-container">
             <button class="filter-btn active" data-filter="all">All</button>
             <button class="filter-btn" data-filter="vacant">
-              Vacant (<span id="count-filter-vacant">0</span>)
+              Vacant&nbsp;<span id="count-filter-vacant">0</span>
             </button>
             <button class="filter-btn" data-filter="occupied">
-              Occupied (<span id="count-filter-occupied">0</span>)
+              Occupied&nbsp;<span id="count-filter-occupied">0</span>
             </button>
             <button class="filter-btn" data-filter="cleaning">
-              Cleaning (<span id="count-filter-cleaning">0</span>)
+              Cleaning&nbsp;<span id="count-filter-cleaning">0</span>
             </button>
-            <button class="filter-btn" data-filter="balances">
-              Pending Balances (<span id="count-filter-balances">0</span>)
+            <button
+              class="filter-btn filter-btn-balances"
+              data-filter="balances"
+            >
+              <span
+                >Balances&nbsp;<span id="count-filter-balances">0</span></span
+              >
+              <span
+                class="filter-balance-amount"
+                id="amount-filter-balances"
+              ></span>
             </button>
-          </div>
-
-          <!-- Floor Selection -->
-          <div class="floor-selector">
-            <button class="floor-btn active" data-floor="all">
-              All Floors
-            </button>
-            <button class="floor-btn" data-floor="first">First Floor</button>
-            <button class="floor-btn" data-floor="second">Second Floor</button>
           </div>
 
           <!-- Rooms Grid -->
@@ -310,16 +354,34 @@
           <!-- Date Range Filter -->
           <div class="txn-date-filter">
             <div class="txn-quick-btns">
-              <button class="txn-quick-btn active" data-range="today">Today</button>
+              <button class="txn-quick-btn active" data-range="today">
+                Today
+              </button>
               <button class="txn-quick-btn" data-range="3">Last 3 days</button>
             </div>
             <div class="txn-custom-range">
-              <i class="fas fa-calendar-alt" style="color:#6c757d;font-size:0.8rem;"></i>
+              <i
+                class="fas fa-calendar-alt"
+                style="color: #6c757d; font-size: 0.8rem"
+              ></i>
               <div class="txn-date-lock-wrap" id="txn-date-lock-wrap">
-                <input type="text" id="txn-date-range" class="txn-date-range-input txn-date-locked" placeholder="🔒 Custom range" readonly />
-                <span class="txn-date-lock-icon" id="txn-date-lock-icon"><i class="fas fa-lock"></i></span>
+                <input
+                  type="text"
+                  id="txn-date-range"
+                  class="txn-date-range-input txn-date-locked"
+                  placeholder="🔒 Custom range"
+                  readonly
+                />
+                <span class="txn-date-lock-icon" id="txn-date-lock-icon"
+                  ><i class="fas fa-lock"></i
+                ></span>
               </div>
-              <button id="txn-relock-btn" class="txn-relock-btn" title="Lock date range" style="display:none;">
+              <button
+                id="txn-relock-btn"
+                class="txn-relock-btn"
+                title="Lock date range"
+                style="display: none"
+              >
                 <i class="fas fa-lock"></i> Lock
               </button>
             </div>
@@ -345,7 +407,9 @@
           <!-- Analytics Cards -->
           <div class="txn-analytics-cards" id="txn-analytics-cards">
             <div class="txn-card txn-card-cash">
-              <div class="txn-card-icon"><i class="fas fa-money-bill-wave"></i></div>
+              <div class="txn-card-icon">
+                <i class="fas fa-money-bill-wave"></i>
+              </div>
               <div class="txn-card-body">
                 <div class="txn-card-label">Cash</div>
                 <div class="txn-card-value" id="txn-card-cash">₹0</div>
@@ -366,7 +430,9 @@
               </div>
             </div>
             <div class="txn-card txn-card-expense">
-              <div class="txn-card-icon"><i class="fas fa-arrow-circle-down"></i></div>
+              <div class="txn-card-icon">
+                <i class="fas fa-arrow-circle-down"></i>
+              </div>
               <div class="txn-card-body">
                 <div class="txn-card-label">Expenses</div>
                 <div class="txn-card-value" id="txn-card-expense">₹0</div>
@@ -391,16 +457,26 @@
                 <i class="fas fa-calendar-lock"></i>
               </div>
               <h3 class="txn-pwd-modal-title">Manager Access</h3>
-              <p class="txn-pwd-modal-sub">Enter your manager password to unlock the custom date range.</p>
+              <p class="txn-pwd-modal-sub">
+                Enter your manager password to unlock the custom date range.
+              </p>
               <div class="txn-pwd-field-wrap">
                 <i class="fas fa-key txn-pwd-field-icon"></i>
-                <input type="password" id="txn-pwd-input" class="txn-pwd-field" placeholder="Enter password" autocomplete="off" />
+                <input
+                  type="password"
+                  id="txn-pwd-input"
+                  class="txn-pwd-field"
+                  placeholder="Enter password"
+                  autocomplete="off"
+                />
               </div>
               <p id="txn-pwd-error" class="txn-pwd-error"></p>
               <div class="txn-pwd-actions">
-                <button id="txn-pwd-close-btn" class="txn-pwd-cancel-btn">Cancel</button>
+                <button id="txn-pwd-close-btn" class="txn-pwd-cancel-btn">
+                  Cancel
+                </button>
                 <button id="txn-pwd-submit-btn" class="txn-pwd-submit-btn">
-                  <i class="fas fa-unlock" style="margin-right:5px;"></i>Unlock
+                  <i class="fas fa-unlock" style="margin-right: 5px"></i>Unlock
                 </button>
               </div>
             </div>
@@ -408,7 +484,7 @@
         </div>
 
         <!-- Reports Tab Content -->
-        <!-- Password Modal for Reports -->
+        <!-- Password Modal for Reports (legacy, kept for compatibility) -->
         <div class="modal-backdrop" id="password-modal">
           <div class="modal-content" style="max-width: 380px">
             <div class="modal-header">
@@ -545,11 +621,22 @@
         <div class="tab-content hidden" id="bookings-tab">
           <div class="section-title">
             <h2>Room Bookings</h2>
-            <div style="display:flex;gap:0.5rem;">
-              <button id="mmt-settlements-btn" class="action-btn btn-sm" style="background:rgba(12,111,205,0.12);color:#0c6fcd;border:1px solid rgba(12,111,205,0.3);">
+            <div style="display: flex; gap: 0.5rem">
+              <button
+                id="mmt-settlements-btn"
+                class="action-btn btn-sm"
+                style="
+                  background: rgba(12, 111, 205, 0.12);
+                  color: #0c6fcd;
+                  border: 1px solid rgba(12, 111, 205, 0.3);
+                "
+              >
                 <i class="fas fa-university"></i> MMT Settlements
               </button>
-              <button id="new-booking-btn" class="action-btn btn-sm btn-primary">
+              <button
+                id="new-booking-btn"
+                class="action-btn btn-sm btn-primary"
+              >
                 <i class="fas fa-plus"></i> New Booking
               </button>
             </div>
@@ -660,13 +747,32 @@
         </div>
 
         <!-- MMT Settlements Modal -->
-        <div class="modal-backdrop" id="mmt-settlements-modal" style="z-index:1100;">
-          <div class="modal-content booking-modal-compact" style="max-width:640px;">
+        <div
+          class="modal-backdrop"
+          id="mmt-settlements-modal"
+          style="z-index: 1100"
+        >
+          <div
+            class="modal-content booking-modal-compact"
+            style="max-width: 640px"
+          >
             <div class="modal-header">
-              <h2 style="color:#0c6fcd;"><i class="fas fa-university" style="margin-right:6px;"></i>MMT Settlements</h2>
-              <button class="close-btn" id="close-mmt-settlements-btn" aria-label="Close">&times;</button>
+              <h2 style="color: #0c6fcd">
+                <i class="fas fa-university" style="margin-right: 6px"></i>MMT
+                Settlements
+              </h2>
+              <button
+                class="close-btn"
+                id="close-mmt-settlements-btn"
+                aria-label="Close"
+              >
+                &times;
+              </button>
             </div>
-            <div id="mmt-settlements-list" style="padding:0.5rem 0;max-height:420px;overflow-y:auto;">
+            <div
+              id="mmt-settlements-list"
+              style="padding: 0.5rem 0; max-height: 420px; overflow-y: auto"
+            >
               <div class="loading-indicator">
                 <span class="loader"></span>
                 <p>Loading settlements...</p>
@@ -800,10 +906,6 @@
           <div class="nav-icon"><i class="fas fa-receipt"></i></div>
           <div class="nav-label">Transactions</div>
         </div>
-        <div class="nav-item" data-tab="bookings">
-          <div class="nav-icon"><i class="fas fa-calendar-alt"></i></div>
-          <div class="nav-label">Bookings</div>
-        </div>
         <div class="nav-item" data-tab="register">
           <div class="nav-icon"><i class="fas fa-book"></i></div>
           <div class="nav-label">Register</div>
@@ -812,11 +914,154 @@
           <div class="nav-icon"><i class="fas fa-file-invoice-dollar"></i></div>
           <div class="nav-label">Bills</div>
         </div>
-        <div class="nav-item" data-tab="reports">
-          <div class="nav-icon"><i class="fas fa-chart-bar"></i></div>
-          <div class="nav-label">Reports</div>
+        <div class="nav-item" data-tab="bookings">
+          <div class="nav-icon"><i class="fas fa-calendar-alt"></i></div>
+          <div class="nav-label">Bookings</div>
         </div>
       </nav>
+    </div>
+
+    <!-- ── Settings Modal ───────────────────────────────────────────────────── -->
+    <div
+      class="modal-backdrop"
+      id="settings-modal"
+      onclick="if (event.target === this) closeSettingsModal();"
+    >
+      <div class="modal-content" style="max-width: 420px">
+        <div class="modal-header">
+          <h2>
+            <i
+              class="fas fa-cog"
+              style="margin-right: 8px; color: var(--primary)"
+            ></i
+            >Settings
+          </h2>
+          <button
+            class="close-btn"
+            onclick="closeSettingsModal()"
+            aria-label="Close"
+          >
+            &times;
+          </button>
+        </div>
+        <div style="padding: 0.5rem 0 0.75rem">
+          <!-- Reports card -->
+          <div
+            id="settings-reports-card"
+            onclick="handleSettingsReportsClick()"
+            style="
+              display: flex;
+              align-items: center;
+              gap: 1rem;
+              padding: 0.85rem 1rem;
+              border-radius: 12px;
+              border: 1.5px solid var(--border);
+              cursor: pointer;
+              transition:
+                background 0.15s,
+                border-color 0.15s;
+            "
+            onmouseover="
+              this.style.background = '#f0f7ff';
+              this.style.borderColor = '#0c6fcd';
+            "
+            onmouseout="
+              this.style.background = '';
+              this.style.borderColor = '';
+            "
+          >
+            <div
+              style="
+                width: 44px;
+                height: 44px;
+                border-radius: 12px;
+                flex-shrink: 0;
+                background: rgba(12, 111, 205, 0.1);
+                display: flex;
+                align-items: center;
+                justify-content: center;
+              "
+            >
+              <i
+                class="fas fa-chart-bar"
+                style="color: #0c6fcd; font-size: 1.1rem"
+              ></i>
+            </div>
+            <div style="flex: 1">
+              <div
+                style="
+                  font-weight: 600;
+                  font-size: 0.92rem;
+                  color: var(--text-primary);
+                "
+              >
+                Analytics &amp; Reports
+              </div>
+              <div
+                style="
+                  font-size: 0.75rem;
+                  color: var(--text-secondary);
+                  margin-top: 2px;
+                "
+              >
+                Revenue, expenses &amp; trends
+              </div>
+            </div>
+            <i
+              class="fas fa-chevron-right"
+              style="color: #bbb; font-size: 0.8rem"
+            ></i>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Manager Access Modal (reports + discount — sits above all other modals) -->
+    <div
+      class="modal-backdrop"
+      id="mgr-access-modal"
+      style="z-index: 1200"
+      onclick="if (event.target === this) closeMgrAccessModal();"
+    >
+      <div class="txn-pwd-modal-box">
+        <div class="txn-pwd-modal-icon" id="mgr-access-icon">
+          <i class="fas fa-shield-alt"></i>
+        </div>
+        <h3 class="txn-pwd-modal-title" id="mgr-access-title">
+          Manager Access
+        </h3>
+        <p class="txn-pwd-modal-sub" id="mgr-access-sub">
+          Enter your manager password to continue.
+        </p>
+        <div class="txn-pwd-field-wrap">
+          <i class="fas fa-key txn-pwd-field-icon"></i>
+          <input
+            type="password"
+            id="mgr-access-pwd"
+            class="txn-pwd-field"
+            placeholder="Enter password"
+            autocomplete="off"
+            onkeydown="if (event.key === 'Enter') submitMgrAccessPassword();"
+          />
+        </div>
+        <p
+          id="mgr-access-error"
+          class="txn-pwd-error"
+          style="display: none"
+        ></p>
+        <div class="txn-pwd-actions">
+          <button class="txn-pwd-cancel-btn" onclick="closeMgrAccessModal()">
+            Cancel
+          </button>
+          <button
+            id="mgr-access-submit"
+            class="txn-pwd-submit-btn"
+            onclick="submitMgrAccessPassword()"
+          >
+            <i class="fas fa-unlock" style="margin-right: 5px"></i>Unlock
+          </button>
+        </div>
+      </div>
     </div>
 
     <!-- Minimalistic Check-in Modal -->
@@ -908,24 +1153,97 @@
               ></div>
             </div>
 
-            <!-- Stored ID doc preview — shown when returning guest with docs on file -->
-            <div id="checkin-stored-doc-preview" style="display: none; margin-top: 0.5rem">
-              <div style="
-                background: #e8f5e9;
-                border: 1px solid #a5d6a7;
+            <!-- ── Flagged customer alert — shown by customer-docs.js on mobile lookup ── -->
+            <div
+              id="checkin-flag-alert"
+              style="
+                display: none;
+                margin-top: 0.6rem;
+                background: #fff5f5;
+                border: 1.5px solid #fc8181;
                 border-radius: 8px;
-                padding: 0.5rem 0.65rem;
-              ">
-                <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.4rem">
-                  <span style="font-size: 0.78rem; font-weight: 600; color: #2e7d32">
-                    <i class="fas fa-check-circle" style="margin-right: 0.25rem"></i>ID on file
+                padding: 0.6rem 0.75rem;
+              "
+            >
+              <div style="display: flex; align-items: flex-start; gap: 0.5rem">
+                <span style="font-size: 1.1rem; line-height: 1">⚠️</span>
+                <div>
+                  <div
+                    style="
+                      font-weight: 700;
+                      color: #c53030;
+                      font-size: 0.88rem;
+                      margin-bottom: 0.2rem;
+                    "
+                  >
+                    Flagged Customer
+                  </div>
+                  <div
+                    id="checkin-flag-alert-notes"
+                    style="
+                      font-size: 0.82rem;
+                      color: #742a2a;
+                      margin-bottom: 0.15rem;
+                    "
+                  ></div>
+                  <div
+                    id="checkin-flag-alert-date"
+                    style="font-size: 0.78rem; color: #9b2c2c; opacity: 0.8"
+                  ></div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Stored ID doc preview — shown when returning guest with docs on file -->
+            <div
+              id="checkin-stored-doc-preview"
+              style="display: none; margin-top: 0.5rem"
+            >
+              <div
+                style="
+                  background: #e8f5e9;
+                  border: 1px solid #a5d6a7;
+                  border-radius: 8px;
+                  padding: 0.5rem 0.65rem;
+                "
+              >
+                <div
+                  style="
+                    display: flex;
+                    align-items: center;
+                    justify-content: space-between;
+                    margin-bottom: 0.4rem;
+                  "
+                >
+                  <span
+                    style="font-size: 0.78rem; font-weight: 600; color: #2e7d32"
+                  >
+                    <i
+                      class="fas fa-check-circle"
+                      style="margin-right: 0.25rem"
+                    ></i
+                    >ID on file
                   </span>
-                  <button type="button" id="checkin-view-stored-docs-btn"
-                    style="font-size: 0.72rem; color: #1565c0; background: none; border: none; cursor: pointer; padding: 0; text-decoration: underline">
+                  <button
+                    type="button"
+                    id="checkin-view-stored-docs-btn"
+                    style="
+                      font-size: 0.72rem;
+                      color: #1565c0;
+                      background: none;
+                      border: none;
+                      cursor: pointer;
+                      padding: 0;
+                      text-decoration: underline;
+                    "
+                  >
                     View all
                   </button>
                 </div>
-                <div id="checkin-stored-doc-thumbs" style="display: flex; gap: 0.4rem; flex-wrap: wrap"></div>
+                <div
+                  id="checkin-stored-doc-thumbs"
+                  style="display: flex; gap: 0.4rem; flex-wrap: wrap"
+                ></div>
               </div>
             </div>
 
@@ -947,7 +1265,12 @@
                   <!-- Thumbnails injected by JS -->
                   <div
                     id="doc-thumbs-strip"
-                    style="display: flex; gap: 0.4rem; align-items: center; flex-wrap: wrap"
+                    style="
+                      display: flex;
+                      gap: 0.4rem;
+                      align-items: center;
+                      flex-wrap: wrap;
+                    "
                   ></div>
                   <!-- Add-another button (hidden when 3 photos taken) -->
                   <button
@@ -1072,10 +1395,23 @@
     <div class="modal-backdrop" id="doc-camera-modal" style="z-index: 2000">
       <div
         class="modal-content"
-        style="max-width: 480px; padding: 0; overflow: hidden; display: flex; flex-direction: column"
+        style="
+          max-width: 480px;
+          padding: 0;
+          overflow: hidden;
+          display: flex;
+          flex-direction: column;
+        "
       >
         <!-- Handle bar (visual cue for bottom sheet) -->
-        <div style="padding: 0.5rem; text-align: center; background: #fff; flex-shrink: 0">
+        <div
+          style="
+            padding: 0.5rem;
+            text-align: center;
+            background: #fff;
+            flex-shrink: 0;
+          "
+        >
           <div
             style="
               width: 36px;
@@ -1100,7 +1436,10 @@
           "
         >
           <span style="font-size: 0.9rem; font-weight: 600; color: #333">
-            <i class="fas fa-id-card" style="color: #1565c0; margin-right: 0.3rem"></i>
+            <i
+              class="fas fa-id-card"
+              style="color: #1565c0; margin-right: 0.3rem"
+            ></i>
             Scan ID Document
           </span>
           <!-- Doc type toggle + close -->
@@ -1144,8 +1483,18 @@
         </div>
 
         <!-- Camera viewport -->
-        <div id="doc-cam-modal-feed-section" style="flex: 1; display: flex; flex-direction: column">
-          <div style="position: relative; background: #111; overflow: hidden; flex: 1">
+        <div
+          id="doc-cam-modal-feed-section"
+          style="flex: 1; display: flex; flex-direction: column"
+        >
+          <div
+            style="
+              position: relative;
+              background: #111;
+              overflow: hidden;
+              flex: 1;
+            "
+          >
             <video
               id="doc-camera-feed"
               autoplay
@@ -1183,7 +1532,7 @@
                 width: 52px;
                 height: 52px;
                 border-radius: 50%;
-                background: rgba(255,255,255,0.92);
+                background: rgba(255, 255, 255, 0.92);
                 border: 3px solid #1565c0;
                 color: #1565c0;
                 font-size: 1.3rem;
@@ -1191,7 +1540,7 @@
                 display: flex;
                 align-items: center;
                 justify-content: center;
-                box-shadow: 0 2px 8px rgba(0,0,0,0.35);
+                box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
                 z-index: 10;
               "
             >
@@ -1217,7 +1566,11 @@
                 letter-spacing: 0.01em;
               "
             >
-              <i class="fas fa-search" style="margin-right: 0.3rem; font-size: 0.7rem"></i>Scanning for document…
+              <i
+                class="fas fa-search"
+                style="margin-right: 0.3rem; font-size: 0.7rem"
+              ></i
+              >Scanning for document…
             </div>
           </div>
 
@@ -1244,7 +1597,10 @@
         </div>
 
         <!-- Preview section — shown after capture -->
-        <div id="doc-cam-modal-preview-section" style="display: none; flex-direction: column">
+        <div
+          id="doc-cam-modal-preview-section"
+          style="display: none; flex-direction: column"
+        >
           <!-- Preview image -->
           <div style="position: relative; background: #111; overflow: hidden">
             <img
@@ -1273,7 +1629,8 @@
                 pointer-events: none;
               "
             >
-              <i class="fas fa-check-circle" style="margin-right: 0.2rem"></i>Scanned
+              <i class="fas fa-check-circle" style="margin-right: 0.2rem"></i
+              >Scanned
             </div>
           </div>
           <!-- Preview actions -->
@@ -1344,56 +1701,151 @@
               <i class="fas fa-upload"></i>
             </button>
             <!-- Hidden file input for checkout doc upload (multiple, no capture → gallery/files picker) -->
-            <input type="file" id="checkout-doc-file-input" accept="image/*" multiple style="display: none" />
+            <input
+              type="file"
+              id="checkout-doc-file-input"
+              accept="image/*"
+              multiple
+              style="display: none"
+            />
             <button class="close-btn" aria-label="Close">&times;</button>
           </div>
         </div>
 
         <!-- Pending-upload strip: shown after camera capture, before committing to server -->
-        <div id="checkout-pending-docs"
-          style="display: none; background: #f0f4ff;
-                 border-top: 3px solid #3f51b5;
-                 border-bottom: 1px solid #dde3f5;">
+        <div
+          id="checkout-pending-docs"
+          style="
+            display: none;
+            background: #f0f4ff;
+            border-top: 3px solid #3f51b5;
+            border-bottom: 1px solid #dde3f5;
+          "
+        >
           <!-- Top row: label + actions -->
-          <div style="padding: 0.55rem 1rem 0.35rem;
-                      display: flex; align-items: center; justify-content: space-between; gap: 0.5rem;">
-            <div style="display: flex; align-items: center; gap: 0.5rem; min-width: 0;">
-              <div style="width: 7px; height: 7px; border-radius: 50%; background: #f59e0b;
-                          box-shadow: 0 0 0 3px rgba(245,158,11,0.2); flex-shrink: 0; animation: pulse-dot 1.8s infinite;"></div>
-              <span style="font-size: 0.75rem; font-weight: 700; color: #3730a3; letter-spacing: 0.03em; white-space: nowrap;">
+          <div
+            style="
+              padding: 0.55rem 1rem 0.35rem;
+              display: flex;
+              align-items: center;
+              justify-content: space-between;
+              gap: 0.5rem;
+            "
+          >
+            <div
+              style="
+                display: flex;
+                align-items: center;
+                gap: 0.5rem;
+                min-width: 0;
+              "
+            >
+              <div
+                style="
+                  width: 7px;
+                  height: 7px;
+                  border-radius: 50%;
+                  background: #f59e0b;
+                  box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.2);
+                  flex-shrink: 0;
+                  animation: pulse-dot 1.8s infinite;
+                "
+              ></div>
+              <span
+                style="
+                  font-size: 0.75rem;
+                  font-weight: 700;
+                  color: #3730a3;
+                  letter-spacing: 0.03em;
+                  white-space: nowrap;
+                "
+              >
                 Ready to upload
               </span>
-              <span id="checkout-pending-count"
-                style="background: #e0e7ff; color: #4338ca; border-radius: 20px;
-                       padding: 0.1rem 0.5rem; font-size: 0.68rem; font-weight: 700; flex-shrink: 0;"></span>
+              <span
+                id="checkout-pending-count"
+                style="
+                  background: #e0e7ff;
+                  color: #4338ca;
+                  border-radius: 20px;
+                  padding: 0.1rem 0.5rem;
+                  font-size: 0.68rem;
+                  font-weight: 700;
+                  flex-shrink: 0;
+                "
+              ></span>
             </div>
-            <div style="display: flex; align-items: center; gap: 0.4rem; flex-shrink: 0;">
-              <button id="checkout-pending-upload-btn" type="button"
-                style="padding: 0.32rem 0.9rem; border-radius: 20px;
-                       background: #4338ca; color: #fff; border: none;
-                       font-size: 0.76rem; font-weight: 600; cursor: pointer;
-                       display: flex; align-items: center; gap: 0.35rem;
-                       box-shadow: 0 2px 8px rgba(67,56,202,0.35); transition: background 0.15s;"
-                onmouseover="this.style.background='#3730a3'"
-                onmouseout="this.style.background='#4338ca'">
+            <div
+              style="
+                display: flex;
+                align-items: center;
+                gap: 0.4rem;
+                flex-shrink: 0;
+              "
+            >
+              <button
+                id="checkout-pending-upload-btn"
+                type="button"
+                style="
+                  padding: 0.32rem 0.9rem;
+                  border-radius: 20px;
+                  background: #4338ca;
+                  color: #fff;
+                  border: none;
+                  font-size: 0.76rem;
+                  font-weight: 600;
+                  cursor: pointer;
+                  display: flex;
+                  align-items: center;
+                  gap: 0.35rem;
+                  box-shadow: 0 2px 8px rgba(67, 56, 202, 0.35);
+                  transition: background 0.15s;
+                "
+                onmouseover="this.style.background = '#3730a3'"
+                onmouseout="this.style.background = '#4338ca'"
+              >
                 <i class="fas fa-cloud-upload-alt"></i> Save to guest
               </button>
-              <button id="checkout-pending-discard-btn" type="button"
-                style="padding: 0.3rem 0.6rem; border-radius: 6px; background: transparent;
-                       color: #9ca3af; border: 1px solid #d1d5db; font-size: 0.72rem;
-                       cursor: pointer; white-space: nowrap; transition: all 0.15s;"
-                onmouseover="this.style.color='#ef4444';this.style.borderColor='#fca5a5'"
-                onmouseout="this.style.color='#9ca3af';this.style.borderColor='#d1d5db'"
-                title="Discard all">
+              <button
+                id="checkout-pending-discard-btn"
+                type="button"
+                style="
+                  padding: 0.3rem 0.6rem;
+                  border-radius: 6px;
+                  background: transparent;
+                  color: #9ca3af;
+                  border: 1px solid #d1d5db;
+                  font-size: 0.72rem;
+                  cursor: pointer;
+                  white-space: nowrap;
+                  transition: all 0.15s;
+                "
+                onmouseover="
+                  this.style.color = '#ef4444';
+                  this.style.borderColor = '#fca5a5';
+                "
+                onmouseout="
+                  this.style.color = '#9ca3af';
+                  this.style.borderColor = '#d1d5db';
+                "
+                title="Discard all"
+              >
                 <i class="fas fa-times"></i> Discard
               </button>
             </div>
           </div>
           <!-- Thumbnail row -->
-          <div id="checkout-pending-thumbs"
-            style="display: flex; gap: 0.55rem; padding: 0.2rem 1rem 0.65rem;
-                   overflow-x: auto; scrollbar-width: none; align-items: flex-end;">
-          </div>
+          <div
+            id="checkout-pending-thumbs"
+            style="
+              display: flex;
+              gap: 0.55rem;
+              padding: 0.2rem 1rem 0.65rem;
+              overflow-x: auto;
+              scrollbar-width: none;
+              align-items: flex-end;
+            "
+          ></div>
         </div>
 
         <div class="guest-details">
@@ -1488,16 +1940,33 @@
               <i class="fas fa-tint"></i> Water 1L
               <span class="svc-chip-price">₹20</span>
             </button>
-            <button class="svc-chip" data-service="Extra Bed" data-price="" data-accommodation="true">
+            <button
+              class="svc-chip"
+              data-service="Extra Bed"
+              data-price=""
+              data-accommodation="true"
+            >
               <i class="fas fa-bed"></i> Extra Bed
               <span class="svc-chip-price">₹ ?</span>
             </button>
             <!-- AC service chip — shown only for rooms 200-206 when isAC is false -->
-            <button class="svc-chip" id="ac-service-btn" data-service="AC" data-price="" data-accommodation="true" style="display:none">
+            <button
+              class="svc-chip"
+              id="ac-service-btn"
+              data-service="AC"
+              data-price=""
+              data-accommodation="true"
+              style="display: none"
+            >
               <i class="fas fa-snowflake"></i> Add AC
               <span class="svc-chip-price">₹ ?</span>
             </button>
-            <button class="svc-chip" data-service="" data-price="" data-custom="true">
+            <button
+              class="svc-chip"
+              data-service=""
+              data-price=""
+              data-custom="true"
+            >
               <i class="fas fa-pen"></i> Custom
               <span class="svc-chip-price">₹ ?</span>
             </button>
@@ -1505,9 +1974,15 @@
 
           <div id="service-form" class="hidden">
             <!-- Service name row — shown only for Custom chip -->
-            <div id="svc-name-row" class="form-row" style="margin-top: 1rem; display:none">
-              <div class="form-group" style="flex:1">
-                <label class="form-label" for="service-name">Service Name</label>
+            <div
+              id="svc-name-row"
+              class="form-row"
+              style="margin-top: 1rem; display: none"
+            >
+              <div class="form-group" style="flex: 1">
+                <label class="form-label" for="service-name"
+                  >Service Name</label
+                >
                 <input
                   type="text"
                   id="service-name"
@@ -1539,7 +2014,14 @@
                 />
               </div>
             </div>
-            <div style="text-align:right; margin: 0.4rem 0 0.6rem; font-size:0.9rem; color:var(--dark)">
+            <div
+              style="
+                text-align: right;
+                margin: 0.4rem 0 0.6rem;
+                font-size: 0.9rem;
+                color: var(--dark);
+              "
+            >
               Total: <strong id="service-total-price">₹0</strong>
             </div>
             <div class="form-group">
@@ -1779,6 +2261,48 @@
                 ></textarea>
               </div>
             </div>
+          </div>
+        </div>
+
+        <!-- ── Customer Flag Section ── -->
+        <div
+          id="checkout-flag-section"
+          style="
+            margin-top: 1rem;
+            border-top: 1px solid #f0f0f0;
+            padding-top: 1rem;
+            text-align: left;
+          "
+        >
+          <label
+            style="
+              display: inline-flex;
+              align-items: center;
+              cursor: pointer;
+              gap: 0.5rem;
+              user-select: none;
+            "
+          >
+            <input
+              type="checkbox"
+              id="checkout-flag-customer"
+              style="width: 16px; height: 16px; cursor: pointer"
+            />
+            <span style="font-weight: 600; color: #c0392b">
+              🚩 Flag this customer
+            </span>
+          </label>
+          <div
+            id="checkout-flag-notes-container"
+            style="display: none; margin-top: 0.5rem"
+          >
+            <textarea
+              id="checkout-flag-notes"
+              class="form-control"
+              placeholder="Reason for flagging (e.g. damage, non-payment, behaviour)…"
+              rows="2"
+              style="font-size: 0.85rem; resize: vertical"
+            ></textarea>
           </div>
         </div>
 
@@ -2074,7 +2598,9 @@
             </select>
           </div>
           <div class="form-group" id="expense-description-container">
-            <label class="form-label" for="expense-description">Description</label>
+            <label class="form-label" for="expense-description"
+              >Description</label
+            >
             <input
               type="text"
               class="form-control"
@@ -2096,43 +2622,86 @@
           </div>
 
           <!-- Extra fields shown only for Booking Commission -->
-          <div id="commission-fields" style="display:none;">
+          <div id="commission-fields" style="display: none">
             <div class="form-group">
-              <label class="form-label" for="commission-platform">Platform</label>
+              <label class="form-label" for="commission-platform"
+                >Platform</label
+              >
               <select class="form-control" id="commission-platform">
                 <option value="booking.com">Booking.com</option>
               </select>
             </div>
-            <div class="form-row" style="display:flex; gap:0.75rem;">
-              <div class="form-group" style="flex:1;">
-                <label class="form-label" for="commission-amount">Commission (₹)</label>
-                <input type="number" class="form-control" id="commission-amount" placeholder="Commission amount" min="0" />
+            <div class="form-row" style="display: flex; gap: 0.75rem">
+              <div class="form-group" style="flex: 1">
+                <label class="form-label" for="commission-amount"
+                  >Commission (₹)</label
+                >
+                <input
+                  type="number"
+                  class="form-control"
+                  id="commission-amount"
+                  placeholder="Commission amount"
+                  min="0"
+                />
               </div>
-              <div class="form-group" style="flex:1;">
-                <label class="form-label" for="commission-gst">GST on Commission (₹)</label>
-                <input type="number" class="form-control" id="commission-gst" placeholder="GST amount" min="0" />
+              <div class="form-group" style="flex: 1">
+                <label class="form-label" for="commission-gst"
+                  >GST on Commission (₹)</label
+                >
+                <input
+                  type="number"
+                  class="form-control"
+                  id="commission-gst"
+                  placeholder="GST amount"
+                  min="0"
+                />
               </div>
             </div>
-            <div class="form-row" style="display:flex; gap:0.75rem;">
-              <div class="form-group" style="flex:1;">
-                <label class="form-label" for="commission-invoice-number">Invoice Number</label>
-                <input type="text" class="form-control" id="commission-invoice-number" placeholder="e.g. BDC/2026/001" />
+            <div class="form-row" style="display: flex; gap: 0.75rem">
+              <div class="form-group" style="flex: 1">
+                <label class="form-label" for="commission-invoice-number"
+                  >Invoice Number</label
+                >
+                <input
+                  type="text"
+                  class="form-control"
+                  id="commission-invoice-number"
+                  placeholder="e.g. BDC/2026/001"
+                />
               </div>
-              <div class="form-group" style="flex:1;">
-                <label class="form-label" for="commission-invoice-date">Invoice Date</label>
-                <input type="date" class="form-control" id="commission-invoice-date" />
+              <div class="form-group" style="flex: 1">
+                <label class="form-label" for="commission-invoice-date"
+                  >Invoice Date</label
+                >
+                <input
+                  type="date"
+                  class="form-control"
+                  id="commission-invoice-date"
+                />
               </div>
             </div>
             <div class="form-group">
-              <label class="form-label" for="commission-payment-status">Payment Status</label>
+              <label class="form-label" for="commission-payment-status"
+                >Payment Status</label
+              >
               <select class="form-control" id="commission-payment-status">
                 <option value="pending">Pending</option>
                 <option value="paid">Paid</option>
               </select>
             </div>
-            <div class="form-group" id="commission-payment-date-group" style="display:none;">
-              <label class="form-label" for="commission-payment-date">Payment Date</label>
-              <input type="date" class="form-control" id="commission-payment-date" />
+            <div
+              class="form-group"
+              id="commission-payment-date-group"
+              style="display: none"
+            >
+              <label class="form-label" for="commission-payment-date"
+                >Payment Date</label
+              >
+              <input
+                type="date"
+                class="form-control"
+                id="commission-payment-date"
+              />
             </div>
           </div>
           <div class="form-group">
@@ -2167,24 +2736,40 @@
     <div class="modal-backdrop" id="new-booking-modal">
       <div class="modal-content booking-modal-compact">
         <div class="modal-header">
-          <h2><i class="fas fa-bookmark" style="font-size:0.9rem;margin-right:0.4rem;"></i>New Booking</h2>
+          <h2>
+            <i
+              class="fas fa-bookmark"
+              style="font-size: 0.9rem; margin-right: 0.4rem"
+            ></i
+            >New Booking
+          </h2>
           <button class="close-btn" aria-label="Close">&times;</button>
         </div>
         <form id="booking-form">
-
           <!-- Row 1: Date range + check-in time -->
           <div class="bk-row">
             <div class="form-group">
               <label class="form-label">Check-in → Check-out</label>
               <div class="booking-date-range-wrap">
-                <input type="text" class="form-control" id="booking-date-range" placeholder="Select dates" readonly />
+                <input
+                  type="text"
+                  class="form-control"
+                  id="booking-date-range"
+                  placeholder="Select dates"
+                  readonly
+                />
               </div>
               <input type="hidden" id="booking-check-in" />
               <input type="hidden" id="booking-check-out" />
             </div>
             <div class="form-group">
               <label class="form-label">Expected Check-in Time</label>
-              <input type="time" class="form-control" id="booking-check-in-time" required />
+              <input
+                type="time"
+                class="form-control"
+                id="booking-check-in-time"
+                required
+              />
             </div>
           </div>
 
@@ -2192,12 +2777,25 @@
           <div class="bk-row">
             <div class="form-group">
               <label class="form-label">Guest Name</label>
-              <input type="text" class="form-control" id="booking-guest-name" placeholder="Full name" required />
+              <input
+                type="text"
+                class="form-control"
+                id="booking-guest-name"
+                placeholder="Full name"
+                required
+              />
             </div>
             <div class="form-group">
               <label class="form-label">Mobile</label>
-              <input type="tel" class="form-control" id="booking-guest-mobile" placeholder="10-digit mobile"
-                     required pattern="[0-9]{10}" title="10-digit mobile number" />
+              <input
+                type="tel"
+                class="form-control"
+                id="booking-guest-mobile"
+                placeholder="10-digit mobile"
+                required
+                pattern="[0-9]{10}"
+                title="10-digit mobile number"
+              />
             </div>
           </div>
 
@@ -2205,7 +2803,14 @@
           <div class="bk-row">
             <div class="form-group">
               <label class="form-label"># Guests</label>
-              <input type="number" class="form-control" id="booking-guest-count" min="1" value="1" required />
+              <input
+                type="number"
+                class="form-control"
+                id="booking-guest-count"
+                min="1"
+                value="1"
+                required
+              />
             </div>
             <div class="form-group">
               <label class="form-label">Booking Source</label>
@@ -2230,25 +2835,55 @@
             <div class="bk-row">
               <div class="form-group">
                 <label class="form-label">Total Amount (₹)</label>
-                <input type="number" class="form-control" id="booking-total-amount" placeholder="Total" required min="1" />
+                <input
+                  type="number"
+                  class="form-control"
+                  id="booking-total-amount"
+                  placeholder="Total"
+                  required
+                  min="1"
+                />
               </div>
               <div class="form-group">
                 <label class="form-label">Advance (₹)</label>
-                <input type="number" class="form-control" id="booking-partial-payment" placeholder="Optional" min="0" />
+                <input
+                  type="number"
+                  class="form-control"
+                  id="booking-partial-payment"
+                  placeholder="Optional"
+                  min="0"
+                />
               </div>
             </div>
-            <div class="bk-row" style="align-items:center; margin-bottom:0.5rem;">
-              <div class="form-group" style="margin-bottom:0">
+            <div
+              class="bk-row"
+              style="align-items: center; margin-bottom: 0.5rem"
+            >
+              <div class="form-group" style="margin-bottom: 0">
                 <label class="form-label">Remaining</label>
-                <div class="form-value" id="booking-remaining-amount" style="font-weight:700;font-size:0.95rem;">₹0</div>
+                <div
+                  class="form-value"
+                  id="booking-remaining-amount"
+                  style="font-weight: 700; font-size: 0.95rem"
+                >
+                  ₹0
+                </div>
               </div>
-              <div class="form-group" style="margin-bottom:0">
+              <div class="form-group" style="margin-bottom: 0">
                 <label class="form-label">Payment Method</label>
-                <div class="payment-options" style="margin-top:0.2rem;">
-                  <button type="button" class="payment-btn cash active" data-payment="cash">
+                <div class="payment-options" style="margin-top: 0.2rem">
+                  <button
+                    type="button"
+                    class="payment-btn cash active"
+                    data-payment="cash"
+                  >
                     <i class="fas fa-money-bill"></i> Cash
                   </button>
-                  <button type="button" class="payment-btn online" data-payment="online">
+                  <button
+                    type="button"
+                    class="payment-btn online"
+                    data-payment="online"
+                  >
                     <i class="fas fa-mobile-alt"></i> Online
                   </button>
                 </div>
@@ -2258,34 +2893,67 @@
           </div>
 
           <!-- MMT OTA fields -->
-          <div id="booking-mmt-fields" style="display:none;">
+          <div id="booking-mmt-fields" style="display: none">
             <div class="form-group">
               <label class="form-label">OTA Total Amount (₹)</label>
-              <input type="number" class="form-control" id="booking-ota-total" placeholder="Amount charged on MMT" min="1" />
+              <input
+                type="number"
+                class="form-control"
+                id="booking-ota-total"
+                placeholder="Amount charged on MMT"
+                min="1"
+              />
             </div>
             <div class="bk-row">
               <div class="form-group">
                 <label class="form-label">MMT Commission (₹)</label>
-                <input type="number" class="form-control" id="booking-ota-commission" placeholder="Commission" min="0" />
+                <input
+                  type="number"
+                  class="form-control"
+                  id="booking-ota-commission"
+                  placeholder="Commission"
+                  min="0"
+                />
               </div>
               <div class="form-group">
                 <label class="form-label">GST on Commission (₹)</label>
-                <input type="number" class="form-control" id="booking-ota-commission-gst" placeholder="GST" min="0" />
+                <input
+                  type="number"
+                  class="form-control"
+                  id="booking-ota-commission-gst"
+                  placeholder="GST"
+                  min="0"
+                />
               </div>
             </div>
             <div class="form-group">
               <label class="form-label">Net Receivable from MMT</label>
-              <div class="form-value" id="booking-net-receivable" style="font-weight:bold; color: var(--primary);">₹0</div>
+              <div
+                class="form-value"
+                id="booking-net-receivable"
+                style="font-weight: bold; color: var(--primary)"
+              >
+                ₹0
+              </div>
             </div>
           </div>
 
           <!-- Notes -->
           <div class="form-group">
             <label class="form-label">Notes (Optional)</label>
-            <textarea class="form-control" id="booking-notes" placeholder="Special requests or notes" rows="2"></textarea>
+            <textarea
+              class="form-control"
+              id="booking-notes"
+              placeholder="Special requests or notes"
+              rows="2"
+            ></textarea>
           </div>
 
-          <button type="submit" class="action-btn btn-primary" style="width:100%;margin-top:0.25rem;">
+          <button
+            type="submit"
+            class="action-btn btn-primary"
+            style="width: 100%; margin-top: 0.25rem"
+          >
             <i class="fas fa-check"></i> Create Booking
           </button>
         </form>
@@ -2296,120 +2964,253 @@
     <div class="modal-backdrop" id="booking-details-modal">
       <div class="modal-content booking-modal-compact">
         <div class="modal-header">
-          <h2><i class="fas fa-bookmark" style="font-size:0.9rem;margin-right:0.4rem;"></i>Booking Details</h2>
+          <h2>
+            <i
+              class="fas fa-bookmark"
+              style="font-size: 0.9rem; margin-right: 0.4rem"
+            ></i
+            >Booking Details
+          </h2>
           <button class="close-btn" aria-label="Close">&times;</button>
         </div>
 
         <div class="booking-details">
-
           <!-- Guest + Room header card -->
-          <div class="summary-card" style="margin-bottom:0.75rem;">
-            <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:0.5rem;">
+          <div class="summary-card" style="margin-bottom: 0.75rem">
+            <div
+              style="
+                display: flex;
+                justify-content: space-between;
+                align-items: flex-start;
+                gap: 0.5rem;
+              "
+            >
               <div>
-                <div style="font-size:0.7rem;color:var(--gray);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:2px;">Guest</div>
-                <div style="font-weight:700;font-size:1rem;" id="details-guest-name"></div>
-                <a href="tel:" id="details-guest-mobile-link" class="call-link" style="font-size:0.85rem;margin-top:2px;display:inline-flex;align-items:center;gap:4px;">
-                  <i class="fas fa-phone" style="font-size:0.75rem;"></i>
+                <div
+                  style="
+                    font-size: 0.7rem;
+                    color: var(--gray);
+                    text-transform: uppercase;
+                    letter-spacing: 0.05em;
+                    margin-bottom: 2px;
+                  "
+                >
+                  Guest
+                </div>
+                <div
+                  style="font-weight: 700; font-size: 1rem"
+                  id="details-guest-name"
+                ></div>
+                <a
+                  href="tel:"
+                  id="details-guest-mobile-link"
+                  class="call-link"
+                  style="
+                    font-size: 0.85rem;
+                    margin-top: 2px;
+                    display: inline-flex;
+                    align-items: center;
+                    gap: 4px;
+                  "
+                >
+                  <i class="fas fa-phone" style="font-size: 0.75rem"></i>
                   <span id="details-guest-mobile"></span>
                 </a>
               </div>
-              <div style="text-align:right;">
-                <div style="font-size:0.7rem;color:var(--gray);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:2px;">Room</div>
-                <div style="font-weight:700;font-size:1.1rem;color:var(--primary);" id="details-room-number"></div>
-                <div id="details-status" style="font-size:0.75rem;margin-top:2px;"></div>
+              <div style="text-align: right">
+                <div
+                  style="
+                    font-size: 0.7rem;
+                    color: var(--gray);
+                    text-transform: uppercase;
+                    letter-spacing: 0.05em;
+                    margin-bottom: 2px;
+                  "
+                >
+                  Room
+                </div>
+                <div
+                  style="
+                    font-weight: 700;
+                    font-size: 1.1rem;
+                    color: var(--primary);
+                  "
+                  id="details-room-number"
+                ></div>
+                <div
+                  id="details-status"
+                  style="font-size: 0.75rem; margin-top: 2px"
+                ></div>
               </div>
             </div>
           </div>
 
           <!-- Dates section -->
-          <div class="bk-row" style="margin-bottom:0.5rem;">
-            <div class="form-group" style="margin-bottom:0;">
+          <div class="bk-row" style="margin-bottom: 0.5rem">
+            <div class="form-group" style="margin-bottom: 0">
               <label class="form-label">Check-in</label>
-              <div style="font-weight:600;font-size:0.9rem;" id="details-check-in"></div>
-              <div style="font-size:0.8rem;color:var(--gray);" id="details-check-in-time"></div>
+              <div
+                style="font-weight: 600; font-size: 0.9rem"
+                id="details-check-in"
+              ></div>
+              <div
+                style="font-size: 0.8rem; color: var(--gray)"
+                id="details-check-in-time"
+              ></div>
             </div>
-            <div class="form-group" style="margin-bottom:0;">
+            <div class="form-group" style="margin-bottom: 0">
               <label class="form-label">Check-out</label>
-              <div style="font-weight:600;font-size:0.9rem;" id="details-check-out"></div>
-              <div style="font-size:0.8rem;color:var(--gray);" id="details-nights"></div>
+              <div
+                style="font-weight: 600; font-size: 0.9rem"
+                id="details-check-out"
+              ></div>
+              <div
+                style="font-size: 0.8rem; color: var(--gray)"
+                id="details-nights"
+              ></div>
             </div>
           </div>
 
           <!-- Meta info row -->
-          <div class="bk-row" style="margin-bottom:0.75rem;">
-            <div class="form-group" style="margin-bottom:0;">
+          <div class="bk-row" style="margin-bottom: 0.75rem">
+            <div class="form-group" style="margin-bottom: 0">
               <label class="form-label">Guests</label>
-              <div style="font-size:0.9rem;" id="details-guests"></div>
+              <div style="font-size: 0.9rem" id="details-guests"></div>
             </div>
-            <div class="form-group" style="margin-bottom:0;">
+            <div class="form-group" style="margin-bottom: 0">
               <label class="form-label">Booked On</label>
-              <div style="font-size:0.85rem;color:var(--gray);" id="details-booking-date"></div>
+              <div
+                style="font-size: 0.85rem; color: var(--gray)"
+                id="details-booking-date"
+              ></div>
             </div>
           </div>
 
           <!-- Payment section (hidden for MMT) -->
           <div id="details-payment-section">
-            <div class="bk-row" style="margin-bottom:0.5rem;">
-              <div class="form-group" style="margin-bottom:0;">
+            <div class="bk-row" style="margin-bottom: 0.5rem">
+              <div class="form-group" style="margin-bottom: 0">
                 <label class="form-label">Total</label>
-                <div style="font-weight:600;" id="details-total-amount"></div>
+                <div style="font-weight: 600" id="details-total-amount"></div>
               </div>
-              <div class="form-group" style="margin-bottom:0;">
+              <div class="form-group" style="margin-bottom: 0">
                 <label class="form-label">Paid</label>
-                <div style="font-weight:600;color:var(--success);" id="details-paid-amount"></div>
+                <div
+                  style="font-weight: 600; color: var(--success)"
+                  id="details-paid-amount"
+                ></div>
               </div>
             </div>
-            <div class="form-group" style="margin-bottom:0.5rem;">
+            <div class="form-group" style="margin-bottom: 0.5rem">
               <label class="form-label">Balance Due</label>
-              <div style="font-weight:700;font-size:0.95rem;color:var(--danger);" id="details-balance"></div>
+              <div
+                style="
+                  font-weight: 700;
+                  font-size: 0.95rem;
+                  color: var(--danger);
+                "
+                id="details-balance"
+              ></div>
             </div>
           </div>
 
           <!-- MMT / OTA section (hidden for normal bookings) -->
-          <div id="details-ota-section" style="display:none;background:rgba(12,111,205,0.07);border:1px solid rgba(12,111,205,0.2);border-radius:8px;padding:0.7rem 0.85rem;margin-bottom:0.5rem;">
-            <div style="font-size:0.7rem;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;color:#0c6fcd;margin-bottom:0.5rem;">
+          <div
+            id="details-ota-section"
+            style="
+              display: none;
+              background: rgba(12, 111, 205, 0.07);
+              border: 1px solid rgba(12, 111, 205, 0.2);
+              border-radius: 8px;
+              padding: 0.7rem 0.85rem;
+              margin-bottom: 0.5rem;
+            "
+          >
+            <div
+              style="
+                font-size: 0.7rem;
+                font-weight: 700;
+                text-transform: uppercase;
+                letter-spacing: 0.05em;
+                color: #0c6fcd;
+                margin-bottom: 0.5rem;
+              "
+            >
               <span id="details-booking-source"></span>
             </div>
-            <div class="bk-row" style="margin-bottom:0.4rem;">
-              <div class="form-group" style="margin-bottom:0;">
-                <label class="form-label" style="font-size:0.7rem;">OTA Total</label>
-                <div style="font-weight:600;" id="details-ota-total"></div>
+            <div class="bk-row" style="margin-bottom: 0.4rem">
+              <div class="form-group" style="margin-bottom: 0">
+                <label class="form-label" style="font-size: 0.7rem"
+                  >OTA Total</label
+                >
+                <div style="font-weight: 600" id="details-ota-total"></div>
               </div>
-              <div class="form-group" style="margin-bottom:0;">
-                <label class="form-label" style="font-size:0.7rem;">Commission</label>
+              <div class="form-group" style="margin-bottom: 0">
+                <label class="form-label" style="font-size: 0.7rem"
+                  >Commission</label
+                >
                 <div id="details-ota-commission"></div>
               </div>
             </div>
             <div class="bk-row">
-              <div class="form-group" style="margin-bottom:0;">
-                <label class="form-label" style="font-size:0.7rem;">Net Receivable</label>
-                <div style="font-weight:700;color:#0c6fcd;" id="details-net-receivable"></div>
+              <div class="form-group" style="margin-bottom: 0">
+                <label class="form-label" style="font-size: 0.7rem"
+                  >Net Receivable</label
+                >
+                <div
+                  style="font-weight: 700; color: #0c6fcd"
+                  id="details-net-receivable"
+                ></div>
               </div>
-              <div class="form-group" style="margin-bottom:0;">
-                <label class="form-label" style="font-size:0.7rem;">Settlement</label>
+              <div class="form-group" style="margin-bottom: 0">
+                <label class="form-label" style="font-size: 0.7rem"
+                  >Settlement</label
+                >
                 <div id="details-settlement-status"></div>
               </div>
             </div>
           </div>
 
           <!-- Notes -->
-          <div class="form-group" style="margin-bottom:0.5rem;">
+          <div class="form-group" style="margin-bottom: 0.5rem">
             <label class="form-label">Notes</label>
-            <div style="font-size:0.85rem;color:var(--gray);" id="details-notes"></div>
+            <div
+              style="font-size: 0.85rem; color: var(--gray)"
+              id="details-notes"
+            ></div>
           </div>
 
           <!-- Booking ID -->
-          <div style="font-size:0.7rem;color:var(--gray);margin-bottom:0.75rem;">
-            ID: <span id="details-booking-id" style="font-family:monospace;"></span>
+          <div
+            style="
+              font-size: 0.7rem;
+              color: var(--gray);
+              margin-bottom: 0.75rem;
+            "
+          >
+            ID:
+            <span id="details-booking-id" style="font-family: monospace"></span>
           </div>
 
           <!-- Guest Photo -->
-          <div id="details-photo-container" style="margin-bottom:0.75rem;text-align:center;display:none;">
-            <img id="details-guest-photo" style="max-width:100%;max-height:160px;border-radius:8px;border:1px solid #eee;" alt="Guest photo" />
+          <div
+            id="details-photo-container"
+            style="margin-bottom: 0.75rem; text-align: center; display: none"
+          >
+            <img
+              id="details-guest-photo"
+              style="
+                max-width: 100%;
+                max-height: 160px;
+                border-radius: 8px;
+                border: 1px solid #eee;
+              "
+              alt="Guest photo"
+            />
           </div>
         </div>
 
-        <div class="action-row" style="margin-top:0.5rem;">
+        <div class="action-row" style="margin-top: 0.5rem">
           <button class="action-btn btn-primary" id="update-booking-btn">
             <i class="fas fa-edit"></i> Edit
           </button>
@@ -2422,12 +3223,24 @@
           <button class="action-btn btn-danger" id="cancel-booking-btn">
             <i class="fas fa-times-circle"></i> Cancel
           </button>
-          <button class="action-btn btn-success" id="mark-settlement-btn" style="display:none;background:#17a2b8;border-color:#17a2b8;">
+          <button
+            class="action-btn btn-success"
+            id="mark-settlement-btn"
+            style="display: none; background: #17a2b8; border-color: #17a2b8"
+          >
             <i class="fas fa-university"></i> Mark Settlement
           </button>
-          <button class="action-btn btn-sm" id="send-whatsapp-btn"
-            style="background-color:#25d366;border-color:#25d366;color:white;"
-            onclick="sendWhatsAppBookingConfirmation()" title="Send WhatsApp Confirmation">
+          <button
+            class="action-btn btn-sm"
+            id="send-whatsapp-btn"
+            style="
+              background-color: #25d366;
+              border-color: #25d366;
+              color: white;
+            "
+            onclick="sendWhatsAppBookingConfirmation()"
+            title="Send WhatsApp Confirmation"
+          >
             <i class="fab fa-whatsapp"></i> WhatsApp
           </button>
         </div>
@@ -2445,19 +3258,48 @@
           <input type="hidden" id="ota-booking-id" />
           <div class="form-group">
             <label class="form-label">Net Receivable</label>
-            <div class="form-value" id="ota-net-receivable-display" style="font-weight:bold; color:var(--primary);">₹0</div>
+            <div
+              class="form-value"
+              id="ota-net-receivable-display"
+              style="font-weight: bold; color: var(--primary)"
+            >
+              ₹0
+            </div>
           </div>
           <div class="form-group">
-            <label class="form-label" for="ota-settlement-date">Settlement Date</label>
-            <input type="date" class="form-control" id="ota-settlement-date" required />
+            <label class="form-label" for="ota-settlement-date"
+              >Settlement Date</label
+            >
+            <input
+              type="date"
+              class="form-control"
+              id="ota-settlement-date"
+              required
+            />
           </div>
           <div class="form-group">
-            <label class="form-label" for="ota-settlement-amount">Settlement Amount (₹)</label>
-            <input type="number" class="form-control" id="ota-settlement-amount" placeholder="Amount received from MMT" min="1" required />
+            <label class="form-label" for="ota-settlement-amount"
+              >Settlement Amount (₹)</label
+            >
+            <input
+              type="number"
+              class="form-control"
+              id="ota-settlement-amount"
+              placeholder="Amount received from MMT"
+              min="1"
+              required
+            />
           </div>
           <div class="form-group">
-            <label class="form-label" for="ota-settlement-notes">Notes (Optional)</label>
-            <input type="text" class="form-control" id="ota-settlement-notes" placeholder="Reference / UTR number" />
+            <label class="form-label" for="ota-settlement-notes"
+              >Notes (Optional)</label
+            >
+            <input
+              type="text"
+              class="form-control"
+              id="ota-settlement-notes"
+              placeholder="Reference / UTR number"
+            />
           </div>
           <button type="submit" class="action-btn btn-primary">
             <i class="fas fa-check"></i> Confirm Settlement
@@ -2834,7 +3676,10 @@
       // Global API fetch wrapper — must load before all other scripts
       const _API_KEY = "cibara-secure-2026";
       function apiFetch(url, options = {}) {
-        options.headers = Object.assign({ "X-API-Key": _API_KEY }, options.headers || {});
+        options.headers = Object.assign(
+          { "X-API-Key": _API_KEY },
+          options.headers || {},
+        );
         return fetch(url, options);
       }
     </script>
@@ -2843,9 +3688,15 @@
          The inline apiFetch block above runs synchronously first, so it is
          available when these deferred scripts execute. Saves 200-400 ms on
          first paint by not blocking the HTML parser. -->
-    <script defer src="https://cdnjs.cloudflare.com/ajax/libs/flatpickr/4.6.13/flatpickr.min.js"></script>
+    <script
+      defer
+      src="https://cdnjs.cloudflare.com/ajax/libs/flatpickr/4.6.13/flatpickr.min.js"
+    ></script>
     <script defer src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <script defer src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <script
+      defer
+      src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"
+    ></script>
     <script defer src="/static/register.js"></script>
     <script defer src="/static/bills.js"></script>
     <script defer src="/static/script.js"></script>
@@ -2868,146 +3719,305 @@
 
     <!-- Booking modal date range picker init -->
     <script>
-    document.addEventListener('DOMContentLoaded', function () {
-      if (!window.flatpickr) return;
-      var _bookingPicker = flatpickr('#booking-date-range', {
-        mode: 'range',
-        dateFormat: 'D, d M',
-        minDate: 'today',
-        disableMobile: true,
-        onChange: function (selectedDates) {
-          var ci = document.getElementById('booking-check-in');
-          var co = document.getElementById('booking-check-out');
-          function toYMD(d) {
-            return d.getFullYear() + '-' +
-              String(d.getMonth() + 1).padStart(2, '0') + '-' +
-              String(d.getDate()).padStart(2, '0');
-          }
-          if (selectedDates.length >= 1 && ci) {
-            ci.value = toYMD(selectedDates[0]);
-            ci.dispatchEvent(new Event('change'));
-          }
-          if (selectedDates.length === 2 && co) {
-            co.value = toYMD(selectedDates[1]);
-            co.dispatchEvent(new Event('change'));
-          }
+      document.addEventListener("DOMContentLoaded", function () {
+        if (!window.flatpickr) return;
+        var _bookingPicker = flatpickr("#booking-date-range", {
+          mode: "range",
+          dateFormat: "D, d M",
+          minDate: "today",
+          disableMobile: true,
+          onChange: function (selectedDates) {
+            var ci = document.getElementById("booking-check-in");
+            var co = document.getElementById("booking-check-out");
+            function toYMD(d) {
+              return (
+                d.getFullYear() +
+                "-" +
+                String(d.getMonth() + 1).padStart(2, "0") +
+                "-" +
+                String(d.getDate()).padStart(2, "0")
+              );
+            }
+            if (selectedDates.length >= 1 && ci) {
+              ci.value = toYMD(selectedDates[0]);
+              ci.dispatchEvent(new Event("change"));
+            }
+            if (selectedDates.length === 2 && co) {
+              co.value = toYMD(selectedDates[1]);
+              co.dispatchEvent(new Event("change"));
+            }
+          },
+        });
+        // Reset picker when modal opens
+        var newBookingBtn = document.getElementById("new-booking-btn");
+        if (newBookingBtn) {
+          newBookingBtn.addEventListener("click", function () {
+            setTimeout(function () {
+              if (_bookingPicker) _bookingPicker.clear();
+            }, 50);
+          });
         }
       });
-      // Reset picker when modal opens
-      var newBookingBtn = document.getElementById('new-booking-btn');
-      if (newBookingBtn) {
-        newBookingBtn.addEventListener('click', function () {
-          setTimeout(function () { if (_bookingPicker) _bookingPicker.clear(); }, 50);
-        });
-      }
-    });
     </script>
     <!-- ── Document photo viewer overlay ─────────────────────────────── -->
     <div id="doc-photo-viewer">
-      <div style="
-        width: 100%; max-width: 420px;
-        background: linear-gradient(160deg, #1c2133 0%, #141824 100%);
-        border-radius: 20px; overflow: hidden;
-        box-shadow: 0 32px 80px rgba(0,0,0,0.75), 0 0 0 1px rgba(255,255,255,0.06);
-      ">
-
+      <div
+        style="
+          width: 100%;
+          max-width: 420px;
+          background: linear-gradient(160deg, #1c2133 0%, #141824 100%);
+          border-radius: 20px;
+          overflow: hidden;
+          box-shadow:
+            0 32px 80px rgba(0, 0, 0, 0.75),
+            0 0 0 1px rgba(255, 255, 255, 0.06);
+        "
+      >
         <!-- Header -->
-        <div style="
-          display: flex; align-items: center; justify-content: space-between;
-          padding: 0.9rem 1.1rem;
-          background: rgba(255,255,255,0.04);
-          border-bottom: 1px solid rgba(255,255,255,0.07);
-        ">
-          <div style="display: flex; align-items: center; gap: 0.65rem;">
-            <div style="
-              width: 34px; height: 34px; border-radius: 10px;
-              background: linear-gradient(135deg, #1565c0, #1976d2);
-              display: flex; align-items: center; justify-content: center;
-              box-shadow: 0 4px 12px rgba(25,118,210,0.4);
-            ">
-              <i class="fas fa-id-card" style="color: #fff; font-size: 0.85rem;"></i>
+        <div
+          style="
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0.9rem 1.1rem;
+            background: rgba(255, 255, 255, 0.04);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+          "
+        >
+          <div style="display: flex; align-items: center; gap: 0.65rem">
+            <div
+              style="
+                width: 34px;
+                height: 34px;
+                border-radius: 10px;
+                background: linear-gradient(135deg, #1565c0, #1976d2);
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                box-shadow: 0 4px 12px rgba(25, 118, 210, 0.4);
+              "
+            >
+              <i
+                class="fas fa-id-card"
+                style="color: #fff; font-size: 0.85rem"
+              ></i>
             </div>
             <div>
-              <div style="color: #f0f4ff; font-weight: 700; font-size: 0.92rem; letter-spacing: 0.01em;">ID Documents</div>
-              <div id="doc-viewer-count" style="color: rgba(255,255,255,0.42); font-size: 0.7rem; margin-top: 1px;"></div>
+              <div
+                style="
+                  color: #f0f4ff;
+                  font-weight: 700;
+                  font-size: 0.92rem;
+                  letter-spacing: 0.01em;
+                "
+              >
+                ID Documents
+              </div>
+              <div
+                id="doc-viewer-count"
+                style="
+                  color: rgba(255, 255, 255, 0.42);
+                  font-size: 0.7rem;
+                  margin-top: 1px;
+                "
+              ></div>
             </div>
           </div>
-          <button id="doc-viewer-close"
+          <button
+            id="doc-viewer-close"
             style="
-              background: rgba(255,255,255,0.07); border: 1px solid rgba(255,255,255,0.1);
-              color: rgba(255,255,255,0.7); width: 32px; height: 32px; border-radius: 50%;
-              cursor: pointer; font-size: 1rem; display: flex; align-items: center;
-              justify-content: center; transition: all 0.15s;"
-            onmouseover="this.style.background='rgba(255,255,255,0.15)';this.style.color='#fff'"
-            onmouseout="this.style.background='rgba(255,255,255,0.07)';this.style.color='rgba(255,255,255,0.7)'"
-            aria-label="Close">&times;</button>
+              background: rgba(255, 255, 255, 0.07);
+              border: 1px solid rgba(255, 255, 255, 0.1);
+              color: rgba(255, 255, 255, 0.7);
+              width: 32px;
+              height: 32px;
+              border-radius: 50%;
+              cursor: pointer;
+              font-size: 1rem;
+              display: flex;
+              align-items: center;
+              justify-content: center;
+              transition: all 0.15s;
+            "
+            onmouseover="
+              this.style.background = 'rgba(255,255,255,0.15)';
+              this.style.color = '#fff';
+            "
+            onmouseout="
+              this.style.background = 'rgba(255,255,255,0.07)';
+              this.style.color = 'rgba(255,255,255,0.7)';
+            "
+            aria-label="Close"
+          >
+            &times;
+          </button>
         </div>
 
         <!-- Image area -->
-        <div style="position: relative; background: #0a0c12; min-height: 280px; display: flex; align-items: center; justify-content: center;">
-          <img id="doc-viewer-main-img"
-            style="width: 100%; max-height: 340px; object-fit: contain; display: block;"
-            alt="ID Document" />
+        <div
+          style="
+            position: relative;
+            background: #0a0c12;
+            min-height: 280px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+          "
+        >
+          <img
+            id="doc-viewer-main-img"
+            style="
+              width: 100%;
+              max-height: 340px;
+              object-fit: contain;
+              display: block;
+            "
+            alt="ID Document"
+          />
 
           <!-- Gradient fade edges -->
-          <div style="position: absolute; inset: 0; pointer-events: none;
-            background: linear-gradient(to right, rgba(10,12,18,0.35) 0%, transparent 18%, transparent 82%, rgba(10,12,18,0.35) 100%);"></div>
+          <div
+            style="
+              position: absolute;
+              inset: 0;
+              pointer-events: none;
+              background: linear-gradient(
+                to right,
+                rgba(10, 12, 18, 0.35) 0%,
+                transparent 18%,
+                transparent 82%,
+                rgba(10, 12, 18, 0.35) 100%
+              );
+            "
+          ></div>
 
           <!-- Prev -->
-          <button id="doc-viewer-prev"
-            style="position: absolute; left: 0.65rem; top: 50%; transform: translateY(-50%);
-              background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.15);
-              backdrop-filter: blur(4px); color: white; width: 36px; height: 36px;
-              border-radius: 50%; cursor: pointer; font-size: 0.85rem; display: none;
-              align-items: center; justify-content: center; transition: all 0.15s;"
-            onmouseover="this.style.background='rgba(255,255,255,0.22)'"
-            onmouseout="this.style.background='rgba(255,255,255,0.1)'">
+          <button
+            id="doc-viewer-prev"
+            style="
+              position: absolute;
+              left: 0.65rem;
+              top: 50%;
+              transform: translateY(-50%);
+              background: rgba(255, 255, 255, 0.1);
+              border: 1px solid rgba(255, 255, 255, 0.15);
+              backdrop-filter: blur(4px);
+              color: white;
+              width: 36px;
+              height: 36px;
+              border-radius: 50%;
+              cursor: pointer;
+              font-size: 0.85rem;
+              display: none;
+              align-items: center;
+              justify-content: center;
+              transition: all 0.15s;
+            "
+            onmouseover="this.style.background = 'rgba(255,255,255,0.22)'"
+            onmouseout="this.style.background = 'rgba(255,255,255,0.1)'"
+          >
             <i class="fas fa-chevron-left"></i>
           </button>
           <!-- Next -->
-          <button id="doc-viewer-next"
-            style="position: absolute; right: 0.65rem; top: 50%; transform: translateY(-50%);
-              background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.15);
-              backdrop-filter: blur(4px); color: white; width: 36px; height: 36px;
-              border-radius: 50%; cursor: pointer; font-size: 0.85rem; display: none;
-              align-items: center; justify-content: center; transition: all 0.15s;"
-            onmouseover="this.style.background='rgba(255,255,255,0.22)'"
-            onmouseout="this.style.background='rgba(255,255,255,0.1)'">
+          <button
+            id="doc-viewer-next"
+            style="
+              position: absolute;
+              right: 0.65rem;
+              top: 50%;
+              transform: translateY(-50%);
+              background: rgba(255, 255, 255, 0.1);
+              border: 1px solid rgba(255, 255, 255, 0.15);
+              backdrop-filter: blur(4px);
+              color: white;
+              width: 36px;
+              height: 36px;
+              border-radius: 50%;
+              cursor: pointer;
+              font-size: 0.85rem;
+              display: none;
+              align-items: center;
+              justify-content: center;
+              transition: all 0.15s;
+            "
+            onmouseover="this.style.background = 'rgba(255,255,255,0.22)'"
+            onmouseout="this.style.background = 'rgba(255,255,255,0.1)'"
+          >
             <i class="fas fa-chevron-right"></i>
           </button>
         </div>
 
         <!-- Thumbnail strip -->
-        <div id="doc-viewer-thumbs"
-          style="display: flex; gap: 0.55rem; padding: 0.7rem 1rem;
-            background: rgba(0,0,0,0.25); overflow-x: auto; scrollbar-width: none;">
-        </div>
+        <div
+          id="doc-viewer-thumbs"
+          style="
+            display: flex;
+            gap: 0.55rem;
+            padding: 0.7rem 1rem;
+            background: rgba(0, 0, 0, 0.25);
+            overflow-x: auto;
+            scrollbar-width: none;
+          "
+        ></div>
 
         <!-- Footer -->
-        <div style="
-          padding: 0.65rem 1rem;
-          border-top: 1px solid rgba(255,255,255,0.06);
-          display: flex; justify-content: space-between; align-items: center;
-          gap: 0.5rem;
-        ">
-          <button id="doc-viewer-delete-btn" type="button"
+        <div
+          style="
+            padding: 0.65rem 1rem;
+            border-top: 1px solid rgba(255, 255, 255, 0.06);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 0.5rem;
+          "
+        >
+          <button
+            id="doc-viewer-delete-btn"
+            type="button"
             style="
-              background: rgba(198,40,40,0.12); border: 1px solid rgba(198,40,40,0.35);
-              color: #ef9a9a; border-radius: 8px; padding: 0.38rem 0.85rem;
-              font-size: 0.78rem; cursor: pointer; display: flex; align-items: center;
-              gap: 0.4rem; transition: all 0.15s; font-weight: 500;"
-            onmouseover="this.style.background='rgba(198,40,40,0.25)';this.style.color='#ffcdd2'"
-            onmouseout="this.style.background='rgba(198,40,40,0.12)';this.style.color='#ef9a9a'"
-            title="Delete this document">
+              background: rgba(198, 40, 40, 0.12);
+              border: 1px solid rgba(198, 40, 40, 0.35);
+              color: #ef9a9a;
+              border-radius: 8px;
+              padding: 0.38rem 0.85rem;
+              font-size: 0.78rem;
+              cursor: pointer;
+              display: flex;
+              align-items: center;
+              gap: 0.4rem;
+              transition: all 0.15s;
+              font-weight: 500;
+            "
+            onmouseover="
+              this.style.background = 'rgba(198,40,40,0.25)';
+              this.style.color = '#ffcdd2';
+            "
+            onmouseout="
+              this.style.background = 'rgba(198,40,40,0.12)';
+              this.style.color = '#ef9a9a';
+            "
+            title="Delete this document"
+          >
             <i class="fas fa-trash-alt"></i> Delete &amp; Retake
           </button>
-          <a id="doc-viewer-open-link" href="#" target="_blank" rel="noopener noreferrer"
+          <a
+            id="doc-viewer-open-link"
+            href="#"
+            target="_blank"
+            rel="noopener noreferrer"
             style="
-              color: rgba(255,255,255,0.45); font-size: 0.78rem; text-decoration: none;
-              display: flex; align-items: center; gap: 0.35rem; transition: color 0.15s;
-              white-space: nowrap;"
-            onmouseover="this.style.color='#90caf9'"
-            onmouseout="this.style.color='rgba(255,255,255,0.45)'">
+              color: rgba(255, 255, 255, 0.45);
+              font-size: 0.78rem;
+              text-decoration: none;
+              display: flex;
+              align-items: center;
+              gap: 0.35rem;
+              transition: color 0.15s;
+              white-space: nowrap;
+            "
+            onmouseover="this.style.color = '#90caf9'"
+            onmouseout="this.style.color = 'rgba(255,255,255,0.45)'"
+          >
             <i class="fas fa-external-link-alt"></i> Open full size
           </a>
         </div>
@@ -3015,56 +4025,126 @@
     </div>
 
     <!-- ── Professional confirm dialog ───────────────────────────────── -->
-    <div id="confirm-dialog"
-      style="display: none; position: fixed; inset: 0; z-index: 999999;
-             background: rgba(0,0,0,0.65); backdrop-filter: blur(4px);
-             align-items: center; justify-content: center;">
-      <div style="
-        background: linear-gradient(160deg, #1c2133 0%, #141824 100%);
-        border-radius: 18px; padding: 1.85rem 1.6rem;
-        max-width: 340px; width: 90%;
-        box-shadow: 0 32px 80px rgba(0,0,0,0.7), 0 0 0 1px rgba(255,255,255,0.06);
-        display: flex; flex-direction: column; gap: 1rem;">
+    <div
+      id="confirm-dialog"
+      style="
+        display: none;
+        position: fixed;
+        inset: 0;
+        z-index: 999999;
+        background: rgba(0, 0, 0, 0.65);
+        backdrop-filter: blur(4px);
+        align-items: center;
+        justify-content: center;
+      "
+    >
+      <div
+        style="
+          background: linear-gradient(160deg, #1c2133 0%, #141824 100%);
+          border-radius: 18px;
+          padding: 1.85rem 1.6rem;
+          max-width: 340px;
+          width: 90%;
+          box-shadow:
+            0 32px 80px rgba(0, 0, 0, 0.7),
+            0 0 0 1px rgba(255, 255, 255, 0.06);
+          display: flex;
+          flex-direction: column;
+          gap: 1rem;
+        "
+      >
         <!-- Icon -->
-        <div style="display: flex; justify-content: center;">
-          <div style="
-            width: 56px; height: 56px; border-radius: 16px;
-            background: rgba(198,40,40,0.15); border: 1px solid rgba(198,40,40,0.25);
-            display: flex; align-items: center; justify-content: center;">
-            <i id="confirm-dialog-icon" class="fas fa-trash-alt"
-               style="font-size: 1.4rem; color: #ef5350;"></i>
+        <div style="display: flex; justify-content: center">
+          <div
+            style="
+              width: 56px;
+              height: 56px;
+              border-radius: 16px;
+              background: rgba(198, 40, 40, 0.15);
+              border: 1px solid rgba(198, 40, 40, 0.25);
+              display: flex;
+              align-items: center;
+              justify-content: center;
+            "
+          >
+            <i
+              id="confirm-dialog-icon"
+              class="fas fa-trash-alt"
+              style="font-size: 1.4rem; color: #ef5350"
+            ></i>
           </div>
         </div>
         <!-- Text -->
-        <h3 id="confirm-dialog-title"
-          style="margin: 0; text-align: center; font-size: 1.05rem; font-weight: 700;
-                 color: #f0f4ff; letter-spacing: 0.01em;"></h3>
-        <p id="confirm-dialog-message"
-          style="margin: -0.25rem 0 0; text-align: center; font-size: 0.82rem;
-                 color: rgba(240,244,255,0.5); line-height: 1.6;"></p>
+        <h3
+          id="confirm-dialog-title"
+          style="
+            margin: 0;
+            text-align: center;
+            font-size: 1.05rem;
+            font-weight: 700;
+            color: #f0f4ff;
+            letter-spacing: 0.01em;
+          "
+        ></h3>
+        <p
+          id="confirm-dialog-message"
+          style="
+            margin: -0.25rem 0 0;
+            text-align: center;
+            font-size: 0.82rem;
+            color: rgba(240, 244, 255, 0.5);
+            line-height: 1.6;
+          "
+        ></p>
         <!-- Actions -->
-        <div style="display: flex; gap: 0.65rem; margin-top: 0.15rem;">
-          <button id="confirm-dialog-cancel"
-            style="flex: 1; padding: 0.65rem; border-radius: 10px;
-                   border: 1px solid rgba(255,255,255,0.1);
-                   background: rgba(255,255,255,0.05); color: rgba(240,244,255,0.75);
-                   font-size: 0.875rem; cursor: pointer; font-weight: 500; transition: all 0.15s;"
-            onmouseover="this.style.background='rgba(255,255,255,0.1)';this.style.color='#f0f4ff'"
-            onmouseout="this.style.background='rgba(255,255,255,0.05)';this.style.color='rgba(240,244,255,0.75)'">
+        <div style="display: flex; gap: 0.65rem; margin-top: 0.15rem">
+          <button
+            id="confirm-dialog-cancel"
+            style="
+              flex: 1;
+              padding: 0.65rem;
+              border-radius: 10px;
+              border: 1px solid rgba(255, 255, 255, 0.1);
+              background: rgba(255, 255, 255, 0.05);
+              color: rgba(240, 244, 255, 0.75);
+              font-size: 0.875rem;
+              cursor: pointer;
+              font-weight: 500;
+              transition: all 0.15s;
+            "
+            onmouseover="
+              this.style.background = 'rgba(255,255,255,0.1)';
+              this.style.color = '#f0f4ff';
+            "
+            onmouseout="
+              this.style.background = 'rgba(255,255,255,0.05)';
+              this.style.color = 'rgba(240,244,255,0.75)';
+            "
+          >
             Cancel
           </button>
-          <button id="confirm-dialog-ok"
-            style="flex: 1; padding: 0.65rem; border-radius: 10px; border: none;
-                   background: #c62828; color: #fff; font-size: 0.875rem;
-                   cursor: pointer; font-weight: 600; transition: background 0.15s;
-                   box-shadow: 0 4px 14px rgba(198,40,40,0.4);"
-            onmouseover="this.style.background='#b71c1c'"
-            onmouseout="this.style.background='#c62828'">
+          <button
+            id="confirm-dialog-ok"
+            style="
+              flex: 1;
+              padding: 0.65rem;
+              border-radius: 10px;
+              border: none;
+              background: #c62828;
+              color: #fff;
+              font-size: 0.875rem;
+              cursor: pointer;
+              font-weight: 600;
+              transition: background 0.15s;
+              box-shadow: 0 4px 14px rgba(198, 40, 40, 0.4);
+            "
+            onmouseover="this.style.background = '#b71c1c'"
+            onmouseout="this.style.background = '#c62828'"
+          >
             Delete
           </button>
         </div>
       </div>
     </div>
-
   </body>
 </html>

@@ -1172,6 +1172,31 @@ def get_history():
                         if p.get("room") == str(room) and p.get("name") == guest_name]
 
         payments = payments or []
+
+        # If any room shifts exist, also fetch payments still on the old room.
+        # This handles the race condition where the background migration thread
+        # (update_payments_room) hasn't finished updating room numbers yet.
+        shift_entries = [p for p in payments if p.get("type") == "room_shift"]
+        fetched_old_rooms = set()
+        for shift in shift_entries:
+            old_room_num = shift.get("old_room")
+            if old_room_num and old_room_num not in fetched_old_rooms:
+                fetched_old_rooms.add(old_room_num)
+                try:
+                    if checkin_dt:
+                        old_pmts = payment_service.query_payments_for_stay(
+                            old_room_num, guest_name, checkin_dt
+                        ) or []
+                    else:
+                        old_pmts = []
+                    # Only include payments still tagged with the old room
+                    # (already-migrated ones are already in `payments`)
+                    for p in old_pmts:
+                        if p.get("room") == str(old_room_num):
+                            payments.append(p)
+                except Exception as e:
+                    logger.warning(f"Could not fetch old room {old_room_num} payments: {e}")
+
         room_cash_logs = [p for p in payments if p.get("method") == "cash"
                           and p.get("type") not in ("refund", "checkout_refund", "manual_refund")]
         room_online_logs = [p for p in payments if p.get("method") == "online"

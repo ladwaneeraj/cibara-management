@@ -46,6 +46,14 @@
         const roomNumber = roomNumberElement.textContent;
         const balance = rooms[roomNumber].balance;
 
+        // ── Capture flag state NOW — before the guest object is nulled out ──
+        const flagCbEl = document.getElementById("checkout-flag-customer");
+        const flagNotesEl = document.getElementById("checkout-flag-notes");
+        const shouldFlag = !!(flagCbEl && flagCbEl.checked);
+        const flagNotesValue = flagNotesEl ? flagNotesEl.value.trim() : "";
+        const checkoutMobile = rooms[roomNumber]?.guest?.mobile || "";
+        console.log("[flag] shouldFlag:", shouldFlag, "mobile:", checkoutMobile);
+
         // Check if settle later is enabled
         const settleLaterEnabled =
           document.getElementById("settle-later-checkbox")?.checked || false;
@@ -117,6 +125,31 @@
           if (result.success) {
             console.log("Checkout successful");
 
+            // ── Save customer flag if checkbox was ticked ─────────────────
+            if (shouldFlag && checkoutMobile) {
+              console.log("[flag] Saving flag for:", checkoutMobile);
+              apiFetch("/toggle_customer_flag", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  mobile: checkoutMobile,
+                  is_flagged: true,
+                  flag_notes: flagNotesValue,
+                }),
+              })
+                .then((r) => r.json())
+                .then((flagResult) => {
+                  if (flagResult.success) {
+                    console.log("[flag] Customer flagged successfully:", checkoutMobile);
+                    showNotification("🚩 Customer flagged successfully", "success");
+                  } else {
+                    console.warn("[flag] Flag API error:", flagResult.message);
+                    showNotification("⚠️ Checkout done but flag not saved: " + (flagResult.message || "unknown error"), "error");
+                  }
+                })
+                .catch((err) => console.warn("[flag] Network error saving flag:", err));
+            }
+
             // Close both modals
             this.closeConfirmationModal();
             const checkoutModal = document.getElementById("checkout-modal");
@@ -131,6 +164,9 @@
             }
             if (typeof renderRooms === "function") renderRooms();
             debouncedFetchData(); // background sync
+
+            // Notify register & bills modules to refresh live
+            window.dispatchEvent(new CustomEvent("cibaraRoomUpdate", { detail: { type: "checkout", room: roomNumber } }));
 
             // Show appropriate success message
             if (settleLaterEnabled && balance > 0) {
@@ -266,6 +302,14 @@
             balanceContainer.style.display = "none";
           }
         }
+
+        // Reset flag section each time the confirmation modal opens
+        const flagCb = document.getElementById("checkout-flag-customer");
+        const flagNotesCtr = document.getElementById("checkout-flag-notes-container");
+        const flagNotesField = document.getElementById("checkout-flag-notes");
+        if (flagCb) flagCb.checked = false;
+        if (flagNotesCtr) flagNotesCtr.style.display = "none";
+        if (flagNotesField) flagNotesField.value = "";
 
         // Show the confirmation modal
         const checkoutConfirmModal = document.getElementById(

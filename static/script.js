@@ -17,7 +17,6 @@ let logs = {
 let totals = { cash: 0, online: 0, balance: 0, refunds: 0 };
 let activePaymentMethod = "cash";
 let currentFilter = "all";
-let currentFloor = "all";
 let searchTerm = "";
 let capturedPhotoData = null; // For storing camera photo
 let uploadedPhotoUrl = null; // For storing uploaded photo URL
@@ -323,14 +322,6 @@ function renderRooms() {
       return;
     }
 
-    if (currentFloor === "first" && roomNumber.startsWith("2")) {
-      return;
-    }
-
-    if (currentFloor === "second" && !roomNumber.startsWith("2")) {
-      return;
-    }
-
     if (
       searchTerm &&
       !roomNumber.toLowerCase().includes(searchTerm) &&
@@ -630,65 +621,56 @@ async function fetchData() {
 }
 
 function updateFilterCounts() {
-  let counts = {
-    vacant: 0,
-    occupied: 0,
-    cleaning: 0,
-    balances: 0,
-  };
+  let counts = { vacant: 0, occupied: 0, cleaning: 0, balances: 0 };
+  let balanceTotal = 0;
 
-  // Iterate through the rooms object
   Object.values(rooms).forEach((room) => {
-    // Count by Status
     if (room.status === "vacant") counts.vacant++;
     else if (room.status === "occupied") counts.occupied++;
     else if (room.status === "cleaning") counts.cleaning++;
 
-    // Count specifically for Pending Balances (Occupied + Balance > 0)
     if (room.status === "occupied" && room.balance > 0) {
       counts.balances++;
+      balanceTotal += room.balance;
     }
   });
 
-  // Update the DOM elements
-  const elVacant = document.getElementById("count-filter-vacant");
+  const elVacant   = document.getElementById("count-filter-vacant");
   const elOccupied = document.getElementById("count-filter-occupied");
   const elCleaning = document.getElementById("count-filter-cleaning");
   const elBalances = document.getElementById("count-filter-balances");
+  const elAmount   = document.getElementById("amount-filter-balances");
 
-  if (elVacant) elVacant.textContent = counts.vacant;
+  if (elVacant)   elVacant.textContent   = counts.vacant;
   if (elOccupied) elOccupied.textContent = counts.occupied;
   if (elCleaning) elCleaning.textContent = counts.cleaning;
   if (elBalances) elBalances.textContent = counts.balances;
+  if (elAmount)   elAmount.textContent   = balanceTotal > 0 ? `₹${balanceTotal.toLocaleString("en-IN")}` : "";
 }
 
 function updateStats() {
-  let counts = {
-    vacant: 0,
-    occupied: 0,
-    cleaning: 0,
-    balances: 0,
-  };
+  let counts = { vacant: 0, occupied: 0, cleaning: 0, balances: 0 };
+  let balanceTotal = 0;
 
-  // Calculate counts from the rooms object
   Object.values(rooms).forEach((room) => {
     if (room.status === "vacant") counts.vacant++;
     else if (room.status === "occupied") {
       counts.occupied++;
-      if (room.balance > 0) counts.balances++;
+      if (room.balance > 0) { counts.balances++; balanceTotal += room.balance; }
     } else if (room.status === "cleaning") counts.cleaning++;
   });
 
-  // Update the filter button spans
-  const elVacant = document.getElementById("count-filter-vacant");
+  const elVacant   = document.getElementById("count-filter-vacant");
   const elOccupied = document.getElementById("count-filter-occupied");
   const elCleaning = document.getElementById("count-filter-cleaning");
   const elBalances = document.getElementById("count-filter-balances");
+  const elAmount   = document.getElementById("amount-filter-balances");
 
-  if (elVacant) elVacant.textContent = counts.vacant;
+  if (elVacant)   elVacant.textContent   = counts.vacant;
   if (elOccupied) elOccupied.textContent = counts.occupied;
   if (elCleaning) elCleaning.textContent = counts.cleaning;
   if (elBalances) elBalances.textContent = counts.balances;
+  if (elAmount)   elAmount.textContent   = balanceTotal > 0 ? `₹${balanceTotal.toLocaleString("en-IN")}` : "";
 
   // Keep the quick action badge logic if you still use the floating bolt menu
   const renewalsDue = Object.values(rooms).filter(
@@ -3155,40 +3137,126 @@ function displayDailyStatistics() {
   }
 }
 
-// Report password protection logic
-const REPORT_PASSWORD = "admin123"; // You can change this to any password you want
-let reportPasswordVerified = false;
+// ── Manager Access Modal — shared gate for Reports & Discount ─────────────────
+let reportPasswordVerified = false;   // stays true once unlocked per session
+let _mgrAccessCallback = null;        // called on successful password entry
 
-// Function to handle reports tab access
+/**
+ * Open the manager access modal.
+ * @param {string} title   - Modal heading
+ * @param {string} sub     - Sub-text below heading
+ * @param {string} icon    - FontAwesome class for the icon (e.g. "fa-chart-bar")
+ * @param {Function} onSuccess - Called with no arguments when password is correct
+ */
+function openMgrAccessModal(title, sub, icon, onSuccess) {
+  const modal   = document.getElementById("mgr-access-modal");
+  const titleEl = document.getElementById("mgr-access-title");
+  const subEl   = document.getElementById("mgr-access-sub");
+  const iconEl  = document.getElementById("mgr-access-icon");
+  const pwdEl   = document.getElementById("mgr-access-pwd");
+  const errEl   = document.getElementById("mgr-access-error");
+  if (!modal) return;
+
+  if (titleEl) titleEl.textContent = title;
+  if (subEl)   subEl.textContent   = sub;
+  if (iconEl)  iconEl.innerHTML    = `<i class="fas ${icon}"></i>`;
+  if (pwdEl)   { pwdEl.value = ""; }
+  if (errEl)   { errEl.textContent = ""; errEl.style.display = "none"; }
+
+  _mgrAccessCallback = onSuccess;
+  modal.classList.add("show");
+  setTimeout(() => pwdEl && pwdEl.focus(), 120);
+}
+
+function closeMgrAccessModal() {
+  const modal = document.getElementById("mgr-access-modal");
+  if (modal) modal.classList.remove("show");
+  _mgrAccessCallback = null;
+}
+
+async function submitMgrAccessPassword() {
+  const pwdEl    = document.getElementById("mgr-access-pwd");
+  const errEl    = document.getElementById("mgr-access-error");
+  const submitBtn = document.getElementById("mgr-access-submit");
+  const pass = pwdEl ? pwdEl.value.trim() : "";
+
+  if (!pass) {
+    if (errEl) { errEl.textContent = "Please enter the password."; errEl.style.display = "block"; }
+    return;
+  }
+
+  if (submitBtn) { submitBtn.disabled = true; submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin" style="margin-right:5px"></i>Verifying…'; }
+  if (errEl) errEl.style.display = "none";
+
+  try {
+    const res = await apiFetch("/verify_manager_password", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ password: pass }),
+    });
+    const data = await res.json();
+
+    if (data.success) {
+      const cb = _mgrAccessCallback;   // save BEFORE closeMgrAccessModal nulls it
+      closeMgrAccessModal();
+      if (typeof cb === "function") cb();
+    } else {
+      if (errEl) { errEl.textContent = "Incorrect password. Try again."; errEl.style.display = "block"; }
+      if (pwdEl) { pwdEl.value = ""; pwdEl.focus(); }
+    }
+  } catch (e) {
+    if (errEl) { errEl.textContent = "Error verifying password. Try again."; errEl.style.display = "block"; }
+  } finally {
+    if (submitBtn) { submitBtn.disabled = false; submitBtn.innerHTML = '<i class="fas fa-unlock" style="margin-right:5px"></i>Unlock'; }
+  }
+}
+
+// ── Settings Modal ─────────────────────────────────────────────────────────────
+// All button wiring is done via inline onclick in HTML — these are pure logic functions.
+
+function openSettingsModal() {
+  // Ask for manager password before opening settings
+  openMgrAccessModal(
+    "Settings Access",
+    "Enter the manager password to open Settings.",
+    "fa-cog",
+    function () {
+      const modal = document.getElementById("settings-modal");
+      if (modal) modal.classList.add("show");
+    }
+  );
+}
+
+function closeSettingsModal() {
+  const modal = document.getElementById("settings-modal");
+  if (modal) modal.classList.remove("show");
+}
+
+function handleSettingsReportsClick() {
+  // Settings is already password-gated — go straight to analytics
+  closeSettingsModal();
+  reportPasswordVerified = true;
+  showReportsTab();
+}
+
+// No initMgrAccessModal / initSettingsModal needed — all wired via inline onclick in HTML.
+
+// Function to handle reports tab access (kept for legacy compatibility)
 function handleReportsTabAccess() {
-  // Skip password check if already verified
   if (reportPasswordVerified) {
     showReportsTab();
     return;
   }
-
-  // Show password modal
-  const passwordModal = document.getElementById("password-modal");
-  if (!passwordModal) {
-    debugLog("Password modal not found, creating one...");
-    createPasswordModal();
-    return;
-  }
-
-  passwordModal.classList.add("show");
-
-  // Clear previous password input and error
-  const passwordInput = document.getElementById("report-password");
-  const passwordError = document.getElementById("password-error");
-
-  if (passwordInput) {
-    passwordInput.value = "";
-    passwordInput.focus();
-  }
-
-  if (passwordError) {
-    passwordError.style.display = "none";
-  }
+  openMgrAccessModal(
+    "Reports Access",
+    "Enter the manager password to view Analytics & Reports.",
+    "fa-chart-bar",
+    () => {
+      reportPasswordVerified = true;
+      showReportsTab();
+      showNotification("Access granted to Analytics & Reports", "success");
+    }
+  );
 }
 
 // Create password modal if it doesn't exist
@@ -3300,74 +3368,30 @@ function setupPasswordModalListeners() {
   console.log("Event delegation already set up globally");
 }
 
-// Function to verify password
+// Legacy verifyReportPassword — now delegates to the manager access modal flow
 function verifyReportPassword() {
-  console.log("verifyReportPassword called");
-
-  const passwordInput = document.getElementById("report-password");
-  const passwordError = document.getElementById("password-error");
-  const passwordModal = document.getElementById("password-modal");
-
-  console.log("Elements found:", {
-    passwordInput: !!passwordInput,
-    passwordError: !!passwordError,
-    passwordModal: !!passwordModal,
-  });
-
-  if (!passwordInput || !passwordError || !passwordModal) {
-    debugLog("Password elements not found");
-    console.error("Missing password modal elements");
-    return;
-  }
-
-  const password = passwordInput.value;
-  console.log("Password entered:", password ? "***" : "empty");
-
-  if (password === REPORT_PASSWORD) {
-    // Password correct
-    console.log("Password correct");
-    reportPasswordVerified = true;
-    passwordModal.classList.remove("show");
-    showReportsTab();
-    showNotification("Access granted to reports section", "success");
-  } else {
-    // Password incorrect
-    console.log("Password incorrect");
-    passwordError.style.display = "block";
-    passwordInput.value = "";
-    passwordInput.focus();
-
-    // Add shake animation to input
-    passwordInput.style.animation = "shake 0.5s";
-    setTimeout(() => {
-      passwordInput.style.animation = "";
-    }, 500);
-  }
+  handleReportsTabAccess();
 }
 
-// Function to show reports tab
+// Function to show reports tab (no nav item to highlight — Reports moved to Settings)
 function showReportsTab() {
-  // Show the reports tab
   document.querySelectorAll(".tab-content").forEach((content) => {
     content.classList.add("hidden");
   });
-
   const reportsTab = document.getElementById("reports-tab");
-  if (reportsTab) {
-    reportsTab.classList.remove("hidden");
-  }
+  if (reportsTab) reportsTab.classList.remove("hidden");
 
-  // Update nav items
+  // Clear any active nav highlight (reports has no footer tab)
   document.querySelectorAll(".nav-item").forEach((navItem) => {
     navItem.classList.remove("active");
   });
 
-  const reportsNavItem = document.querySelector(
-    '.nav-item[data-tab="reports"]',
-  );
-  if (reportsNavItem) {
-    reportsNavItem.classList.add("active");
-  }
+  // Auto-load analytics data so charts appear without needing to click Apply Filter
+  setTimeout(function () {
+    if (typeof generateEnhancedReport === "function") {
+      generateEnhancedReport();
+    }
+  }, 50);
 }
 
 // Add discount field to checkout modal for existing stays
@@ -3397,6 +3421,7 @@ function createDiscountDialog() {
   const dialog = document.createElement("div");
   dialog.className = "modal-backdrop";
   dialog.id = "discount-modal";
+  dialog.style.zIndex = "1100";   // above checkout modal (1000)
   dialog.innerHTML = `
     <div class="modal-content" style="max-width: 400px">
       <div class="modal-header">
@@ -3567,13 +3592,20 @@ function updateCheckoutModalWithDiscount(roomNumber) {
     }
   }
 
-  // Add discount event listener
+  // Add discount event listener — password-protected
   const addDiscountBtn = document.getElementById("add-discount-btn");
   if (addDiscountBtn) {
     addDiscountBtn.onclick = function () {
-      document.getElementById("discount-modal").classList.add("show");
-      document.getElementById("discount-amount").value = "";
-      document.getElementById("discount-amount").focus();
+      openMgrAccessModal(
+        "Apply Discount",
+        "Enter the manager password to apply a discount.",
+        "fa-tag",
+        () => {
+          document.getElementById("discount-modal").classList.add("show");
+          document.getElementById("discount-amount").value = "";
+          document.getElementById("discount-amount").focus();
+        }
+      );
     };
   }
 }
@@ -3662,6 +3694,14 @@ function setupCheckoutConfirmation() {
       "checkout-confirm-modal",
     );
     if (checkoutConfirmModal) {
+      // Reset flag section each time the confirmation modal opens
+      const flagCb = document.getElementById("checkout-flag-customer");
+      const flagNotesCtr = document.getElementById("checkout-flag-notes-container");
+      const flagNotes = document.getElementById("checkout-flag-notes");
+      if (flagCb) flagCb.checked = false;
+      if (flagNotesCtr) flagNotesCtr.style.display = "none";
+      if (flagNotes) flagNotes.value = "";
+
       checkoutConfirmModal.classList.add("show");
       console.log("Confirmation modal displayed");
     } else {
@@ -3669,6 +3709,19 @@ function setupCheckoutConfirmation() {
       showNotification("Error: Confirmation modal not found", "error");
     }
   });
+
+  // ── Flag checkbox: show/hide notes textarea ────────────────────────────────
+  const flagCheckbox = document.getElementById("checkout-flag-customer");
+  const flagNotesContainer = document.getElementById("checkout-flag-notes-container");
+  if (flagCheckbox && flagNotesContainer) {
+    flagCheckbox.addEventListener("change", function () {
+      flagNotesContainer.style.display = this.checked ? "block" : "none";
+      if (!this.checked) {
+        const notesInput = document.getElementById("checkout-flag-notes");
+        if (notesInput) notesInput.value = "";
+      }
+    });
+  }
 
   // Handle the proceed button in the confirmation modal
   const proceedCheckoutBtn = document.getElementById("proceed-checkout-btn");
@@ -3760,6 +3813,19 @@ function setupCheckoutConfirmation() {
       this.disabled = false;
       this.innerHTML = "Yes, Checkout";
 
+      // ── Capture flag state before modals close ────────────────────────────
+      const flagCbEl = document.getElementById("checkout-flag-customer");
+      const flagNotesEl = document.getElementById("checkout-flag-notes");
+      const shouldFlag = !!(flagCbEl && flagCbEl.checked);
+      const flagNotesValue = flagNotesEl ? flagNotesEl.value.trim() : "";
+      const checkoutMobile = prevRoomState?.guest?.mobile || "";
+
+      // DEBUG — remove after confirming flag works
+      console.log("[flag-debug] flagCbEl found:", !!flagCbEl);
+      console.log("[flag-debug] shouldFlag:", shouldFlag);
+      console.log("[flag-debug] checkoutMobile:", checkoutMobile);
+      console.log("[flag-debug] prevRoomState guest:", prevRoomState?.guest);
+
       // Fire request in background — no await
       apiFetch("/checkout", {
         method: "POST",
@@ -3778,6 +3844,34 @@ function setupCheckoutConfirmation() {
             // Auto-generate & store PDF in background (non-blocking)
             if (result.bill_id && typeof window._cibaraBillsAutoGenerate === "function") {
               window._cibaraBillsAutoGenerate(result.bill_id);
+            }
+            // Save customer flag if the checkbox was ticked at checkout
+            console.log("[flag-debug] checkout success. shouldFlag:", shouldFlag, "checkoutMobile:", checkoutMobile);
+            if (shouldFlag && checkoutMobile) {
+              console.log("[flag-debug] firing toggle_customer_flag for:", checkoutMobile);
+              apiFetch("/toggle_customer_flag", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  mobile: checkoutMobile,
+                  is_flagged: true,
+                  flag_notes: flagNotesValue,
+                }),
+              })
+                .then((r) => r.json())
+                .then((flagResult) => {
+                  if (flagResult.success) {
+                    console.log("[flag] Customer flagged successfully:", checkoutMobile);
+                  } else {
+                    console.warn("[flag] Flag API returned error:", flagResult.message);
+                    showNotification("⚠️ Checkout done, but customer flag could not be saved: " + (flagResult.message || "unknown error"), "error");
+                  }
+                })
+                .catch((err) =>
+                  console.warn("[flag] Could not save customer flag:", err)
+                );
+            } else if (shouldFlag && !checkoutMobile) {
+              console.warn("[flag] Flag checkbox was ticked but no mobile number found for this guest — flag not saved.");
             }
           } else {
             // Rollback local state and show error
@@ -3928,18 +4022,6 @@ document.addEventListener("DOMContentLoaded", function () {
     });
   });
 
-  // Floor filters
-  document.querySelectorAll(".floor-btn").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      document
-        .querySelectorAll(".floor-btn")
-        .forEach((b) => b.classList.remove("active"));
-      btn.classList.add("active");
-      currentFloor = btn.dataset.floor;
-      debugLog(`Floor filter changed to: ${currentFloor}`);
-      renderRooms();
-    });
-  });
 
   // Search functionality
   if (roomSearch) {
@@ -4170,6 +4252,9 @@ document.addEventListener("DOMContentLoaded", function () {
 
           // Check-in adds new guest data — let background fetch hydrate the room
           debouncedFetchData();
+
+          // Notify register & bills modules to refresh live
+          window.dispatchEvent(new CustomEvent("cibaraRoomUpdate", { detail: { type: "checkin" } }));
         } else {
           showNotification(result.message || "Error during check-in", "error");
           submitBtn.disabled = false;
@@ -4359,27 +4444,14 @@ document.addEventListener("DOMContentLoaded", function () {
     document.getElementById("end-date").value = today;
   }
 
-  // Setup event listeners for password modal - Try to setup existing modal first
-  const existingPasswordModal = document.getElementById("password-modal");
-  if (existingPasswordModal) {
-    setupPasswordModalListeners();
-  }
+  // Initialise settings modal + manager access modal
+  initSettingsModal();
+  initMgrAccessModal();
 
-  // Override reports tab click handler
-  const reportsNavItem = document.querySelector(
-    '.nav-item[data-tab="reports"]',
-  );
-  if (reportsNavItem) {
-    // Remove any existing listeners first
-    const newReportsNavItem = reportsNavItem.cloneNode(true);
-    reportsNavItem.parentNode.replaceChild(newReportsNavItem, reportsNavItem);
-
-    // Add the new listener
-    newReportsNavItem.addEventListener("click", function (e) {
-      e.preventDefault();
-      e.stopPropagation();
-      handleReportsTabAccess();
-    });
+  // Settings button in header — query fresh (top-level const may be null at load time)
+  const settingsBtnEl = document.getElementById("settings-btn");
+  if (settingsBtnEl) {
+    settingsBtnEl.addEventListener("click", openSettingsModal);
   }
 
   debugLog("Initialization complete");

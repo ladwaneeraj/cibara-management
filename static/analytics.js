@@ -1079,7 +1079,7 @@ function exportToExcel() {
           log.time || "N/A",
           (log.category || "other").charAt(0).toUpperCase() +
             (log.category || "other").slice(1),
-          log.description || "N/A",
+          log.name || log.description || "N/A",
           log.amount || 0,
           (log.payment_method || "cash").toUpperCase(),
           (log.expense_type || "transaction").charAt(0).toUpperCase() +
@@ -1274,7 +1274,7 @@ function renderCompactReportData(data) {
         }">
           <div class="log-details">
             <div class="log-title">
-              ${log.description} 
+              ${log.name || log.description || 'N/A'}
               <span class="expense-category-badge">${categoryDisplay}</span>
             </div>
             <div class="log-subtitle">${formatDateTime(

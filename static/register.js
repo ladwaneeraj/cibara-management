@@ -664,8 +664,8 @@
       <i class="fas fa-calendar-alt"></i>
       <input type="text" id="reg-date-range" class="reg-date-range-input" placeholder="Select date range" readonly />
     </div>
-    <button class="reg-quick-btn rq-active" data-rq="week">Week</button>
-    <button class="reg-quick-btn" data-rq="today">Today</button>
+    <button class="reg-quick-btn rq-active" data-rq="today">Today</button>
+    <button class="reg-quick-btn" data-rq="week">Week</button>
     <button class="reg-quick-btn" data-rq="month">Month</button>
     <span class="reg-filter-divider"></span>
     <select id="reg-status-filter">
@@ -759,8 +759,8 @@
 
   // ── Date defaults + flatpickr init ────────────────────────────────────────────
   function setDefaults() {
-    const today = todayStr(), week = nDaysAgoStr(6);
-    state.dateRange.start = week;
+    const today = todayStr();
+    state.dateRange.start = today;
     state.dateRange.end = today;
 
     const el = dom("reg-date-range");
@@ -771,7 +771,7 @@
       dateFormat: "Y-m-d",   // internal ISO format — avoids maxDate mis-parsing
       altInput: true,         // show human-friendly text to user
       altFormat: "d M Y",     // display: "17 Mar 2026"
-      defaultDate: [week, today],
+      defaultDate: [today, today],
       maxDate: today,
       disableMobile: true,
       onChange: function (selectedDates) {
@@ -1099,6 +1099,24 @@
 
     if (!tab.classList.contains("hidden")) loadData(true);
   }
+
+  // ── Live refresh on checkin / checkout ───────────────────────────────────────
+  // Dispatched by settle-later-fix.js (checkout), script.js (checkin),
+  // and booking.js (booking conversion). Refreshes only today's range since
+  // all these operations are happening right now.
+  window.addEventListener("cibaraRoomUpdate", function (e) {
+    const tab = dom("register-tab");
+    if (tab && !tab.classList.contains("hidden")) {
+      // Tab is visible — refresh immediately if today is in the date range
+      const today = todayStr();
+      if (state.dateRange.end === today) {
+        loadData(true);
+      }
+    } else {
+      // Tab is not visible — bust the cache so next open gets fresh data
+      state.lastLoadedRange = null;
+    }
+  });
 
   // ══════════════════════════════════════════════════════════════════════════════
   // ID DOCUMENTS MODAL — view customer docs, no password required

@@ -1394,6 +1394,9 @@ function initializeConvertBookingForm() {
         // Refresh bookings and rooms
         fetchBookings();
         debouncedFetchData();
+
+        // Notify register & bills modules to refresh live
+        window.dispatchEvent(new CustomEvent("cibaraRoomUpdate", { detail: { type: "checkin_conversion" } }));
       } else {
         showNotification(result.message || "Error converting booking", "error");
       }

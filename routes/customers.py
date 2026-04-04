@@ -199,6 +199,42 @@ def delete_customer_document():
         return jsonify(success=False, message=f"Error: {e}"), 500
 
 
+@customers_bp.route("/toggle_customer_flag", methods=["POST"])
+def toggle_customer_flag():
+    """
+    Set or clear the customer flag.
+
+    JSON body:
+        mobile      – 10-digit mobile number
+        is_flagged  – boolean (true = flag, false = unflag)
+        flag_notes  – optional notes / reason string
+
+    Returns JSON: { success, message }
+    """
+    try:
+        data = request.get_json(silent=True) or {}
+        mobile = "".join(c for c in str(data.get("mobile", "")) if c.isdigit())
+        is_flagged = bool(data.get("is_flagged", False))
+        flag_notes = str(data.get("flag_notes", "")).strip()
+
+        if len(mobile) != 10:
+            return jsonify(success=False, message="Valid 10-digit mobile required"), 400
+
+        # update_flag uses set(merge=True) so it works whether the customer
+        # document already exists or not — no existence pre-check needed.
+        # Use sync=True so the HTTP response reflects the committed write.
+        logger.info(f"toggle_customer_flag: mobile={mobile} is_flagged={is_flagged} notes='{flag_notes}'")
+        customer_service.update_flag(mobile, is_flagged, flag_notes, sync=True)
+        logger.info(f"toggle_customer_flag: write completed for {mobile}")
+
+        action = "flagged" if is_flagged else "unflagged"
+        return jsonify(success=True, message=f"Customer {action} successfully")
+
+    except Exception as e:
+        logger.error(f"toggle_customer_flag error: {e}")
+        return jsonify(success=False, message=f"Error: {e}"), 500
+
+
 @customers_bp.route("/batch_check_customer_docs", methods=["POST"])
 def batch_check_customer_docs():
     """

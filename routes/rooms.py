@@ -500,15 +500,25 @@ def add_on():
             old_price    = guest.get("price", 0)
             renewal_count = room_data.get("renewal_count", 0)
             existing_offset = guest.get("transfer_day_offset", 0)
+            # For accommodation add-ons (Extra Bed, AC): use +1 formula.
+            # The service price (₹300) covers TODAY at old room rate.
+            # The bumped price covers future renewals.
+            # e.g. Add Extra Bed Day 1 (renewal_count=0):
+            #   old_days=1 → pre_transfer: 1 day at ₹700
+            #   days_in_current_room=0 → current charges=₹0 at bumped price
+            #   services_total adds ₹300 → total = ₹700 + ₹300 = ₹1000 ✓
+            # Day 2 renewal: days_in_current_room=1 at ₹1000 (bumped) = ₹1000
+            #   total = ₹700 + ₹1000 + ₹300(service) = ₹2000 ✓
             old_days     = (renewal_count + 1) - existing_offset
 
             existing_pre = list(guest.get("pre_transfer_charges", []) or [])
-            existing_pre.append({
-                "days":      old_days,
-                "price":     old_price,
-                "total":     old_price * old_days,
-                "from_room": room,          # same room — price change, not room change
-            })
+            if old_days > 0:
+                existing_pre.append({
+                    "days":      old_days,
+                    "price":     old_price,
+                    "total":     old_price * old_days,
+                    "from_room": room,          # same room — price change, not room change
+                })
             new_price = old_price + int(unit_price)
 
             room_update["guest.pre_transfer_charges"] = existing_pre
@@ -872,15 +882,20 @@ def transfer_room():
         old_price         = new_room_data["guest"].get("price", 0)
         old_renewal_count = new_room_data.get("renewal_count", 0)
         existing_offset   = new_room_data["guest"].get("transfer_day_offset", 0)
-        old_days          = (old_renewal_count + 1) - existing_offset  # days in THIS room only
+        # days in THIS room = completed renewals since last transfer.
+        # Do NOT add +1 — the current (incomplete) day belongs to the NEW room.
+        # Same-day transfer → old_days = 0, new room is charged the full day.
+        # Next-day transfer → old_days = 1, old room charged 1 day, new room rest.
+        old_days          = old_renewal_count - existing_offset
 
-        existing_pre_transfer = new_room_data["guest"].get("pre_transfer_charges", [])
-        existing_pre_transfer.append({
-            "days":      old_days,
-            "price":     old_price,
-            "total":     old_price * old_days,
-            "from_room": old_room,
-        })
+        existing_pre_transfer = list(new_room_data["guest"].get("pre_transfer_charges", []) or [])
+        if old_days > 0:
+            existing_pre_transfer.append({
+                "days":      old_days,
+                "price":     old_price,
+                "total":     old_price * old_days,
+                "from_room": old_room,
+            })
         new_room_data["guest"]["pre_transfer_charges"] = existing_pre_transfer
         # Advance the offset so the new room knows where to start counting
         new_room_data["guest"]["transfer_day_offset"] = existing_offset + old_days

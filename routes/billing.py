@@ -156,6 +156,8 @@ def get_register_data():
                 "balance": room_data_item.get("balance", 0),
                 "status": "active",
                 "serial_number": serial,
+                # Include add_ons so the payment modal can display services
+                "services": room_data_item.get("add_ons", []),
             }
             register_entries.append(entry)
             active_count += 1
@@ -688,6 +690,212 @@ def add_bill_payment():
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# MANAGER PASSWORD HELPER (local copy — avoids circular import with rooms.py)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _check_manager_password(provided: str) -> bool:
+    import os as _os
+    expected = _os.environ.get("MANAGER_PASSWORD", "manager@1234")
+    return provided == expected
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# RECALCULATE BILL — recompute payment totals from payments collection
+# ══════════════════════════════════════════════════════════════════════════════
+
+@billing_bp.route("/recalculate_bill", methods=["POST"])
+def recalculate_bill():
+    """
+    Re-fetch all payment records for a stay and update the bill document's
+    payment_cash, payment_online, and balance fields.
+    Triggered after a payment edit so the bill reflects the corrected amounts.
+    Also fires a background PDF regeneration so the new version is stored.
+    """
+    try:
+        data     = request.json or {}
+        password = data.get("password", "")
+        bill_id  = (data.get("bill_id") or "").strip()
+
+        if not _check_manager_password(password):
+            return jsonify(success=False, message="Incorrect password"), 403
+
+        if not bill_id:
+            return jsonify(success=False, message="bill_id is required"), 400
+
+        bill_snap = bills_ref.document(bill_id).get()
+        if not bill_snap.exists:
+            return jsonify(success=False, message="Bill not found"), 404
+
+        bill_data    = bill_snap.to_dict()
+        room         = str(bill_data.get("room", ""))
+        guest_name   = bill_data.get("guest_name", "")
+        checkin_time = bill_data.get("checkin_time", "")
+
+        if not room or not guest_name or not checkin_time:
+            return jsonify(success=False, message="Bill is missing required fields"), 400
+
+        checkin_dt = datetime.strptime(checkin_time, "%Y-%m-%d %H:%M")
+
+        stay_payments = payment_service.query_payments_for_stay(
+            room, guest_name, checkin_dt
+        ) or []
+
+        _exclude      = ("refund", "checkout_refund", "manual_refund",
+                         "booking_cancel_refund", "discount", "expense")
+        _refund_types = ("refund", "checkout_refund", "manual_refund",
+                         "booking_cancel_refund")
+
+        payment_cash = sum(
+            p.get("amount", 0) for p in stay_payments
+            if p.get("method") == "cash" and p.get("type") not in _exclude
+        )
+        payment_online = sum(
+            p.get("amount", 0) for p in stay_payments
+            if p.get("method") == "online" and p.get("type") not in _exclude
+        )
+        total_refunds = sum(
+            p.get("amount", 0) for p in stay_payments
+            if p.get("type") in _refund_types
+        )
+
+        total_amount = bill_data.get("total_amount", 0)
+        new_balance  = total_amount - payment_cash - payment_online + total_refunds
+
+        bills_ref.document(bill_id).update({
+            "payment_cash":   payment_cash,
+            "payment_online": payment_online,
+            "balance":        new_balance,
+        })
+
+        # Background PDF regeneration
+        updated_bill = dict(bill_data)
+        updated_bill.update({
+            "payment_cash":   payment_cash,
+            "payment_online": payment_online,
+            "balance":        new_balance,
+        })
+        import threading as _thr
+        _thr.Thread(
+            target=auto_generate_bill_pdf,
+            args=(bill_id, updated_bill),
+            daemon=True,
+        ).start()
+
+        logger.info(
+            f"recalculate_bill: {bill_id} → cash={payment_cash} "
+            f"online={payment_online} balance={new_balance}"
+        )
+        return jsonify(
+            success=True,
+            message="Bill recalculated and PDF queued",
+            payment_cash=payment_cash,
+            payment_online=payment_online,
+            balance=new_balance,
+        )
+
+    except Exception as e:
+        logger.error(f"recalculate_bill error: {e}", exc_info=True)
+        return jsonify(success=False, message=f"Error: {str(e)}"), 500
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# UPDATE BILL SERVICE — change a service price and regenerate bill totals + PDF
+# ══════════════════════════════════════════════════════════════════════════════
+
+@billing_bp.route("/update_bill_service", methods=["POST"])
+def update_bill_service():
+    """
+    Edit the price of a single service in a completed bill.
+    Recalculates services_total, total_amount, balance, then fires a
+    background PDF regeneration so the new version lands in bills module.
+    """
+    try:
+        data          = request.json or {}
+        password      = data.get("password", "")
+        bill_id       = (data.get("bill_id") or "").strip()
+        svc_index_raw = data.get("service_index")
+        new_price_raw = data.get("new_price")
+
+        if not _check_manager_password(password):
+            return jsonify(success=False, message="Incorrect password"), 403
+
+        if not bill_id or svc_index_raw is None or new_price_raw is None:
+            return jsonify(
+                success=False,
+                message="bill_id, service_index, and new_price are required"
+            ), 400
+
+        try:
+            svc_index = int(svc_index_raw)
+            new_price = int(new_price_raw)
+        except (ValueError, TypeError):
+            return jsonify(
+                success=False,
+                message="service_index and new_price must be integers"
+            ), 400
+
+        if new_price < 0:
+            return jsonify(success=False, message="Price cannot be negative"), 400
+
+        bill_snap = bills_ref.document(bill_id).get()
+        if not bill_snap.exists:
+            return jsonify(success=False, message="Bill not found"), 404
+
+        bill_data = bill_snap.to_dict()
+        services  = list(bill_data.get("services", []))
+
+        if svc_index < 0 or svc_index >= len(services):
+            return jsonify(success=False, message="Service index out of range"), 400
+
+        old_price = services[svc_index].get("price", 0)
+        services[svc_index]["price"]      = new_price
+        services[svc_index]["unit_price"] = new_price  # single-unit assumption
+
+        services_total     = sum(s.get("price", 0) for s in services)
+        total_discounts    = bill_data.get("discounts", 0)
+        room_charges_total = bill_data.get("room_charges_total", 0)
+        total_amount       = room_charges_total + services_total - total_discounts
+
+        payment_cash   = bill_data.get("payment_cash", 0)
+        payment_online = bill_data.get("payment_online", 0)
+        total_refunds  = bill_data.get("refunds", 0)
+        new_balance    = total_amount - payment_cash - payment_online + total_refunds
+
+        bills_ref.document(bill_id).update({
+            "services":       services,
+            "services_total": services_total,
+            "total_amount":   total_amount,
+            "balance":        new_balance,
+        })
+
+        updated_bill = dict(bill_data)
+        updated_bill.update({
+            "services":       services,
+            "services_total": services_total,
+            "total_amount":   total_amount,
+            "balance":        new_balance,
+        })
+
+        import threading as _thr
+        _thr.Thread(
+            target=auto_generate_bill_pdf,
+            args=(bill_id, updated_bill),
+            daemon=True,
+        ).start()
+
+        logger.info(
+            f"update_bill_service: {bill_id} idx={svc_index} "
+            f"item={services[svc_index].get('item')} "
+            f"price {old_price}→{new_price}"
+        )
+        return jsonify(success=True, message="Service updated and bill PDF queued")
+
+    except Exception as e:
+        logger.error(f"update_bill_service error: {e}", exc_info=True)
+        return jsonify(success=False, message=f"Error: {str(e)}"), 500
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # SAVE BILL PDF — upload generated PDF to Firebase Storage, store URL in bill
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -806,18 +1014,27 @@ def _build_bill_html(b: dict) -> str:
     room_charges  = b.get("room_charges_total") or (rate * days)
     accom_total   = room_charges + accom_addons_total
 
-    # Use stored gst_amount when available (correctly computed per-segment).
-    # Derive CGST/SGST from it; fall back to back-calculation for old bills.
-    stored_gst    = b.get("gst_amount")
-    if stored_gst is not None:
-        cgst      = stored_gst / 2
-        sgst      = cgst
-        accom_base = accom_total - stored_gst
+    # GST display strategy — mirrors bills.js logic:
+    # Trust stored gst_amount (per-segment for room transfers, inclusive formula).
+    # Old bills used exclusive formula (rate/100): detect by checking if stored
+    # value ≈ accom_total × rate/100; if so, recalculate with inclusive formula.
+    stored_gst = b.get("gst_amount")
+    if stored_gst is not None and gst_rate_pct > 0:
+        exclusive_gst = accom_total * gst_rate_pct / 100
+        is_old_exclusive_bill = abs(stored_gst - exclusive_gst) < 0.10
+        if is_old_exclusive_bill:
+            gst_divisor = 100 + gst_rate_pct
+            gst_amt = accom_total * gst_rate_pct / gst_divisor
+        else:
+            gst_amt = stored_gst
+    elif gst_rate_pct > 0:
+        gst_divisor = 100 + gst_rate_pct
+        gst_amt = accom_total * gst_rate_pct / gst_divisor
     else:
-        divisor   = 1 + gst_rate_pct / 100
-        accom_base = accom_total / divisor if divisor else accom_total
-        cgst      = (accom_total - accom_base) / 2
-        sgst      = cgst
+        gst_amt = 0
+    cgst       = gst_amt / 2
+    sgst       = cgst
+    accom_base = accom_total - gst_amt
 
     discounts    = b.get("discounts") or 0
     svc_total_all = b.get("services_total") or 0
@@ -921,7 +1138,44 @@ def _build_bill_html(b: dict) -> str:
         if balance <= 0 and refunds <= 0 else ""
     )
 
-    per_night_base = _f2(accom_base / (days or 1))
+    # ── Room Rent rows: one per segment for transfer stays, single row otherwise ──
+    room_segments    = b.get("room_segments") or []
+    current_room_no  = b.get("current_room") or b.get("room", "")
+    current_room_days  = b.get("current_room_days")
+    current_room_price = b.get("current_room_price")
+    current_room_total = b.get("current_room_total")
+
+    if room_segments and current_room_days is not None:
+        # Multi-room stay — show one row per room
+        room_rent_rows = ""
+        for seg in room_segments:
+            seg_room  = seg.get("from_room", "")
+            seg_days  = seg.get("days", 0)
+            seg_price = seg.get("price", 0)
+            seg_total = seg.get("total", 0)
+            if seg_days > 0:
+                room_rent_rows += (
+                    f'<tr><td>Room Rent – Rm {seg_room}</td>'
+                    f'<td class="b-tr">{seg_days}</td>'
+                    f'<td class="b-tr">{_f2(seg_price)}</td>'
+                    f'<td class="b-tr">{_f2(seg_total)}</td></tr>'
+                )
+        if current_room_days > 0:
+            room_rent_rows += (
+                f'<tr><td>Room Rent – Rm {current_room_no}</td>'
+                f'<td class="b-tr">{current_room_days}</td>'
+                f'<td class="b-tr">{_f2(current_room_price)}</td>'
+                f'<td class="b-tr">{_f2(current_room_total)}</td></tr>'
+            )
+    else:
+        # Single-room stay (or old bill without segment data)
+        per_night_base = _f2(room_charges / (days or 1))
+        room_rent_rows = (
+            f'<tr><td>Room Rent</td>'
+            f'<td class="b-tr">{days}</td>'
+            f'<td class="b-tr">{per_night_base}</td>'
+            f'<td class="b-tr">{_f2(room_charges)}</td></tr>'
+        )
 
     return f"""
 <div class="b-bill-wrap">
@@ -960,12 +1214,7 @@ def _build_bill_html(b: dict) -> str:
     </thead>
     <tbody>
       <tr class="b-sec"><td colspan="4">Accommodation Charges (SAC: 9963)</td></tr>
-      <tr>
-        <td>Room Rent - Base Amount (excl. GST)</td>
-        <td class="b-tr">{days}</td>
-        <td class="b-tr">{per_night_base}</td>
-        <td class="b-tr">{_f2(accom_base)}</td>
-      </tr>
+      {room_rent_rows}
       {gst_rows}
       {accom_addon_rows}
       {accom_subtotal_row}

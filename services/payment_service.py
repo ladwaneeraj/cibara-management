@@ -188,6 +188,37 @@ def query_payments_for_stay(room, guest_name, checkin_dt):
     except Exception as e:
         logger.warning(f"PaymentService booking-advance Q2 failed: {e}")
 
+    # Q3: Fallback — catch booking advance payments that were NOT linked via
+    # stay_room_key (e.g. backfill failed at convert_booking_to_checkin).
+    # Queries by room + type to avoid needing a composite index; filters by
+    # guest name and date in Python.  Only picks up payments dated BEFORE the
+    # checkin date so we don't accidentally include next-stay advances.
+    try:
+        q3 = (
+            _payments_ref
+            .where(filter=fa_firestore.FieldFilter("room", "==", room_str))
+            .where(filter=fa_firestore.FieldFilter("type",  "==", "booking_advance"))
+        )
+        for doc in q3.stream():
+            if doc.id in seen_ids:
+                continue
+            pdata = doc.to_dict()
+            # Must match guest name and be dated strictly before checkin
+            if (pdata.get("name") == guest_name
+                    and pdata.get("date", "9999-99-99") < checkin_date_str):
+                seen_ids.add(doc.id)
+                results.append(pdata)
+                # Also backfill stay_room_key now so Q2 will find it next time
+                try:
+                    doc.reference.update({
+                        "stay_room_key":    f"{room_str}_{checkin_dt_str}",
+                        "stay_checkin_date": checkin_date_str,
+                    })
+                except Exception:
+                    pass
+    except Exception as e:
+        logger.warning(f"PaymentService booking-advance Q3 failed: {e}")
+
     return _dedup_payments(results)
 
 

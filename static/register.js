@@ -422,6 +422,42 @@
 }
 .reg-pay-btn:hover { background: #6c757d; color: #fff; border-color: #6c757d; }
 
+/* ── Bill number link (clickable in register table) ── */
+.reg-bill-link {
+  background: none; border: none; padding: 0; cursor: pointer;
+  color: var(--primary, #3f51b5); text-decoration: underline;
+  font-size: .73rem; white-space: nowrap; font-weight: 600;
+}
+.reg-bill-link:hover { opacity: 0.7; }
+
+/* ── Services section in payments modal ── */
+.rp-svc-section { margin-top: 1rem; padding-top: 1rem; border-top: 2px solid #e8eaf0; }
+.rp-svc-section h4 { font-size: .82rem; font-weight: 700; color: #333; margin: 0 0 .5rem; }
+.rp-svc-table { width: 100%; border-collapse: collapse; font-size: .82rem; }
+.rp-svc-table thead { background: var(--primary,#3f51b5); color: #fff; }
+.rp-svc-table th { padding: .4rem .5rem; text-align: left; font-weight: 600; white-space: nowrap; }
+.rp-svc-table tbody tr:hover { background: #f7f9fc; }
+.rp-svc-table td { padding: .35rem .5rem; border-bottom: 1px solid #f0f0f0; }
+.rp-svc-edit-btn {
+  padding: .2rem .5rem; font-size: .72rem; cursor: pointer;
+  border: 1px solid var(--primary,#3f51b5); border-radius: 4px;
+  background: #fff; color: var(--primary,#3f51b5);
+}
+.rp-svc-edit-btn:hover { background: var(--primary,#3f51b5); color: #fff; }
+.rp-svc-edit-row { background: #eef2ff !important; }
+.rp-svc-edit-row td { padding: .45rem .5rem !important; }
+.rp-svc-edit-form { display: flex; gap: .4rem; align-items: center; flex-wrap: wrap; }
+.rp-svc-save-btn {
+  padding: .25rem .6rem; background: #28a745; color: #fff;
+  border: none; border-radius: 4px; cursor: pointer; font-size: .75rem;
+}
+.rp-svc-save-btn:hover { opacity: .85; }
+.rp-svc-cancel-btn {
+  padding: .25rem .6rem; background: #6c757d; color: #fff;
+  border: none; border-radius: 4px; cursor: pointer; font-size: .75rem;
+}
+.rp-svc-cancel-btn:hover { opacity: .85; }
+
 /* ── Password prompt modal ── */
 .rpm-overlay {
   display: none; position: fixed; inset: 0;
@@ -644,6 +680,214 @@
     return document.getElementById(id);
   }
 
+  // ── Bill helper functions ─────────────────────────────────────────────────────
+  function fix2(n) { return (+(n || 0)).toFixed(2); }
+  function fmtBillDT(dtStr) {
+    if (!dtStr) return "-";
+    const [dp, tp = ""] = dtStr.split(" ");
+    const [y, m, d] = dp.split("-");
+    const mn = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+    let timePart = "";
+    if (tp) {
+      const [hh, mm] = tp.split(":");
+      const h = parseInt(hh);
+      const ampm = h >= 12 ? "PM" : "AM";
+      const h12 = h === 0 ? 12 : h > 12 ? h - 12 : h;
+      timePart = `, ${String(h12).padStart(2,"0")}:${mm} ${ampm}`;
+    }
+    return `${mn[parseInt(m)-1]} ${parseInt(d)}, ${y}${timePart}`;
+  }
+
+  // ── Bill HTML builder (mirrors bills.js buildBillHTML) ────────────────────────
+  function buildBillHTML(b) {
+    const days = b.days_stayed || calcDays(b.checkin_time, b.checkout_time);
+    const rate = b.room_price_per_night || b.room_rent || 0;
+    const services = b.services || [];
+    const accomAddons  = services.filter(s => s.accommodation_charge);
+    const otherSvcs    = services.filter(s => !s.accommodation_charge);
+    const accomAddonsTotal = accomAddons.reduce((s,x) => s+(x.price||0), 0);
+    const otherSvcTotal    = otherSvcs.reduce((s,x) => s+(x.price||0), 0);
+    const gstRatePct = typeof b.gst_rate === "number" ? b.gst_rate :
+      rate > 7500 ? 18 : rate >= 1000 ? 5 : 0;
+    const cgstRate = gstRatePct / 2;
+    const sgstRate = gstRatePct / 2;
+    const roomCharges = (typeof b.room_charges_total === "number" && b.room_charges_total > 0)
+      ? b.room_charges_total : rate * days;
+    const accomTotal = roomCharges + accomAddonsTotal;
+    // Trust stored gst_amount (per-segment for room transfers).
+    // Old bills used exclusive formula — detect and recalculate those.
+    let cgst, sgst, accomBase;
+    if (typeof b.gst_amount === "number" && gstRatePct > 0) {
+      const exclusiveGst = accomTotal * gstRatePct / 100;
+      const isOldExclusiveBill = Math.abs(b.gst_amount - exclusiveGst) < 0.10;
+      const gstAmt = isOldExclusiveBill
+        ? accomTotal * gstRatePct / (100 + gstRatePct)
+        : b.gst_amount;
+      cgst = gstAmt / 2; sgst = cgst; accomBase = accomTotal - gstAmt;
+    } else if (gstRatePct > 0) {
+      const gstAmt = accomTotal * gstRatePct / (100 + gstRatePct);
+      cgst = gstAmt / 2; sgst = cgst; accomBase = accomTotal - gstAmt;
+    } else {
+      cgst = 0; sgst = 0; accomBase = accomTotal;
+    }
+    const discounts  = b.discounts || 0;
+    const svcTotalAll = b.services_total || 0;
+    const grandTotal = (typeof b.total_amount === "number" && b.total_amount > 0)
+      ? b.total_amount : roomCharges + svcTotalAll - discounts;
+    const cashPaid = b.payment_cash || 0;
+    const onlinePaid = b.payment_online || 0;
+    const refunds = b.refunds || 0;
+    const refundCash = b.refund_cash || 0;
+    const refundOnline = b.refund_online || 0;
+    const totalPaid = cashPaid + onlinePaid;
+    const netCollected = totalPaid - refunds;
+    const balance = b.balance || 0;
+    const displayBillNo = b.bill_number || "N/A";
+    const billDate = fmtBillDT(b.checkout_time);
+    const accomAddonRows = accomAddons.map(s =>
+      `<tr><td>${s.item}</td><td class="b-tr">${s.quantity||1}</td>
+       <td class="b-tr">${fix2(s.unit_price||s.price||0)}</td>
+       <td class="b-tr">${fix2(s.price||0)}</td></tr>`).join("");
+    const otherSvcRows = otherSvcs.map(s =>
+      `<tr><td>${s.item}</td><td class="b-tr">${s.quantity||1}</td>
+       <td class="b-tr">${fix2(s.unit_price||s.price||0)}</td>
+       <td class="b-tr">${fix2(s.price||0)}</td></tr>`).join("");
+    const gstRows = `
+      <tr class="b-gst-row"><td>CGST @ ${cgstRate}%</td>
+        <td class="b-tr">—</td><td class="b-tr">—</td><td class="b-tr">${fix2(cgst)}</td></tr>
+      <tr class="b-gst-row"><td>SGST @ ${sgstRate}%</td>
+        <td class="b-tr">—</td><td class="b-tr">—</td><td class="b-tr">${fix2(sgst)}</td></tr>`;
+    const accomSubtotalRow = accomAddons.length > 0 || days > 1
+      ? `<tr class="b-subtotal"><td colspan="3" class="b-tr">Accommodation Total (incl. GST)</td>
+         <td class="b-tr">${fix2(accomTotal)}</td></tr>` : "";
+    const otherSvcSection = otherSvcRows
+      ? `<tr class="b-sec"><td colspan="4">Additional Services (Non-Taxable)</td></tr>
+         ${otherSvcRows}
+         <tr class="b-subtotal"><td colspan="3" class="b-tr">Services Total</td>
+           <td class="b-tr">${fix2(otherSvcTotal)}</td></tr>` : "";
+    const discountRow = discounts > 0
+      ? `<tr><td colspan="3" style="text-align:right;color:#2e7d32;font-weight:600;">Discount</td>
+         <td class="b-tr" style="color:#2e7d32;font-weight:700;">− ${fix2(discounts)}</td></tr>` : "";
+    // ── Room Rent rows: one per segment for transfer stays ───────────────────
+    const roomSegments   = b.room_segments || [];
+    const currentRoomNo  = b.current_room || b.room || "";
+    const currentRoomDays  = b.current_room_days;
+    const currentRoomPrice = b.current_room_price;
+    const currentRoomTotal = b.current_room_total;
+    let roomRentRows = "";
+    if (roomSegments.length > 0 && currentRoomDays != null) {
+      for (const seg of roomSegments) {
+        if ((seg.days || 0) > 0) {
+          roomRentRows += `<tr><td>Room Rent – Rm ${seg.from_room || ""}</td>
+            <td class="b-tr">${seg.days}</td>
+            <td class="b-tr">${fix2(seg.price || 0)}</td>
+            <td class="b-tr">${fix2(seg.total || 0)}</td></tr>`;
+        }
+      }
+      if ((currentRoomDays || 0) > 0) {
+        roomRentRows += `<tr><td>Room Rent – Rm ${currentRoomNo}</td>
+          <td class="b-tr">${currentRoomDays}</td>
+          <td class="b-tr">${fix2(currentRoomPrice || 0)}</td>
+          <td class="b-tr">${fix2(currentRoomTotal || 0)}</td></tr>`;
+      }
+    } else {
+      roomRentRows = `<tr><td>Room Rent</td>
+        <td class="b-tr">${days}</td>
+        <td class="b-tr">${fix2(roomCharges / (days || 1))}</td>
+        <td class="b-tr">${fix2(roomCharges)}</td></tr>`;
+    }
+    const refundRows = refunds > 0 ? (() => {
+      const rc = refundCash > 0 ? `<tr><td>Refund Given (Cash)</td><td class="b-tr" style="color:#c00;">− ₹ ${fix2(refundCash)}</td></tr>` : "";
+      const ro = refundOnline > 0 ? `<tr><td>Refund Given (UPI)</td><td class="b-tr" style="color:#c00;">− ₹ ${fix2(refundOnline)}</td></tr>` : "";
+      const rf = !refundCash && !refundOnline ? `<tr><td>Refund Given</td><td class="b-tr" style="color:#c00;">− ₹ ${fix2(refunds)}</td></tr>` : "";
+      return rc + ro + rf + `<tr class="b-subtotal"><td>Net Collected</td><td class="b-tr">₹ ${fix2(netCollected)}</td></tr>`;
+    })() : "";
+    return `<div class="b-bill-wrap">
+  <div class="b-header-block">
+    <div class="b-lodge-name">CIBARA COMFORTS</div>
+    <div class="b-lodge-entity">A Unit of Cibara Enterprise</div>
+    <div class="b-lodge-sub">Opposite Bus Stand Road, Harihar, Karnataka – 577601</div>
+    <div class="b-lodge-sub">Ph: +91 9482831381</div>
+    <div class="b-gstin-bar">GSTIN: 29AAWFC1962B1Z9 &nbsp;·&nbsp; SAC: 9963 &nbsp;·&nbsp; Karnataka (KA – 29)</div>
+    <div class="b-title">TAX INVOICE</div>
+  </div>
+  <table class="b-info-outer"><tr>
+    <td class="b-info-col">
+      <div class="b-row"><span class="b-lbl">Bill No:</span> ${displayBillNo}</div>
+      <div class="b-row"><span class="b-lbl">Guest Name:</span> ${b.guest_name || "-"}</div>
+      <div class="b-row"><span class="b-lbl">Mobile:</span> ${b.guest_mobile || "N/A"}</div>
+      <div class="b-row"><span class="b-lbl">Room No:</span> ${b.room || "-"}</div>
+      <div class="b-row"><span class="b-lbl">Guests:</span> ${b.guest_count || 1}</div>
+    </td>
+    <td class="b-info-col b-info-col-r">
+      <div class="b-row"><span class="b-lbl">Check-in:</span> ${fmtBillDT(b.checkin_time)}</div>
+      <div class="b-row"><span class="b-lbl">Check-out:</span> ${fmtBillDT(b.checkout_time)}</div>
+      <div class="b-row"><span class="b-lbl">Days Stayed:</span> ${days}</div>
+      <div class="b-row"><span class="b-lbl">Bill Date:</span> ${billDate}</div>
+      <div class="b-row"><span class="b-lbl">Place of Supply:</span> Karnataka (KA – 29)</div>
+    </td>
+  </tr></table>
+  <table class="b-tbl">
+    <thead><tr>
+      <th>Description</th><th class="b-tr">Qty</th>
+      <th class="b-tr">Rate (₹)</th><th class="b-tr">Amount (₹)</th>
+    </tr></thead>
+    <tbody>
+      <tr class="b-sec"><td colspan="4">Accommodation Charges (SAC: 9963)</td></tr>
+      ${roomRentRows}
+      ${gstRows}${accomAddonRows}${accomSubtotalRow}${otherSvcSection}${discountRow}
+      <tr class="b-grand">
+        <td colspan="3" class="b-tr">GRAND TOTAL</td>
+        <td class="b-tr">₹ ${fix2(grandTotal)}</td>
+      </tr>
+    </tbody>
+  </table>
+  <div class="b-pay-section">
+    <div class="b-pay-title">Payment Details</div>
+    <table class="b-tbl"><tbody>
+      <tr><td>Cash Paid</td><td class="b-tr">₹ ${fix2(cashPaid)}</td></tr>
+      <tr><td>Online / UPI Paid</td><td class="b-tr">₹ ${fix2(onlinePaid)}</td></tr>
+      <tr class="b-subtotal"><td>Total Paid</td><td class="b-tr">₹ ${fix2(totalPaid)}</td></tr>
+      ${refundRows}
+      ${balance > 0 ? `<tr><td style="font-weight:800;color:#c62828;">Balance Due</td><td class="b-tr" style="font-weight:800;color:#c62828;">₹ ${fix2(balance)}</td></tr>` : ""}
+      ${balance <= 0 && refunds <= 0 ? `<tr><td style="color:#2e7d32;font-weight:700;">Payment Status</td><td class="b-tr" style="color:#2e7d32;font-weight:700;">PAID IN FULL</td></tr>` : ""}
+    </tbody></table>
+  </div>
+  <table class="b-sig"><tr>
+    <td><div class="b-sig-line">Guest Signature</div></td>
+    <td style="text-align:right"><div class="b-sig-line">Authorised Signatory</div></td>
+  </tr></table>
+  <div class="b-footer">
+    <p>Thank you for staying at Cibara Comforts. We look forward to welcoming you again!</p>
+    <p>This is a computer-generated invoice.</p>
+  </div>
+</div>`;
+  }
+
+  // ── Bill viewer functions ─────────────────────────────────────────────────────
+  async function openRegBill(id) {
+    const overlay = dom("reg-bill-overlay");
+    const area    = dom("reg-bill-print-area");
+    if (!overlay || !area) return;
+    area.innerHTML = `<div class="reg-state"><div class="reg-loader"></div><p>Loading…</p></div>`;
+    overlay.classList.add("show");
+    try {
+      const res  = await apiFetch(`/generate_bill/${id}`);
+      const data = await res.json();
+      if (data.success) {
+        area.innerHTML = buildBillHTML(data.bill);
+      } else {
+        area.innerHTML = `<div class="reg-state" style="color:#c00;"><i class="fas fa-times-circle"></i><p>${data.message || "Failed to load bill"}</p></div>`;
+      }
+    } catch (err) {
+      area.innerHTML = `<div class="reg-state" style="color:#c00;"><i class="fas fa-times-circle"></i><p>Network error</p></div>`;
+    }
+  }
+  function _closeRegBill() {
+    const overlay = dom("reg-bill-overlay");
+    if (overlay) overlay.classList.remove("show");
+  }
+
   // ── Build tab HTML ────────────────────────────────────────────────────────────
   function buildHTML() {
     const tab = dom("register-tab");
@@ -745,6 +989,25 @@
       <div id="rp-content">
         <div class="rp-spinner">Loading…</div>
       </div>
+      <div id="rp-services-section" style="padding: 0 0 .5rem;"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Bill viewer modal ──────────────────────────────────────────────── -->
+<div id="reg-bill-overlay" class="bill-modal" role="dialog" aria-modal="true">
+  <div class="bill-content">
+    <div class="bill-header">
+      <h2><i class="fas fa-receipt" style="margin-right:.4rem;"></i>Bill</h2>
+      <button class="bill-close" id="reg-bill-close" title="Close">&times;</button>
+    </div>
+    <div id="reg-bill-print-area">
+      <div class="reg-state"><div class="reg-loader"></div><p>Loading…</p></div>
+    </div>
+    <div class="bill-actions">
+      <button onclick="window.print()" style="background:#6c757d;color:#fff;border:none;padding:.35rem .8rem;border-radius:6px;cursor:pointer;font-size:.82rem;">
+        <i class="fas fa-print"></i> Print
+      </button>
     </div>
   </div>
 </div>`;
@@ -832,21 +1095,32 @@
     const rb = dom("reg-refresh-btn");
     if (rb) rb.addEventListener("click", () => loadData(true));
 
-    // Delegated: group toggle + pay button
+    // Delegated: group toggle + pay button + bill link
     const tbody = dom("reg-table-body");
     if (tbody) {
       tbody.addEventListener("click", (e) => {
         const hdr = e.target.closest(".date-group-header");
         if (hdr) { toggleGroup(hdr); return; }
 
+        // Bill number click → open bill viewer
+        const billLink = e.target.closest(".reg-bill-link");
+        if (billLink) {
+          e.stopPropagation();
+          openRegBill(billLink.dataset.id);
+          return;
+        }
+
         const payBtn = e.target.closest(".reg-pay-btn");
         if (payBtn) {
           e.stopPropagation();
-          _openPasswordPrompt({
-            room:         payBtn.dataset.room,
-            guest_name:   decodeURIComponent(payBtn.dataset.guest || ""),
-            checkin_time: payBtn.dataset.checkin,
-          });
+          const room      = payBtn.dataset.room;
+          const guestName = decodeURIComponent(payBtn.dataset.guest || "");
+          const checkin   = payBtn.dataset.checkin;
+          // Look up full entry so services + bill id are available in modal
+          const fullEntry = state.filteredEntries.find(
+            en => en.room === room && en.guest_name === guestName && en.checkin_time === checkin
+          ) || { room, guest_name: guestName, checkin_time: checkin };
+          _openPasswordPrompt(fullEntry);
           return;
         }
 
@@ -883,6 +1157,10 @@
     const rpClose = dom("rp-close");
     if (rpClose) rpClose.addEventListener("click", _closePaymentsModal);
 
+    // Bill viewer modal close
+    const regBillClose = dom("reg-bill-close");
+    if (regBillClose) regBillClose.addEventListener("click", _closeRegBill);
+
     // Close modals on overlay click
     const rpmOverlay = dom("rpm-overlay");
     if (rpmOverlay) rpmOverlay.addEventListener("click", (e) => {
@@ -891,6 +1169,10 @@
     const rpOverlay = dom("rp-overlay");
     if (rpOverlay) rpOverlay.addEventListener("click", (e) => {
       if (e.target === rpOverlay) _closePaymentsModal();
+    });
+    const regBillOverlay = dom("reg-bill-overlay");
+    if (regBillOverlay) regBillOverlay.addEventListener("click", (e) => {
+      if (e.target === regBillOverlay) _closeRegBill();
     });
   }
 
@@ -1018,9 +1300,14 @@
         : "-";
     const billNo = e.status === "completed" ? e.bill_number || "-" : "-";
     const stCls = e.status === "active" ? "status-active" : "status-completed";
+    // Make bill number clickable for completed bills with a real Firestore doc id
+    const isRealBill = billNo !== "-" && e.id && !String(e.id).startsWith("active_");
+    const billNoCell = isRealBill
+      ? `<button class="reg-bill-link" data-id="${e.id}" title="View Bill">${billNo}</button>`
+      : `<span style="font-size:.73rem;white-space:nowrap;">${billNo}</span>`;
     return `<tr class="date-group-row" data-date-group="${dk}">
       <td>${serial}</td>
-      <td style="font-size:.73rem;white-space:nowrap;">${billNo}</td>
+      <td>${billNoCell}</td>
       <td><strong>${e.guest_name || "-"}</strong></td>
       <td style="font-size:.78rem;">${e.guest_mobile || "-"}</td>
       <td><strong>${e.room || "-"}</strong></td>
@@ -1205,10 +1492,11 @@
 
   // Module-level state for the payments flow
   const pmState = {
-    entry:    null,   // { room, guest_name, checkin_time }
-    password: null,   // stored in-memory after first successful verify
-    payments: [],     // loaded payment records
-    editId:   null,   // payment doc id currently being edited
+    entry:       null,   // full entry object (room, guest_name, checkin_time, services, id, status)
+    password:    null,   // stored in-memory after first successful verify
+    payments:    [],     // loaded payment records
+    editId:      null,   // payment doc id currently being edited
+    editSvcIdx:  null,   // service index being edited
   };
 
   // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -1371,17 +1659,23 @@
         `<strong>Check-in:</strong> ${e.checkin_time || "-"}`;
     }
 
-    pmState.editId = null;
+    pmState.editId     = null;
+    pmState.editSvcIdx = null;
     _renderPaymentsTable(content);
+    // Render services section (filters out water services)
+    _renderServicesSection(dom("rp-services-section"));
     overlay.classList.add("show");
   }
 
   function _closePaymentsModal() {
     const overlay = dom("rp-overlay");
     if (overlay) overlay.classList.remove("show");
-    pmState.editId  = null;
-    pmState.entry   = null;
-    pmState.payments = [];
+    pmState.editId     = null;
+    pmState.editSvcIdx = null;
+    pmState.entry      = null;
+    pmState.payments   = [];
+    const svcsEl = dom("rp-services-section");
+    if (svcsEl) svcsEl.innerHTML = "";
     // Do NOT clear pmState.password — user may open another entry without re-typing
   }
 
@@ -1532,12 +1826,162 @@
       _renderPaymentsTable(dom("rp-content"));
       _notify("Payment updated.", "success");
 
+      // If this is a completed bill and amount changed, recalculate bill totals + new PDF
+      const billEntry = pmState.entry;
+      if (newAmount !== null && billEntry && billEntry.id && !String(billEntry.id).startsWith("active_")) {
+        apiFetch("/recalculate_bill", {
+          method:  "POST",
+          headers: { "Content-Type": "application/json" },
+          body:    JSON.stringify({ password: pmState.password, bill_id: billEntry.id }),
+        }).then(() => {
+          _notify("Bill PDF version updated.", "success");
+          state.lastLoadedRange = null;  // bust register cache
+        }).catch(() => {});
+      }
+
       // If amount changed, refresh room data so balance in checkout modal updates
       if (newAmount !== null && typeof window.fetchData === "function") {
         window.fetchData().then(() => {
           if (typeof window.renderRooms === "function") window.renderRooms();
         }).catch(() => {});
       }
+
+    } catch (err) {
+      _notify("Network error. Please try again.", "error");
+    } finally {
+      if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = "Save"; }
+    }
+  };
+
+  // ══════════════════════════════════════════════════════════════════════════════
+  // SERVICES SECTION — in payments modal, shows non-water services with edit
+  // ══════════════════════════════════════════════════════════════════════════════
+
+  function _renderServicesSection(container) {
+    if (!container) return;
+    const entry = pmState.entry || {};
+    // Filter out water services
+    const services = (entry.services || []).filter(svc => {
+      const nm = (svc.item || "").toLowerCase();
+      return !nm.includes("water");
+    });
+
+    if (!services.length) {
+      container.innerHTML = "";
+      return;
+    }
+
+    // Only allow editing for completed bills (id doesn't start with "active_")
+    const isBill = entry.id && !String(entry.id).startsWith("active_");
+
+    let rows = "";
+    services.forEach((svc, idx) => {
+      const isEditing = (pmState.editSvcIdx === idx);
+      if (isEditing && isBill) {
+        rows += `
+        <tr class="rp-svc-edit-row" data-svcidx="${idx}">
+          <td colspan="4">
+            <div class="rp-svc-edit-form">
+              <label style="font-size:.75rem;font-weight:600;color:#555;">${svc.item || "Service"}</label>
+              <label style="font-size:.75rem;font-weight:600;color:#555;white-space:nowrap;">Amount (₹):</label>
+              <input type="number" id="rp-svc-amount-${idx}" value="${svc.price || 0}" min="0" style="width:80px;" />
+              <button class="rp-svc-save-btn" onclick="_svcSave(${idx})">Save</button>
+              <button class="rp-svc-cancel-btn" onclick="_svcCancelEdit()">Cancel</button>
+            </div>
+          </td>
+        </tr>`;
+      } else {
+        const editBtn = isBill
+          ? `<button class="rp-svc-edit-btn" onclick="_svcStartEdit(${idx})">Edit</button>`
+          : "";
+        rows += `
+        <tr data-svcidx="${idx}">
+          <td>${svc.item || "-"}</td>
+          <td style="text-align:center;">${svc.quantity || 1}</td>
+          <td>₹${(svc.price || 0).toLocaleString("en-IN")}</td>
+          <td>${editBtn}</td>
+        </tr>`;
+      }
+    });
+
+    container.innerHTML = `
+      <div class="rp-svc-section">
+        <h4><i class="fas fa-concierge-bell" style="margin-right:.3rem;"></i>Services</h4>
+        <table class="rp-svc-table">
+          <thead>
+            <tr><th>Service</th><th>Qty</th><th>Amount</th><th></th></tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>`;
+  }
+
+  window._svcStartEdit = function (idx) {
+    pmState.editSvcIdx = idx;
+    _renderServicesSection(dom("rp-services-section"));
+    const inp = dom(`rp-svc-amount-${idx}`);
+    if (inp) inp.focus();
+  };
+
+  window._svcCancelEdit = function () {
+    pmState.editSvcIdx = null;
+    _renderServicesSection(dom("rp-services-section"));
+  };
+
+  window._svcSave = async function (idx) {
+    const inp     = dom(`rp-svc-amount-${idx}`);
+    const saveBtn = document.querySelector(`.rp-svc-edit-row[data-svcidx="${idx}"] .rp-svc-save-btn`);
+    if (!inp) return;
+
+    const newAmount = parseInt(inp.value, 10);
+    if (isNaN(newAmount) || newAmount < 0) {
+      _notify("Amount must be 0 or more.", "error");
+      return;
+    }
+
+    const entry = pmState.entry || {};
+    if (!entry.id || String(entry.id).startsWith("active_")) {
+      _notify("Service editing only available for completed bills.", "error");
+      return;
+    }
+
+    if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = "Saving…"; }
+
+    try {
+      const res = await apiFetch("/update_bill_service", {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({
+          password:      pmState.password,
+          bill_id:       entry.id,
+          service_index: idx,
+          new_price:     newAmount,
+        }),
+      });
+
+      if (res.status === 403) {
+        _notify("Session expired. Please close and re-open.", "error");
+        pmState.password = null;
+        return;
+      }
+
+      const data = await res.json();
+      if (!data.success) {
+        _notify(data.message || "Update failed.", "error");
+        return;
+      }
+
+      // Update local entry services
+      if (pmState.entry && Array.isArray(pmState.entry.services)) {
+        pmState.entry.services[idx].price = newAmount;
+      }
+
+      pmState.editSvcIdx = null;
+      _renderServicesSection(dom("rp-services-section"));
+      _notify("Service updated. Bill PDF regenerated.", "success");
+
+      // Bust register cache so updated totals reload on next view
+      state.lastLoadedRange = null;
 
     } catch (err) {
       _notify("Network error. Please try again.", "error");

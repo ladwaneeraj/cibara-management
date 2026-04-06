@@ -1883,18 +1883,38 @@
       : rate * days;
     const accomTotal = roomCharges + accomAddonsTotal;
 
-    // Use stored gst_amount when available (correctly computed per-segment).
-    // Derive CGST/SGST from it; fall back to back-calculation for old bills.
+    // GST display strategy:
+    // config.py now stores gst_amount using inclusive back-calculation AND
+    // per-segment logic (so room transfers with different slabs are correct).
+    // We TRUST the stored value — but old bills used the exclusive formula
+    // (rate/100 instead of rate/(100+rate)) producing a slightly higher number.
+    // Detect old bills: if stored value ≈ accomTotal × rate/100, it is the
+    // wrong exclusive formula → recalculate with inclusive formula.
+    // Otherwise (stored < exclusive result, e.g. room transfers with exempt
+    // segments, or already-correct inclusive bills) → use stored value.
     let cgst, sgst, accomBase;
-    if (typeof b.gst_amount === "number") {
-      cgst      = b.gst_amount / 2;
+    if (typeof b.gst_amount === "number" && gstRatePct > 0) {
+      const exclusiveGst = accomTotal * gstRatePct / 100;
+      const isOldExclusiveBill = Math.abs(b.gst_amount - exclusiveGst) < 0.10;
+      let gstAmt;
+      if (isOldExclusiveBill) {
+        // Old bill — recalculate correctly (inclusive back-calculation on full total)
+        gstAmt = accomTotal * gstRatePct / (100 + gstRatePct);
+      } else {
+        // New bill or room-transfer bill — trust stored per-segment value
+        gstAmt = b.gst_amount;
+      }
+      cgst      = gstAmt / 2;
       sgst      = cgst;
-      accomBase = accomTotal - b.gst_amount;
+      accomBase = accomTotal - gstAmt;
+    } else if (gstRatePct > 0) {
+      // No stored value — back-calculate
+      const gstAmt = accomTotal * gstRatePct / (100 + gstRatePct);
+      cgst      = gstAmt / 2;
+      sgst      = cgst;
+      accomBase = accomTotal - gstAmt;
     } else {
-      const divisor = 1 + gstRatePct / 100;
-      accomBase = accomTotal / divisor;
-      cgst      = (accomTotal - accomBase) / 2;
-      sgst      = cgst;
+      cgst = 0; sgst = 0; accomBase = accomTotal;
     }
 
     // Grand total — use stored total_amount (authoritative figure from billing).
@@ -1975,6 +1995,43 @@
          </tr>`
       : "";
 
+    // ── Room Rent rows: one per segment for transfer stays ───────────────────────
+    const roomSegments   = b.room_segments || [];
+    const currentRoomNo  = b.current_room || b.room || "";
+    const currentRoomDays  = b.current_room_days;
+    const currentRoomPrice = b.current_room_price;
+    const currentRoomTotal = b.current_room_total;
+    let roomRentRows = "";
+    if (roomSegments.length > 0 && currentRoomDays != null) {
+      // Multi-room stay — one row per room
+      for (const seg of roomSegments) {
+        if ((seg.days || 0) > 0) {
+          roomRentRows += `<tr>
+            <td>Room Rent – Rm ${seg.from_room || ""}</td>
+            <td class="b-tr">${seg.days}</td>
+            <td class="b-tr">${fix2(seg.price || 0)}</td>
+            <td class="b-tr">${fix2(seg.total || 0)}</td>
+          </tr>`;
+        }
+      }
+      if ((currentRoomDays || 0) > 0) {
+        roomRentRows += `<tr>
+          <td>Room Rent – Rm ${currentRoomNo}</td>
+          <td class="b-tr">${currentRoomDays}</td>
+          <td class="b-tr">${fix2(currentRoomPrice || 0)}</td>
+          <td class="b-tr">${fix2(currentRoomTotal || 0)}</td>
+        </tr>`;
+      }
+    } else {
+      // Single-room stay (or old bill without segment data)
+      roomRentRows = `<tr>
+        <td>Room Rent</td>
+        <td class="b-tr">${days}</td>
+        <td class="b-tr">${fix2(roomCharges / (days || 1))}</td>
+        <td class="b-tr">${fix2(roomCharges)}</td>
+      </tr>`;
+    }
+
     // Discount row
     const discountRow =
       discounts > 0
@@ -2031,12 +2088,7 @@
     </thead>
     <tbody>
       <tr class="b-sec"><td colspan="4">Accommodation Charges (SAC: 9963)</td></tr>
-      <tr>
-        <td>Room Rent — Base Amount (excl. GST)</td>
-        <td class="b-tr">${days}</td>
-        <td class="b-tr">${fix2(accomBase / (days || 1))}</td>
-        <td class="b-tr">${fix2(accomBase)}</td>
-      </tr>
+      ${roomRentRows}
       ${gstRows}
       ${accomAddonRows}
       ${accomSubtotalRow}

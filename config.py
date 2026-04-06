@@ -514,21 +514,45 @@ def create_bill_record(room, room_data, checkout_time, batch=None,
         )
         non_accommodation_total = services_total - accommodation_addons_total
 
-        # GST on pre-transfer segments (each segment at its own slab)
-        pre_transfer_gst = sum(
-            round(entry.get("total", 0) * _gst_rate_for_price(entry.get("price", 0)) / 100, 2)
-            for entry in pre_transfer_charges
-        )
-        # GST on current room segment + accommodation add-ons
+        # GST slab is determined by the combined per-night tariff.
+        # room_price_per_night is already bumped to include Extra Bed / AC unit prices,
+        # so _gst_rate_for_price(room_price_per_night) reflects the correct slab.
         gst_rate = _gst_rate_for_price(room_price_per_night)
-        current_gst = round(
-            (current_room_charges + accommodation_addons_total) * gst_rate / 100, 2
-        )
-        gst_amount = pre_transfer_gst + current_gst
 
-        # Taxable accommodation value (exclusive of discount; discount applied pro-rata
-        # on the invoice for compliance; here we store gross taxable for reference).
-        accommodation_taxable = room_charges_total + accommodation_addons_total
+        # Prices entered are GST-INCLUSIVE (the amount charged to the customer).
+        # GST is back-calculated: gst = total_inclusive × rate / (100 + rate)
+        # e.g. room ₹800 + Extra Bed ₹300 = ₹1,100 inclusive → 5% slab
+        #      GST = 1100 × 5 / 105 = ₹52.38; taxable base = ₹1,047.62
+
+        if accommodation_addons_total > 0:
+            # Add-ons change the effective slab for the full stay — apply combined
+            # back-calculation on the full inclusive accommodation total.
+            divisor = 100 + gst_rate  # 105 for 5%, 118 for 18%, 100 for 0%
+            gst_amount = round(
+                (room_charges_total + accommodation_addons_total) * gst_rate / divisor, 2
+            )
+        else:
+            # No accommodation add-ons — use per-segment back-calculation so room
+            # transfers are taxed accurately at each segment's own slab.
+            pre_transfer_gst = sum(
+                round(
+                    entry.get("total", 0)
+                    * _gst_rate_for_price(entry.get("price", 0))
+                    / (100 + _gst_rate_for_price(entry.get("price", 0))),
+                    2,
+                )
+                for entry in pre_transfer_charges
+            )
+            current_divisor = 100 + gst_rate
+            current_gst = round(current_room_charges * gst_rate / current_divisor, 2)
+            gst_amount = pre_transfer_gst + current_gst
+
+        # accommodation_taxable = PRE-GST taxable base (what goes on GST returns).
+        # = (room_charges + addons inclusive) - gst_amount
+        # This is the value a CA uses for CGST/SGST filing.
+        accommodation_taxable = round(
+            (room_charges_total + accommodation_addons_total) - gst_amount, 2
+        )
 
         # bill_number is determined after invoice logic below
         bill_number = None
@@ -654,6 +678,14 @@ def create_bill_record(room, room_data, checkout_time, batch=None,
             "accommodation_taxable": accommodation_taxable,
             "non_accommodation_total": non_accommodation_total,
             "gst_amount": gst_amount,
+            # Room-segment breakdown for itemised bill display (room transfers)
+            # Each entry: {from_room, days, price, total}
+            # current_room_* = the final room at checkout
+            "room_segments": pre_transfer_charges,
+            "current_room": room,
+            "current_room_days": days_in_current_room,
+            "current_room_price": room_price_per_night,
+            "current_room_total": current_room_charges,
         }
 
         return bill_record

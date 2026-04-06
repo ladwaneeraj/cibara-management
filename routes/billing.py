@@ -1085,7 +1085,7 @@ def _build_bill_html(b: dict) -> str:
         f'<tr class="b-subtotal">'
         f'<td colspan="3" class="b-tr">Accommodation Total (incl. GST)</td>'
         f'<td class="b-tr">{_f2(accom_total)}</td></tr>'
-        if accom_addons or days > 1 else ""
+        if accom_addons or days > 1 or room_segments else ""
     )
 
     other_svc_section = (
@@ -1138,15 +1138,26 @@ def _build_bill_html(b: dict) -> str:
         if balance <= 0 and refunds <= 0 else ""
     )
 
-    # ── Room Rent rows: one per segment for transfer stays, single row otherwise ──
-    room_segments    = b.get("room_segments") or []
-    current_room_no  = b.get("current_room") or b.get("room", "")
+    # ── Helper: GST slab for a given per-night price ─────────────────────────
+    def _seg_gst_rate(price):
+        if price < 1000: return 0
+        elif price <= 7500: return 5
+        else: return 18
+
+    def _seg_taxable(total_incl, price):
+        """Pre-GST taxable value for a segment given its inclusive total."""
+        r = _seg_gst_rate(price)
+        return total_incl / (1 + r / 100) if r > 0 else total_incl
+
+    # ── Room Rent rows: pre-GST values, one per segment for transfer stays ────
+    room_segments      = b.get("room_segments") or []
+    current_room_no    = b.get("current_room") or b.get("room", "")
     current_room_days  = b.get("current_room_days")
     current_room_price = b.get("current_room_price")
     current_room_total = b.get("current_room_total")
 
     if room_segments and current_room_days is not None:
-        # Multi-room stay — show one row per room
+        # Multi-room stay — one row per room, showing pre-GST taxable rate
         room_rent_rows = ""
         for seg in room_segments:
             seg_room  = seg.get("from_room", "")
@@ -1154,28 +1165,39 @@ def _build_bill_html(b: dict) -> str:
             seg_price = seg.get("price", 0)
             seg_total = seg.get("total", 0)
             if seg_days > 0:
+                seg_tax   = _seg_taxable(seg_total, seg_price)
+                seg_rate  = seg_tax / seg_days if seg_days else 0
                 room_rent_rows += (
                     f'<tr><td>Room Rent – Rm {seg_room}</td>'
                     f'<td class="b-tr">{seg_days}</td>'
-                    f'<td class="b-tr">{_f2(seg_price)}</td>'
-                    f'<td class="b-tr">{_f2(seg_total)}</td></tr>'
+                    f'<td class="b-tr">{_f2(seg_rate)}</td>'
+                    f'<td class="b-tr">{_f2(seg_tax)}</td></tr>'
                 )
-        if current_room_days > 0:
+        if (current_room_days or 0) > 0:
+            curr_tax  = _seg_taxable(current_room_total or 0, current_room_price or 0)
+            curr_rate = curr_tax / current_room_days if current_room_days else 0
             room_rent_rows += (
                 f'<tr><td>Room Rent – Rm {current_room_no}</td>'
                 f'<td class="b-tr">{current_room_days}</td>'
-                f'<td class="b-tr">{_f2(current_room_price)}</td>'
-                f'<td class="b-tr">{_f2(current_room_total)}</td></tr>'
+                f'<td class="b-tr">{_f2(curr_rate)}</td>'
+                f'<td class="b-tr">{_f2(curr_tax)}</td></tr>'
             )
     else:
-        # Single-room stay (or old bill without segment data)
-        per_night_base = _f2(room_charges / (days or 1))
+        # Single-room stay — show pre-GST taxable base
         room_rent_rows = (
             f'<tr><td>Room Rent</td>'
             f'<td class="b-tr">{days}</td>'
-            f'<td class="b-tr">{per_night_base}</td>'
-            f'<td class="b-tr">{_f2(room_charges)}</td></tr>'
+            f'<td class="b-tr">{_f2(accom_base / (days or 1))}</td>'
+            f'<td class="b-tr">{_f2(accom_base)}</td></tr>'
         )
+
+    # For add-on stays, show a "Taxable Base" row so the math is transparent
+    taxable_base_row = (
+        f'<tr class="b-gst-row"><td>Taxable Base (excl. GST)</td>'
+        f'<td class="b-tr">—</td><td class="b-tr">—</td>'
+        f'<td class="b-tr">{_f2(accom_base)}</td></tr>'
+        if accom_addons else ""
+    )
 
     return f"""
 <div class="b-bill-wrap">
@@ -1215,8 +1237,9 @@ def _build_bill_html(b: dict) -> str:
     <tbody>
       <tr class="b-sec"><td colspan="4">Accommodation Charges (SAC: 9963)</td></tr>
       {room_rent_rows}
-      {gst_rows}
       {accom_addon_rows}
+      {taxable_base_row}
+      {gst_rows}
       {accom_subtotal_row}
       {other_svc_section}
       {discount_row}

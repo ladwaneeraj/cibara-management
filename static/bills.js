@@ -1976,9 +1976,26 @@
         <td class="b-tr">${fix2(sgst)}</td>
       </tr>`;
 
-    // Accommodation subtotal row (only when add-ons exist or multi-day)
+    // Helper: GST slab for a given per-night price
+    function segGstRate(p) {
+      return p < 1000 ? 0 : p <= 7500 ? 5 : 18;
+    }
+    function segTaxable(totalIncl, price) {
+      const r = segGstRate(price);
+      return r > 0 ? totalIncl / (1 + r / 100) : totalIncl;
+    }
+
+    // ── Room Rent rows: pre-GST taxable values, one per segment for transfers ──
+    // Declare roomSegments BEFORE accomSubtotalRow which references it
+    const roomSegments   = b.room_segments || [];
+    const currentRoomNo  = b.current_room || b.room || "";
+    const currentRoomDays  = b.current_room_days;
+    const currentRoomPrice = b.current_room_price;
+    const currentRoomTotal = b.current_room_total;
+
+    // Accommodation subtotal row (when add-ons, multi-day, or multi-room)
     const accomSubtotalRow =
-      accomAddons.length > 0 || days > 1
+      accomAddons.length > 0 || days > 1 || roomSegments.length > 0
         ? `<tr class="b-subtotal">
            <td colspan="3" class="b-tr">Accommodation Total (incl. GST)</td>
            <td class="b-tr">${fix2(accomTotal)}</td>
@@ -1994,43 +2011,48 @@
            <td class="b-tr">${fix2(otherSvcTotal)}</td>
          </tr>`
       : "";
-
-    // ── Room Rent rows: one per segment for transfer stays ───────────────────────
-    const roomSegments   = b.room_segments || [];
-    const currentRoomNo  = b.current_room || b.room || "";
-    const currentRoomDays  = b.current_room_days;
-    const currentRoomPrice = b.current_room_price;
-    const currentRoomTotal = b.current_room_total;
     let roomRentRows = "";
     if (roomSegments.length > 0 && currentRoomDays != null) {
-      // Multi-room stay — one row per room
       for (const seg of roomSegments) {
         if ((seg.days || 0) > 0) {
+          const segTax  = segTaxable(seg.total || 0, seg.price || 0);
+          const segRate = seg.days ? segTax / seg.days : 0;
           roomRentRows += `<tr>
             <td>Room Rent – Rm ${seg.from_room || ""}</td>
             <td class="b-tr">${seg.days}</td>
-            <td class="b-tr">${fix2(seg.price || 0)}</td>
-            <td class="b-tr">${fix2(seg.total || 0)}</td>
+            <td class="b-tr">${fix2(segRate)}</td>
+            <td class="b-tr">${fix2(segTax)}</td>
           </tr>`;
         }
       }
       if ((currentRoomDays || 0) > 0) {
+        const currTax  = segTaxable(currentRoomTotal || 0, currentRoomPrice || 0);
+        const currRate = currentRoomDays ? currTax / currentRoomDays : 0;
         roomRentRows += `<tr>
           <td>Room Rent – Rm ${currentRoomNo}</td>
           <td class="b-tr">${currentRoomDays}</td>
-          <td class="b-tr">${fix2(currentRoomPrice || 0)}</td>
-          <td class="b-tr">${fix2(currentRoomTotal || 0)}</td>
+          <td class="b-tr">${fix2(currRate)}</td>
+          <td class="b-tr">${fix2(currTax)}</td>
         </tr>`;
       }
     } else {
-      // Single-room stay (or old bill without segment data)
+      // Single-room stay — show pre-GST taxable base
       roomRentRows = `<tr>
         <td>Room Rent</td>
         <td class="b-tr">${days}</td>
-        <td class="b-tr">${fix2(roomCharges / (days || 1))}</td>
-        <td class="b-tr">${fix2(roomCharges)}</td>
+        <td class="b-tr">${fix2(accomBase / (days || 1))}</td>
+        <td class="b-tr">${fix2(accomBase)}</td>
       </tr>`;
     }
+
+    // For add-on stays show a "Taxable Base" row so math is transparent
+    const taxableBaseRow = accomAddons.length > 0
+      ? `<tr class="b-gst-row">
+           <td>Taxable Base (excl. GST)</td>
+           <td class="b-tr">—</td><td class="b-tr">—</td>
+           <td class="b-tr">${fix2(accomBase)}</td>
+         </tr>`
+      : "";
 
     // Discount row
     const discountRow =
@@ -2089,8 +2111,9 @@
     <tbody>
       <tr class="b-sec"><td colspan="4">Accommodation Charges (SAC: 9963)</td></tr>
       ${roomRentRows}
-      ${gstRows}
       ${accomAddonRows}
+      ${taxableBaseRow}
+      ${gstRows}
       ${accomSubtotalRow}
       ${otherSvcSection}
       ${discountRow}

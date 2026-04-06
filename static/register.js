@@ -757,7 +757,21 @@
         <td class="b-tr">—</td><td class="b-tr">—</td><td class="b-tr">${fix2(cgst)}</td></tr>
       <tr class="b-gst-row"><td>SGST @ ${sgstRate}%</td>
         <td class="b-tr">—</td><td class="b-tr">—</td><td class="b-tr">${fix2(sgst)}</td></tr>`;
-    const accomSubtotalRow = accomAddons.length > 0 || days > 1
+    // Helper: GST slab and pre-GST taxable for a segment
+    function segGstRate(p) { return p < 1000 ? 0 : p <= 7500 ? 5 : 18; }
+    function segTaxable(totalIncl, price) {
+      const r = segGstRate(price);
+      return r > 0 ? totalIncl / (1 + r / 100) : totalIncl;
+    }
+
+    // ── Room Rent rows: pre-GST taxable values ───────────────────────────────
+    const roomSegments   = b.room_segments || [];
+    const currentRoomNo  = b.current_room || b.room || "";
+    const currentRoomDays  = b.current_room_days;
+    const currentRoomPrice = b.current_room_price;
+    const currentRoomTotal = b.current_room_total;
+
+    const accomSubtotalRow = accomAddons.length > 0 || days > 1 || roomSegments.length > 0
       ? `<tr class="b-subtotal"><td colspan="3" class="b-tr">Accommodation Total (incl. GST)</td>
          <td class="b-tr">${fix2(accomTotal)}</td></tr>` : "";
     const otherSvcSection = otherSvcRows
@@ -768,34 +782,37 @@
     const discountRow = discounts > 0
       ? `<tr><td colspan="3" style="text-align:right;color:#2e7d32;font-weight:600;">Discount</td>
          <td class="b-tr" style="color:#2e7d32;font-weight:700;">− ${fix2(discounts)}</td></tr>` : "";
-    // ── Room Rent rows: one per segment for transfer stays ───────────────────
-    const roomSegments   = b.room_segments || [];
-    const currentRoomNo  = b.current_room || b.room || "";
-    const currentRoomDays  = b.current_room_days;
-    const currentRoomPrice = b.current_room_price;
-    const currentRoomTotal = b.current_room_total;
     let roomRentRows = "";
     if (roomSegments.length > 0 && currentRoomDays != null) {
       for (const seg of roomSegments) {
         if ((seg.days || 0) > 0) {
+          const st = segTaxable(seg.total || 0, seg.price || 0);
+          const sr = seg.days ? st / seg.days : 0;
           roomRentRows += `<tr><td>Room Rent – Rm ${seg.from_room || ""}</td>
             <td class="b-tr">${seg.days}</td>
-            <td class="b-tr">${fix2(seg.price || 0)}</td>
-            <td class="b-tr">${fix2(seg.total || 0)}</td></tr>`;
+            <td class="b-tr">${fix2(sr)}</td>
+            <td class="b-tr">${fix2(st)}</td></tr>`;
         }
       }
       if ((currentRoomDays || 0) > 0) {
+        const ct = segTaxable(currentRoomTotal || 0, currentRoomPrice || 0);
+        const cr = currentRoomDays ? ct / currentRoomDays : 0;
         roomRentRows += `<tr><td>Room Rent – Rm ${currentRoomNo}</td>
           <td class="b-tr">${currentRoomDays}</td>
-          <td class="b-tr">${fix2(currentRoomPrice || 0)}</td>
-          <td class="b-tr">${fix2(currentRoomTotal || 0)}</td></tr>`;
+          <td class="b-tr">${fix2(cr)}</td>
+          <td class="b-tr">${fix2(ct)}</td></tr>`;
       }
     } else {
       roomRentRows = `<tr><td>Room Rent</td>
         <td class="b-tr">${days}</td>
-        <td class="b-tr">${fix2(roomCharges / (days || 1))}</td>
-        <td class="b-tr">${fix2(roomCharges)}</td></tr>`;
+        <td class="b-tr">${fix2(accomBase / (days || 1))}</td>
+        <td class="b-tr">${fix2(accomBase)}</td></tr>`;
     }
+    const taxableBaseRow = accomAddons.length > 0
+      ? `<tr class="b-gst-row"><td>Taxable Base (excl. GST)</td>
+         <td class="b-tr">—</td><td class="b-tr">—</td>
+         <td class="b-tr">${fix2(accomBase)}</td></tr>`
+      : "";
     const refundRows = refunds > 0 ? (() => {
       const rc = refundCash > 0 ? `<tr><td>Refund Given (Cash)</td><td class="b-tr" style="color:#c00;">− ₹ ${fix2(refundCash)}</td></tr>` : "";
       const ro = refundOnline > 0 ? `<tr><td>Refund Given (UPI)</td><td class="b-tr" style="color:#c00;">− ₹ ${fix2(refundOnline)}</td></tr>` : "";
@@ -835,7 +852,7 @@
     <tbody>
       <tr class="b-sec"><td colspan="4">Accommodation Charges (SAC: 9963)</td></tr>
       ${roomRentRows}
-      ${gstRows}${accomAddonRows}${accomSubtotalRow}${otherSvcSection}${discountRow}
+      ${accomAddonRows}${taxableBaseRow}${gstRows}${accomSubtotalRow}${otherSvcSection}${discountRow}
       <tr class="b-grand">
         <td colspan="3" class="b-tr">GRAND TOTAL</td>
         <td class="b-tr">₹ ${fix2(grandTotal)}</td>

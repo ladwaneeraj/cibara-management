@@ -410,6 +410,7 @@
     dateRange: { start: null, end: null },
     filters: { search: "", source: "all", payment: "all" },
     lastLoadedRange: null,
+    _reqId: 0,            // incremented on every fetch; detects stale responses
     sort: { key: null, dir: "asc" },
     // Pay modal state
     payModal: {
@@ -595,8 +596,8 @@
       <i class="fas fa-calendar-alt"></i>
       <input type="text" id="bl-date-range" class="bl-date-range-input" placeholder="Select date range" readonly />
     </div>
-    <button class="bl-quick-btn bq-active" data-bq="today">Today</button>
-    <button class="bl-quick-btn" data-bq="week">Week</button>
+    <button class="bl-quick-btn" data-bq="today">Today</button>
+    <button class="bl-quick-btn bq-active" data-bq="week">Week</button>
     <button class="bl-quick-btn" data-bq="month">Month</button>
     <span class="bl-filter-divider"></span>
     <select id="bl-payment-filter">
@@ -777,8 +778,9 @@
   // ── Date defaults + flatpickr init ────────────────────────────────────────────
   function setDefaults() {
     const today = todayStr();
-    state.dateRange.start = today;
-    state.dateRange.end = today;
+    const weekStart = nDaysAgoStr(6);
+    state.dateRange.start = weekStart;   // default: last 7 days
+    state.dateRange.end   = today;
 
     const el = dom("bl-date-range");
     if (!el || !window.flatpickr) return;
@@ -788,13 +790,14 @@
       dateFormat: "Y-m-d", // internal ISO format — avoids maxDate mis-parsing
       altInput: true, // show human-friendly text to user
       altFormat: "d M Y", // display: "17 Mar 2026"
-      defaultDate: [today, today],
+      defaultDate: [weekStart, today],
       maxDate: today,
       disableMobile: true,
       onChange: function (selectedDates) {
         if (selectedDates.length === 2) {
           state.dateRange.start = dateToYMD(selectedDates[0]);
           state.dateRange.end = dateToYMD(selectedDates[1]);
+          // clear quick-btn active (manual calendar pick)
           document
             .querySelectorAll(".bl-quick-btn")
             .forEach((b) => b.classList.remove("bq-active"));
@@ -818,11 +821,15 @@
         else start = today;
         state.dateRange.start = start;
         state.dateRange.end = today;
-        if (state._datePicker) state._datePicker.setDate([start, today]);
+        // Pass false so setDate does NOT fire onChange → avoids a duplicate
+        // loadData call that would be blocked when a prior load is in flight
+        if (state._datePicker) state._datePicker.setDate([start, today], false);
         document
           .querySelectorAll(".bl-quick-btn")
           .forEach((b) => b.classList.remove("bq-active"));
         btn.classList.add("bq-active");
+        // Always force-reload, even if a previous load is still running
+        state.loading = false;
         loadData(true);
       });
     });
@@ -1116,20 +1123,21 @@
 
   // ── Load data ────────────────────────────────────────────────────────────────
   async function loadData(force) {
-    if (state.loading) return;
     const { start, end } = state.dateRange;
     if (!start || !end) return;
 
+    // Non-forced calls: skip if same range already loaded or a load is in flight
     const rangeKey = `${start}_${end}`;
-    if (
-      !force &&
-      state.lastLoadedRange === rangeKey &&
-      state.allEntries.length >= 0
-    ) {
-      applyFilters();
-      return;
+    if (!force) {
+      if (state.loading) return;
+      if (state.lastLoadedRange === rangeKey) {
+        applyFilters();
+        return;
+      }
     }
 
+    // Stamp this request; any earlier in-flight fetch will discard its result
+    const myReqId = ++state._reqId;
     state.loading = true;
     showLoading();
 
@@ -1139,8 +1147,10 @@
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ start_date: start, end_date: end }),
       });
+      if (myReqId !== state._reqId) return; // a newer request superseded this one
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
+      if (myReqId !== state._reqId) return;
       if (data.success) {
         state.allEntries = data.entries || [];
         state.lastLoadedRange = rangeKey;
@@ -1149,10 +1159,11 @@
         showError(data.message || "Failed to load");
       }
     } catch (err) {
+      if (myReqId !== state._reqId) return;
       console.error("[Bills]", err);
       showError("Network error — " + err.message);
     } finally {
-      state.loading = false;
+      if (myReqId === state._reqId) state.loading = false;
     }
   }
 

@@ -62,6 +62,9 @@ onSnapshot(collection(db, "rooms"), (snapshot) => {
   if (changed) {
     console.log("⚡ Remote room update — patching local state");
     if (typeof renderRooms === "function") renderRooms();
+    // Notify Register & Bills modules so they re-fetch their data too.
+    // This covers changes made on ANY device, not just the current browser.
+    window.dispatchEvent(new CustomEvent("cibaraRoomUpdate", { detail: { type: "remote_sync" } }));
     showSyncToast();
   }
 });

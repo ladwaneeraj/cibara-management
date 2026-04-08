@@ -1734,8 +1734,38 @@ function showEditTimeModal(roomNumber, currentCheckInTime) {
   const newCheckinDate = document.getElementById("new-checkin-date");
   const newCheckinTime = document.getElementById("new-checkin-time");
 
-  if (newCheckinDate) newCheckinDate.value = formattedDate;
-  if (newCheckinTime) newCheckinTime.value = time;
+  // Compute today's date and current time for max constraints
+  const nowForMax = new Date();
+  const todayForMax = nowForMax.toISOString().split("T")[0];
+  const currentHHMM = String(nowForMax.getHours()).padStart(2, "0") + ":" +
+                      String(nowForMax.getMinutes()).padStart(2, "0");
+
+  if (newCheckinDate) {
+    newCheckinDate.value = formattedDate;
+    newCheckinDate.max = todayForMax; // cannot pick a future date
+  }
+  if (newCheckinTime) {
+    newCheckinTime.value = time;
+    // If the current check-in date is today, cap time to now
+    newCheckinTime.max = (formattedDate === todayForMax) ? currentHHMM : "23:59";
+  }
+
+  // When the date changes, update the time's max accordingly
+  if (newCheckinDate) {
+    newCheckinDate.onchange = function () {
+      if (!newCheckinTime) return;
+      const now2 = new Date();
+      const today2 = now2.toISOString().split("T")[0];
+      const nowHHMM2 = String(now2.getHours()).padStart(2, "0") + ":" +
+                       String(now2.getMinutes()).padStart(2, "0");
+      if (newCheckinDate.value === today2) {
+        newCheckinTime.max = nowHHMM2;
+        if (newCheckinTime.value > nowHHMM2) newCheckinTime.value = nowHHMM2;
+      } else {
+        newCheckinTime.max = "23:59";
+      }
+    };
+  }
 
   // Setup the form submission
   const form = document.getElementById("edit-time-form");
@@ -1751,6 +1781,13 @@ function showEditTimeModal(roomNumber, currentCheckInTime) {
       const newDate = document.getElementById("new-checkin-date").value;
       const newTime = document.getElementById("new-checkin-time").value;
       const newCheckInTime = `${newDate} ${newTime}`;
+
+      // Validate: check-in time must not be in the future
+      const selectedDt = new Date(`${newDate}T${newTime}`);
+      if (selectedDt > new Date()) {
+        showNotification("Check-in time cannot be set to a future time.", "error");
+        return;
+      }
 
       // Disable submit button and show loading state
       const submitBtn = form.querySelector("button[type=submit]");
@@ -1796,6 +1833,9 @@ function showEditTimeModal(roomNumber, currentCheckInTime) {
         }
 
         showNotification("Check-in time updated successfully!", "success");
+
+        // Notify register & bills modules to refresh their data
+        window.dispatchEvent(new CustomEvent("cibaraRoomUpdate", { detail: { type: "checkin_time_edit" } }));
       } else {
         showNotification(
           result.message || "Error updating check-in time",

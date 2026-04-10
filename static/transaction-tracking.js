@@ -21,7 +21,7 @@ class TransactionTracker {
     try {
       localStorage.setItem(
         "lodge_daily_counters",
-        JSON.stringify(this.dailyCounters)
+        JSON.stringify(this.dailyCounters),
       );
     } catch (error) {
       console.error("Error saving daily counters:", error);
@@ -54,6 +54,41 @@ class TransactionTracker {
   storeSerialNumber(date, roomNumber, serialNumber) {
     const key = `${date}_${roomNumber}`;
     localStorage.setItem(`serial_${key}`, serialNumber.toString());
+  }
+
+  /**
+   * Called when a check-in date changes (e.g. staff edits the check-in time to a different day).
+   * Releases the serial slot on the old date and assigns a new serial on the new date.
+   * Returns the new serial number (or null if new date is not today).
+   */
+  reassignCheckinDate(roomNumber, oldDate, newDate) {
+    if (oldDate === newDate) return null; // same day — nothing to do
+
+    // 1. Remove old serial entry
+    const oldKey = `${oldDate}_${roomNumber}`;
+    localStorage.removeItem(`serial_${oldKey}`);
+
+    // 2. Decrement old date counter (floor at 0 to avoid negatives)
+    if (this.dailyCounters[oldDate] && this.dailyCounters[oldDate] > 0) {
+      this.dailyCounters[oldDate] = Math.max(0, this.dailyCounters[oldDate] - 1);
+      this.saveDailyCounters();
+    }
+
+    // 3. Assign a new serial for the new date (only if it is today)
+    const todayStr = new Date().toISOString().split("T")[0];
+    if (newDate === todayStr) {
+      if (!this.dailyCounters[newDate]) {
+        this.dailyCounters[newDate] = 0;
+      }
+      this.dailyCounters[newDate] += 1;
+      this.saveDailyCounters();
+      const newSerial = this.dailyCounters[newDate];
+      this.storeSerialNumber(newDate, roomNumber, newSerial);
+      console.log(`Reassigned room ${roomNumber}: serial released from ${oldDate}, new serial #${newSerial} on ${newDate}`);
+      return newSerial;
+    }
+
+    return null;
   }
 
   cleanupOldCounters() {
@@ -174,7 +209,7 @@ class TransactionTracker {
         ? "booking conversion"
         : "fresh check-in";
       console.log(
-        `Assigned serial number ${serialNumber} to room ${roomNumber} for ${date} (${checkinType})`
+        `Assigned serial number ${serialNumber} to room ${roomNumber} for ${date} (${checkinType})`,
       );
       return serialNumber;
     }
@@ -216,23 +251,40 @@ class TransactionLogManager {
     const src = logsOverride || logs;
     const inRange = (date) => date >= fromDate && date <= toDate;
 
-    const recentCashLogs    = (src.cash    || []).filter((log) => inRange(log.date));
-    const recentOnlineLogs  = (src.online  || []).filter((log) => inRange(log.date));
-    const recentRefundLogs  = (src.refunds || []).filter((log) => inRange(log.date));
+    const recentCashLogs = (src.cash || []).filter((log) => inRange(log.date));
+    const recentOnlineLogs = (src.online || []).filter((log) =>
+      inRange(log.date),
+    );
+    const recentRefundLogs = (src.refunds || []).filter((log) =>
+      inRange(log.date),
+    );
     // For cached global logs, filter to transaction-type expenses only.
     // For server-fetched logsOverride, expenses are already pre-filtered by the backend.
     const recentExpenseLogs = (src.expenses || []).filter(
-      (log) => inRange(log.date) && (logsOverride || log.expense_type === "transaction")
+      (log) =>
+        inRange(log.date) &&
+        (logsOverride || log.expense_type === "transaction"),
     );
 
     // Always compute analytics from the full unfiltered set for the date range
-    this._updateAnalyticsCards(recentCashLogs, recentOnlineLogs, recentRefundLogs, recentExpenseLogs);
+    this._updateAnalyticsCards(
+      recentCashLogs,
+      recentOnlineLogs,
+      recentRefundLogs,
+      recentExpenseLogs,
+    );
 
     // Apply type filter for the list only
-    let cashForList    = typeFilter === "all" || typeFilter === "cash"     ? recentCashLogs    : [];
-    let onlineForList  = typeFilter === "all" || typeFilter === "online"   ? recentOnlineLogs  : [];
-    let refundForList  = typeFilter === "all" || typeFilter === "refunds"  ? recentRefundLogs  : [];
-    let expenseForList = typeFilter === "all" || typeFilter === "expenses" ? recentExpenseLogs : [];
+    let cashForList =
+      typeFilter === "all" || typeFilter === "cash" ? recentCashLogs : [];
+    let onlineForList =
+      typeFilter === "all" || typeFilter === "online" ? recentOnlineLogs : [];
+    let refundForList =
+      typeFilter === "all" || typeFilter === "refunds" ? recentRefundLogs : [];
+    let expenseForList =
+      typeFilter === "all" || typeFilter === "expenses"
+        ? recentExpenseLogs
+        : [];
 
     const allRecentLogs = [
       ...cashForList.map((log) => ({ ...log, logType: "cash" })),
@@ -288,7 +340,11 @@ class TransactionLogManager {
     let logsHTML = "";
 
     const _today = new Date().toISOString().split("T")[0];
-    const _yesterday = (() => { const d = new Date(); d.setDate(d.getDate() - 1); return d.toISOString().split("T")[0]; })();
+    const _yesterday = (() => {
+      const d = new Date();
+      d.setDate(d.getDate() - 1);
+      return d.toISOString().split("T")[0];
+    })();
 
     function formatDate(dateStr) {
       const date = new Date(dateStr + "T00:00:00");
@@ -301,7 +357,8 @@ class TransactionLogManager {
       .forEach((date) => {
         let dateDisplay = formatDate(date);
         if (date === _today) dateDisplay = "Today — " + dateDisplay;
-        else if (date === _yesterday) dateDisplay = "Yesterday — " + dateDisplay;
+        else if (date === _yesterday)
+          dateDisplay = "Yesterday — " + dateDisplay;
 
         const dayTotal = logsByDate[date].reduce((sum, l) => {
           if (l.logType === "refunds" || l.logType === "expenses") return sum;
@@ -326,7 +383,10 @@ class TransactionLogManager {
     const totalIn = cashSum + upiSum - refundSum;
 
     const fmt = (n) => "₹" + n.toLocaleString("en-IN");
-    const set = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
+    const set = (id, val) => {
+      const el = document.getElementById(id);
+      if (el) el.textContent = val;
+    };
 
     set("txn-card-cash", fmt(cashSum));
     set("txn-card-upi", fmt(upiSum));
@@ -343,7 +403,7 @@ class TransactionLogManager {
     let additionalInfo = "";
 
     if (logType === "refunds") {
-      type = "Refund";
+      type = "";  // REFUND badge already shows it — no duplicate text
       color = 'style="color: var(--danger)"';
     } else if (logType === "expenses") {
       type = log.category || "Expense";
@@ -357,13 +417,13 @@ class TransactionLogManager {
       additionalInfo = log.reason ? ` (${log.reason})` : "";
     } else if (logType === "cash") {
       if (log.payment_method === "pay_later" || log.amount === 0) {
-        type = "Pay Later";
+        type = "";  // PAY LATER badge already shows it — no duplicate text
         color = 'style="color: var(--warning)"';
       } else {
-        type = "Cash Payment";
+        type = "";
       }
     } else if (logType === "online") {
-      type = "Online Payment";
+      type = "";
     }
 
     let tagsHtml = "";
@@ -371,7 +431,7 @@ class TransactionLogManager {
       tagsHtml = tags
         .map(
           (tag) =>
-            `<span class="${tag.class}" style="background-color: ${tag.color}">${tag.text}</span>`
+            `<span class="${tag.class}" style="background-color: ${tag.color}">${tag.text}</span>`,
         )
         .join(" ");
     }
@@ -406,8 +466,24 @@ class TransactionLogManager {
       titleContent = `Room ${log.room} - ${log.name}`;
     }
 
+    // Background colour per payment type (keep colours light/subtle)
+    let rowBg = "";
+    const isPayLater = log.payment_method === "pay_later" || (log.amount === 0 && log.is_fresh_checkin);
+    if (isPayLater) {
+      rowBg = 'style="background-color: #fffbe6;"';                         // light yellow
+    } else if (logType === "online") {
+      rowBg = 'style="background-color: #e8f4fd;"';                         // light blue
+    } else if (logType === "cash") {
+      rowBg = 'style="background-color: #e9f7ec;"';                         // light green
+    } else if (logType === "refunds" || log.transaction_type === "refund" || log.transaction_type === "checkout_refund" || logType === "expenses") {
+      rowBg = 'style="background-color: #fdecea;"';                         // light red
+    }
+
+    // Build subtitle: tags first, then time
+    const subtitleTime = type ? `${type}${additionalInfo} at ${log.time || "N/A"}` : `at ${log.time || "N/A"}`;
+
     return `
-      <div class="log-item">
+      <div class="log-item" ${rowBg}>
         <div class="log-details">
           <div class="log-title">
             ${serialHtml}
@@ -415,8 +491,7 @@ class TransactionLogManager {
             ${shiftInfo}
           </div>
           <div class="log-subtitle">
-            ${type}${additionalInfo} at ${log.time || "N/A"}
-            ${tagsHtml}
+            ${tagsHtml}${tagsHtml ? " " : ""}${subtitleTime}
           </div>
         </div>
         <div class="log-amount" ${color}>${amountDisplay}</div>
@@ -481,37 +556,49 @@ class TransactionLogManager {
       return tags;
     }
 
-    let isRenewal = false;
+    // Fresh check-ins must never show CONTINUE — only continuation payments do
+    const isFresh =
+      log.is_fresh_checkin === true ||
+      log.transaction_type === "fresh_checkin" ||
+      log.transaction_type === "booking_conversion" ||
+      log.is_booking_conversion === true;
 
-    if (log.is_renewal === true || log.transaction_type === "renewal_payment") {
-      isRenewal = true;
-    }
+    if (!isFresh) {
+      let isRenewal = false;
 
-    if (
-      !isRenewal &&
-      log.room &&
-      log.date &&
-      rooms[log.room] &&
-      rooms[log.room].checkin_time
-    ) {
-      try {
-        const checkinDate = rooms[log.room].checkin_time.split(" ")[0];
-        const logDate = log.date;
-
-        if (checkinDate !== logDate) {
-          isRenewal = true;
-        }
-      } catch (error) {
-        // Ignore error
+      if (
+        log.is_renewal === true ||
+        log.transaction_type === "renewal_payment"
+      ) {
+        isRenewal = true;
       }
-    }
 
-    if (isRenewal) {
-      tags.push({
-        text: "CONTINUE",
-        class: "transaction-tag continue-tag",
-        color: "#28a745",
-      });
+      if (
+        !isRenewal &&
+        log.room &&
+        log.date &&
+        rooms[log.room] &&
+        rooms[log.room].checkin_time
+      ) {
+        try {
+          const checkinDate = rooms[log.room].checkin_time.split(" ")[0];
+          const logDate = log.date;
+
+          if (checkinDate !== logDate) {
+            isRenewal = true;
+          }
+        } catch (error) {
+          // Ignore error
+        }
+      }
+
+      if (isRenewal) {
+        tags.push({
+          text: "CONTINUE",
+          class: "transaction-tag continue-tag",
+          color: "#28a745",
+        });
+      }
     }
 
     return tags;
@@ -543,8 +630,18 @@ class TransactionLogManager {
       return null;
     }
 
+    // First try the serial number stored in the log itself (from Firebase)
     if (log.serial_number) {
       return log.serial_number;
+    }
+
+    // Fallback: look up from localStorage using date + room
+    if (log.date && log.room && window.transactionTracker) {
+      const stored = window.transactionTracker.getSerialNumberForDate(
+        log.date,
+        log.room,
+      );
+      if (stored) return stored;
     }
 
     return null;
@@ -552,7 +649,7 @@ class TransactionLogManager {
 
   updatePaymentLogs(roomNumber) {
     const paymentLogsContainer = document.getElementById(
-      "checkout-payment-logs"
+      "checkout-payment-logs",
     );
     if (!paymentLogsContainer) {
       console.log("Payment logs container not found");
@@ -569,7 +666,7 @@ class TransactionLogManager {
     // ── Cache hit: render instantly, no network call ──────────────────────
     const cacheKey = `${roomNumber}:${roomInfo.checkin_time || ""}`;
     const cached = _payCache[cacheKey];
-    if (cached && (Date.now() - cached.ts < _PAY_CACHE_TTL)) {
+    if (cached && Date.now() - cached.ts < _PAY_CACHE_TTL) {
       this._renderPaymentData(paymentLogsContainer, cached.data);
       return;
     }
@@ -600,12 +697,16 @@ class TransactionLogManager {
 
   _renderPaymentData(container, data) {
     if (!data.success) {
-      container.innerHTML = '<div class="log-item">Could not load payment history</div>';
+      container.innerHTML =
+        '<div class="log-item">Could not load payment history</div>';
       return;
     }
 
     const _refundTypes = new Set([
-      "refund", "checkout_refund", "manual_refund", "booking_cancel_refund"
+      "refund",
+      "checkout_refund",
+      "manual_refund",
+      "booking_cancel_refund",
     ]);
 
     const allPayments = [
@@ -615,8 +716,12 @@ class TransactionLogManager {
       ...(data.addons || []).map((p) => ({ ...p, _source: "addon" })),
       ...(data.shifts || []).map((p) => ({ ...p, _source: "shift" })),
     ].sort((a, b) => {
-      const da = a.date ? new Date(`${a.date} ${a.time || "00:00"}`) : new Date(0);
-      const db = b.date ? new Date(`${b.date} ${b.time || "00:00"}`) : new Date(0);
+      const da = a.date
+        ? new Date(`${a.date} ${a.time || "00:00"}`)
+        : new Date(0);
+      const db = b.date
+        ? new Date(`${b.date} ${b.time || "00:00"}`)
+        : new Date(0);
       return db - da;
     });
 
@@ -880,7 +985,8 @@ const _payCache = {};
 const _PAY_CACHE_TTL = 5 * 60 * 1000;
 
 function _payCacheKey(roomNumber) {
-  const r = (typeof rooms !== "undefined" && rooms[roomNumber]) ? rooms[roomNumber] : {};
+  const r =
+    typeof rooms !== "undefined" && rooms[roomNumber] ? rooms[roomNumber] : {};
   return `${roomNumber}:${r.checkin_time || ""}`;
 }
 
@@ -891,15 +997,22 @@ window.invalidatePayHistoryCache = function (roomNumber) {
 // Prefetch in background so data is ready when modal opens.
 window.prefetchPaymentLogs = function (roomNumber) {
   const key = _payCacheKey(roomNumber);
-  if (_payCache[key] && (Date.now() - _payCache[key].ts < _PAY_CACHE_TTL)) return;
-  const roomInfo = (typeof rooms !== "undefined") ? rooms[roomNumber] : null;
+  if (_payCache[key] && Date.now() - _payCache[key].ts < _PAY_CACHE_TTL) return;
+  const roomInfo = typeof rooms !== "undefined" ? rooms[roomNumber] : null;
   if (!roomInfo || !roomInfo.guest) return;
   apiFetch("/get_history", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ room: roomNumber, name: roomInfo.guest.name, checkin_time: roomInfo.checkin_time || null }),
-  }).then((r) => r.json())
-    .then((data) => { if (data.success) _payCache[key] = { data, ts: Date.now() }; })
+    body: JSON.stringify({
+      room: roomNumber,
+      name: roomInfo.guest.name,
+      checkin_time: roomInfo.checkin_time || null,
+    }),
+  })
+    .then((r) => r.json())
+    .then((data) => {
+      if (data.success) _payCache[key] = { data, ts: Date.now() };
+    })
     .catch(() => {});
 };
 
@@ -932,7 +1045,7 @@ class TransactionFilterManager {
       .querySelectorAll(".transaction-filter-btn")
       .forEach((btn) => btn.classList.remove("active"));
     const activeBtn = document.querySelector(
-      `[data-filter="${filterType}"].transaction-filter-btn`
+      `[data-filter="${filterType}"].transaction-filter-btn`,
     );
     if (activeBtn) activeBtn.classList.add("active");
     this.filterAndDisplayLogs();
@@ -1056,7 +1169,7 @@ class TransactionFilterManager {
     } else {
       logsHtml = filteredLogs
         .map((log) =>
-          transactionLogManager.renderEnhancedLogItem(log, log.logType)
+          transactionLogManager.renderEnhancedLogItem(log, log.logType),
         )
         .join("");
     }
@@ -1088,9 +1201,9 @@ class TransactionFilterManager {
 
 // ─── Filter state ────────────────────────────────────────────────────────────
 let txnActiveDateRange = { fromDate: null, toDate: null };
-let txnActiveType    = "all";   // "all" | "cash" | "online" | "refunds" | "expenses"
-let txnDateUnlocked  = false;   // true after manager password verified
-let txnExtendedLogs  = null;    // cached logs from /get_transactions_range for current range
+let txnActiveType = "all"; // "all" | "cash" | "online" | "refunds" | "expenses"
+let txnDateUnlocked = false; // true after manager password verified
+let txnExtendedLogs = null; // cached logs from /get_transactions_range for current range
 
 function _getDateOffset(days) {
   const d = new Date();
@@ -1111,13 +1224,18 @@ function _isWithinCache(fromDate) {
 // instead of reading the `let logs` global (window.logs swap doesn't work with let).
 function _renderWithLogs(fromDate, toDate, logsObj) {
   if (transactionLogManager) {
-    transactionLogManager.renderEnhancedLogs(fromDate, toDate, txnActiveType, logsObj || null);
+    transactionLogManager.renderEnhancedLogs(
+      fromDate,
+      toDate,
+      txnActiveType,
+      logsObj || null,
+    );
   }
 }
 
 async function _triggerRender(fromDate, toDate) {
   txnActiveDateRange = { fromDate, toDate };
-  txnExtendedLogs    = null;
+  txnExtendedLogs = null;
 
   // If range is within the 3-day cache, use it directly — no extra network call
   if (_isWithinCache(fromDate)) {
@@ -1127,57 +1245,78 @@ async function _triggerRender(fromDate, toDate) {
 
   // Extended range — fetch from server
   const logEl = document.getElementById("transaction-log");
-  if (logEl) logEl.innerHTML = `<div class="loading-indicator"><span class="loader"></span><p>Loading transactions…</p></div>`;
+  if (logEl)
+    logEl.innerHTML = `<div class="loading-indicator"><span class="loader"></span><p>Loading transactions…</p></div>`;
 
   try {
-    const res  = await apiFetch("/get_transactions_range", {
-      method:  "POST",
+    const res = await apiFetch("/get_transactions_range", {
+      method: "POST",
       headers: { "Content-Type": "application/json" },
-      body:    JSON.stringify({ from_date: fromDate, to_date: toDate }),
+      body: JSON.stringify({ from_date: fromDate, to_date: toDate }),
     });
     const data = await res.json();
     if (data.success && data.logs) {
       txnExtendedLogs = data.logs;
       _renderWithLogs(fromDate, toDate, txnExtendedLogs);
     } else {
-      if (logEl) logEl.innerHTML = `<div class="empty-state" style="padding:2rem;text-align:center;"><i class="fas fa-exclamation-triangle fa-2x" style="color:var(--warning);margin-bottom:0.75rem;display:block;"></i><p>${data.message || "Failed to load data."}</p></div>`;
+      if (logEl)
+        logEl.innerHTML = `<div class="empty-state" style="padding:2rem;text-align:center;"><i class="fas fa-exclamation-triangle fa-2x" style="color:var(--warning);margin-bottom:0.75rem;display:block;"></i><p>${data.message || "Failed to load data."}</p></div>`;
     }
   } catch (e) {
-    if (logEl) logEl.innerHTML = `<div class="empty-state" style="padding:2rem;text-align:center;"><p style="color:var(--danger);">Network error: ${e.message}</p></div>`;
+    if (logEl)
+      logEl.innerHTML = `<div class="empty-state" style="padding:2rem;text-align:center;"><p style="color:var(--danger);">Network error: ${e.message}</p></div>`;
   }
 }
 
 // ── Date picker lock / unlock ─────────────────────────────────────────────────
 function _setDatePickerUnlocked() {
   txnDateUnlocked = true;
-  const rangeEl  = document.getElementById("txn-date-range");
-  const icon     = document.getElementById("txn-date-lock-icon");
-  const lockBtn  = document.getElementById("txn-relock-btn");
+  const rangeEl = document.getElementById("txn-date-range");
+  const icon = document.getElementById("txn-date-lock-icon");
+  const lockBtn = document.getElementById("txn-relock-btn");
 
-  if (rangeEl) { rangeEl.classList.remove("txn-date-locked"); rangeEl.placeholder = "Pick date range"; }
+  if (rangeEl) {
+    rangeEl.classList.remove("txn-date-locked");
+    rangeEl.placeholder = "Pick date range";
+  }
   const altInput = window._txnPicker && window._txnPicker.altInput;
-  if (altInput)  { altInput.classList.remove("txn-date-locked"); altInput.placeholder = "Pick date range"; altInput.style.cursor = "pointer"; }
-  if (icon)      icon.innerHTML = '<i class="fas fa-lock-open" style="color:var(--success);font-size:0.75rem;"></i>';
-  if (lockBtn)   lockBtn.style.display = "flex"; // show re-lock button
+  if (altInput) {
+    altInput.classList.remove("txn-date-locked");
+    altInput.placeholder = "Pick date range";
+    altInput.style.cursor = "pointer";
+  }
+  if (icon)
+    icon.innerHTML =
+      '<i class="fas fa-lock-open" style="color:var(--success);font-size:0.75rem;"></i>';
+  if (lockBtn) lockBtn.style.display = "flex"; // show re-lock button
 }
 
 function _relockDatePicker() {
   txnDateUnlocked = false;
   txnExtendedLogs = null;
-  const rangeEl  = document.getElementById("txn-date-range");
-  const icon     = document.getElementById("txn-date-lock-icon");
-  const lockBtn  = document.getElementById("txn-relock-btn");
+  const rangeEl = document.getElementById("txn-date-range");
+  const icon = document.getElementById("txn-date-lock-icon");
+  const lockBtn = document.getElementById("txn-relock-btn");
 
-  if (rangeEl) { rangeEl.classList.add("txn-date-locked"); rangeEl.placeholder = "🔒 Custom range"; }
+  if (rangeEl) {
+    rangeEl.classList.add("txn-date-locked");
+    rangeEl.placeholder = "🔒 Custom range";
+  }
   const altInput = window._txnPicker && window._txnPicker.altInput;
-  if (altInput)  { altInput.classList.add("txn-date-locked"); altInput.placeholder = "🔒 Custom range"; }
-  if (icon)      icon.innerHTML = '<i class="fas fa-lock" style="font-size:0.75rem;"></i>';
-  if (lockBtn)   lockBtn.style.display = "none";
+  if (altInput) {
+    altInput.classList.add("txn-date-locked");
+    altInput.placeholder = "🔒 Custom range";
+  }
+  if (icon)
+    icon.innerHTML = '<i class="fas fa-lock" style="font-size:0.75rem;"></i>';
+  if (lockBtn) lockBtn.style.display = "none";
 
   // Snap back to Today
   const today = new Date().toISOString().split("T")[0];
   if (window._txnPicker) window._txnPicker.setDate([today, today]);
-  document.querySelectorAll(".txn-quick-btn").forEach((b) => b.classList.remove("active"));
+  document
+    .querySelectorAll(".txn-quick-btn")
+    .forEach((b) => b.classList.remove("active"));
   const todayBtn = document.querySelector('.txn-quick-btn[data-range="today"]');
   if (todayBtn) todayBtn.classList.add("active");
   _triggerRender(today, today);
@@ -1186,10 +1325,16 @@ function _relockDatePicker() {
 function _openTxnPasswordModal() {
   const modal = document.getElementById("txn-date-pwd-modal");
   const input = document.getElementById("txn-pwd-input");
-  const err   = document.getElementById("txn-pwd-error");
+  const err = document.getElementById("txn-pwd-error");
   if (modal) modal.classList.add("show");
-  if (err)   { err.style.display = "none"; err.textContent = ""; }
-  if (input) { input.value = ""; setTimeout(() => input.focus(), 120); }
+  if (err) {
+    err.style.display = "none";
+    err.textContent = "";
+  }
+  if (input) {
+    input.value = "";
+    setTimeout(() => input.focus(), 120);
+  }
 }
 
 function _closeTxnPasswordModal() {
@@ -1198,17 +1343,23 @@ function _closeTxnPasswordModal() {
 }
 
 async function _submitTxnPassword() {
-  const input  = document.getElementById("txn-pwd-input");
-  const err    = document.getElementById("txn-pwd-error");
-  const btn    = document.getElementById("txn-pwd-submit-btn");
-  const pass   = input ? input.value.trim() : "";
+  const input = document.getElementById("txn-pwd-input");
+  const err = document.getElementById("txn-pwd-error");
+  const btn = document.getElementById("txn-pwd-submit-btn");
+  const pass = input ? input.value.trim() : "";
 
   if (!pass) {
-    if (err) { err.textContent = "Please enter the password."; err.style.display = "block"; }
+    if (err) {
+      err.textContent = "Please enter the password.";
+      err.style.display = "block";
+    }
     return;
   }
 
-  if (btn) { btn.disabled = true; btn.textContent = "Verifying…"; }
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = "Verifying…";
+  }
   if (err) err.style.display = "none";
 
   try {
@@ -1219,14 +1370,23 @@ async function _submitTxnPassword() {
     });
 
     if (res.status === 403) {
-      if (err) { err.textContent = "Incorrect password. Try again."; err.style.display = "block"; }
-      if (input) { input.value = ""; input.focus(); }
+      if (err) {
+        err.textContent = "Incorrect password. Try again.";
+        err.style.display = "block";
+      }
+      if (input) {
+        input.value = "";
+        input.focus();
+      }
       return;
     }
 
     const data = await res.json();
     if (!data.success) {
-      if (err) { err.textContent = data.message || "Incorrect password."; err.style.display = "block"; }
+      if (err) {
+        err.textContent = data.message || "Incorrect password.";
+        err.style.display = "block";
+      }
       return;
     }
 
@@ -1235,16 +1395,21 @@ async function _submitTxnPassword() {
     _setDatePickerUnlocked();
     // Open flatpickr immediately after unlock
     if (window._txnPicker) window._txnPicker.open();
-
   } catch (e) {
-    if (err) { err.textContent = "Network error. Please try again."; err.style.display = "block"; }
+    if (err) {
+      err.textContent = "Network error. Please try again.";
+      err.style.display = "block";
+    }
   } finally {
-    if (btn) { btn.disabled = false; btn.textContent = "Unlock"; }
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = "Unlock";
+    }
   }
 }
 
 function initTxnDateFilter() {
-  const todayStr    = new Date().toISOString().split("T")[0];
+  const todayStr = new Date().toISOString().split("T")[0];
   const defaultFrom = todayStr; // today only
 
   // ── flatpickr — initialised but won't open until unlocked ─────────────────
@@ -1270,11 +1435,13 @@ function initTxnDateFilter() {
         if (!txnDateUnlocked) return;
         if (selectedDates.length === 2) {
           const from = selectedDates[0].toISOString().split("T")[0];
-          const to   = selectedDates[1].toISOString().split("T")[0];
-          document.querySelectorAll(".txn-quick-btn").forEach((b) => b.classList.remove("active"));
+          const to = selectedDates[1].toISOString().split("T")[0];
+          document
+            .querySelectorAll(".txn-quick-btn")
+            .forEach((b) => b.classList.remove("active"));
           _triggerRender(from, to);
         }
-      }
+      },
     });
 
     // Intercept clicks on the altInput — show password modal if locked
@@ -1294,7 +1461,7 @@ function initTxnDateFilter() {
 
       clickTarget.addEventListener("click", handlePickerClick, true);
       if (lockWrap) {
-        lockWrap.addEventListener("click", function(e) {
+        lockWrap.addEventListener("click", function (e) {
           if (!txnDateUnlocked) handlePickerClick(e);
         });
       }
@@ -1304,13 +1471,16 @@ function initTxnDateFilter() {
   // ── Quick buttons ─────────────────────────────────────────────────────────
   document.querySelectorAll(".txn-quick-btn").forEach((btn) => {
     btn.addEventListener("click", function () {
-      document.querySelectorAll(".txn-quick-btn").forEach((b) => b.classList.remove("active"));
+      document
+        .querySelectorAll(".txn-quick-btn")
+        .forEach((b) => b.classList.remove("active"));
       this.classList.add("active");
 
       const range = this.dataset.range;
       const today = new Date().toISOString().split("T")[0];
       // "today" → same day; "3" → last 3 days (today + 2 days back)
-      const from = range === "today" ? today : _getDateOffset(parseInt(range, 10) - 1);
+      const from =
+        range === "today" ? today : _getDateOffset(parseInt(range, 10) - 1);
       if (window._txnPicker) window._txnPicker.setDate([from, today]);
       _triggerRender(from, today);
     });
@@ -1319,7 +1489,9 @@ function initTxnDateFilter() {
   // ── Type filter buttons ───────────────────────────────────────────────────
   document.querySelectorAll(".txn-type-btn").forEach((btn) => {
     btn.addEventListener("click", function () {
-      document.querySelectorAll(".txn-type-btn").forEach((b) => b.classList.remove("active"));
+      document
+        .querySelectorAll(".txn-type-btn")
+        .forEach((b) => b.classList.remove("active"));
       this.classList.add("active");
       txnActiveType = this.dataset.type;
       const { fromDate, toDate } = txnActiveDateRange;
@@ -1332,18 +1504,21 @@ function initTxnDateFilter() {
   if (relockBtn) relockBtn.addEventListener("click", _relockDatePicker);
 
   // ── Password modal events ─────────────────────────────────────────────────
-  const closeBtn  = document.getElementById("txn-pwd-close-btn");
+  const closeBtn = document.getElementById("txn-pwd-close-btn");
   const submitBtn = document.getElementById("txn-pwd-submit-btn");
-  const pwdInput  = document.getElementById("txn-pwd-input");
+  const pwdInput = document.getElementById("txn-pwd-input");
 
-  if (closeBtn)  closeBtn.addEventListener("click", _closeTxnPasswordModal);
+  if (closeBtn) closeBtn.addEventListener("click", _closeTxnPasswordModal);
   if (submitBtn) submitBtn.addEventListener("click", _submitTxnPassword);
-  if (pwdInput)  pwdInput.addEventListener("keydown", (e) => { if (e.key === "Enter") _submitTxnPassword(); });
+  if (pwdInput)
+    pwdInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") _submitTxnPassword();
+    });
 
   // Close modal on backdrop click
   const pwdModal = document.getElementById("txn-date-pwd-modal");
   if (pwdModal) {
-    pwdModal.addEventListener("click", function(e) {
+    pwdModal.addEventListener("click", function (e) {
       if (e.target === pwdModal) _closeTxnPasswordModal();
     });
   }

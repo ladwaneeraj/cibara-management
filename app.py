@@ -1,5 +1,6 @@
-from flask import Flask, render_template, send_from_directory, jsonify, request
+from flask import Flask, render_template, send_from_directory, send_file, jsonify, request
 from flask_compress import Compress
+import mimetypes
 from config import initialize_data, logger, db, UPLOAD_FOLDER
 from routes.rooms import rooms_bp
 from routes.bookings import bookings_bp
@@ -11,7 +12,13 @@ from routes.utils import utils_bp
 import os
 import threading
 
-app = Flask(__name__, static_folder='static', template_folder='templates')
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+STATIC_DIR = os.path.join(BASE_DIR, 'static')
+
+app = Flask(__name__,
+            static_folder=STATIC_DIR,
+            static_url_path='/static',
+            template_folder=os.path.join(BASE_DIR, 'templates'))
 
 # Gzip-compress all JSON/HTML responses automatically (~70% smaller payloads)
 Compress(app)
@@ -25,6 +32,27 @@ Compress(app)
 
 _PUBLIC_PREFIXES = ("/static/", "/uploads/")
 _PUBLIC_EXACT    = ("/", "/health")
+
+@app.before_request
+def _serve_static():
+    """Serve static files directly — bypasses all routing and middleware."""
+    if request.path.startswith('/static/'):
+        filename = request.path[8:]          # strip leading '/static/'
+        if filename and '..' not in filename:
+            filepath = os.path.join(STATIC_DIR, filename)
+            if os.path.isfile(filepath):
+                mime, _ = mimetypes.guess_type(filepath)
+                return send_file(filepath, mimetype=mime or 'application/octet-stream')
+
+@app.route("/debug-path")
+def debug_path():
+    import os as _os
+    return jsonify({
+        "BASE_DIR": BASE_DIR,
+        "STATIC_DIR": STATIC_DIR,
+        "static_exists": _os.path.isdir(STATIC_DIR),
+        "sample_files": _os.listdir(STATIC_DIR)[:5] if _os.path.isdir(STATIC_DIR) else []
+    })
 
 @app.before_request
 def require_api_key():
@@ -56,10 +84,6 @@ def require_api_key():
 @app.route("/")
 def index():
     return render_template("index.html")
-
-@app.route("/static/<path:path>")
-def serve_static(path):
-    return send_from_directory("static", path)
 
 @app.route("/uploads/<path:filename>")
 def uploaded_file(filename):

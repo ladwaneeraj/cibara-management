@@ -88,6 +88,181 @@ onSnapshot(doc(db, "totals", "current_totals"), (snap) => {
   }
 });
 
+// ─── Payments listener ─────────────────────────────────────────────────────
+// Each payment is its own Firestore document so docChanges() gives exactly
+// the one record that was added — no array diffing needed.
+// On "added": patch the local logs cache and smooth-insert the row in the
+// transactions tab without any Flask round-trip.
+let paymentsInitialLoad = true;
+
+onSnapshot(collection(db, "payments"), (snapshot) => {
+  if (paymentsInitialLoad) {
+    paymentsInitialLoad = false;
+    return;
+  }
+
+  if (snapshot.metadata.hasPendingWrites || snapshot.metadata.fromCache) return;
+
+  const todayStr = new Date().toISOString().split("T")[0];
+
+  snapshot.docChanges().forEach((change) => {
+    if (change.type !== "added") return;          // edits/deletes handled by room sync
+    const p = change.doc.data();
+    if (!p || !p.date) return;
+
+    console.log("⚡ Remote payment added — patching transactions");
+
+    // 1. Patch the local `logs` cache so the in-memory state stays correct
+    _patchLocalLogs(p);
+
+    // 2. If the transactions tab is open AND this payment is in the currently
+    //    displayed date range, smooth-insert the row without re-rendering everything.
+    _smoothInsertPaymentRow(p);
+
+    // 3. Fire a lightweight event so bills + register can react to new payments
+    //    without waiting for a room-level change (e.g. mid-stay add-on payments).
+    window.dispatchEvent(new CustomEvent("cibaraPaymentAdded", { detail: p }));
+
+    // 4. Only toast for today's payments to avoid noise on historical data loads
+    if (p.date === todayStr) showSyncToast();
+  });
+});
+
+// ─── Bills listener ────────────────────────────────────────────────────────
+// Fires when a checkout bill is created/updated on another device.
+let billsInitialLoad = true;
+
+onSnapshot(collection(db, "bills"), (snapshot) => {
+  if (billsInitialLoad) {
+    billsInitialLoad = false;
+    return;
+  }
+
+  if (snapshot.metadata.hasPendingWrites || snapshot.metadata.fromCache) return;
+
+  snapshot.docChanges().forEach((change) => {
+    if (change.type === "added" || change.type === "modified") {
+      const bill = change.doc.data();
+      console.log("⚡ Remote bill change — notifying tabs");
+      window.dispatchEvent(new CustomEvent("cibaraBillChanged", { detail: bill }));
+      showSyncToast();
+    }
+  });
+});
+
+// ─── Helpers ───────────────────────────────────────────────────────────────
+
+/**
+ * Patch the global `logs` object (used by renderEnhancedLogs) with one new
+ * payment document so the in-memory cache stays consistent with Firestore.
+ */
+function _patchLocalLogs(p) {
+  if (typeof logs === "undefined") return;
+
+  const _refundTypes = new Set([
+    "refund", "checkout_refund", "manual_refund", "booking_cancel_refund",
+  ]);
+  const type = p.type || "";
+  const method = p.method || "";
+
+  let bucket = null;
+  if (_refundTypes.has(type)) {
+    bucket = "refunds";
+  } else if (type === "expense" && p.expense_type === "transaction") {
+    bucket = "expenses";
+  } else if (method === "cash" || method === "pay_later") {
+    bucket = "cash";
+  } else if (method === "online") {
+    bucket = "online";
+  }
+
+  if (!bucket) return;
+  if (!logs[bucket]) logs[bucket] = [];
+
+  // Avoid duplicates — the local browser may have already added it
+  const key = `${p.date}_${p.time}_${p.room}_${p.amount}`;
+  const already = logs[bucket].some(
+    (e) => `${e.date}_${e.time}_${e.room}_${e.amount}` === key
+  );
+  if (!already) logs[bucket].unshift(p);   // newest first
+}
+
+/**
+ * Smooth-insert a single payment row into the visible transactions list.
+ * Only runs when the transactions tab is open and the payment's date is
+ * within the currently displayed range. No full re-render.
+ */
+function _smoothInsertPaymentRow(p) {
+  if (typeof transactionLogManager === "undefined") return;
+
+  const container = document.getElementById("transaction-log");
+  if (!container) return;
+
+  // Only act when the transactions tab is actually visible
+  const txnTab = document.getElementById("transaction-tab");
+  if (!txnTab || txnTab.classList.contains("hidden")) return;
+
+  // Check if this payment's date falls in the currently rendered range
+  if (typeof txnActiveDateRange !== "undefined" && txnActiveDateRange.fromDate) {
+    if (p.date < txnActiveDateRange.fromDate || p.date > txnActiveDateRange.toDate) return;
+  }
+
+  const _refundTypes = new Set([
+    "refund", "checkout_refund", "manual_refund", "booking_cancel_refund",
+  ]);
+  const type = p.type || "";
+  const method = p.method || "";
+
+  let logType = "cash";
+  if (_refundTypes.has(type))                              logType = "refunds";
+  else if (type === "expense")                             logType = "expenses";
+  else if (method === "online")                            logType = "online";
+
+  // Build the HTML for just this one row
+  const html = transactionLogManager.renderEnhancedLogItem({ ...p, logType }, logType);
+
+  // Find or create the date-group header for this payment's date
+  const dateHeaderId = `log-date-${p.date}`;
+  let dateHeader = document.getElementById(dateHeaderId);
+
+  if (!dateHeader) {
+    // Date group doesn't exist yet — prepend a new one at the top
+    const todayStr  = new Date().toISOString().split("T")[0];
+    const yest      = new Date(); yest.setDate(yest.getDate() - 1);
+    const yesterStr = yest.toISOString().split("T")[0];
+    const dateObj   = new Date(p.date + "T00:00:00");
+    const label     = dateObj.toLocaleDateString("en-IN", { weekday: "long", month: "short", day: "numeric" });
+    const prefix    = p.date === todayStr ? "Today — " : p.date === yesterStr ? "Yesterday — " : "";
+
+    const groupDiv  = document.createElement("div");
+    groupDiv.innerHTML = `<div id="${dateHeaderId}" class="log-date-header">${prefix}${label}<span class="log-date-total"></span></div>`;
+    container.insertBefore(groupDiv.firstElementChild, container.firstChild);
+    dateHeader = document.getElementById(dateHeaderId);
+  }
+
+  // Insert the new row right after its date header, with a fade-in animation
+  const tempDiv = document.createElement("div");
+  tempDiv.innerHTML = html.trim();
+  const newRow = tempDiv.firstElementChild;
+  if (!newRow) return;
+
+  newRow.style.animation = "cibaraFadeIn 0.35s ease";
+  dateHeader.insertAdjacentElement("afterend", newRow);
+
+  // Inject the animation keyframe once
+  if (!document.getElementById("cibara-fadein-style")) {
+    const s = document.createElement("style");
+    s.id = "cibara-fadein-style";
+    s.textContent = `
+      @keyframes cibaraFadeIn {
+        from { opacity: 0; transform: translateY(-6px); }
+        to   { opacity: 1; transform: translateY(0); }
+      }
+    `;
+    document.head.appendChild(s);
+  }
+}
+
 // ─── Toast helper ──────────────────────────────────────────────────────────
 function showSyncToast() {
   const toast = document.createElement("div");

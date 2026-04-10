@@ -548,6 +548,61 @@
     return { base: total, cgst: 0, sgst: 0, total, cgstRate: 0, sgstRate: 0 };
   }
 
+  /**
+   * Calculates GST for packaged drinking water (HSN 2201, 5% inclusive/MRP).
+   * Only services where item contains "water" AND accommodation_charge != true.
+   * Returns { mrp, taxable, cgst, sgst, qty }
+   */
+  function waterGst(services) {
+    let mrp = 0, taxable = 0, cgst = 0, sgst = 0, qty = 0;
+    (services || [])
+      .filter(s => (s.item || '').toLowerCase().includes('water') && !s.accommodation_charge)
+      .forEach(w => {
+        const p = parseFloat(w.price || 0);
+        const t = p / 1.05;
+        const g = p - t;
+        mrp      += p;
+        taxable  += t;
+        cgst     += g / 2;
+        sgst     += g / 2;
+        qty      += parseFloat(w.quantity || 1);
+      });
+    return { mrp, taxable, cgst, sgst, qty };
+  }
+
+  /**
+   * Calculates total accommodation GST (room + accommodation_charge add-ons).
+   * Extra bed, AC etc. (accommodation_charge=true) are taxed at same slab as room.
+   * Returns { taxable, cgst, sgst, cgstRate }
+   */
+  function accomGst(e, days) {
+    const rate = e.room_rent || e.room_price_per_night || 0;
+    const { base, cgst, sgst, cgstRate } = gstAmounts(rate, days);
+    // Add accommodation add-ons (extra bed, AC) — same slab
+    let accomAddonBase = 0, accomCgst = 0, accomSgst = 0;
+    (e.services || [])
+      .filter(s => s.accommodation_charge && !(s.item || '').toLowerCase().includes('water'))
+      .forEach(s => {
+        const p = parseFloat(s.price || 0);
+        if (cgstRate > 0) {
+          const rate2 = cgstRate * 2; // total %
+          const divisor = 1 + rate2 / 100;
+          const b = p / divisor;
+          accomAddonBase += b;
+          accomCgst += (p - b) / 2;
+          accomSgst += (p - b) / 2;
+        } else {
+          accomAddonBase += p;
+        }
+      });
+    return {
+      taxable: base + accomAddonBase,
+      cgst: cgst + accomCgst,
+      sgst: sgst + accomSgst,
+      cgstRate,
+    };
+  }
+
   // ── Build tab HTML ────────────────────────────────────────────────────────────
   function buildHTML() {
     const tab = dom("bills-tab");
@@ -571,10 +626,16 @@
     <div class="bl-card bl-cash">
       <div class="bl-label">Cash (Period)</div>
       <div class="bl-value" id="bl-tc-cash">₹0</div>
+      <div style="font-size:.66rem;color:#aaa;margin-top:2px;" title="Includes advance payments received before checkout date">
+        incl. advances *
+      </div>
     </div>
     <div class="bl-card bl-upi">
       <div class="bl-label">UPI (Period)</div>
       <div class="bl-value" id="bl-tc-upi">₹0</div>
+      <div style="font-size:.66rem;color:#aaa;margin-top:2px;" title="Includes advance payments received before checkout date">
+        incl. advances *
+      </div>
     </div>
     <div class="bl-card bl-rev">
       <div class="bl-label">Revenue (Period)</div>
@@ -587,6 +648,14 @@
     <div class="bl-card" style="border-left:3px solid #fd7e14;">
       <div class="bl-label">Pending Due</div>
       <div class="bl-value" id="bl-tc-pending" style="color:#fd7e14;">0</div>
+    </div>
+    <div class="bl-card" style="border-left:3px solid #6f42c1;">
+      <div class="bl-label">GST Collected</div>
+      <div class="bl-value" id="bl-tc-gst" style="color:#6f42c1;">₹0</div>
+      <div style="font-size:.68rem;color:#888;margin-top:2px;">
+        <span id="bl-tc-gst-accom">Accom: ₹0</span> &nbsp;|&nbsp;
+        <span id="bl-tc-gst-water">Water: ₹0</span>
+      </div>
     </div>
   </div>
 
@@ -946,7 +1015,6 @@
               pdf_url: pdfUrl,
               guest_name: _openBillData.guest_name,
               guest_mobile: _openBillData.guest_mobile,
-              invoice_number: _openBillData.invoice_number,
               bill_number: _openBillData.bill_number,
               total_amount: _openBillData.total_amount,
             };
@@ -1224,16 +1292,28 @@
   function renderTally(entries) {
     let cash = 0,
       upi = 0,
-      pending = 0;
+      pending = 0,
+      totalAccomGst = 0,
+      totalWaterGst = 0;
     for (const e of entries) {
       if ((e.balance || 0) > 0) {
         pending++;
         continue;
       }
       cash += e.payment_cash || 0;
-      upi += e.payment_online || 0;
+      upi  += e.payment_online || 0;
+
+      // GST tally — only for fully paid entries
+      const days = e.days_stayed || calcDays(e.checkin_time, e.checkout_time);
+      const ag   = accomGst(e, days);
+      totalAccomGst += ag.cgst + ag.sgst;
+
+      const wg  = waterGst(e.services || []);
+      totalWaterGst += wg.cgst + wg.sgst;
     }
     const revenue = cash + upi;
+    const totalGst = totalAccomGst + totalWaterGst;
+
     const set = (id, val) => {
       const el = dom(id);
       if (el) el.textContent = "₹" + inr(val || 0);
@@ -1241,9 +1321,16 @@
     set("bl-tc-cash", cash);
     set("bl-tc-upi", upi);
     set("bl-tc-rev", revenue);
-    const countEl = dom("bl-tc-count");
+    set("bl-tc-gst", totalGst);
+
+    const gstAccomEl = dom("bl-tc-gst-accom");
+    const gstWaterEl = dom("bl-tc-gst-water");
+    if (gstAccomEl) gstAccomEl.textContent = "Accom: ₹" + inr(Math.round(totalAccomGst));
+    if (gstWaterEl) gstWaterEl.textContent  = "Water: ₹" + inr(Math.round(totalWaterGst));
+
+    const countEl   = dom("bl-tc-count");
     const pendingEl = dom("bl-tc-pending");
-    if (countEl) countEl.textContent = entries.length;
+    if (countEl)   countEl.textContent   = entries.length;
     if (pendingEl) pendingEl.textContent = pending || "0";
   }
 
@@ -1407,7 +1494,7 @@
    */
   // silent=true → no overlay, no alert; used when auto-triggered after checkout.
   async function generateAndUploadPDF(billId, billData, silent = false) {
-    const folderNo = billData.bill_number || billData.invoice_number || billId;
+    const folderNo = billData.bill_number || billId;
 
     if (!silent) showPdfOverlay("Generating invoice PDF…");
 
@@ -1419,7 +1506,7 @@
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           bill_id: billId,
-          invoice_no: folderNo,
+          bill_number: folderNo,
           html_content: buildBillHTML(billData),
         }),
       });
@@ -1872,6 +1959,12 @@
     );
     const otherSvcTotal = otherServices.reduce((s, x) => s + (x.price || 0), 0);
 
+    // ── Water vs non-water split (water = GST 5% inclusive/MRP; others = non-taxable) ──
+    const waterServices    = otherServices.filter((s) => (s.item || "").toLowerCase().includes("water"));
+    const nonWaterServices = otherServices.filter((s) => !(s.item || "").toLowerCase().includes("water"));
+    const waterSvcTotal    = waterServices.reduce((s, x) => s + (x.price || 0), 0);
+    const nonWaterSvcTotal = nonWaterServices.reduce((s, x) => s + (x.price || 0), 0);
+
     // ── GST calculation ──────────────────────────────────────────────────────────
     // Use stored gst_rate from backend when available (includes accommodation add-ons
     // in the taxable base). Fall back to on-the-fly calculation for older bills.
@@ -1928,8 +2021,24 @@
       cgst = 0; sgst = 0; accomBase = accomTotal;
     }
 
-    // Grand total — use stored total_amount (authoritative figure from billing).
+    // ── Discount — recalculate GST on post-discount accommodation ────────────
+    // Sec 15(3)(a) CGST Act: pre-supply discounts reduce the taxable value.
+    // Prorate: discount applied to accommodation first, excess to services.
     const discounts = b.discounts || 0;
+    const discountOnAccom   = Math.min(discounts, accomTotal);
+    const effectiveAccom    = accomTotal - discountOnAccom;  // post-discount base
+
+    // Recalculate GST on effective accommodation (overwrites earlier cgst/sgst)
+    if (gstRatePct > 0 && effectiveAccom > 0) {
+      const effGst = effectiveAccom * gstRatePct / (100 + gstRatePct);
+      cgst      = effGst / 2;
+      sgst      = cgst;
+      accomBase = effectiveAccom - effGst;
+    } else if (gstRatePct > 0 && effectiveAccom <= 0) {
+      cgst = 0; sgst = 0; accomBase = 0;
+    }
+    // (if gstRatePct == 0, cgst/sgst are already 0 from above)
+
     const svcTotalAll = b.services_total || 0; // includes both types
     const grandTotal = (typeof b.total_amount === "number" && b.total_amount > 0)
       ? b.total_amount
@@ -1961,8 +2070,44 @@
       )
       .join("");
 
-    // ── Other services rows ──────────────────────────────────────────────────────
-    const otherSvcRows = otherServices
+    // ── Water service rows (GST 5% inclusive — show taxable value in Amount col) ──
+    // taxable_value = price / 1.05  (back-calculate from MRP — price does NOT change)
+    let waterCgst = 0, waterSgst = 0;
+    waterServices.forEach((s) => {
+      const wGst = (s.price || 0) - (s.price || 0) / 1.05;
+      waterCgst += wGst / 2;
+      waterSgst += wGst / 2;
+    });
+    const waterRows = waterServices
+      .map((s) => `
+      <tr>
+        <td>${s.item || "Water"}</td>
+        <td class="b-tr">${s.quantity || 1}</td>
+        <td class="b-tr">${fix2((s.unit_price || s.price || 0) / 1.05)}</td>
+        <td class="b-tr">${fix2((s.price || 0) / 1.05)}</td>
+      </tr>`)
+      .join("");
+    const waterSvcSection = waterRows
+      ? `<tr class="b-sec"><td colspan="4">Packaged Drinking Water (HSN: 2201)</td></tr>
+         ${waterRows}
+         <tr class="b-gst-row">
+           <td>CGST @ 2.5%</td>
+           <td class="b-tr">—</td><td class="b-tr">—</td>
+           <td class="b-tr">${fix2(waterCgst)}</td>
+         </tr>
+         <tr class="b-gst-row">
+           <td>SGST @ 2.5%</td>
+           <td class="b-tr">—</td><td class="b-tr">—</td>
+           <td class="b-tr">${fix2(waterSgst)}</td>
+         </tr>
+         <tr class="b-subtotal">
+           <td colspan="3" class="b-tr">Water Total (MRP, incl. GST)</td>
+           <td class="b-tr">${fix2(waterSvcTotal)}</td>
+         </tr>`
+      : "";
+
+    // ── Other services rows (non-water, non-taxable) ─────────────────────────────
+    const otherSvcRows = nonWaterServices
       .map(
         (s) => `
       <tr>
@@ -1974,18 +2119,36 @@
       )
       .join("");
 
-    // ── GST rows — always show, 0.00 when exempt ─────────────────────────────────
-    const gstRows = `
-      <tr class="b-gst-row">
-        <td>CGST @ ${cgstRate}%</td>
-        <td class="b-tr">—</td><td class="b-tr">—</td>
-        <td class="b-tr">${fix2(cgst)}</td>
-      </tr>
-      <tr class="b-gst-row">
-        <td>SGST @ ${sgstRate}%</td>
-        <td class="b-tr">—</td><td class="b-tr">—</td>
-        <td class="b-tr">${fix2(sgst)}</td>
-      </tr>`;
+    // ── GST rows — recalculated post-discount (Sec 15(3)(a) CGST Act) ───────────
+    let gstRows;
+    if (gstRatePct > 0 && effectiveAccom > 0) {
+      // Normal: GST on net accommodation after discount
+      gstRows = `
+        <tr class="b-gst-row">
+          <td>CGST @ ${cgstRate}%</td>
+          <td class="b-tr">—</td><td class="b-tr">—</td>
+          <td class="b-tr">${fix2(cgst)}</td>
+        </tr>
+        <tr class="b-gst-row">
+          <td>SGST @ ${sgstRate}%</td>
+          <td class="b-tr">—</td><td class="b-tr">—</td>
+          <td class="b-tr">${fix2(sgst)}</td>
+        </tr>`;
+    } else if (gstRatePct > 0 && effectiveAccom <= 0) {
+      // Full discount — GST waived
+      gstRows = `
+        <tr class="b-gst-row">
+          <td colspan="3" style="color:#2e7d32;">GST Nil (Discount applied — Sec 15(3)(a) CGST Act)</td>
+          <td class="b-tr">0.00</td>
+        </tr>`;
+    } else {
+      // Exempt slab (< ₹1,000/night)
+      gstRows = `
+        <tr class="b-gst-row">
+          <td colspan="3" style="color:#888;">GST Exempt (Room rate below ₹1,000/night)</td>
+          <td class="b-tr">0.00</td>
+        </tr>`;
+    }
 
     // Helper: GST slab for a given per-night price
     function segGstRate(p) {
@@ -1997,33 +2160,54 @@
     }
 
     // ── Room Rent rows: pre-GST taxable values, one per segment for transfers ──
-    // Declare roomSegments BEFORE accomSubtotalRow which references it
-    const roomSegments   = b.room_segments || [];
-    const currentRoomNo  = b.current_room || b.room || "";
-    const currentRoomDays  = b.current_room_days;
-    const currentRoomPrice = b.current_room_price;
-    const currentRoomTotal = b.current_room_total;
+    const roomSegments = b.room_segments || [];
+
+    // Detect format: new format has "room" key; old format has "from_room" key
+    const isNewFormat = roomSegments.length > 0 && "room" in roomSegments[0];
+    const isMultiRoom = (isNewFormat && roomSegments.length > 1)
+                     || (!isNewFormat && roomSegments.length > 0);
 
     // Accommodation subtotal row (when add-ons, multi-day, or multi-room)
     const accomSubtotalRow =
-      accomAddons.length > 0 || days > 1 || roomSegments.length > 0
+      accomAddons.length > 0 || days > 1 || isMultiRoom
         ? `<tr class="b-subtotal">
            <td colspan="3" class="b-tr">Accommodation Total (incl. GST)</td>
            <td class="b-tr">${fix2(accomTotal)}</td>
          </tr>`
         : "";
 
-    // Other services section (non-accommodation)
+    // Other services section (non-water, non-accommodation, non-taxable)
     const otherSvcSection = otherSvcRows
       ? `<tr class="b-sec"><td colspan="4">Additional Services (Non-Taxable)</td></tr>
          ${otherSvcRows}
          <tr class="b-subtotal">
            <td colspan="3" class="b-tr">Services Total</td>
-           <td class="b-tr">${fix2(otherSvcTotal)}</td>
+           <td class="b-tr">${fix2(nonWaterSvcTotal)}</td>
          </tr>`
       : "";
+
     let roomRentRows = "";
-    if (roomSegments.length > 0 && currentRoomDays != null) {
+    if (isNewFormat && roomSegments.length > 1) {
+      // NEW FORMAT — multi-room: render all segments from clean array
+      for (const seg of roomSegments) {
+        const segNights = seg.nights || 0;
+        if (segNights > 0) {
+          const segTax  = segTaxable(seg.total || 0, seg.rate || 0);
+          const segRate = segNights ? segTax / segNights : 0;
+          roomRentRows += `<tr>
+            <td>Room Rent – Rm ${seg.room || ""}</td>
+            <td class="b-tr">${segNights}</td>
+            <td class="b-tr">${fix2(segRate)}</td>
+            <td class="b-tr">${fix2(segTax)}</td>
+          </tr>`;
+        }
+      }
+    } else if (!isNewFormat && roomSegments.length > 0) {
+      // OLD FORMAT — backward compat for bills before this change
+      const currentRoomNo    = b.current_room || b.room || "";
+      const currentRoomDays  = b.current_room_days;
+      const currentRoomPrice = b.current_room_price;
+      const currentRoomTotal = b.current_room_total;
       for (const seg of roomSegments) {
         if ((seg.days || 0) > 0) {
           const segTax  = segTaxable(seg.total || 0, seg.price || 0);
@@ -2076,6 +2260,17 @@
          </tr>`
         : "";
 
+    // Round-off row — GST back-calculation can leave a ₹0.01 gap between
+    // (taxable_base + CGST + SGST) and the inclusive MRP. Show when ≥ ₹0.01.
+    const computedAccomSum = Math.round((accomBase + cgst + sgst) * 100) / 100;
+    const roundDiff = Math.round((effectiveAccom - computedAccomSum) * 100) / 100;
+    const roundOffRow = Math.abs(roundDiff) >= 0.01
+      ? `<tr class="b-gst-row">
+           <td colspan="3" style="text-align:right;color:#aaa;">Round-off</td>
+           <td class="b-tr" style="color:#aaa;">${roundDiff > 0 ? "+" : ""}${fix2(roundDiff)}</td>
+         </tr>`
+      : "";
+
     return `
 <div class="b-bill-wrap">
 
@@ -2125,7 +2320,9 @@
       ${accomAddonRows}
       ${taxableBaseRow}
       ${gstRows}
+      ${roundOffRow}
       ${accomSubtotalRow}
+      ${waterSvcSection}
       ${otherSvcSection}
       ${discountRow}
       <tr class="b-grand">
@@ -2168,7 +2365,7 @@
             : ""
         }
         ${balance > 0 ? `<tr><td style="font-weight:800;color:#c62828;">Balance Due</td><td class="b-tr" style="font-weight:800;color:#c62828;">₹ ${fix2(balance)}</td></tr>` : ""}
-        ${balance <= 0 && refunds <= 0 ? `<tr><td style="color:#2e7d32;font-weight:700;">Payment Status</td><td class="b-tr" style="color:#2e7d32;font-weight:700;">PAID IN FULL</td></tr>` : ""}
+        ${/* removed PAID IN FULL — balance row already shows ₹0 when settled */ ""}
       </tbody>
     </table>
   </div>
@@ -2190,7 +2387,10 @@
 </div>`;
   }
 
-  // ── Export — CA-ready GST report ─────────────────────────────────────────────
+  // ── Export — CA-ready 3-sheet GST Workbook ───────────────────────────────────
+  // Sheet 1: Invoice Register  — full line-item detail for the period
+  // Sheet 2: GST B2C Summary   — mirrors GSTR-1 Table 7/8 (B2C aggregated)
+  // Sheet 3: HSN/SAC Summary   — mirrors GSTR-1 Table 12
   function exportToExcel() {
     if (!state.filteredEntries.length) {
       alert("No invoiced bills to export.");
@@ -2201,74 +2401,287 @@
       return;
     }
 
-    const rows = state.filteredEntries.map((e, i) => {
-      const days =
-        typeof e.days_stayed === "number"
-          ? e.days_stayed
-          : calcDays(e.checkin_time, e.checkout_time);
-      const rate = e.room_rent || 0;
-      const { base, cgst, sgst, cgstRate } = gstAmounts(rate, days);
-      const gstRatePct = cgstRate * 2; // total GST %
-      return {
-        "Sr No": e.serial_number || i + 1,
-        "Bill No": e.bill_number || "-",
-        "Guest Name": e.guest_name || "-",
-        Contact: e.guest_mobile || "-",
-        Room: e.room || "-",
-        "Check-in": fmtDT(e.checkin_time),
-        "Check-out": e.checkout_time ? fmtDT(e.checkout_time) : "-",
-        Days: days,
-        "Room Rate/Night": rate,
-        "Base Amt (excl GST)": +base.toFixed(2),
-        "GST Rate %": gstRatePct,
-        "CGST Amount": +cgst.toFixed(2),
-        "SGST Amount": +sgst.toFixed(2),
-        "Total GST": +(cgst + sgst).toFixed(2),
-        "Room Charges (incl GST)": rate * days,
-        Services: e.services_total || 0,
-        "Grand Total": e.total_amount || 0,
-        "Cash Paid": e.payment_cash || 0,
-        "Online/UPI Paid": e.payment_online || 0,
-        Refund: e.refunds || 0,
-        "Balance Due": e.balance || 0,
-        "Booking Source": e.booking_source || "normal",
-        "Place of Supply": "Karnataka (KA-29)",
-        "SAC Code": "9963",
-      };
+    const period = `${state.dateRange.start} to ${state.dateRange.end}`;
+
+    // ── helpers ───────────────────────────────────────────────────────────────
+    const r2 = v => +parseFloat(v || 0).toFixed(2);
+
+    // ── aggregate per entry ───────────────────────────────────────────────────
+    // Buckets for sheet 2/3:
+    //   accom5     – accommodation 5% slab  (SAC 9963)
+    //   accom18    – accommodation 18% slab (SAC 9963)
+    //   accomExmpt – accommodation exempt   (SAC 9963)
+    //   water5     – packaged water 5%      (HSN 2201)
+    const b = {
+      accom5:     { taxable: 0, cgst: 0, sgst: 0, igst: 0 },
+      accom18:    { taxable: 0, cgst: 0, sgst: 0, igst: 0 },
+      accomExmpt: { taxable: 0, cgst: 0, sgst: 0, igst: 0 },
+      water5:     { taxable: 0, cgst: 0, sgst: 0, igst: 0, mrp: 0 },
+    };
+
+    // Sheet 1 rows
+    const regRows = [];
+    let regSerial = 1;
+
+    state.filteredEntries.forEach((e, i) => {
+      const days = e.days_stayed || calcDays(e.checkin_time, e.checkout_time);
+
+      // Accommodation (room + accommodation_charge add-ons)
+      const ag  = accomGst(e, days);
+      // Water (HSN 2201)
+      const wg  = waterGst(e.services || []);
+      // Non-water, non-accommodation services (plain add-ons, no GST classification here)
+      const nonWaterSvcTotal = (e.services || [])
+        .filter(s => !s.accommodation_charge && !(s.item || '').toLowerCase().includes('water'))
+        .reduce((sum, s) => sum + parseFloat(s.price || 0), 0);
+
+      const accomInclGst = (e.room_rent || 0) * days +
+        (e.services || [])
+          .filter(s => s.accommodation_charge && !(s.item || '').toLowerCase().includes('water'))
+          .reduce((sum, s) => sum + parseFloat(s.price || 0), 0);
+
+      // Sheet 1 row
+      regRows.push({
+        "Sr No":                   e.serial_number || regSerial++,
+        "Bill No":                 e.bill_number || "-",
+        "Guest Name":              e.guest_name || "-",
+        "Contact":                 e.guest_mobile || "-",
+        "Room":                    e.room || "-",
+        "Check-in":                fmtDT(e.checkin_time),
+        "Check-out":               e.checkout_time ? fmtDT(e.checkout_time) : "-",
+        "Days":                    days,
+        "Room Rate/Night":         e.room_rent || 0,
+        // Accommodation columns
+        "Accom Taxable (excl GST)": r2(ag.taxable),
+        "Accom GST Rate %":        ag.cgstRate * 2,
+        "Accom CGST":              r2(ag.cgst),
+        "Accom SGST":              r2(ag.sgst),
+        "Accom Total (incl GST)":  r2(accomInclGst),
+        // Water columns
+        "Water MRP (incl GST)":    r2(wg.mrp),
+        "Water Taxable (excl GST)":r2(wg.taxable),
+        "Water CGST (2.5%)":       r2(wg.cgst),
+        "Water SGST (2.5%)":       r2(wg.sgst),
+        "Water GST Total":         r2(wg.cgst + wg.sgst),
+        // Other
+        "Other Services":          r2(nonWaterSvcTotal),
+        "Grand Total":             e.total_amount || 0,
+        "Cash Paid":               e.payment_cash || 0,
+        "Online/UPI Paid":         e.payment_online || 0,
+        "Refund":                  e.refunds || 0,
+        "Balance Due":             e.balance || 0,
+        "Booking Source":          e.booking_source || "normal",
+        "Place of Supply":         "Karnataka (KA-29)",
+        "SAC/HSN":                 "9963 / 2201",
+      });
+
+      // Accumulate into buckets for sheet 2/3
+      if (ag.cgstRate === 9) {
+        b.accom18.taxable += ag.taxable;
+        b.accom18.cgst    += ag.cgst;
+        b.accom18.sgst    += ag.sgst;
+      } else if (ag.cgstRate === 2.5) {
+        b.accom5.taxable  += ag.taxable;
+        b.accom5.cgst     += ag.cgst;
+        b.accom5.sgst     += ag.sgst;
+      } else {
+        b.accomExmpt.taxable += ag.taxable;
+      }
+      b.water5.mrp     += wg.mrp;
+      b.water5.taxable += wg.taxable;
+      b.water5.cgst    += wg.cgst;
+      b.water5.sgst    += wg.sgst;
     });
 
+    // ── Sheet 1: Invoice Register ─────────────────────────────────────────────
+    const wsReg = XLSX.utils.json_to_sheet(regRows);
+    wsReg["!cols"] = [
+      { wch: 6 },  // Sr No
+      { wch: 20 }, // Bill No
+      { wch: 22 }, // Guest Name
+      { wch: 14 }, // Contact
+      { wch: 6 },  // Room
+      { wch: 18 }, // Check-in
+      { wch: 18 }, // Check-out
+      { wch: 5 },  // Days
+      { wch: 14 }, // Room Rate/Night
+      { wch: 20 }, // Accom Taxable
+      { wch: 14 }, // Accom GST Rate
+      { wch: 12 }, // Accom CGST
+      { wch: 12 }, // Accom SGST
+      { wch: 18 }, // Accom Total
+      { wch: 16 }, // Water MRP
+      { wch: 20 }, // Water Taxable
+      { wch: 14 }, // Water CGST
+      { wch: 14 }, // Water SGST
+      { wch: 14 }, // Water GST Total
+      { wch: 14 }, // Other Services
+      { wch: 13 }, // Grand Total
+      { wch: 11 }, // Cash Paid
+      { wch: 14 }, // Online Paid
+      { wch: 10 }, // Refund
+      { wch: 12 }, // Balance Due
+      { wch: 14 }, // Booking Source
+      { wch: 18 }, // Place of Supply
+      { wch: 12 }, // SAC/HSN
+    ];
+
+    // ── Sheet 2: GST B2C Summary (GSTR-1 Table 7/8 format) ───────────────────
+    // Intra-state B2C — aggregate by rate slab
+    const b2cRows = [
+      {
+        "Description":           "Accommodation Services (SAC 9963) — 5% slab",
+        "Place of Supply":       "Karnataka (KA-29)",
+        "Applicable % of Tax":   "5%",
+        "Integrated Tax Amount": r2(b.accom5.igst),
+        "Central Tax Amount":    r2(b.accom5.cgst),
+        "State/UT Tax Amount":   r2(b.accom5.sgst),
+        "Cess Amount":           0,
+        "Total Taxable Value":   r2(b.accom5.taxable),
+        "Remarks":               "Room charges ₹1,000–₹7,500/night",
+      },
+      {
+        "Description":           "Accommodation Services (SAC 9963) — 18% slab",
+        "Place of Supply":       "Karnataka (KA-29)",
+        "Applicable % of Tax":   "18%",
+        "Integrated Tax Amount": r2(b.accom18.igst),
+        "Central Tax Amount":    r2(b.accom18.cgst),
+        "State/UT Tax Amount":   r2(b.accom18.sgst),
+        "Cess Amount":           0,
+        "Total Taxable Value":   r2(b.accom18.taxable),
+        "Remarks":               "Room charges above ₹7,500/night",
+      },
+      {
+        "Description":           "Accommodation Services (SAC 9963) — Exempt",
+        "Place of Supply":       "Karnataka (KA-29)",
+        "Applicable % of Tax":   "0%",
+        "Integrated Tax Amount": 0,
+        "Central Tax Amount":    0,
+        "State/UT Tax Amount":   0,
+        "Cess Amount":           0,
+        "Total Taxable Value":   r2(b.accomExmpt.taxable),
+        "Remarks":               "Room charges below ₹1,000/night",
+      },
+      {
+        "Description":           "Packaged Drinking Water (HSN 2201) — 5% slab",
+        "Place of Supply":       "Karnataka (KA-29)",
+        "Applicable % of Tax":   "5%",
+        "Integrated Tax Amount": r2(b.water5.igst),
+        "Central Tax Amount":    r2(b.water5.cgst),
+        "State/UT Tax Amount":   r2(b.water5.sgst),
+        "Cess Amount":           0,
+        "Total Taxable Value":   r2(b.water5.taxable),
+        "Remarks":               "MRP-inclusive; back-calculated taxable = MRP/1.05",
+      },
+    ];
+
+    // Grand total row
+    const allCgst  = r2(b.accom5.cgst  + b.accom18.cgst  + b.water5.cgst);
+    const allSgst  = r2(b.accom5.sgst  + b.accom18.sgst  + b.water5.sgst);
+    const allTaxbl = r2(b.accom5.taxable + b.accom18.taxable + b.accomExmpt.taxable + b.water5.taxable);
+    b2cRows.push({
+      "Description":           "TOTAL",
+      "Place of Supply":       "",
+      "Applicable % of Tax":   "",
+      "Integrated Tax Amount": 0,
+      "Central Tax Amount":    allCgst,
+      "State/UT Tax Amount":   allSgst,
+      "Cess Amount":           0,
+      "Total Taxable Value":   allTaxbl,
+      "Remarks":               `Period: ${period}`,
+    });
+
+    const wsB2C = XLSX.utils.json_to_sheet(b2cRows);
+    wsB2C["!cols"] = [
+      { wch: 46 }, // Description
+      { wch: 20 }, // Place of Supply
+      { wch: 18 }, // Applicable %
+      { wch: 20 }, // IGST
+      { wch: 18 }, // CGST
+      { wch: 18 }, // SGST
+      { wch: 12 }, // Cess
+      { wch: 20 }, // Taxable Value
+      { wch: 40 }, // Remarks
+    ];
+
+    // ── Sheet 3: HSN/SAC Summary (GSTR-1 Table 12) ───────────────────────────
+    const accom5TotalGst  = r2(b.accom5.cgst  + b.accom5.sgst);
+    const accom18TotalGst = r2(b.accom18.cgst + b.accom18.sgst);
+    const water5TotalGst  = r2(b.water5.cgst  + b.water5.sgst);
+
+    const hsnRows = [
+      {
+        "HSN/SAC Code":          "9963",
+        "Description":           "Accommodation and Hospitality Services",
+        "UQC":                   "NOS",
+        "Total Quantity":        state.filteredEntries.length,
+        "Total Value (MRP)":     r2(
+          b.accom5.taxable  + b.accom5.cgst  + b.accom5.sgst  +
+          b.accom18.taxable + b.accom18.cgst + b.accom18.sgst +
+          b.accomExmpt.taxable
+        ),
+        "Taxable Value":         r2(b.accom5.taxable + b.accom18.taxable + b.accomExmpt.taxable),
+        "IGST Amount":           0,
+        "CGST Amount":           r2(b.accom5.cgst + b.accom18.cgst),
+        "SGST Amount":           r2(b.accom5.sgst + b.accom18.sgst),
+        "Total GST":             r2(accom5TotalGst + accom18TotalGst),
+        "Applicable GST Rate":   "0% / 5% / 18% (slab based)",
+      },
+      {
+        "HSN/SAC Code":          "2201",
+        "Description":           "Packaged Drinking Water (not branded / hotel supply)",
+        "UQC":                   "NOS",
+        "Total Quantity":        state.filteredEntries.reduce((s, e) => {
+          return s + waterGst(e.services || []).qty;
+        }, 0),
+        "Total Value (MRP)":     r2(b.water5.mrp || (b.water5.taxable + b.water5.cgst + b.water5.sgst)),
+        "Taxable Value":         r2(b.water5.taxable),
+        "IGST Amount":           0,
+        "CGST Amount":           r2(b.water5.cgst),
+        "SGST Amount":           r2(b.water5.sgst),
+        "Total GST":             water5TotalGst,
+        "Applicable GST Rate":   "5% (MRP inclusive)",
+      },
+      // Grand total
+      {
+        "HSN/SAC Code":          "TOTAL",
+        "Description":           "",
+        "UQC":                   "",
+        "Total Quantity":        "",
+        "Total Value (MRP)":     "",
+        "Taxable Value":         allTaxbl,
+        "IGST Amount":           0,
+        "CGST Amount":           allCgst,
+        "SGST Amount":           allSgst,
+        "Total GST":             r2(parseFloat(allCgst) + parseFloat(allSgst)),
+        "Applicable GST Rate":   "",
+      },
+    ];
+
+    const wsHSN = XLSX.utils.json_to_sheet(hsnRows);
+    wsHSN["!cols"] = [
+      { wch: 14 }, // HSN/SAC
+      { wch: 44 }, // Description
+      { wch: 6 },  // UQC
+      { wch: 14 }, // Qty
+      { wch: 16 }, // Total Value
+      { wch: 16 }, // Taxable Value
+      { wch: 12 }, // IGST
+      { wch: 12 }, // CGST
+      { wch: 12 }, // SGST
+      { wch: 12 }, // Total GST
+      { wch: 24 }, // GST Rate
+    ];
+
+    // ── Build workbook ────────────────────────────────────────────────────────
     try {
-      const ws = XLSX.utils.json_to_sheet(rows);
-      ws["!cols"] = [
-        { wch: 6 },
-        { wch: 20 },
-        { wch: 22 },
-        { wch: 14 },
-        { wch: 6 },
-        { wch: 20 },
-        { wch: 20 },
-        { wch: 5 },
-        { wch: 14 },
-        { wch: 20 },
-        { wch: 10 },
-        { wch: 13 },
-        { wch: 13 },
-        { wch: 12 },
-        { wch: 20 },
-        { wch: 10 },
-        { wch: 13 },
-        { wch: 10 },
-        { wch: 14 },
-        { wch: 12 },
-        { wch: 16 },
-        { wch: 18 },
-        { wch: 10 },
-      ];
       const wb = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wb, ws, "CA_Invoice_Report");
+      XLSX.utils.book_append_sheet(wb, wsReg,  "Invoice Register");
+      XLSX.utils.book_append_sheet(wb, wsB2C,  "GST B2C Summary");
+      XLSX.utils.book_append_sheet(wb, wsHSN,  "HSN SAC Summary");
       XLSX.writeFile(
         wb,
-        `CA_Bills_${state.dateRange.start}_to_${state.dateRange.end}.xlsx`,
+        `CIBARA_GST_Report_${state.dateRange.start}_to_${state.dateRange.end}.xlsx`,
       );
     } catch (err) {
       console.error("[Bills] export error:", err);
@@ -2297,6 +2710,32 @@
       if (state.dateRange.end === today) {
         loadData(true);
       }
+    } else {
+      state.lastLoadedRange = null;
+    }
+  });
+
+  // ── Live payment sync — fires when any payment is added on another device ──
+  // Bust cache so next tab-open gets fresh data; if tab is already visible,
+  // reload immediately (only for today's range to avoid unnecessary fetches).
+  window.addEventListener("cibaraPaymentAdded", function (e) {
+    const p = e.detail || {};
+    const today = todayStr();
+    if (p.date !== today) return;           // only care about today's payments
+    const tab = dom("bills-tab");
+    if (tab && !tab.classList.contains("hidden")) {
+      if (state.dateRange.end === today) loadData(true);
+    } else {
+      state.lastLoadedRange = null;         // bust cache — refresh on next open
+    }
+  });
+
+  // ── Bill created/updated on another device ─────────────────────────────────
+  window.addEventListener("cibaraBillChanged", function (e) {
+    const today = todayStr();
+    const tab = dom("bills-tab");
+    if (tab && !tab.classList.contains("hidden")) {
+      if (state.dateRange.end === today) loadData(true);
     } else {
       state.lastLoadedRange = null;
     }

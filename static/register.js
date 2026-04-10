@@ -1430,6 +1430,32 @@
     }
   });
 
+  // ── Live payment sync — fires when any payment is added on another device ──
+  // Checkout payments update the register (a checkout adds a bill record).
+  // Bust cache on any new payment for today; reload if tab is open.
+  window.addEventListener("cibaraPaymentAdded", function (e) {
+    const p = e.detail || {};
+    const today = todayStr();
+    if (p.date !== today) return;
+    const tab = dom("register-tab");
+    if (tab && !tab.classList.contains("hidden")) {
+      if (state.dateRange.end === today) loadData(true);
+    } else {
+      state.lastLoadedRange = null;
+    }
+  });
+
+  // ── Bill created/updated on another device → refresh register ──────────────
+  window.addEventListener("cibaraBillChanged", function (e) {
+    const today = todayStr();
+    const tab = dom("register-tab");
+    if (tab && !tab.classList.contains("hidden")) {
+      if (state.dateRange.end === today) loadData(true);
+    } else {
+      state.lastLoadedRange = null;
+    }
+  });
+
   // ══════════════════════════════════════════════════════════════════════════════
   // ID DOCUMENTS MODAL — view customer docs, no password required
   // ══════════════════════════════════════════════════════════════════════════════

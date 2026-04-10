@@ -15,7 +15,6 @@ from config import (
     metadata_ref, IST, logger, settlements_ref,
     _build_active_entry_fast, _find_serial_fast, _batch_fill_serials,
     get_all_rooms, invalidate_rooms_and_totals,
-    generate_sequential_invoice_number,
 )
 from services import payment_service, pdf_service
 
@@ -246,9 +245,8 @@ def get_register_data():
                     "payment_source": bill_data.get("payment_source", "hotel"),
                     "net_receivable": bill_data.get("net_receivable", 0),
                     "settlement_status": bill_data.get("settlement_status"),
-                    # GST invoice fields
+                    # GST invoice flag
                     "invoice_generated": bill_data.get("invoice_generated", False),
-                    "invoice_number": bill_data.get("invoice_number"),
                     # PDF — must be included so the WhatsApp button stays dark
                     # after a page refresh (icon colour is driven by pdf_url presence)
                     "pdf_url": bill_data.get("pdf_url", ""),
@@ -579,24 +577,37 @@ def add_bill_payment():
                 bill_update["payment_online"] = bill_data.get("payment_online", 0) + amount
 
         if discount > 0:
-            bill_update["discounts"] = bill_data.get("discounts", 0) + discount
+            new_total_discounts = bill_data.get("discounts", 0) + discount
+            bill_update["discounts"] = new_total_discounts
+
+            # ── Recalculate gst_amount on post-discount base (Sec 15(3)(a)) ────
+            # This keeps the stored gst_amount in sync with what the invoice shows.
+            _gst_rate   = bill_data.get("gst_rate", 0)
+            _room_chrg  = bill_data.get("room_charges_total", 0) or 0
+            _services   = bill_data.get("services") or []
+            _accom_addons_total = sum(
+                s.get("price", 0) for s in _services
+                if s.get("accommodation_charge")
+                and "water" not in (s.get("item") or "").lower()
+            )
+            _accom_total        = _room_chrg + _accom_addons_total
+            _discount_on_accom  = min(new_total_discounts, _accom_total)
+            _effective_accom    = _accom_total - _discount_on_accom
+            if _gst_rate > 0 and _effective_accom > 0:
+                bill_update["gst_amount"] = round(
+                    _effective_accom * _gst_rate / (100 + _gst_rate), 2
+                )
+            elif _gst_rate > 0:
+                bill_update["gst_amount"] = 0.0
 
         new_balance = current_balance - amount - discount
         bill_update["balance"] = new_balance
 
-        invoice_number = None
         if new_balance <= 0:
             bill_update["status"] = "completed"
-            # Generate invoice for UPI payment if not issued yet
+            # Mark invoice_generated for UPI payments if not already flagged
             if payment_mode == "online" and not bill_data.get("invoice_generated"):
-                try:
-                    checkout_dt = datetime.strptime(
-                        bill_data["checkout_time"], "%Y-%m-%d %H:%M")
-                    invoice_number = generate_sequential_invoice_number(checkout_dt)
-                    bill_update["invoice_generated"] = True
-                    bill_update["invoice_number"]    = invoice_number
-                except Exception as _ie:
-                    logger.warning(f"Invoice generation failed: {_ie}")
+                bill_update["invoice_generated"] = True
 
         bills_ref.document(bill_id).update(bill_update)
         logger.info(f"Bill {bill_id} payment ₹{amount} ({payment_mode}), "
@@ -681,7 +692,6 @@ def add_bill_payment():
             success=True,
             message=msg,
             new_balance=new_balance,
-            invoice_number=invoice_number,
         )
 
     except Exception as e:
@@ -861,11 +871,33 @@ def update_bill_service():
         total_refunds  = bill_data.get("refunds", 0)
         new_balance    = total_amount - payment_cash - payment_online + total_refunds
 
+        # ── Recalculate gst_amount if an accommodation add-on was edited ─────
+        # Accommodation add-ons (extra bed, AC) affect the GST base under SAC 9963.
+        # Recalculate on the new effective accommodation total (post-discount).
+        _svc_gst_rate      = bill_data.get("gst_rate", 0)
+        _accom_addons_total = sum(
+            s.get("price", 0) for s in services
+            if s.get("accommodation_charge")
+            and "water" not in (s.get("item") or "").lower()
+        )
+        _accom_total        = room_charges_total + _accom_addons_total
+        _discount_on_accom  = min(total_discounts, _accom_total)
+        _effective_accom    = _accom_total - _discount_on_accom
+        if _svc_gst_rate > 0 and _effective_accom > 0:
+            new_gst_amount = round(
+                _effective_accom * _svc_gst_rate / (100 + _svc_gst_rate), 2
+            )
+        elif _svc_gst_rate > 0:
+            new_gst_amount = 0.0
+        else:
+            new_gst_amount = bill_data.get("gst_amount", 0)  # unchanged if exempt
+
         bills_ref.document(bill_id).update({
             "services":       services,
             "services_total": services_total,
             "total_amount":   total_amount,
             "balance":        new_balance,
+            "gst_amount":     new_gst_amount,
         })
 
         updated_bill = dict(bill_data)
@@ -874,6 +906,7 @@ def update_bill_service():
             "services_total": services_total,
             "total_amount":   total_amount,
             "balance":        new_balance,
+            "gst_amount":     new_gst_amount,
         })
 
         import threading as _thr
@@ -903,12 +936,12 @@ def update_bill_service():
 def save_bill_pdf():
     """
     Accept a base64-encoded PDF from the browser, upload it to Firebase Storage
-    under bills/{invoice_no}/v{n}.pdf, and save the download URL in the bill
+    under bills/{bill_number}/v{n}.pdf, and save the download URL in the bill
     document (pdf_url field + versions array for audit history).
 
     Request JSON:
         bill_id     — Firestore document ID of the bill
-        invoice_no  — used as the Storage folder name (e.g. "INV/2026/03/00045")
+        bill_number — used as the Storage folder name (e.g. "CC/2026/04/00001")
         pdf_base64  — base64-encoded PDF bytes (without data-URI prefix)
 
     Response JSON:
@@ -918,9 +951,9 @@ def save_bill_pdf():
 
     try:
         data = request.json or {}
-        bill_id    = (data.get("bill_id") or "").strip()
-        invoice_no = (data.get("invoice_no") or "").strip()
-        pdf_b64    = (data.get("pdf_base64") or "").strip()
+        bill_id     = (data.get("bill_id") or "").strip()
+        bill_number = (data.get("bill_number") or data.get("invoice_no") or "").strip()
+        pdf_b64     = (data.get("pdf_base64") or "").strip()
 
         if not bill_id:
             return jsonify(success=False, message="bill_id is required")
@@ -936,8 +969,7 @@ def save_bill_pdf():
         except Exception:
             return jsonify(success=False, message="Invalid base64 PDF data")
 
-        # Use bill_id as folder name fallback when invoice_no is absent
-        folder = invoice_no or bill_id
+        folder = bill_number or bill_id
         result = pdf_service.upload_bill_pdf(bill_id, folder, pdf_bytes)
 
         if not result["url"]:
@@ -1004,6 +1036,12 @@ def _build_bill_html(b: dict) -> str:
     accom_addons_total = sum(s.get("price", 0) for s in accom_addons)
     other_svc_total    = sum(s.get("price", 0) for s in other_services)
 
+    # ── Water vs non-water split (water = GST 5% inclusive / MRP; others = non-taxable) ──
+    water_services     = [s for s in other_services if "water" in s.get("item", "").lower()]
+    non_water_services = [s for s in other_services if "water" not in s.get("item", "").lower()]
+    water_svc_total    = sum(s.get("price", 0) for s in water_services)
+    non_water_svc_total = sum(s.get("price", 0) for s in non_water_services)
+
     gst_rate_pct = b.get("gst_rate", 0)
     cgst_rate    = gst_rate_pct / 2
     sgst_rate    = gst_rate_pct / 2
@@ -1014,29 +1052,26 @@ def _build_bill_html(b: dict) -> str:
     room_charges  = b.get("room_charges_total") or (rate * days)
     accom_total   = room_charges + accom_addons_total
 
-    # GST display strategy — mirrors bills.js logic:
-    # Trust stored gst_amount (per-segment for room transfers, inclusive formula).
-    # Old bills used exclusive formula (rate/100): detect by checking if stored
-    # value ≈ accom_total × rate/100; if so, recalculate with inclusive formula.
+    discounts    = b.get("discounts") or 0
+
+    # ── GST display strategy ──────────────────────────────────────────────────
+    # Section 15(3)(a) CGST Act: pre-supply discounts (given at time of supply)
+    # reduce the taxable value. GST must be computed on (accom_total - discount).
+    # We prorate the discount to accommodation first; any excess goes to services.
+    discount_on_accom    = min(discounts, accom_total)
+    effective_accom      = accom_total - discount_on_accom   # post-discount base
+
     stored_gst = b.get("gst_amount")
-    if stored_gst is not None and gst_rate_pct > 0:
-        exclusive_gst = accom_total * gst_rate_pct / 100
-        is_old_exclusive_bill = abs(stored_gst - exclusive_gst) < 0.10
-        if is_old_exclusive_bill:
-            gst_divisor = 100 + gst_rate_pct
-            gst_amt = accom_total * gst_rate_pct / gst_divisor
-        else:
-            gst_amt = stored_gst
-    elif gst_rate_pct > 0:
+    if gst_rate_pct > 0:
+        # Always recalculate on effective (post-discount) accommodation amount.
+        # Handles: full waiver (effective=0 → gst=0), partial discount, old bills.
         gst_divisor = 100 + gst_rate_pct
-        gst_amt = accom_total * gst_rate_pct / gst_divisor
+        gst_amt     = effective_accom * gst_rate_pct / gst_divisor
     else:
         gst_amt = 0
     cgst       = gst_amt / 2
     sgst       = cgst
-    accom_base = accom_total - gst_amt
-
-    discounts    = b.get("discounts") or 0
+    accom_base = effective_accom - gst_amt   # net taxable base (excl. GST)
     svc_total_all = b.get("services_total") or 0
     # Use stored total_amount when available (authoritative figure from billing).
     grand_total  = b.get("total_amount") or (room_charges + svc_total_all - discounts)
@@ -1062,45 +1097,101 @@ def _build_bill_html(b: dict) -> str:
         for s in accom_addons
     )
 
-    # ── Other service rows ──
+    # ── Water service rows (GST 5% inclusive — show taxable value in Amount col) ──
+    # taxable_value = price / 1.05  (back-calculate from MRP)
+    # final price (MRP) is unchanged — no amount added
+    _water_cgst = 0.0
+    _water_sgst = 0.0
+    for _w in water_services:
+        _w_price = float(_w.get("price", 0))
+        _w_gst   = _w_price - (_w_price / 1.05)
+        _water_cgst += _w_gst / 2
+        _water_sgst += _w_gst / 2
+
+    water_rows = "".join(
+        f'<tr><td>{s.get("item", "Water")}</td>'
+        f'<td class="b-tr">{s.get("quantity", 1)}</td>'
+        f'<td class="b-tr">{_f2(float(s.get("unit_price") or s.get("price", 0)) / 1.05)}</td>'
+        f'<td class="b-tr">{_f2(float(s.get("price", 0)) / 1.05)}</td></tr>'
+        for s in water_services
+    )
+    water_svc_section = (
+        f'<tr class="b-sec"><td colspan="4">Packaged Drinking Water (HSN: 2201)</td></tr>'
+        f'{water_rows}'
+        f'<tr class="b-gst-row"><td>CGST @ 2.5%</td>'
+        f'<td class="b-tr">—</td><td class="b-tr">—</td>'
+        f'<td class="b-tr">{_f2(_water_cgst)}</td></tr>'
+        f'<tr class="b-gst-row"><td>SGST @ 2.5%</td>'
+        f'<td class="b-tr">—</td><td class="b-tr">—</td>'
+        f'<td class="b-tr">{_f2(_water_sgst)}</td></tr>'
+        f'<tr class="b-subtotal"><td colspan="3" class="b-tr">Water Total (MRP, incl. GST)</td>'
+        f'<td class="b-tr">{_f2(water_svc_total)}</td></tr>'
+    ) if water_services else ""
+
+    # ── Other service rows (non-water, non-taxable) ──
     other_svc_rows = "".join(
         f'<tr><td>{s.get("item","Service")}</td>'
         f'<td class="b-tr">{s.get("quantity",1)}</td>'
         f'<td class="b-tr">{_f2(s.get("unit_price") or s.get("price",0))}</td>'
         f'<td class="b-tr">{_f2(s.get("price",0))}</td></tr>'
-        for s in other_services
+        for s in non_water_services
     )
 
-    # ── GST rows ──
-    gst_rows = (
-        f'<tr class="b-gst-row"><td>CGST @ {cgst_rate}%</td>'
-        f'<td class="b-tr">—</td><td class="b-tr">—</td>'
-        f'<td class="b-tr">{_f2(cgst)}</td></tr>'
-        f'<tr class="b-gst-row"><td>SGST @ {sgst_rate}%</td>'
-        f'<td class="b-tr">—</td><td class="b-tr">—</td>'
-        f'<td class="b-tr">{_f2(sgst)}</td></tr>'
-    )
+    # ── GST rows — only if effective accommodation > 0 after discount ────────
+    if gst_rate_pct > 0 and effective_accom > 0:
+        gst_rows = (
+            f'<tr class="b-gst-row"><td>CGST @ {cgst_rate}%</td>'
+            f'<td class="b-tr">—</td><td class="b-tr">—</td>'
+            f'<td class="b-tr">{_f2(cgst)}</td></tr>'
+            f'<tr class="b-gst-row"><td>SGST @ {sgst_rate}%</td>'
+            f'<td class="b-tr">—</td><td class="b-tr">—</td>'
+            f'<td class="b-tr">{_f2(sgst)}</td></tr>'
+        )
+    elif gst_rate_pct > 0 and effective_accom <= 0:
+        # Full discount — GST waived per Sec 15(3)(a) CGST Act
+        gst_rows = (
+            f'<tr class="b-gst-row"><td colspan="3" style="color:#2e7d32;">'
+            f'GST Nil (Discount applied — Sec 15(3)(a) CGST Act)</td>'
+            f'<td class="b-tr">0.00</td></tr>'
+        )
+    else:
+        gst_rows = ""
 
+    # Accommodation subtotal shows pre-discount total; discount row below explains reduction
+    _is_multi_room = (_is_new_format and len(room_segments) > 1) or (not _is_new_format and room_segments)
     accom_subtotal_row = (
         f'<tr class="b-subtotal">'
         f'<td colspan="3" class="b-tr">Accommodation Total (incl. GST)</td>'
         f'<td class="b-tr">{_f2(accom_total)}</td></tr>'
-        if accom_addons or days > 1 or room_segments else ""
+        if accom_addons or days > 1 or _is_multi_room else ""
     )
 
     other_svc_section = (
         f'<tr class="b-sec"><td colspan="4">Additional Services (Non-Taxable)</td></tr>'
         f'{other_svc_rows}'
         f'<tr class="b-subtotal"><td colspan="3" class="b-tr">Services Total</td>'
-        f'<td class="b-tr">{_f2(other_svc_total)}</td></tr>'
+        f'<td class="b-tr">{_f2(non_water_svc_total)}</td></tr>'
         if other_svc_rows else ""
     )
 
+    # Discount row — shown above grand total
     discount_row = (
         f'<tr><td colspan="3" style="text-align:right;color:#2e7d32;font-weight:600;">'
         f'Discount</td>'
         f'<td class="b-tr" style="color:#2e7d32;font-weight:700;">- {_f2(discounts)}</td></tr>'
         if discounts > 0 else ""
+    )
+
+    # ── Round-off row ────────────────────────────────────────────────────────
+    # GST back-calculation (price / 1.0x) can leave a ₹0.01 floating-point gap
+    # between (taxable_base + CGST + SGST) and the actual MRP charged.
+    # A round-off row makes the invoice self-consistent and is standard practice.
+    _computed_accom_sum = round(accom_base + cgst + sgst, 2)
+    _round_diff = round(effective_accom - _computed_accom_sum, 2)
+    round_off_row = (
+        f'<tr class="b-gst-row"><td colspan="3" style="text-align:right;color:#888;">Round-off</td>'
+        f'<td class="b-tr" style="color:#888;">{("+" if _round_diff > 0 else "")}{_f2(_round_diff)}</td></tr>'
+        if abs(_round_diff) >= 0.01 else ""
     )
 
     # ── Refund rows ──
@@ -1132,11 +1223,7 @@ def _build_bill_html(b: dict) -> str:
         if balance > 0 else ""
     )
 
-    paid_full_row = (
-        f'<tr><td style="color:#2e7d32;font-weight:700;">Payment Status</td>'
-        f'<td class="b-tr" style="color:#2e7d32;font-weight:700;">PAID IN FULL</td></tr>'
-        if balance <= 0 and refunds <= 0 else ""
-    )
+    paid_full_row = ""  # removed — balance row already shows ₹0 when settled
 
     # ── Helper: GST slab for a given per-night price ─────────────────────────
     def _seg_gst_rate(price):
@@ -1150,14 +1237,35 @@ def _build_bill_html(b: dict) -> str:
         return total_incl / (1 + r / 100) if r > 0 else total_incl
 
     # ── Room Rent rows: pre-GST values, one per segment for transfer stays ────
-    room_segments      = b.get("room_segments") or []
-    current_room_no    = b.get("current_room") or b.get("room", "")
-    current_room_days  = b.get("current_room_days")
-    current_room_price = b.get("current_room_price")
-    current_room_total = b.get("current_room_total")
+    room_segments = b.get("room_segments") or []
 
-    if room_segments and current_room_days is not None:
-        # Multi-room stay — one row per room, showing pre-GST taxable rate
+    # Detect format: new format has "room" key; old format has "from_room" key
+    # Old format also needs current_room_* fields from the bill document.
+    _is_new_format = bool(room_segments and "room" in room_segments[0])
+
+    if _is_new_format and len(room_segments) > 1:
+        # NEW FORMAT — multi-room stay: render all segments from the clean array
+        room_rent_rows = ""
+        for seg in room_segments:
+            seg_room   = seg.get("room", "")
+            seg_nights = seg.get("nights", 0)
+            seg_rate   = seg.get("rate", 0)
+            seg_total  = seg.get("total", 0)
+            if seg_nights > 0:
+                seg_tax      = _seg_taxable(seg_total, seg_rate)
+                seg_rate_ex  = seg_tax / seg_nights if seg_nights else 0
+                room_rent_rows += (
+                    f'<tr><td>Room Rent – Rm {seg_room}</td>'
+                    f'<td class="b-tr">{seg_nights}</td>'
+                    f'<td class="b-tr">{_f2(seg_rate_ex)}</td>'
+                    f'<td class="b-tr">{_f2(seg_tax)}</td></tr>'
+                )
+    elif not _is_new_format and room_segments:
+        # OLD FORMAT — backward compat for bills created before this change
+        current_room_no    = b.get("current_room") or b.get("room", "")
+        current_room_days  = b.get("current_room_days")
+        current_room_price = b.get("current_room_price")
+        current_room_total = b.get("current_room_total")
         room_rent_rows = ""
         for seg in room_segments:
             seg_room  = seg.get("from_room", "")
@@ -1165,8 +1273,8 @@ def _build_bill_html(b: dict) -> str:
             seg_price = seg.get("price", 0)
             seg_total = seg.get("total", 0)
             if seg_days > 0:
-                seg_tax   = _seg_taxable(seg_total, seg_price)
-                seg_rate  = seg_tax / seg_days if seg_days else 0
+                seg_tax  = _seg_taxable(seg_total, seg_price)
+                seg_rate = seg_tax / seg_days if seg_days else 0
                 room_rent_rows += (
                     f'<tr><td>Room Rent – Rm {seg_room}</td>'
                     f'<td class="b-tr">{seg_days}</td>'
@@ -1240,7 +1348,9 @@ def _build_bill_html(b: dict) -> str:
       {accom_addon_rows}
       {taxable_base_row}
       {gst_rows}
+      {round_off_row}
       {accom_subtotal_row}
+      {water_svc_section}
       {other_svc_section}
       {discount_row}
       <tr class="b-grand">
@@ -1303,11 +1413,7 @@ def auto_generate_bill_pdf(bill_id: str, bill_record: dict):
             logger.error(f"[auto_pdf] xhtml2pdf error for bill {bill_id}: code {result.err}")
             return
 
-        folder = (
-            bill_record.get("invoice_number")
-            or bill_record.get("bill_number")
-            or bill_id
-        )
+        folder = bill_record.get("bill_number") or bill_id
         upload = pdf_service.upload_bill_pdf(bill_id, folder, pdf_buf.getvalue())
         if upload.get("url"):
             logger.info(
@@ -1429,14 +1535,14 @@ def render_bill_pdf():
 
     Skips generation if a PDF URL already exists in Firestore.
 
-    Request JSON:  { bill_id, invoice_no, html_content }
+    Request JSON:  { bill_id, bill_number, html_content }
     Response JSON: { success, pdf_url, version, skipped? }
     """
     try:
-        data       = request.json or {}
-        bill_id    = (data.get("bill_id") or "").strip()
-        invoice_no = (data.get("invoice_no") or "").strip()
-        html_body  = (data.get("html_content") or "").strip()
+        data        = request.json or {}
+        bill_id     = (data.get("bill_id") or "").strip()
+        bill_number = (data.get("bill_number") or data.get("invoice_no") or "").strip()
+        html_body   = (data.get("html_content") or "").strip()
 
         if not bill_id or not html_body:
             return jsonify(success=False,
@@ -1474,7 +1580,7 @@ def render_bill_pdf():
         pdf_bytes = pdf_buf.getvalue()
 
         # ── Upload to Firebase Storage ────────────────────────────────────────
-        folder = invoice_no or bill_id
+        folder = bill_number or bill_id
         upload = pdf_service.upload_bill_pdf(bill_id, folder, pdf_bytes)
 
         if not upload.get("url"):

@@ -1818,6 +1818,17 @@ function showEditTimeModal(roomNumber, currentCheckInTime) {
       if (result.success) {
         editTimeModal.classList.remove("show");
 
+        // If the date portion changed, fix the serial number counter so the
+        // old date slot is released and the new date gets a fresh serial.
+        const oldCheckinTime = rooms[roomNumber] && rooms[roomNumber].checkin_time;
+        if (oldCheckinTime && window.transactionTracker) {
+          const oldDate = oldCheckinTime.split(" ")[0];
+          const newDate = newCheckInTime.split(" ")[0];
+          if (oldDate !== newDate) {
+            window.transactionTracker.reassignCheckinDate(roomNumber, oldDate, newDate);
+          }
+        }
+
         // Patch local state directly — no server round-trip needed for a simple time edit
         if (rooms[roomNumber]) {
           rooms[roomNumber].checkin_time = newCheckInTime;

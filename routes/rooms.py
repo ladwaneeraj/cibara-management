@@ -874,19 +874,27 @@ def transfer_room():
         new_room_data = rooms_dict[old_room].copy()
 
         # ── Snapshot pre-transfer charges before changing price ──────────────────
-        # renewal_count is a running total across the whole stay (not reset on
-        # transfer).  We use transfer_day_offset to track how many days were
-        # spent in rooms BEFORE the current one, so billing can calculate:
-        #   days_in_current_room = (renewal_count + 1) - transfer_day_offset
-        # and apply the correct price only to those days.
-        old_price         = new_room_data["guest"].get("price", 0)
-        old_renewal_count = new_room_data.get("renewal_count", 0)
-        existing_offset   = new_room_data["guest"].get("transfer_day_offset", 0)
-        # days in THIS room = completed renewals since last transfer.
-        # Do NOT add +1 — the current (incomplete) day belongs to the NEW room.
-        # Same-day transfer → old_days = 0, new room is charged the full day.
-        # Next-day transfer → old_days = 1, old room charged 1 day, new room rest.
-        old_days          = old_renewal_count - existing_offset
+        # Use CALENDAR DATES to count days — not renewal_count.
+        # renewal_count is incremented at midnight, so if staff transfers a guest
+        # before the renewal runs (e.g. 9am), renewal_count is still 0 for the day
+        # and the old segment would get 0 days — wrong.
+        # Date-based calculation: days = (today - checkin_date) - already_offset
+        # Same-day transfer  → 0 days in old room (correct: guest never slept there).
+        # Next-day transfer  → 1 day  in old room (correct: 1 night in old room).
+        old_price        = new_room_data["guest"].get("price", 0)
+        existing_offset  = new_room_data["guest"].get("transfer_day_offset", 0)
+
+        _now_date     = datetime.now(IST).date()
+        _checkin_str  = new_room_data.get("checkin_time", "")
+        try:
+            _checkin_date = datetime.strptime(_checkin_str[:10], "%Y-%m-%d").date()
+        except (ValueError, TypeError):
+            _checkin_date = _now_date
+
+        # Total calendar days elapsed since original check-in
+        _total_elapsed = (_now_date - _checkin_date).days
+        # Days in THIS (old) room = elapsed − days already captured in prior segments
+        old_days = max(0, _total_elapsed - existing_offset)
 
         existing_pre_transfer = list(new_room_data["guest"].get("pre_transfer_charges", []) or [])
         if old_days > 0:
@@ -897,10 +905,11 @@ def transfer_room():
                 "from_room": old_room,
             })
         new_room_data["guest"]["pre_transfer_charges"] = existing_pre_transfer
-        # Advance the offset so the new room knows where to start counting
+        # Advance the offset by the days just recorded
         new_room_data["guest"]["transfer_day_offset"] = existing_offset + old_days
-        # renewal_count carries over unchanged — it keeps incrementing for every
-        # renewal across the whole stay, regardless of how many rooms were used.
+        # Store the transfer date so checkout can compute current-room days by date
+        new_room_data["guest"]["last_transfer_date"] = _now_date.strftime("%Y-%m-%d")
+        # renewal_count carries over unchanged — still used for non-transfer stays
         # ────────────────────────────────────────────────────────────────────────
 
         if new_price:

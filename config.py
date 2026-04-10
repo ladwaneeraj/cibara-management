@@ -461,18 +461,29 @@ def create_bill_record(room, room_data, checkout_time, batch=None,
         renewal_count        = room_data.get("renewal_count", 0)
 
         # ── Room transfer: build charges per price segment ───────────────────────
-        # renewal_count is a running total across the whole stay (never reset on
-        # transfer).  transfer_day_offset records how many days were spent in all
-        # previous rooms, so we can isolate days in the current room:
-        #
-        #   days_in_current_room = (renewal_count + 1) - transfer_day_offset
-        #
         # pre_transfer_charges: [{days, price, total, from_room}, ...]
-        # Each entry was written by transfer_room() before the price changed.
+        # Each entry was written by transfer_room() using date-based day counts.
         pre_transfer_charges  = guest.get("pre_transfer_charges", [])
         transfer_day_offset   = guest.get("transfer_day_offset", 0)
+        last_transfer_date    = guest.get("last_transfer_date")   # set by transfer_room()
 
-        days_in_current_room  = (renewal_count + 1) - transfer_day_offset
+        if pre_transfer_charges and last_transfer_date:
+            # Transfer occurred — use calendar dates to count current-room days.
+            # last_transfer_date = the date the guest moved INTO this (current) room.
+            # days_in_current_room = checkout_date − transfer_date
+            # Minimum 1 so a same-day-checkout-after-transfer still bills 1 night.
+            try:
+                _transfer_dt = datetime.strptime(last_transfer_date, "%Y-%m-%d").date()
+                days_in_current_room = (checkout_dt.date() - _transfer_dt).days
+                if days_in_current_room < 1:
+                    days_in_current_room = 1
+            except (ValueError, TypeError):
+                # Fallback to renewal_count logic if date is malformed
+                days_in_current_room = max(1, (renewal_count + 1) - transfer_day_offset)
+        else:
+            # No transfer — original renewal_count-based calculation (still correct).
+            days_in_current_room = (renewal_count + 1) - transfer_day_offset
+
         pre_transfer_total    = sum(entry.get("total", 0) for entry in pre_transfer_charges)
         pre_transfer_days     = sum(entry.get("days",  0) for entry in pre_transfer_charges)
 
@@ -574,9 +585,9 @@ def create_bill_record(room, room_data, checkout_time, batch=None,
             net_receivable     = booking_doc.get("net_receivable", 0)
             settlement_status  = booking_doc.get("settlement_status")
 
-        # ── Invoice logic (Section 3 of spec) ───────────────────────────────────
-        # invoice_number (INV/YYYY/MM/XXXXX) is the GST tax invoice — separate from
-        # bill_number (CC/YYYY/MM/XXXXX) which is always generated as the folio/receipt.
+        # ── Invoice flag logic ────────────────────────────────────────────────────
+        # invoice_generated = True when this bill qualifies as a formal GST tax invoice.
+        # bill_number (CC/YYYY/MM/XXXXX) is the single reference — no separate INV/... number.
         any_addon_online = any(
             p.get("type") == "addon" and p.get("method") == "online"
             for p in stay_payments
@@ -626,9 +637,39 @@ def create_bill_record(room, room_data, checkout_time, batch=None,
         else:
             bill_number = "-"
 
-        invoice_number = None
-        if invoice_generated:
-            invoice_number = generate_sequential_invoice_number(checkout_dt)
+        # ── Build clean room_segments array ──────────────────────────────────────
+        # Each entry: {room, date_from, date_to, nights, rate, total}
+        # Covers ALL segments (prior rooms + final room) in chronological order.
+        # Single-room stays have exactly one entry.
+        try:
+            _checkin_date = datetime.strptime(checkin_time[:10], "%Y-%m-%d").date()
+        except (ValueError, TypeError):
+            _checkin_date = checkout_dt.date()
+
+        clean_segments = []
+        _cursor_date = _checkin_date
+        for _seg in (pre_transfer_charges or []):
+            _seg_nights = _seg.get("days", 0)
+            _seg_date_to = _cursor_date + timedelta(days=_seg_nights)
+            clean_segments.append({
+                "room":      _seg.get("from_room", ""),
+                "date_from": _cursor_date.strftime("%Y-%m-%d"),
+                "date_to":   _seg_date_to.strftime("%Y-%m-%d"),
+                "nights":    _seg_nights,
+                "rate":      _seg.get("price", 0),
+                "total":     _seg.get("total", 0),
+            })
+            _cursor_date = _seg_date_to
+        # Append final (current) room segment
+        clean_segments.append({
+            "room":      room,
+            "date_from": _cursor_date.strftime("%Y-%m-%d"),
+            "date_to":   checkout_dt.date().strftime("%Y-%m-%d"),
+            "nights":    days_in_current_room,
+            "rate":      room_price_per_night,
+            "total":     current_room_charges,
+        })
+        # ─────────────────────────────────────────────────────────────────────────
 
         bill_record = {
             "bill_number": bill_number,
@@ -664,9 +705,9 @@ def create_bill_record(room, room_data, checkout_time, batch=None,
             "ota_commission_gst": ota_commission_gst,
             "net_receivable": net_receivable,
             "settlement_status": settlement_status,
-            # GST invoice fields (separate from bill_number folio)
+            # GST invoice flag — True when bill qualifies as a formal GST invoice.
+            # bill_number (CC/YYYY/MM/XXXXX) is the single reference for all invoices.
             "invoice_generated": invoice_generated,
-            "invoice_number": invoice_number,
             # Settle-later link
             "settlement_id": settlement_id if settle_later else None,
             # ── GST breakdown (SAC 9963 — Accommodation Services) ─────────────
@@ -678,14 +719,10 @@ def create_bill_record(room, room_data, checkout_time, batch=None,
             "accommodation_taxable": accommodation_taxable,
             "non_accommodation_total": non_accommodation_total,
             "gst_amount": gst_amount,
-            # Room-segment breakdown for itemised bill display (room transfers)
-            # Each entry: {from_room, days, price, total}
-            # current_room_* = the final room at checkout
-            "room_segments": pre_transfer_charges,
-            "current_room": room,
-            "current_room_days": days_in_current_room,
-            "current_room_price": room_price_per_night,
-            "current_room_total": current_room_charges,
+            # ── Room segments — clean array for all stays ──────────────────────
+            # Each entry: {room, date_from, date_to, nights, rate, total}
+            # Single-room stays have exactly one entry.
+            "room_segments": clean_segments,
         }
 
         return bill_record
@@ -724,35 +761,6 @@ def generate_sequential_bill_number(checkout_date):
         # Timestamp-based fallback — still unique, never 0
         ts = max(1, int(checkout_date.timestamp()) % 100000)
         return f"CC/{checkout_date.year}/{str(checkout_date.month).zfill(2)}/{ts:05d}"
-
-def generate_sequential_invoice_number(checkout_date):
-    """
-    Format: INV/YYYY/MM/XXXXX
-    Separate atomic counter from bill numbers.
-    """
-    try:
-        year  = checkout_date.year
-        month = str(checkout_date.month).zfill(2)
-
-        counter_key = f"invoice_{year}_{month}"
-        counter_ref = counters_ref.document(counter_key)
-        txn         = db.transaction()
-
-        @firestore.transactional
-        def _inc(t, ref):
-            snap    = ref.get(transaction=t)
-            new_val = (snap.get("count") + 1) if snap.exists else 1
-            t.set(ref, {"count": new_val})
-            return new_val
-
-        seq    = _inc(txn, counter_ref)
-        serial = str(seq).zfill(5)
-        return f"INV/{year}/{month}/{serial}"
-
-    except Exception as e:
-        logger.error(f"Error generating invoice number: {e}")
-        ts = max(1, int(checkout_date.timestamp()) % 100000)
-        return f"INV/{checkout_date.year}/{str(checkout_date.month).zfill(2)}/{ts:05d}"
 
 
 def find_serial_number_for_checkin(room_number, guest_name, checkin_dt, all_logs):

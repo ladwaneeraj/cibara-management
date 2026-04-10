@@ -11,7 +11,6 @@ from firebase_admin import firestore
 from config import (
     db, totals_ref, IST, logger,
     invalidate_rooms_and_totals,
-    generate_sequential_invoice_number,
 )
 
 # settlements_ref and bills_ref defined in config
@@ -171,18 +170,10 @@ def collect_settlement():
                 if new_balance <= 0:
                     bill_update["status"] = "completed"
 
-                    # Generate invoice if UPI payment and no invoice yet
+                    # Mark invoice_generated for UPI settlements if not already flagged
                     if (payment_mode == "online"
                             and not bill_data.get("invoice_generated")):
-                        try:
-                            checkout_dt = datetime.strptime(
-                                bill_data["checkout_time"], "%Y-%m-%d %H:%M"
-                            )
-                            inv_num = generate_sequential_invoice_number(checkout_dt)
-                            bill_update["invoice_generated"] = True
-                            bill_update["invoice_number"]    = inv_num
-                        except Exception as _ie:
-                            logger.warning(f"Could not generate invoice on settlement: {_ie}")
+                        bill_update["invoice_generated"] = True
 
                 bills_ref.document(bill_doc.id).update(bill_update)
                 logger.info(f"Bill {bill_doc.id} updated after settlement collection "

@@ -264,6 +264,140 @@ def get_customer(mobile: str):
         return None
 
 
+def list_customers_page(page_size: int = 50, cursor: str = "", search: str = "") -> dict:
+    """
+    Cursor-based paginated listing of customers (lightweight — no image URLs).
+
+    Args:
+        page_size : max records to return (capped at 100).
+        cursor    : last seen mobile from previous page (empty = first page).
+        search    : if set, falls back to search_customers (no cursor support).
+
+    Returns dict:
+        {
+          "customers": [ {name, mobile, total_stays, total_spent,
+                          last_stay_date, is_flagged, doc_count}, ... ],
+          "next_cursor": "<mobile of last row>" | None,
+          "has_more": bool
+        }
+    """
+    if _customers_ref is None:
+        return {"customers": [], "next_cursor": None, "has_more": False}
+
+    page_size = min(max(page_size, 1), 100)
+
+    try:
+        if search and search.strip():
+            raw = search_customers(search.strip(), limit=page_size)
+            return {
+                "customers": [_slim(c) for c in raw],
+                "next_cursor": None,
+                "has_more": False,
+            }
+
+        query = _customers_ref.order_by("name").limit(page_size + 1)
+        if cursor:
+            # start_after requires a DocumentSnapshot; fetch it first
+            snap = _customers_ref.document(cursor).get()
+            if snap.exists:
+                query = _customers_ref.order_by("name").start_after(snap).limit(page_size + 1)
+
+        rows = []
+        for doc in query.stream():
+            d = doc.to_dict()
+            d["_id"] = doc.id
+            rows.append(d)
+
+        has_more = len(rows) > page_size
+        if has_more:
+            rows = rows[:page_size]
+
+        slimmed     = [_slim(r) for r in rows]
+        next_cursor = rows[-1]["_id"] if (rows and has_more) else None
+
+        return {"customers": slimmed, "next_cursor": next_cursor, "has_more": has_more}
+
+    except Exception as e:
+        logger.error(f"CustomerService list_customers_page failed: {e}")
+        return {"customers": [], "next_cursor": None, "has_more": False}
+
+
+def _slim(c: dict) -> dict:
+    """Lightweight customer row — no image URLs, just counts."""
+    return {
+        "name":           c.get("name", ""),
+        "mobile":         c.get("mobile", "") or c.get("_id", ""),
+        "total_stays":    c.get("total_stays", 0),
+        "total_spent":    c.get("total_spent", 0),
+        "last_stay_date": c.get("last_stay_date", ""),
+        "first_visit":    c.get("first_visit", ""),
+        "is_flagged":     c.get("is_flagged", False),
+        "doc_count":      len(c.get("id_doc_urls") or []),
+    }
+
+
+def update_customer(mobile: str, updates: dict) -> bool:
+    """
+    Update allowed fields on a customer record.
+    Allowed: name, address, id_type, id_number.
+    Mobile (the doc key) cannot be changed.
+    Returns True on success, False on failure.
+    """
+    if _customers_ref is None:
+        return False
+    clean = _clean_mobile(mobile)
+    if not clean:
+        return False
+
+    allowed = {"name", "address", "id_type", "id_number"}
+    safe = {k: v for k, v in updates.items() if k in allowed}
+    if not safe:
+        return False
+    try:
+        _customers_ref.document(clean).update(safe)
+        logger.info(f"CustomerService: updated customer {clean} fields={list(safe.keys())}")
+        return True
+    except Exception as e:
+        logger.error(f"CustomerService update_customer failed for {clean}: {e}")
+        return False
+
+
+def add_customer(data: dict) -> bool:
+    """
+    Manually add a new customer (without a booking).
+    Requires at minimum: name + mobile.
+    Returns True on success, False on failure.
+    """
+    if _customers_ref is None:
+        return False
+    mobile = _clean_mobile(data.get("mobile", ""))
+    if not mobile:
+        return False
+    try:
+        doc_ref = _customers_ref.document(mobile)
+        if doc_ref.get().exists:
+            # Already exists — just update provided fields instead
+            return update_customer(mobile, data)
+        now_str = datetime.now(timezone.utc).isoformat()
+        doc_ref.set({
+            "name":         data.get("name", ""),
+            "mobile":       mobile,
+            "id_type":      data.get("id_type", ""),
+            "id_number":    data.get("id_number", ""),
+            "address":      data.get("address", ""),
+            "id_doc_urls":  [],
+            "total_stays":  0,
+            "total_spent":  0,
+            "first_visit":  now_str,
+            "last_stay_date": "",
+        })
+        logger.info(f"CustomerService: manually added customer {mobile}")
+        return True
+    except Exception as e:
+        logger.error(f"CustomerService add_customer failed: {e}")
+        return False
+
+
 # ---------------------------------------------------------------------------
 # FLAG
 # ---------------------------------------------------------------------------

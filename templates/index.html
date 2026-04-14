@@ -813,14 +813,19 @@
                 <label for="end-date">To Date:</label>
                 <input type="date" id="end-date" class="date-input" />
               </div>
-              <div class="filter-group">
+              <div class="filter-group filter-group-search">
                 <label for="search-register">Search:</label>
-                <input
-                  type="text"
-                  id="search-register"
-                  class="search-input"
-                  placeholder="Name, Mobile, Room, Bill No..."
-                />
+                <div class="search-with-btn">
+                  <input
+                    type="text"
+                    id="search-register"
+                    class="search-input search-input-compact"
+                    placeholder="Name, Mobile, Room..."
+                  />
+                  <button class="btn-customers" id="open-customers-btn" onclick="openCustomerManager()">
+                    <i class="fas fa-users"></i> Customers
+                  </button>
+                </div>
               </div>
               <div class="filter-group">
                 <label for="payment-filter">Payment:</label>
@@ -867,6 +872,164 @@
                   <!-- Will be populated by JavaScript -->
                 </tbody>
               </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════
+             Customer Manager Modal
+             ═══════════════════════════════════════════════ -->
+        <!-- ═══ Customer Manager Panel ═══ -->
+        <div class="cm-overlay" id="customer-manager-overlay" onclick="closeCustomerManager(event)">
+          <div class="cm-panel">
+            <div class="cm-header">
+              <div class="cm-header-left"><i class="fas fa-users"></i><h2>Customer Records</h2></div>
+              <div class="cm-header-right">
+                <button class="cm-add-btn" onclick="openAddCustomerForm()">
+                  <i class="fas fa-user-plus"></i> Add Customer
+                </button>
+                <button class="cm-close-btn" onclick="closeCustomerManager()"><i class="fas fa-times"></i></button>
+              </div>
+            </div>
+
+            <div class="cm-search-bar">
+              <div class="cm-search-wrap">
+                <i class="fas fa-search cm-search-icon"></i>
+                <input type="text" id="cm-search-input" class="cm-search-field"
+                  placeholder="Search by name or mobile…" oninput="cmSearch(this.value)" />
+                <button class="cm-clear-search" id="cm-clear-btn" onclick="cmClearSearch()" style="display:none">
+                  <i class="fas fa-times"></i>
+                </button>
+              </div>
+              <div class="cm-stats"><span id="cm-total-count">–</span> loaded</div>
+            </div>
+
+            <div class="cm-chips">
+              <button class="cm-chip active" onclick="cmSetFilter('all',this)">All</button>
+              <button class="cm-chip" onclick="cmSetFilter('flagged',this)">🚩 Flagged</button>
+              <button class="cm-chip" onclick="cmSetFilter('repeat',this)">🔄 Repeat</button>
+              <button class="cm-chip" onclick="cmSetFilter('docs',this)">📋 Has Docs</button>
+            </div>
+
+            <div class="cm-table-wrap">
+              <table class="cm-table">
+                <thead>
+                  <tr>
+                    <th>Guest Name</th>
+                    <th>Mobile</th>
+                    <th>Stays</th>
+                    <th>Total Spent</th>
+                    <th>Last Visit</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody id="cm-table-body">
+                  <tr><td colspan="6" class="cm-loading"><i class="fas fa-spinner fa-spin"></i> Loading…</td></tr>
+                </tbody>
+                <tfoot>
+                  <tr id="cm-load-more-row" style="display:none">
+                    <td colspan="6" class="cm-load-more-cell">
+                      <button class="cm-load-more-btn" onclick="cmLoadMore()">Load more</button>
+                    </td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+
+            <div class="cm-empty" id="cm-empty" style="display:none">
+              <i class="fas fa-user-slash"></i>
+              <p>No customers found</p>
+              <span>Try a different search or add a new customer</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- ═══ Customer Detail Panel ═══ -->
+        <div class="cm-detail-overlay" id="cm-detail-overlay">
+          <div class="cm-detail-panel">
+            <div class="cm-detail-header">
+              <button class="cm-back-btn" onclick="closeCustomerDetail()">
+                <i class="fas fa-arrow-left"></i> Back
+              </button>
+              <h3 id="cm-detail-title">Customer Details</h3>
+              <div style="display:flex;gap:.5rem;align-items:center;">
+                <button class="cm-edit-toggle-btn" id="cm-edit-toggle" onclick="cmToggleEdit()">
+                  <i class="fas fa-edit"></i> Edit
+                </button>
+                <div id="cm-save-wrap" style="display:none;gap:.5rem;">
+                  <button class="cm-btn cm-btn-secondary" onclick="cmToggleEdit()">Cancel</button>
+                  <button class="cm-btn cm-btn-primary" id="cm-save-btn" onclick="cmSaveCustomer()">
+                    <i class="fas fa-save"></i> Save
+                  </button>
+                </div>
+              </div>
+            </div>
+            <!-- Body rendered by JS -->
+            <div id="cm-detail-body"></div>
+          </div>
+        </div>
+
+        <!-- ═══ Add Customer Modal ═══ -->
+        <div class="cm-add-overlay" id="cm-add-overlay">
+          <div class="cm-add-panel">
+            <div class="cm-detail-header">
+              <h3><i class="fas fa-user-plus"></i> Add New Customer</h3>
+              <button class="cm-close-btn" onclick="closeAddCustomerForm()"><i class="fas fa-times"></i></button>
+            </div>
+            <form id="cm-add-form" onsubmit="cmSubmitNewCustomer(event)">
+              <div class="cm-form-group">
+                <label>Full Name <span class="req">*</span></label>
+                <input type="text" id="cm-add-name" class="cm-input" required placeholder="Guest full name" />
+              </div>
+              <div class="cm-form-group">
+                <label>Mobile Number <span class="req">*</span></label>
+                <input type="tel" id="cm-add-mobile" class="cm-input" required
+                  maxlength="10" pattern="\d{10}" placeholder="10-digit mobile" />
+              </div>
+
+              <!-- Photo upload -->
+              <div class="cm-form-group">
+                <label>ID Documents <small>(max 3 photos)</small></label>
+                <div class="cm-docs-grid" id="cm-add-docs-grid">
+                  <label class="cm-add-photo-slot cm-doc-upload-slot"
+                    title="Add photo">
+                    <i class="fas fa-plus"></i><span>Add Photo</span>
+                    <input type="file" accept="image/*" multiple style="display:none"
+                      onchange="cmAddHandlePhotos(this.files)" />
+                  </label>
+                </div>
+                <div class="cm-docs-grid" id="cm-add-pending-photos"></div>
+              </div>
+
+              <div class="cm-form-actions">
+                <button type="button" class="cm-btn cm-btn-secondary" onclick="closeAddCustomerForm()">Cancel</button>
+                <button type="submit" class="cm-btn cm-btn-primary" id="cm-add-submit-btn">
+                  <i class="fas fa-plus"></i> Add Customer
+                </button>
+              </div>
+              <!-- hidden upload progress indicator -->
+              <div id="cm-add-upload-btn" style="display:none;"></div>
+            </form>
+          </div>
+        </div>
+
+        <!-- ═══ Flag Customer Modal ═══ -->
+        <div class="cm-modal-overlay" id="cm-flag-modal-overlay">
+          <div class="cm-mini-modal">
+            <div class="cm-mini-modal-header">
+              <h4 id="cm-flag-modal-title">Flag this guest</h4>
+              <button class="cm-close-btn" onclick="cmCloseFlagModal()"><i class="fas fa-times"></i></button>
+            </div>
+            <div id="cm-flag-note-row" class="cm-form-group">
+              <label>Reason / Notes</label>
+              <textarea id="cm-flag-note-input" class="cm-input cm-textarea"
+                rows="3" placeholder="Why is this guest being flagged?"></textarea>
+            </div>
+            <div class="cm-form-actions">
+              <button class="cm-btn cm-btn-secondary" onclick="cmCloseFlagModal()">Cancel</button>
+              <button class="cm-btn cm-btn-flag-confirm" id="cm-flag-confirm-btn">
+                <i class="fas fa-flag"></i> Flag Guest
+              </button>
             </div>
           </div>
         </div>
@@ -3711,6 +3874,8 @@
     <script defer src="/static/room-cleaning.js"></script>
     <!-- Enhanced check-in: document capture + customer flagging -->
     <script defer src="/static/customer-docs.js"></script>
+    <!-- Customer Manager Panel -->
+    <script defer src="/static/customer-manager.js"></script>
     <script
       type="module"
       src="{{ url_for('static', filename='google_sync.js') }}"

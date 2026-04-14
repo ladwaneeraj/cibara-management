@@ -235,6 +235,95 @@ def toggle_customer_flag():
         return jsonify(success=False, message=f"Error: {e}"), 500
 
 
+@customers_bp.route("/list_customers", methods=["GET"])
+def list_customers_route():
+    """
+    Paginated lightweight customer list (no image URLs — only doc_count).
+
+    Query params:
+        search      – name / mobile / ID search (disables cursor paging)
+        page_size   – rows per page, 1-100, default 50
+        cursor      – mobile of last row from previous page (empty = first page)
+    """
+    try:
+        search    = request.args.get("search", "").strip()
+        page_size = min(int(request.args.get("page_size", 50)), 100)
+        cursor    = request.args.get("cursor", "").strip()
+
+        result = customer_service.list_customers_page(
+            page_size=page_size, cursor=cursor, search=search
+        )
+        return jsonify(
+            success=True,
+            customers=result["customers"],
+            next_cursor=result["next_cursor"],
+            has_more=result["has_more"],
+            total=len(result["customers"]),
+        )
+    except Exception as e:
+        logger.error(f"list_customers error: {e}")
+        return jsonify(success=False, message=str(e)), 500
+
+
+@customers_bp.route("/update_customer", methods=["POST"])
+def update_customer_route():
+    """
+    Update editable fields on a customer record.
+
+    JSON body:
+        mobile   – 10-digit mobile (required, used as the key)
+        name     – optional
+        address  – optional
+        id_type  – optional
+        id_number – optional
+    """
+    try:
+        data   = request.get_json(silent=True) or {}
+        mobile = "".join(c for c in str(data.get("mobile", "")) if c.isdigit())
+        if len(mobile) != 10:
+            return jsonify(success=False, message="Valid 10-digit mobile required"), 400
+
+        ok = customer_service.update_customer(mobile, data)
+        if ok:
+            return jsonify(success=True, message="Customer updated")
+        return jsonify(success=False, message="Update failed or no valid fields"), 400
+    except Exception as e:
+        logger.error(f"update_customer error: {e}")
+        return jsonify(success=False, message=str(e)), 500
+
+
+@customers_bp.route("/add_customer", methods=["POST"])
+def add_customer_route():
+    """
+    Manually add a new customer record (without a booking).
+
+    JSON body:
+        mobile   – 10-digit (required)
+        name     – required
+        address  – optional
+        id_type  – optional
+        id_number – optional
+    """
+    try:
+        data   = request.get_json(silent=True) or {}
+        mobile = "".join(c for c in str(data.get("mobile", "")) if c.isdigit())
+        name   = str(data.get("name", "")).strip()
+
+        if len(mobile) != 10:
+            return jsonify(success=False, message="Valid 10-digit mobile required"), 400
+        if not name:
+            return jsonify(success=False, message="Name is required"), 400
+
+        ok = customer_service.add_customer(data)
+        if ok:
+            return jsonify(success=True, message="Customer added")
+        return jsonify(success=False, message="Failed to add customer"), 500
+    except Exception as e:
+        logger.error(f"add_customer error: {e}")
+        return jsonify(success=False, message=str(e)), 500
+
+
+
 @customers_bp.route("/batch_check_customer_docs", methods=["POST"])
 def batch_check_customer_docs():
     """
@@ -250,20 +339,25 @@ def batch_check_customer_docs():
         from config import db as _db
         data    = request.json or {}
         mobiles = [str(m).strip() for m in data.get("mobiles", []) if m]
-        mobiles = list(dict.fromkeys(mobiles))[:100]  # deduplicate, cap at 100
+        mobiles = list(dict.fromkeys(mobiles))[:500]  # deduplicate, cap at 500
 
         if not mobiles:
             return jsonify(success=True, mobiles_with_docs=[])
 
         cust_ref = _db.collection("customers")
-        refs     = [cust_ref.document(m) for m in mobiles]
 
+        # Firestore get_all() is hard-capped at 100 docs per call.
+        # Chunk the mobile list so registers with 100+ entries work correctly.
+        CHUNK = 100
         mobiles_with_docs = []
-        for snap in _db.get_all(refs):
-            if snap.exists:
-                urls = snap.get("id_doc_urls") or []
-                if urls:
-                    mobiles_with_docs.append(snap.id)
+        for i in range(0, len(mobiles), CHUNK):
+            chunk = mobiles[i:i + CHUNK]
+            refs  = [cust_ref.document(m) for m in chunk]
+            for snap in _db.get_all(refs):
+                if snap.exists:
+                    urls = snap.get("id_doc_urls") or []
+                    if urls:
+                        mobiles_with_docs.append(snap.id)
 
         return jsonify(success=True, mobiles_with_docs=mobiles_with_docs)
 

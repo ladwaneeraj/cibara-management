@@ -1235,6 +1235,83 @@
     }
   }
 
+  // ── Silent refresh (no spinner) — used by remote-sync event handlers ─────────
+  async function loadDataSilent() {
+    const { start, end } = state.dateRange;
+    if (!start || !end || state.loading) return;
+
+    try {
+      const res = await apiFetch("/get_register_data", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ start_date: start, end_date: end }),
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (!data.success) return;
+
+      const newEntries = data.entries || [];
+      _diffAndPatch(newEntries);
+      state.allEntries = newEntries;
+      state.lastLoadedRange = `${start}_${end}`;
+    } catch (err) {
+      console.warn("[Bills] silent refresh failed:", err.message);
+    }
+  }
+
+  // Diff new entries against current state; patch only changed rows in-place.
+  // Falls back to a quiet applyFilters() if rows are added or removed.
+  function _diffAndPatch(newEntries) {
+    const tbody = dom("bl-table-body");
+    if (!tbody) { state.allEntries = newEntries; applyFilters(); return; }
+
+    const oldIds = new Set(state.allEntries.map(e => e.id).filter(Boolean));
+    const newIds = new Set(newEntries.map(e => e.id).filter(Boolean));
+    const hasStructural =
+      newEntries.some(e => e.id && !oldIds.has(e.id)) ||
+      state.allEntries.some(e => e.id && !newIds.has(e.id));
+
+    if (hasStructural) {
+      state.allEntries = newEntries;
+      applyFilters();
+      return;
+    }
+
+    const oldById = Object.fromEntries(
+      state.allEntries.filter(e => e.id).map(e => [e.id, e])
+    );
+
+    // Re-apply the bills filter to the new entries to get visible rows with correct rowIndex
+    const visibleNew = newEntries.filter(
+      e => (e.status === "completed" || e.status === "pending_settlement") &&
+           e.bill_number && e.bill_number.trim() !== "" && e.bill_number !== "-"
+    );
+
+    visibleNew.forEach((newEntry, i) => {
+      if (!newEntry.id) return;
+      const old = oldById[newEntry.id];
+      if (!old) return;
+      if (JSON.stringify(old) === JSON.stringify(newEntry)) return;
+
+      const tr = tbody.querySelector(`tr[data-entry-id="${newEntry.id}"]`);
+      if (!tr) return;
+
+      const dk = (newEntry.checkin_time || "").split(" ")[0] || "unknown";
+      const tmp = document.createElement("tbody");
+      tmp.innerHTML = rowHTML(newEntry, dk, i + 1);
+      const newRow = tmp.querySelector("tr");
+      if (!newRow) return;
+
+      tr.replaceWith(newRow);
+      newRow.style.transition = "none";
+      newRow.style.backgroundColor = "#fffbcc";
+      requestAnimationFrame(() => {
+        newRow.style.transition = "background-color 0.8s ease";
+        newRow.style.backgroundColor = "";
+      });
+    });
+  }
+
   // ── Filters — completed + pending_settlement entries with a bill_number ──────
   function applyFilters() {
     // Include completed bills AND pending_settlement bills (settle-later checkouts).
@@ -1816,7 +1893,7 @@
 
     const actionCell = `<div style="display:flex;gap:5px;align-items:center;flex-wrap:nowrap;justify-content:center;">${mainBtn}${waBtn}</div>`;
 
-    return `<tr class="${rowCls}" data-date-group="${dk}">
+    return `<tr class="${rowCls}" data-date-group="${dk}" data-entry-id="${e.id || ''}">
       <td style="color:#888;font-size:.75rem;">${rowIndex}</td>
       <td style="font-size:.73rem;white-space:nowrap;font-family:monospace;">${billNo}${pendingBadge}</td>
       <td><strong>${e.guest_name || "-"}</strong></td>
@@ -2707,26 +2784,22 @@
     const tab = dom("bills-tab");
     if (tab && !tab.classList.contains("hidden")) {
       const today = todayStr();
-      if (state.dateRange.end === today) {
-        loadData(true);
-      }
+      if (state.dateRange.end === today) loadDataSilent();
     } else {
       state.lastLoadedRange = null;
     }
   });
 
   // ── Live payment sync — fires when any payment is added on another device ──
-  // Bust cache so next tab-open gets fresh data; if tab is already visible,
-  // reload immediately (only for today's range to avoid unnecessary fetches).
   window.addEventListener("cibaraPaymentAdded", function (e) {
     const p = e.detail || {};
     const today = todayStr();
-    if (p.date !== today) return;           // only care about today's payments
+    if (p.date !== today) return;
     const tab = dom("bills-tab");
     if (tab && !tab.classList.contains("hidden")) {
-      if (state.dateRange.end === today) loadData(true);
+      if (state.dateRange.end === today) loadDataSilent();
     } else {
-      state.lastLoadedRange = null;         // bust cache — refresh on next open
+      state.lastLoadedRange = null;
     }
   });
 
@@ -2735,7 +2808,7 @@
     const today = todayStr();
     const tab = dom("bills-tab");
     if (tab && !tab.classList.contains("hidden")) {
-      if (state.dateRange.end === today) loadData(true);
+      if (state.dateRange.end === today) loadDataSilent();
     } else {
       state.lastLoadedRange = null;
     }

@@ -32,12 +32,15 @@
 .reg-icon-btn.export  { background: #1d6f42; color: #fff; }
 
 .reg-filter-bar {
-  display: flex; flex-wrap: wrap;
-  align-items: center; gap: 0.4rem;
+  display: flex; flex-direction: column; gap: 0.4rem;
   margin-bottom: 0.7rem;
   background: #f4f6fb; border-radius: 10px;
   padding: 0.5rem 0.7rem;
   border: 1px solid #e8eaf0;
+}
+.reg-filter-row {
+  display: flex; flex-wrap: wrap;
+  align-items: center; gap: 0.4rem;
 }
 .reg-date-range-wrap {
   display: flex; align-items: center; gap: 0.3rem;
@@ -69,7 +72,7 @@
   color: #444; cursor: pointer;
 }
 .reg-search-input {
-  flex: 1; min-width: 120px;
+  flex: 1; min-width: 100px;
   padding: 0.25rem 0.5rem 0.25rem 1.8rem;
   border: 1px solid #d8d8d8; border-radius: 6px;
   font-size: 0.8rem; height: 30px;
@@ -77,6 +80,21 @@
   transition: border-color 0.15s;
 }
 .reg-search-input:focus { outline: none; border-color: var(--primary, #3f51b5); }
+.reg-customers-btn {
+  display: flex; align-items: center; gap: 0.3rem;
+  padding: 0.25rem 0.75rem; height: 30px;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: #fff; border: none; border-radius: 6px;
+  font-size: 0.78rem; font-weight: 600; cursor: pointer;
+  white-space: nowrap; flex-shrink: 0;
+  transition: opacity 0.2s, transform 0.1s;
+}
+.reg-customers-btn:hover { opacity: 0.88; transform: translateY(-1px); }
+.reg-customers-btn:active { transform: translateY(0); }
+/* In the header toolbar the button sits next to the refresh icon */
+.reg-customers-header-btn {
+  height: 32px; border-radius: 6px;
+}
 .reg-count-badge {
   font-size: 0.72rem; color: #888; white-space: nowrap;
   margin-left: auto; padding: 0 0.3rem;
@@ -411,6 +429,15 @@
   .reg-filter-bar label { display: none; }
   .register-table { font-size: 0.73rem; }
   .register-table th, .register-table td { padding: 0.35rem 0.25rem; }
+  /* Row 1: date fills available width, quick btns stay compact */
+  .reg-filter-row-1 { flex-wrap: nowrap; }
+  .reg-date-range-input { width: 110px; }
+  /* Row 2: selects equal width, search fills rest */
+  .reg-filter-row-2 select { flex: 1; min-width: 0; }
+  .reg-search-input { min-width: 0; }
+  /* Header button: icon only on mobile */
+  .reg-customers-label { display: none; }
+  .reg-customers-header-btn { padding: 0; width: 32px; justify-content: center; }
 }
 
 /* ── Payments button (per register row) ── */
@@ -915,6 +942,9 @@
   <div class="register-header">
     <h1><i class="fas fa-book"></i> Daily Register</h1>
     <div class="register-toolbar">
+      <button class="reg-customers-btn reg-customers-header-btn" onclick="openCustomerManager()" title="Customers">
+        <i class="fas fa-users"></i><span class="reg-customers-label"> Customers</span>
+      </button>
       <button class="reg-icon-btn refresh" id="reg-refresh-btn" title="Refresh">
         <i class="fas fa-sync-alt"></i>
       </button>
@@ -922,27 +952,30 @@
   </div>
 
   <div class="reg-filter-bar">
-    <div class="reg-date-range-wrap" id="reg-date-range-wrap">
-      <i class="fas fa-calendar-alt"></i>
-      <input type="text" id="reg-date-range" class="reg-date-range-input" placeholder="Select date range" readonly />
+    <div class="reg-filter-row reg-filter-row-1">
+      <div class="reg-date-range-wrap" id="reg-date-range-wrap">
+        <i class="fas fa-calendar-alt"></i>
+        <input type="text" id="reg-date-range" class="reg-date-range-input" placeholder="Select date range" readonly />
+      </div>
+      <button class="reg-quick-btn" data-rq="today">Today</button>
+      <button class="reg-quick-btn rq-active" data-rq="week">Week</button>
+      <button class="reg-quick-btn" data-rq="month">Month</button>
     </div>
-    <button class="reg-quick-btn" data-rq="today">Today</button>
-    <button class="reg-quick-btn rq-active" data-rq="week">Week</button>
-    <button class="reg-quick-btn" data-rq="month">Month</button>
-    <span class="reg-filter-divider"></span>
-    <select id="reg-status-filter">
-      <option value="all">All Status</option>
-      <option value="active">Active</option>
-      <option value="completed">Checked Out</option>
-    </select>
-    <select id="reg-payment-filter">
-      <option value="all">All Payments</option>
-      <option value="cash">Cash Only</option>
-      <option value="online">Online Only</option>
-      <option value="split">Split</option>
-      <option value="pending">Pending Balance</option>
-    </select>
-    <input type="text" class="reg-search-input" id="reg-search" placeholder="Name / Room / Mobile…" />
+    <div class="reg-filter-row reg-filter-row-2">
+      <select id="reg-status-filter">
+        <option value="all">All Status</option>
+        <option value="active">Active</option>
+        <option value="completed">Checked Out</option>
+      </select>
+      <select id="reg-payment-filter">
+        <option value="all">All Payments</option>
+        <option value="cash">Cash Only</option>
+        <option value="online">Online Only</option>
+        <option value="split">Split</option>
+        <option value="pending">Pending Balance</option>
+      </select>
+      <input type="text" class="reg-search-input" id="reg-search" placeholder="Name / Room / Mobile…" />
+    </div>
   </div>
 
   <div class="register-table-container">
@@ -1245,6 +1278,86 @@
     }
   }
 
+  // ── Silent refresh (no spinner) — used by remote-sync event handlers ─────────
+  // Fetches the current date range silently, then diffs and patches the DOM.
+  async function loadDataSilent() {
+    const { start, end } = state.dateRange;
+    if (!start || !end || state.loading) return;
+
+    try {
+      const res = await apiFetch("/get_register_data", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ start_date: start, end_date: end }),
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (!data.success) return;
+
+      const newEntries = data.entries || [];
+      _diffAndPatch(newEntries);
+      state.allEntries = newEntries;
+      state.lastLoadedRange = `${start}_${end}`;
+    } catch (err) {
+      console.warn("[Register] silent refresh failed:", err.message);
+    }
+  }
+
+  // Compare new data with current DOM; only re-render rows that actually changed.
+  // Falls back to a quiet applyFilters() (no spinner) if rows are added/removed.
+  function _diffAndPatch(newEntries) {
+    const tbody = dom("reg-table-body");
+    if (!tbody) { state.allEntries = newEntries; applyFilters(); return; }
+
+    // Build id sets to detect structural changes
+    const oldIds = new Set(state.allEntries.map(e => e.id).filter(Boolean));
+    const newIds = new Set(newEntries.map(e => e.id).filter(Boolean));
+    const hasStructural =
+      newEntries.some(e => e.id && !oldIds.has(e.id)) ||
+      state.allEntries.some(e => e.id && !newIds.has(e.id));
+
+    if (hasStructural) {
+      // New or removed rows — silent full re-render (no spinner)
+      state.allEntries = newEntries;
+      applyFilters();
+      return;
+    }
+
+    // Only value changes — patch each modified row in-place
+    const oldById = Object.fromEntries(
+      state.allEntries.filter(e => e.id).map(e => [e.id, e])
+    );
+    let needsDocRefresh = false;
+
+    for (const newEntry of newEntries) {
+      if (!newEntry.id) continue;
+      const old = oldById[newEntry.id];
+      if (!old) continue;
+      if (JSON.stringify(old) === JSON.stringify(newEntry)) continue; // unchanged
+
+      const tr = tbody.querySelector(`tr[data-entry-id="${newEntry.id}"]`);
+      if (!tr) continue;
+
+      const dk = (newEntry.checkin_time || "").split(" ")[0] || "unknown";
+      const tmp = document.createElement("tbody");
+      tmp.innerHTML = rowHTML(newEntry, dk);
+      const newRow = tmp.querySelector("tr");
+      if (!newRow) continue;
+
+      tr.replaceWith(newRow);
+      // Brief yellow flash to show the change
+      newRow.style.transition = "none";
+      newRow.style.backgroundColor = "#fffbcc";
+      requestAnimationFrame(() => {
+        newRow.style.transition = "background-color 0.8s ease";
+        newRow.style.backgroundColor = "";
+      });
+      needsDocRefresh = true;
+    }
+
+    if (needsDocRefresh) _checkAndShowDocButtons();
+  }
+
   // ── Filters ───────────────────────────────────────────────────────────────────
   function applyFilters() {
     let f = [...state.allEntries];
@@ -1330,7 +1443,7 @@
     const billNoCell = isRealBill
       ? `<button class="reg-bill-link" data-id="${e.id}" title="View Bill">${billNo}</button>`
       : `<span style="font-size:.73rem;white-space:nowrap;">${billNo}</span>`;
-    return `<tr class="date-group-row" data-date-group="${dk}">
+    return `<tr class="date-group-row" data-date-group="${dk}" data-entry-id="${e.id || ''}">
       <td>${serial}</td>
       <td>${billNoCell}</td>
       <td><strong>${e.guest_name || "-"}</strong></td>
@@ -1419,11 +1532,9 @@
   window.addEventListener("cibaraRoomUpdate", function (e) {
     const tab = dom("register-tab");
     if (tab && !tab.classList.contains("hidden")) {
-      // Tab is visible — refresh immediately if today is in the date range
+      // Tab is visible — silently refresh (only changed rows re-render)
       const today = todayStr();
-      if (state.dateRange.end === today) {
-        loadData(true);
-      }
+      if (state.dateRange.end === today) loadDataSilent();
     } else {
       // Tab is not visible — bust the cache so next open gets fresh data
       state.lastLoadedRange = null;
@@ -1431,15 +1542,13 @@
   });
 
   // ── Live payment sync — fires when any payment is added on another device ──
-  // Checkout payments update the register (a checkout adds a bill record).
-  // Bust cache on any new payment for today; reload if tab is open.
   window.addEventListener("cibaraPaymentAdded", function (e) {
     const p = e.detail || {};
     const today = todayStr();
     if (p.date !== today) return;
     const tab = dom("register-tab");
     if (tab && !tab.classList.contains("hidden")) {
-      if (state.dateRange.end === today) loadData(true);
+      if (state.dateRange.end === today) loadDataSilent();
     } else {
       state.lastLoadedRange = null;
     }
@@ -1450,7 +1559,7 @@
     const today = todayStr();
     const tab = dom("register-tab");
     if (tab && !tab.classList.contains("hidden")) {
-      if (state.dateRange.end === today) loadData(true);
+      if (state.dateRange.end === today) loadDataSilent();
     } else {
       state.lastLoadedRange = null;
     }

@@ -149,6 +149,327 @@
         }
       }
 
+      /* ── Upcoming Booking Indicator Dot ── */
+      .booking-indicator-dot {
+        position: absolute;
+        top: 7px;
+        right: 7px;
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        border: 2px solid white;
+        box-shadow: 0 1px 4px rgba(0,0,0,0.25);
+        z-index: 5;
+        cursor: default;
+      }
+      @keyframes pulse-blue {
+        0%, 100% { box-shadow: 0 0 0 0 rgba(33,150,243,0.5); }
+        50%       { box-shadow: 0 0 0 5px rgba(33,150,243,0); }
+      }
+      @keyframes pulse-orange {
+        0%, 100% { box-shadow: 0 0 0 0 rgba(255,152,0,0.55); }
+        50%       { box-shadow: 0 0 0 5px rgba(255,152,0,0); }
+      }
+      @keyframes pulse-red {
+        0%, 100% { box-shadow: 0 0 0 0 rgba(244,67,54,0.6); }
+        50%       { box-shadow: 0 0 0 5px rgba(244,67,54,0); }
+      }
+      .booking-indicator-dot.pulse-blue   { animation: pulse-blue   1.8s infinite; }
+      .booking-indicator-dot.pulse-orange { animation: pulse-orange 1.2s infinite; }
+      .booking-indicator-dot.pulse-red    { animation: pulse-red    0.9s infinite; }
+
+      /* ── Housekeeping icons on room card ── */
+      .hk-icons-row {
+        display: flex;
+        gap: 5px;
+        margin-top: 4px;
+        flex-wrap: wrap;
+      }
+      .hk-icon-badge {
+        font-size: 1rem;
+        background: #fff8e1;
+        border: 1px solid #ffe082;
+        border-radius: 6px;
+        padding: 2px 6px;
+        cursor: pointer;
+        transition: background 0.15s, transform 0.1s;
+        user-select: none;
+        line-height: 1.4;
+      }
+      .hk-icon-badge:active {
+        transform: scale(0.92);
+        background: #fff3cd;
+      }
+
+      /* ── Checkout Modal Redesign ── */
+      .co-modal { padding: 0 !important; }
+      .co-topbar {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 0.5rem 0.9rem;
+        border-bottom: 1px solid #f0f0f0;
+        background: white;
+      }
+      .co-hero {
+        background: linear-gradient(135deg, #4361ee 0%, #3a0ca3 100%);
+        color: white;
+        padding: 1rem 1.2rem 0.9rem;
+        display: flex;
+        align-items: center;
+        gap: 0.9rem;
+      }
+      .co-avatar {
+        width: 48px;
+        height: 48px;
+        border-radius: 50%;
+        background: rgba(255,255,255,0.18);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+        overflow: hidden;
+        border: 2px solid rgba(255,255,255,0.35);
+      }
+      .co-avatar-initials {
+        font-size: 1.25rem;
+        font-weight: 700;
+        color: white;
+      }
+      .co-avatar-img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+      }
+      .co-hero-info { flex: 1; min-width: 0; }
+      .co-room-chip {
+        display: inline-block;
+        background: rgba(255,255,255,0.18);
+        border-radius: 20px;
+        padding: 1px 9px;
+        font-size: 0.67rem;
+        font-weight: 600;
+        letter-spacing: 0.05em;
+        margin-bottom: 0.18rem;
+      }
+      .co-guest-name-hero {
+        font-size: 1.05rem;
+        font-weight: 700;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        margin-bottom: 0.18rem;
+        line-height: 1.25;
+      }
+      .co-phone {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        font-size: 0.77rem;
+        color: rgba(255,255,255,0.78);
+        text-decoration: none;
+      }
+      .co-phone:hover { color: white; }
+      .co-stats {
+        display: flex;
+        border-bottom: 1px solid #f0f0f0;
+        background: white;
+      }
+      .co-stat {
+        flex: 1;
+        padding: 0.55rem 0.25rem;
+        text-align: center;
+        border-right: 1px solid #f0f0f0;
+      }
+      .co-stat:last-child { border-right: none; }
+      .co-stat-val {
+        font-size: 0.82rem;
+        font-weight: 700;
+        color: #1a1a2e;
+        line-height: 1.2;
+        word-break: break-word;
+      }
+      .co-stat-lbl {
+        font-size: 0.58rem;
+        color: #9ca3af;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        margin-top: 2px;
+      }
+      .co-body { padding: 0.6rem 1rem; }
+      .co-checkin-row {
+        display: flex;
+        align-items: center;
+        gap: 0.4rem;
+        padding: 0.42rem 0;
+        border-bottom: 1px solid #f5f5f5;
+      }
+      .co-ci-label {
+        font-size: 0.68rem;
+        color: #9ca3af;
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+        flex-shrink: 0;
+      }
+      .co-ci-val {
+        font-size: 0.8rem;
+        font-weight: 600;
+        color: #333;
+        flex: 1;
+      }
+      .co-edit-btn {
+        background: none;
+        border: none;
+        color: var(--primary);
+        cursor: pointer;
+        padding: 0.1rem 0.2rem;
+        font-size: 0.76rem;
+        opacity: 0.65;
+      }
+      .co-edit-btn:hover { opacity: 1; }
+      /* Compact HK row in checkout modal */
+      .co-hk-row {
+        display: flex;
+        align-items: center;
+        gap: 0.4rem;
+        padding: 0.42rem 0;
+        border-bottom: 1px solid #f5f5f5;
+      }
+      .co-hk-lbl {
+        font-size: 0.63rem;
+        font-weight: 700;
+        color: #9ca3af;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        flex-shrink: 0;
+      }
+      .co-hk-pill {
+        padding: 0.2rem 0.6rem;
+        border-radius: 20px;
+        border: 1.5px solid #e2e8f0;
+        background: #f8fafc;
+        font-size: 0.73rem;
+        color: #6b7280;
+        cursor: pointer;
+        transition: all 0.15s;
+        font-weight: 500;
+        line-height: 1.4;
+        user-select: none;
+      }
+      .co-hk-pill:active { transform: scale(0.94); }
+      .co-hk-pill.active {
+        border-color: #f59e0b;
+        background: #fffbeb;
+        color: #92400e;
+        font-weight: 700;
+      }
+      .co-section-hdr {
+        font-size: 0.68rem;
+        font-weight: 700;
+        color: #9ca3af;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        margin-bottom: 0.5rem;
+      }
+      /* Compact HK icons on room card */
+      .hk-card-icons {
+        display: flex;
+        gap: 3px;
+        margin-top: 3px;
+      }
+      .hk-card-icon {
+        font-size: 0.68rem;
+        cursor: pointer;
+        background: rgba(245,158,11,0.1);
+        border: 1px solid rgba(245,158,11,0.28);
+        border-radius: 4px;
+        padding: 1px 3px;
+        transition: background 0.12s;
+        line-height: 1.4;
+        user-select: none;
+      }
+      .hk-card-icon:active { background: rgba(245,158,11,0.28); }
+
+      /* ── HK chip in svc-chips ── */
+      .svc-chip.hk-chip {
+        background: linear-gradient(135deg, #f0fdfa, #ccfbf1);
+        border-color: #2dd4bf;
+        color: #0f766e;
+      }
+      .svc-chip.hk-chip i { color: #0d9488; }
+      .svc-chip.hk-chip.hk-active {
+        background: linear-gradient(135deg, #ccfbf1, #99f6e4);
+        border-color: #0d9488;
+        font-weight: 700;
+      }
+      /* ── HK request overlay toggle buttons ── */
+      .hk-req-btn {
+        width: 100%;
+        padding: 0.6rem 1rem;
+        border-radius: 10px;
+        border: 1.5px solid #e5e7eb;
+        background: #f9fafb;
+        font-size: 0.88rem;
+        font-weight: 500;
+        color: #6b7280;
+        cursor: pointer;
+        text-align: left;
+        transition: all 0.15s;
+      }
+      .hk-req-btn.active {
+        background: #f0fdfa;
+        border-color: #0d9488;
+        color: #0f766e;
+        font-weight: 700;
+      }
+
+      /* ── Housekeeping row inside checkout modal ── */
+      .hk-modal-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 0.55rem 0;
+        border-top: 1px solid #f0f0f0;
+        margin-top: 0.75rem;
+      }
+      .hk-modal-label {
+        display: flex;
+        align-items: center;
+        gap: 0.4rem;
+        font-size: 0.82rem;
+        font-weight: 600;
+        color: var(--dark);
+        letter-spacing: 0.01em;
+      }
+      .hk-modal-btns {
+        display: flex;
+        gap: 0.4rem;
+      }
+      .hk-modal-btn {
+        padding: 0.3rem 0.75rem;
+        border-radius: 20px;
+        border: 1.5px solid #d1d5db;
+        background: #f9fafb;
+        font-size: 0.78rem;
+        font-weight: 500;
+        color: #6b7280;
+        cursor: pointer;
+        transition: all 0.15s ease;
+        letter-spacing: 0.01em;
+        white-space: nowrap;
+      }
+      .hk-modal-btn:hover {
+        border-color: #9ca3af;
+        background: #f3f4f6;
+        color: #374151;
+      }
+      .hk-modal-btn.active {
+        background: #fef3c7;
+        border-color: #f59e0b;
+        color: #92400e;
+        font-weight: 700;
+      }
+
       /* ── Camera modal — mobile bottom-sheet ── */
       @media (max-width: 600px) {
         #doc-camera-modal {
@@ -1842,173 +2163,27 @@
         <div class="modal-header">
           <h2>Checkout - Room <span id="checkout-room-number"></span></h2>
           <div style="display: flex; align-items: center; gap: 0.4rem">
-            <!-- View stored ID docs -->
-            <button
-              id="checkout-doc-view-btn"
-              type="button"
-              class="doc-cam-btn"
-              title="View ID documents on file"
-              aria-label="View ID documents"
-              style="display: none"
-            >
-              <i class="fas fa-id-card"></i>
-            </button>
-            <!-- Upload / add a new ID doc -->
-            <button
-              id="checkout-upload-id-btn"
-              type="button"
-              class="doc-cam-btn"
-              title="Upload ID document (up to 3 images)"
-              aria-label="Upload ID document"
-            >
-              <i class="fas fa-upload"></i>
-            </button>
-            <!-- Hidden file input for checkout doc upload (multiple, no capture → gallery/files picker) -->
-            <input
-              type="file"
-              id="checkout-doc-file-input"
-              accept="image/*"
-              multiple
-              style="display: none"
-            />
+            <button id="checkout-doc-view-btn" type="button" class="doc-cam-btn" title="View ID documents on file" aria-label="View ID documents" style="display: none"><i class="fas fa-id-card"></i></button>
+            <button id="checkout-upload-id-btn" type="button" class="doc-cam-btn" title="Upload ID document (up to 3 images)" aria-label="Upload ID document"><i class="fas fa-upload"></i></button>
+            <input type="file" id="checkout-doc-file-input" accept="image/*" multiple style="display: none" />
             <button class="close-btn" aria-label="Close">&times;</button>
           </div>
         </div>
 
-        <!-- Pending-upload strip: shown after camera capture, before committing to server -->
-        <div
-          id="checkout-pending-docs"
-          style="
-            display: none;
-            background: #f0f4ff;
-            border-top: 3px solid #3f51b5;
-            border-bottom: 1px solid #dde3f5;
-          "
-        >
-          <!-- Top row: label + actions -->
-          <div
-            style="
-              padding: 0.55rem 1rem 0.35rem;
-              display: flex;
-              align-items: center;
-              justify-content: space-between;
-              gap: 0.5rem;
-            "
-          >
-            <div
-              style="
-                display: flex;
-                align-items: center;
-                gap: 0.5rem;
-                min-width: 0;
-              "
-            >
-              <div
-                style="
-                  width: 7px;
-                  height: 7px;
-                  border-radius: 50%;
-                  background: #f59e0b;
-                  box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.2);
-                  flex-shrink: 0;
-                  animation: pulse-dot 1.8s infinite;
-                "
-              ></div>
-              <span
-                style="
-                  font-size: 0.75rem;
-                  font-weight: 700;
-                  color: #3730a3;
-                  letter-spacing: 0.03em;
-                  white-space: nowrap;
-                "
-              >
-                Ready to upload
-              </span>
-              <span
-                id="checkout-pending-count"
-                style="
-                  background: #e0e7ff;
-                  color: #4338ca;
-                  border-radius: 20px;
-                  padding: 0.1rem 0.5rem;
-                  font-size: 0.68rem;
-                  font-weight: 700;
-                  flex-shrink: 0;
-                "
-              ></span>
+        <!-- Pending-upload strip -->
+        <div id="checkout-pending-docs" style="display: none; background: #f0f4ff; border-top: 3px solid #3f51b5; border-bottom: 1px solid #dde3f5;">
+          <div style="padding: 0.55rem 1rem 0.35rem; display: flex; align-items: center; justify-content: space-between; gap: 0.5rem;">
+            <div style="display: flex; align-items: center; gap: 0.5rem; min-width: 0;">
+              <div style="width: 7px; height: 7px; border-radius: 50%; background: #f59e0b; box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.2); flex-shrink: 0; animation: pulse-dot 1.8s infinite;"></div>
+              <span style="font-size: 0.75rem; font-weight: 700; color: #3730a3; letter-spacing: 0.03em; white-space: nowrap;">Ready to upload</span>
+              <span id="checkout-pending-count" style="background: #e0e7ff; color: #4338ca; border-radius: 20px; padding: 0.1rem 0.5rem; font-size: 0.68rem; font-weight: 700; flex-shrink: 0;"></span>
             </div>
-            <div
-              style="
-                display: flex;
-                align-items: center;
-                gap: 0.4rem;
-                flex-shrink: 0;
-              "
-            >
-              <button
-                id="checkout-pending-upload-btn"
-                type="button"
-                style="
-                  padding: 0.32rem 0.9rem;
-                  border-radius: 20px;
-                  background: #4338ca;
-                  color: #fff;
-                  border: none;
-                  font-size: 0.76rem;
-                  font-weight: 600;
-                  cursor: pointer;
-                  display: flex;
-                  align-items: center;
-                  gap: 0.35rem;
-                  box-shadow: 0 2px 8px rgba(67, 56, 202, 0.35);
-                  transition: background 0.15s;
-                "
-                onmouseover="this.style.background = '#3730a3'"
-                onmouseout="this.style.background = '#4338ca'"
-              >
-                <i class="fas fa-cloud-upload-alt"></i> Save to guest
-              </button>
-              <button
-                id="checkout-pending-discard-btn"
-                type="button"
-                style="
-                  padding: 0.3rem 0.6rem;
-                  border-radius: 6px;
-                  background: transparent;
-                  color: #9ca3af;
-                  border: 1px solid #d1d5db;
-                  font-size: 0.72rem;
-                  cursor: pointer;
-                  white-space: nowrap;
-                  transition: all 0.15s;
-                "
-                onmouseover="
-                  this.style.color = '#ef4444';
-                  this.style.borderColor = '#fca5a5';
-                "
-                onmouseout="
-                  this.style.color = '#9ca3af';
-                  this.style.borderColor = '#d1d5db';
-                "
-                title="Discard all"
-              >
-                <i class="fas fa-times"></i> Discard
-              </button>
+            <div style="display: flex; align-items: center; gap: 0.4rem; flex-shrink: 0;">
+              <button id="checkout-pending-upload-btn" type="button" style="padding: 0.32rem 0.9rem; border-radius: 20px; background: #4338ca; color: #fff; border: none; font-size: 0.76rem; font-weight: 600; cursor: pointer; display: flex; align-items: center; gap: 0.35rem; box-shadow: 0 2px 8px rgba(67, 56, 202, 0.35); transition: background 0.15s;" onmouseover="this.style.background='#3730a3'" onmouseout="this.style.background='#4338ca'"><i class="fas fa-cloud-upload-alt"></i> Save to guest</button>
+              <button id="checkout-pending-discard-btn" type="button" style="padding: 0.3rem 0.6rem; border-radius: 6px; background: transparent; color: #9ca3af; border: 1px solid #d1d5db; font-size: 0.72rem; cursor: pointer; white-space: nowrap; transition: all 0.15s;" onmouseover="this.style.color='#ef4444';this.style.borderColor='#fca5a5'" onmouseout="this.style.color='#9ca3af';this.style.borderColor='#d1d5db'" title="Discard all"><i class="fas fa-times"></i> Discard</button>
             </div>
           </div>
-          <!-- Thumbnail row -->
-          <div
-            id="checkout-pending-thumbs"
-            style="
-              display: flex;
-              gap: 0.55rem;
-              padding: 0.2rem 1rem 0.65rem;
-              overflow-x: auto;
-              scrollbar-width: none;
-              align-items: flex-end;
-            "
-          ></div>
+          <div id="checkout-pending-thumbs" style="display: flex; gap: 0.55rem; padding: 0.2rem 1rem 0.65rem; overflow-x: auto; scrollbar-width: none; align-items: flex-end;"></div>
         </div>
 
         <div class="guest-details">
@@ -2027,24 +2202,9 @@
           </div>
           <div class="detail-row">
             <div class="detail-label">Check-in Time</div>
-            <div
-              class="detail-value"
-              style="display: flex; align-items: center"
-            >
+            <div class="detail-value" style="display: flex; align-items: center">
               <span id="checkout-checkin-time"></span>
-              <button
-                id="edit-checkin-time"
-                style="
-                  margin-left: 8px;
-                  background: none;
-                  border: none;
-                  color: var(--primary);
-                  cursor: pointer;
-                "
-                aria-label="Edit check-in time"
-              >
-                <i class="fas fa-edit"></i>
-              </button>
+              <button id="edit-checkin-time" style="margin-left: 8px; background: none; border: none; color: var(--primary); cursor: pointer;" aria-label="Edit check-in time"><i class="fas fa-edit"></i></button>
             </div>
           </div>
           <div class="detail-row">
@@ -2059,168 +2219,57 @@
             <div class="detail-label">Stay Status</div>
             <div class="detail-value" id="checkout-stay-status">
               <span id="checkout-day-count">Day 1</span>
-              <span id="checkout-renewal-status" class="status-tag waiting"
-                >Waiting</span
-              >
+              <span id="checkout-renewal-status" class="status-tag waiting">Waiting</span>
             </div>
           </div>
           <!-- Guest Photo -->
-          <div
-            id="checkout-photo-container"
-            style="margin-top: 1rem; text-align: center; display: none"
-          >
-            <h4
-              style="
-                margin-bottom: 0.5rem;
-                font-size: 0.9rem;
-                color: var(--gray);
-              "
-            >
-              Guest Photo
-            </h4>
-            <img
-              id="checkout-guest-photo"
-              style="
-                max-width: 100%;
-                max-height: 200px;
-                border-radius: 8px;
-                border: 1px solid #eee;
-              "
-              alt="Guest photo"
-            />
+          <div id="checkout-photo-container" style="margin-top: 1rem; text-align: center; display: none">
+            <h4 style="margin-bottom: 0.5rem; font-size: 0.9rem; color: var(--gray);">Guest Photo</h4>
+            <img id="checkout-guest-photo" style="max-width: 100%; max-height: 200px; border-radius: 8px; border: 1px solid #eee;" alt="Guest photo" />
           </div>
         </div>
 
-        <!-- Add-on Services - Chip UI -->
+        <!-- Add-on Services -->
         <div class="add-on-section" style="margin-top: 1.5rem">
           <h3 style="margin-bottom: 0.75rem">Add Services</h3>
           <div class="svc-chips">
-            <button class="svc-chip" data-service="Water 2L" data-price="30">
-              <i class="fas fa-tint"></i> Water 2L
-              <span class="svc-chip-price">₹30</span>
-            </button>
-            <button class="svc-chip" data-service="Water 1L" data-price="20">
-              <i class="fas fa-tint"></i> Water 1L
-              <span class="svc-chip-price">₹20</span>
-            </button>
-            <button
-              class="svc-chip"
-              data-service="Extra Bed"
-              data-price=""
-              data-accommodation="true"
-            >
-              <i class="fas fa-bed"></i> Extra Bed
-              <span class="svc-chip-price">₹ ?</span>
-            </button>
-            <!-- AC service chip — shown only for rooms 200-206 when isAC is false -->
-            <button
-              class="svc-chip"
-              id="ac-service-btn"
-              data-service="AC"
-              data-price=""
-              data-accommodation="true"
-              style="display: none"
-            >
-              <i class="fas fa-snowflake"></i> Add AC
-              <span class="svc-chip-price">₹ ?</span>
-            </button>
-            <button
-              class="svc-chip"
-              data-service=""
-              data-price=""
-              data-custom="true"
-            >
-              <i class="fas fa-pen"></i> Custom
-              <span class="svc-chip-price">₹ ?</span>
-            </button>
+            <button class="svc-chip" data-service="Water 2L" data-price="30"><i class="fas fa-tint"></i> Water 2L<span class="svc-chip-price">₹30</span></button>
+            <button class="svc-chip" data-service="Water 1L" data-price="20"><i class="fas fa-tint"></i> Water 1L<span class="svc-chip-price">₹20</span></button>
+            <button class="svc-chip" data-service="Extra Bed" data-price="" data-accommodation="true"><i class="fas fa-bed"></i> Extra Bed<span class="svc-chip-price">₹ ?</span></button>
+            <button class="svc-chip" id="ac-service-btn" data-service="AC" data-price="" data-accommodation="true" style="display: none"><i class="fas fa-snowflake"></i> Add AC<span class="svc-chip-price">₹ ?</span></button>
+            <button class="svc-chip" data-service="" data-price="" data-custom="true"><i class="fas fa-pen"></i> Custom<span class="svc-chip-price">₹ ?</span></button>
+            <button class="svc-chip hk-chip" id="hk-chip-btn" title="Request housekeeping"><i class="fas fa-broom"></i> Housekeeping</button>
           </div>
-
           <div id="service-form" class="hidden">
-            <!-- Service name row — shown only for Custom chip -->
-            <div
-              id="svc-name-row"
-              class="form-row"
-              style="margin-top: 1rem; display: none"
-            >
+            <div id="svc-name-row" class="form-row" style="margin-top: 1rem; display: none">
               <div class="form-group" style="flex: 1">
-                <label class="form-label" for="service-name"
-                  >Service Name</label
-                >
-                <input
-                  type="text"
-                  id="service-name"
-                  class="form-control"
-                  placeholder="e.g. Breakfast, Laundry…"
-                />
+                <label class="form-label" for="service-name">Service Name</label>
+                <input type="text" id="service-name" class="form-control" placeholder="e.g. Breakfast, Laundry…" />
               </div>
             </div>
             <div class="form-row" style="margin-top: 1rem">
               <div class="form-group half-width">
                 <label class="form-label" for="service-price">Price (₹)</label>
-                <input
-                  type="number"
-                  id="service-price"
-                  class="form-control"
-                  min="1"
-                  required
-                />
+                <input type="number" id="service-price" class="form-control" min="1" required />
               </div>
               <div class="form-group half-width">
                 <label class="form-label" for="service-quantity">Qty</label>
-                <input
-                  type="number"
-                  id="service-quantity"
-                  class="form-control"
-                  min="1"
-                  value="1"
-                  required
-                />
+                <input type="number" id="service-quantity" class="form-control" min="1" value="1" required />
               </div>
             </div>
-            <div
-              style="
-                text-align: right;
-                margin: 0.4rem 0 0.6rem;
-                font-size: 0.9rem;
-                color: var(--dark);
-              "
-            >
-              Total: <strong id="service-total-price">₹0</strong>
-            </div>
+            <div style="text-align: right; margin: 0.4rem 0 0.6rem; font-size: 0.9rem; color: var(--dark);">Total: <strong id="service-total-price">₹0</strong></div>
             <div class="form-group">
               <label class="form-label">Payment Method</label>
               <div class="payment-options">
-                <button
-                  type="button"
-                  class="payment-btn cash active"
-                  data-payment="cash"
-                >
-                  <i class="fas fa-money-bill"></i> Cash
-                </button>
-                <button
-                  type="button"
-                  class="payment-btn online"
-                  data-payment="online"
-                >
-                  <i class="fas fa-mobile-alt"></i> Online
-                </button>
-                <button
-                  type="button"
-                  class="payment-btn balance"
-                  data-payment="balance"
-                >
-                  <i class="fas fa-clock"></i> Later
-                </button>
+                <button type="button" class="payment-btn cash active" data-payment="cash"><i class="fas fa-money-bill"></i> Cash</button>
+                <button type="button" class="payment-btn online" data-payment="online"><i class="fas fa-mobile-alt"></i> Online</button>
+                <button type="button" class="payment-btn balance" data-payment="balance"><i class="fas fa-clock"></i> Later</button>
               </div>
               <input type="hidden" id="service-payment-method" value="cash" />
             </div>
             <div class="action-row">
-              <button id="cancel-service-btn" class="action-btn btn-secondary">
-                Cancel
-              </button>
-              <button id="add-service-btn" class="action-btn btn-success">
-                Add Service
-              </button>
+              <button id="cancel-service-btn" class="action-btn btn-secondary">Cancel</button>
+              <button id="add-service-btn" class="action-btn btn-success">Add Service</button>
             </div>
           </div>
         </div>
@@ -2228,25 +2277,45 @@
         <div class="payment-logs-container">
           <h3 style="margin-bottom: 1rem">Payment History</h3>
           <div id="checkout-payment-logs">
-            <!-- Payment logs will be listed here -->
-            <div class="loading-indicator">
-              <span class="loader"></span>
-            </div>
+            <div class="loading-indicator"><span class="loader"></span></div>
           </div>
         </div>
 
         <!-- Clear Balance or Process Refund Section -->
-        <div id="payment-or-refund-section">
-          <!-- This section will be dynamically populated based on balance -->
-        </div>
+        <div id="payment-or-refund-section"></div>
 
         <div class="action-row" style="margin-top: 1.5rem">
-          <button class="action-btn btn-danger" id="cancel-checkout-btn">
-            Cancel
-          </button>
-          <button class="action-btn btn-success" id="confirm-checkout-btn">
-            Complete Checkout
-          </button>
+          <button class="action-btn btn-danger" id="cancel-checkout-btn">Cancel</button>
+          <button class="action-btn btn-success" id="confirm-checkout-btn">Complete Checkout</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Housekeeping Request Modal (chip → select room/bathroom) -->
+    <div id="hk-request-overlay" style="display:none;position:fixed;inset:0;z-index:2800;align-items:center;justify-content:center;background:rgba(0,0,0,0.42);">
+      <div style="background:white;border-radius:18px;padding:1.3rem 1.4rem 1.1rem;width:min(290px,88vw);box-shadow:0 12px 40px rgba(0,0,0,0.22);">
+        <div style="font-size:0.95rem;font-weight:700;color:#1a1a2e;margin-bottom:0.15rem;">🧹 Housekeeping</div>
+        <div style="font-size:0.72rem;color:#9ca3af;margin-bottom:1rem;">Toggle what needs cleaning</div>
+        <div style="display:flex;flex-direction:column;gap:0.5rem;margin-bottom:1.1rem;">
+          <button id="hk-req-room-btn" class="hk-req-btn">🧹 Room</button>
+          <button id="hk-req-bathroom-btn" class="hk-req-btn">🚿 Bathroom</button>
+        </div>
+        <div style="display:flex;gap:0.5rem;">
+          <button id="hk-req-cancel" style="flex:1;padding:0.52rem;border:1.5px solid #e5e7eb;background:white;border-radius:10px;font-size:0.83rem;color:#6b7280;cursor:pointer;font-weight:500;">Cancel</button>
+          <button id="hk-req-save" style="flex:1;padding:0.52rem;background:#0d9488;border:none;border-radius:10px;font-size:0.83rem;font-weight:700;color:white;cursor:pointer;">Save</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Housekeeping Done Confirmation (mini-modal, no full backdrop) -->
+    <div id="hk-confirm-overlay" style="display:none;position:fixed;inset:0;z-index:3000;align-items:center;justify-content:center;background:rgba(0,0,0,0.38);">
+      <div style="background:white;border-radius:18px;padding:1.4rem 1.5rem 1.2rem;width:80%;max-width:255px;text-align:center;box-shadow:0 12px 40px rgba(0,0,0,0.22);">
+        <div style="font-size:2rem;margin-bottom:0.35rem;" id="hk-confirm-emoji">🧹</div>
+        <div style="font-size:0.95rem;font-weight:700;color:#1a1a2e;margin-bottom:0.2rem;" id="hk-confirm-title">Room cleaned?</div>
+        <div style="font-size:0.72rem;color:#9ca3af;margin-bottom:1rem;">Tap <b>Done</b> to clear the request</div>
+        <div style="display:flex;gap:0.6rem;">
+          <button id="hk-confirm-no" style="flex:1;padding:0.55rem;border:1.5px solid #e5e7eb;background:white;border-radius:10px;font-size:0.83rem;color:#6b7280;cursor:pointer;font-weight:500;">Not yet</button>
+          <button id="hk-confirm-yes" style="flex:1;padding:0.55rem;background:#2ec4b6;border:none;border-radius:10px;font-size:0.83rem;font-weight:700;color:white;cursor:pointer;">✓ Done</button>
         </div>
       </div>
     </div>

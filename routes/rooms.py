@@ -1612,3 +1612,119 @@ def update_stay_payment():
     except Exception as e:
         logger.error(f"update_stay_payment error: {e}", exc_info=True)
         return jsonify(success=False, message=f"Error: {str(e)}"), 500
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Housekeeping (mid-stay cleaning request) toggle
+# ─────────────────────────────────────────────────────────────────────────────
+
+@rooms_bp.route("/toggle_housekeeping", methods=["POST"])
+def toggle_housekeeping():
+    """
+    Toggle mid-stay housekeeping request for a room.
+    Sets service_cleaning.room and/or service_cleaning.bathroom flags.
+
+    Body: { room: str, room_clean: bool (optional), bathroom_clean: bool (optional) }
+    """
+    try:
+        data = request.json or {}
+        room = str(data.get("room", "")).strip()
+        if not room:
+            return jsonify(success=False, message="room is required"), 400
+
+        update_data = {}
+        if "room_clean" in data:
+            update_data["service_cleaning.room"] = bool(data["room_clean"])
+        if "bathroom_clean" in data:
+            update_data["service_cleaning.bathroom"] = bool(data["bathroom_clean"])
+
+        if not update_data:
+            return jsonify(success=False, message="Nothing to update"), 400
+
+        rooms_ref.document(room).update(update_data)
+        invalidate_rooms_and_totals()
+
+        logger.info(f"toggle_housekeeping: room={room} update={update_data}")
+        return jsonify(success=True, message="Housekeeping updated")
+
+    except Exception as e:
+        logger.error(f"toggle_housekeeping error: {e}", exc_info=True)
+        return jsonify(success=False, message=f"Error: {str(e)}"), 500
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Upcoming bookings (within 24 hours) — for room card indicator
+# ─────────────────────────────────────────────────────────────────────────────
+
+@rooms_bp.route("/get_upcoming_bookings", methods=["GET"])
+def get_upcoming_bookings():
+    """
+    Returns bookings whose check_in_date falls today or tomorrow (within ~24 hrs),
+    excluding cancelled and already checked-in bookings.
+    Response: { success: true, upcoming: { "roomNumber": { ...booking info } } }
+    """
+    try:
+        now = datetime.now(IST)
+        today_str = now.strftime("%Y-%m-%d")
+        tomorrow_str = (now + timedelta(days=1)).strftime("%Y-%m-%d")
+
+        # Fetch bookings for today and tomorrow in parallel via two queries
+        today_docs = bookings_ref.where(
+            filter=FieldFilter("check_in_date", "==", today_str)
+        ).stream()
+        tomorrow_docs = bookings_ref.where(
+            filter=FieldFilter("check_in_date", "==", tomorrow_str)
+        ).stream()
+
+        skip_statuses = {"cancelled", "checked_in"}
+        result = {}
+
+        for doc in list(today_docs) + list(tomorrow_docs):
+            b = doc.to_dict()
+            b["booking_id"] = doc.id
+
+            status = b.get("status", "")
+            if status in skip_statuses:
+                continue
+
+            room = str(b.get("room", "")).strip()
+            if not room:
+                continue
+
+            check_in_date = b.get("check_in_date", today_str)
+            check_in_time = b.get("check_in_time", "12:00")
+
+            try:
+                check_in_dt_naive = datetime.strptime(
+                    f"{check_in_date} {check_in_time}", "%Y-%m-%d %H:%M"
+                )
+                check_in_dt = IST.localize(check_in_dt_naive)
+            except ValueError:
+                check_in_dt = IST.localize(
+                    datetime.strptime(f"{check_in_date} 12:00", "%Y-%m-%d %H:%M")
+                )
+
+            hours_until = (check_in_dt - now).total_seconds() / 3600
+
+            # Only surface bookings within the next 24 hrs (or already overdue)
+            if hours_until > 24:
+                continue
+
+            # If multiple bookings for the same room, keep the soonest one
+            if room not in result or hours_until < result[room]["hours_until"]:
+                result[room] = {
+                    "booking_id": b["booking_id"],
+                    "guest_name": b.get("guest_name", "Guest"),
+                    "check_in_date": check_in_date,
+                    "check_in_time": check_in_time,
+                    "hours_until": round(hours_until, 1),
+                    "status": status,
+                    "total_amount": b.get("total_amount", 0),
+                    "paid_amount": b.get("paid_amount", 0),
+                }
+
+        return jsonify(success=True, upcoming=result)
+
+    except Exception as e:
+        logger.error(f"get_upcoming_bookings error: {e}", exc_info=True)
+        return jsonify(success=False, message=f"Error: {str(e)}"), 500

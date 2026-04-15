@@ -2,6 +2,8 @@
 let rooms = {};
 let transactionMetadata = {};
 let dailyCounters = {};
+// Upcoming bookings map: roomNumber (string) → booking info object
+let upcomingBookings = {};
 
 // Keep logs and totals variables as they're used throughout the app
 let logs = {
@@ -311,8 +313,10 @@ function renderRooms() {
       return;
     }
 
-    if (currentFilter === "cleaning" && info.status !== "cleaning") {
-      return;
+    if (currentFilter === "cleaning") {
+      const sc = info.service_cleaning || {};
+      const hasHkRequest = !!(sc.room || sc.bathroom);
+      if (info.status !== "cleaning" && !hasHkRequest) return;
     }
 
     if (
@@ -432,6 +436,17 @@ function renderRooms() {
           info.balance,
         )}</div>`;
       }
+
+      // Mid-stay housekeeping — compact icon chips at bottom of card
+      const sc = info.service_cleaning || {};
+      if (sc.room || sc.bathroom) {
+        roomContent += `<div class="hk-card-icons">`;
+        if (sc.room)
+          roomContent += `<span class="hk-card-icon" onclick="markHousekeepingDone(event,'${roomNumber}','room')" title="Room cleaning — tap when done">🧹</span>`;
+        if (sc.bathroom)
+          roomContent += `<span class="hk-card-icon" onclick="markHousekeepingDone(event,'${roomNumber}','bathroom')" title="Bathroom cleaning — tap when done">🚿</span>`;
+        roomContent += `</div>`;
+      }
     } else {
       // For vacant rooms
       roomContent += `
@@ -443,7 +458,27 @@ function renderRooms() {
       `;
     }
 
-    roomContent += `</div>`;
+    roomContent += `</div>`; // close room-content
+
+    // ── Upcoming booking indicator dot ──────────────────────────────────────
+    // Shown on any room with a booking arriving within 24 hrs (not cancelled/checked_in)
+    const upcoming = upcomingBookings[roomNumber];
+    if (upcoming) {
+      const hrs = upcoming.hours_until;
+      let dotColor, pulseClass;
+      if (hrs <= 0) {
+        dotColor = "#f44336"; pulseClass = "pulse-red";     // overdue
+      } else if (hrs <= 4) {
+        dotColor = "#ff9800"; pulseClass = "pulse-orange";  // urgent <4hrs
+      } else {
+        dotColor = "#2196F3"; pulseClass = "pulse-blue";    // normal <24hrs
+      }
+      const arrivalLabel = hrs <= 0
+        ? `Overdue — ${upcoming.guest_name}`
+        : `${upcoming.guest_name} arriving at ${upcoming.check_in_time}`;
+      roomContent += `<div class="booking-indicator-dot ${pulseClass}" style="background:${dotColor};" title="${arrivalLabel}"></div>`;
+    }
+
     roomCard.innerHTML = roomContent;
 
     // Setup click handlers
@@ -520,6 +555,241 @@ function handleCleanedClick(event, roomNumber) {
   markRoomAsCleaned(roomNumber);
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Mid-stay Housekeeping logic
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Called when staff taps a 🧹 or 🚿 icon on the room card.
+ * Shows a minimal confirmation before marking done.
+ */
+function markHousekeepingDone(event, roomNumber, type) {
+  event.stopPropagation();
+  showHkConfirm(roomNumber, type);
+}
+
+/**
+ * Shows the mini confirmation overlay for a housekeeping task.
+ */
+function showHkConfirm(roomNumber, type) {
+  const overlay   = document.getElementById("hk-confirm-overlay");
+  const emojiEl   = document.getElementById("hk-confirm-emoji");
+  const titleEl   = document.getElementById("hk-confirm-title");
+  if (!overlay) return;
+
+  if (emojiEl) emojiEl.textContent = type === "room" ? "🧹" : "🚿";
+  if (titleEl) titleEl.textContent = type === "room" ? "Room cleaned?" : "Bathroom cleaned?";
+
+  overlay.style.display = "flex";
+
+  // Tap the dark backdrop → dismiss
+  overlay.onclick = (e) => { if (e.target === overlay) overlay.style.display = "none"; };
+
+  // Clone buttons to drop any stale listeners
+  ["hk-confirm-yes", "hk-confirm-no"].forEach(id => {
+    const old = document.getElementById(id);
+    if (!old) return;
+    const fresh = old.cloneNode(true);
+    old.parentNode.replaceChild(fresh, old);
+  });
+
+  document.getElementById("hk-confirm-no").addEventListener("click", () => {
+    overlay.style.display = "none";
+  });
+
+  document.getElementById("hk-confirm-yes").addEventListener("click", async () => {
+    overlay.style.display = "none";
+    await _applyHousekeepingDone(roomNumber, type);
+  });
+}
+
+/** Actually clears the flag and saves to server. */
+async function _applyHousekeepingDone(roomNumber, type) {
+  if (!rooms[roomNumber]) return;
+  if (!rooms[roomNumber].service_cleaning) rooms[roomNumber].service_cleaning = {};
+  rooms[roomNumber].service_cleaning[type] = false;
+  renderRooms();
+
+  const label = type === "room" ? "Room cleaning" : "Bathroom cleaning";
+  showNotification(`${label} marked as done ✓`, "success");
+
+  try {
+    const body = { room: roomNumber };
+    if (type === "room") body.room_clean = false;
+    else body.bathroom_clean = false;
+
+    await apiFetch("/toggle_housekeeping", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  } catch (e) {
+    console.error("_applyHousekeepingDone error:", e);
+  }
+}
+
+/**
+ * Updates the visual state of one housekeeping toggle in the checkout modal.
+ * toggleId  — the .hk-toggle-item element ID
+ * dotId     — the .hk-dot element ID inside it
+ * active    — boolean
+ */
+function updateHousekeepingToggleUI(toggleId, _dotId, active) {
+  // _dotId kept for call-site compatibility but unused — new design uses
+  // a single .co-hk-pill button where active state is a CSS class.
+  const toggle = document.getElementById(toggleId);
+  if (!toggle) return;
+  toggle.classList.toggle("active", !!active);
+}
+
+/**
+ * Wires click handler on a housekeeping toggle inside the checkout modal.
+ * Clones the element to remove old listeners before adding the new one.
+ */
+function setupHousekeepingToggle(roomNumber, toggleId, dotId, type) {
+  const oldEl = document.getElementById(toggleId);
+  if (!oldEl) return;
+
+  // Clone to drop stale event listeners
+  const el = oldEl.cloneNode(true);
+  oldEl.parentNode.replaceChild(el, oldEl);
+
+  el.addEventListener("click", async () => {
+    if (!rooms[roomNumber]) return;
+    if (!rooms[roomNumber].service_cleaning) rooms[roomNumber].service_cleaning = {};
+
+    const isActive = !rooms[roomNumber].service_cleaning[type];
+    rooms[roomNumber].service_cleaning[type] = isActive;
+
+    updateHousekeepingToggleUI(toggleId, dotId, isActive);
+    renderRooms(); // update card icons live
+
+    try {
+      const body = { room: roomNumber };
+      if (type === "room") body.room_clean = isActive;
+      else body.bathroom_clean = isActive;
+
+      await apiFetch("/toggle_housekeeping", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+    } catch (e) {
+      console.error("setupHousekeepingToggle error:", e);
+    }
+  });
+}
+
+/**
+ * Sets up the HK chip in the checkout modal.
+ * Updates chip appearance (active = any HK requested) and wires click to open overlay.
+ */
+function setupHkChip(roomNumber, sc) {
+  const chip = document.getElementById("hk-chip-btn");
+  if (!chip) return;
+
+  // Show active state if any HK is requested
+  const anyActive = !!(sc.room || sc.bathroom);
+  chip.classList.toggle("hk-active", anyActive);
+
+  // Clone to remove stale listeners
+  const newChip = chip.cloneNode(true);
+  chip.parentNode.replaceChild(newChip, chip);
+
+  newChip.addEventListener("click", (e) => {
+    e.stopPropagation();
+    openHkRequestModal(roomNumber);
+  });
+}
+
+/**
+ * Opens the HK request overlay for a room.
+ * Shows current room/bathroom state and lets staff toggle + save.
+ */
+function openHkRequestModal(roomNumber) {
+  const overlay = document.getElementById("hk-request-overlay");
+  if (!overlay) return;
+
+  const roomBtn     = document.getElementById("hk-req-room-btn");
+  const bathroomBtn = document.getElementById("hk-req-bathroom-btn");
+  const saveBtn     = document.getElementById("hk-req-save");
+  const cancelBtn   = document.getElementById("hk-req-cancel");
+
+  if (!roomBtn || !bathroomBtn || !saveBtn || !cancelBtn) return;
+
+  // Read current state
+  const sc = (rooms[roomNumber] && rooms[roomNumber].service_cleaning) || {};
+  let roomActive     = !!sc.room;
+  let bathroomActive = !!sc.bathroom;
+
+  const refresh = () => {
+    roomBtn.classList.toggle("active", roomActive);
+    bathroomBtn.classList.toggle("active", bathroomActive);
+  };
+  refresh();
+
+  // Clone buttons to drop stale listeners
+  const newRoomBtn     = roomBtn.cloneNode(true);
+  const newBathroomBtn = bathroomBtn.cloneNode(true);
+  const newSaveBtn     = saveBtn.cloneNode(true);
+  const newCancelBtn   = cancelBtn.cloneNode(true);
+
+  roomBtn.replaceWith(newRoomBtn);
+  bathroomBtn.replaceWith(newBathroomBtn);
+  saveBtn.replaceWith(newSaveBtn);
+  cancelBtn.replaceWith(newCancelBtn);
+
+  // Re-apply active classes after clone
+  newRoomBtn.classList.toggle("active", roomActive);
+  newBathroomBtn.classList.toggle("active", bathroomActive);
+
+  newRoomBtn.addEventListener("click", () => {
+    roomActive = !roomActive;
+    newRoomBtn.classList.toggle("active", roomActive);
+  });
+  newBathroomBtn.addEventListener("click", () => {
+    bathroomActive = !bathroomActive;
+    newBathroomBtn.classList.toggle("active", bathroomActive);
+  });
+
+  const close = () => { overlay.style.display = "none"; };
+
+  newCancelBtn.addEventListener("click", close);
+  overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); }, { once: true });
+
+  newSaveBtn.addEventListener("click", async () => {
+    close();
+
+    // Update local state
+    if (!rooms[roomNumber]) return;
+    if (!rooms[roomNumber].service_cleaning) rooms[roomNumber].service_cleaning = {};
+    rooms[roomNumber].service_cleaning.room     = roomActive;
+    rooms[roomNumber].service_cleaning.bathroom = bathroomActive;
+
+    // Update chip appearance
+    const chip = document.getElementById("hk-chip-btn");
+    if (chip) chip.classList.toggle("hk-active", roomActive || bathroomActive);
+
+    renderRooms(); // update card icons live
+
+    try {
+      await apiFetch("/toggle_housekeeping", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          room: roomNumber,
+          room_clean:     roomActive,
+          bathroom_clean: bathroomActive,
+        }),
+      });
+    } catch (e) {
+      console.error("openHkRequestModal save error:", e);
+    }
+  });
+
+  overlay.style.display = "flex";
+}
+
 // Debounced background sync — prevents 3 rapid actions (e.g. add service ×3)
 // from each firing a full Firestore reload. Only the LAST call within 2 s runs.
 let _fetchDebounceTimer = null;
@@ -538,10 +808,11 @@ async function fetchData() {
   try {
     debugLog("Fetching data from server...");
 
-    // Fire both requests in parallel — cuts sequential wait by ~0.8–1s
-    const [response, metadataResponse] = await Promise.all([
+    // Fire all requests in parallel — cuts sequential wait
+    const [response, metadataResponse, upcomingResponse] = await Promise.all([
       apiFetch("/get_data"),
       apiFetch("/get_transaction_metadata").catch(() => null),
+      apiFetch("/get_upcoming_bookings").catch(() => null),
     ]);
 
     if (!response.ok) {
@@ -566,6 +837,18 @@ async function fetchData() {
       }
     } catch (error) {
       console.warn("Could not fetch transaction metadata:", error);
+    }
+
+    // Process upcoming bookings from parallel response
+    try {
+      if (upcomingResponse && upcomingResponse.ok) {
+        const upcomingData = await upcomingResponse.json();
+        if (upcomingData.success) {
+          upcomingBookings = upcomingData.upcoming || {};
+        }
+      }
+    } catch (error) {
+      console.warn("Could not fetch upcoming bookings:", error);
     }
 
     // Process rooms to ensure they have renewal data
@@ -629,6 +912,12 @@ function updateFilterCounts() {
     else if (room.status === "occupied") counts.occupied++;
     else if (room.status === "cleaning") counts.cleaning++;
 
+    // Count occupied rooms with active HK requests in the cleaning badge
+    if (room.status === "occupied") {
+      const sc = room.service_cleaning || {};
+      if (sc.room || sc.bathroom) counts.cleaning++;
+    }
+
     if (room.status === "occupied" && room.balance > 0) {
       counts.balances++;
       balanceTotal += room.balance;
@@ -657,6 +946,9 @@ function updateStats() {
     else if (room.status === "occupied") {
       counts.occupied++;
       if (room.balance > 0) { counts.balances++; balanceTotal += room.balance; }
+      // Count occupied rooms with active HK requests in cleaning badge
+      const sc = room.service_cleaning || {};
+      if (sc.room || sc.bathroom) counts.cleaning++;
     } else if (room.status === "cleaning") counts.cleaning++;
   });
 
@@ -1114,61 +1406,64 @@ function updateCheckoutModal(roomNumber) {
     checkoutRoomPrice.textContent = "₹" + roomInfo.guest.price;
   }
 
-  // Update balance display with color coding
-  const balanceEl = document.getElementById("checkout-balance");
+  // ── Guest photo ─────────────────────────────────────────────────────────
+  const guestPhotoContainer = document.getElementById("checkout-photo-container");
+  const guestPhotoEl        = document.getElementById("checkout-guest-photo");
+  if (guestPhotoContainer && guestPhotoEl) {
+    if (roomInfo.guest.photo) {
+      guestPhotoEl.src = roomInfo.guest.photo;
+      guestPhotoContainer.style.display = "block";
+    } else {
+      guestPhotoContainer.style.display = "none";
+    }
+  }
+
+  // ── Balance row ──────────────────────────────────────────────────────────
+  const balanceEl  = document.getElementById("checkout-balance");
+  const isOtaRoom  = roomInfo.guest && roomInfo.guest.payment === "ota";
   const balanceRow = balanceEl ? balanceEl.closest(".detail-row") : null;
-  const isOtaRoom = roomInfo.guest && roomInfo.guest.payment === "ota";
   if (balanceEl) {
     if (isOtaRoom) {
-      // MMT prepaid — hide balance row entirely
+      // MMT prepaid — hide balance row (not applicable)
       if (balanceRow) balanceRow.style.display = "none";
     } else {
       if (balanceRow) balanceRow.style.display = "";
       if (roomInfo.balance < 0) {
-        balanceEl.textContent = "₹" + Math.abs(roomInfo.balance) + " (refund)";
-        balanceEl.classList.add("negative-balance");
-      } else {
+        balanceEl.textContent = "−₹" + Math.abs(roomInfo.balance);
+        balanceEl.style.color = "var(--success)";
+      } else if (roomInfo.balance > 0) {
         balanceEl.textContent = "₹" + roomInfo.balance;
-        balanceEl.classList.remove("negative-balance");
+        balanceEl.style.color = "var(--danger)";
+      } else {
+        balanceEl.textContent = "₹0";
+        balanceEl.style.color = "";
       }
     }
   }
 
-  // Update renewal status
-  const renewalStatus = getRoomRenewalStatus(roomInfo);
-  const dayCountEl = document.getElementById("checkout-day-count");
+  // ── Renewal / stay status ────────────────────────────────────────────────
+  const renewalStatus   = getRoomRenewalStatus(roomInfo);
+  const dayCountEl      = document.getElementById("checkout-day-count");
   const renewalStatusEl = document.getElementById("checkout-renewal-status");
 
   if (dayCountEl) {
     dayCountEl.textContent = `Day ${renewalStatus.dayNumber}`;
   }
 
-  // Set status tag based on renewal status
   if (renewalStatusEl) {
     renewalStatusEl.className = "status-tag";
+    renewalStatusEl.style.color = "";
     if (renewalStatus.expired) {
-      renewalStatusEl.textContent = "Renewal Due";
-      renewalStatusEl.classList.add("renewable");
-    } else if (renewalStatus.hoursLeft < 1) {
-      renewalStatusEl.textContent = `${renewalStatus.minutesLeft}m left`;
       renewalStatusEl.classList.add("warning");
+      renewalStatusEl.textContent = "Overdue";
+    } else if (renewalStatus.hoursLeft <= 2) {
+      renewalStatusEl.classList.add("warning");
+      renewalStatusEl.textContent = renewalStatus.hoursLeft < 1
+        ? `${renewalStatus.minutesLeft}m left`
+        : `${renewalStatus.hoursLeft}h ${renewalStatus.minutesLeft}m left`;
     } else {
+      renewalStatusEl.classList.add("renewable");
       renewalStatusEl.textContent = `${renewalStatus.hoursLeft}h ${renewalStatus.minutesLeft}m left`;
-      renewalStatusEl.classList.add("waiting");
-    }
-  }
-
-  // Display guest photo if available
-  const photoContainer = document.getElementById("checkout-photo-container");
-  if (photoContainer) {
-    if (roomInfo.guest.photo) {
-      const guestPhoto = document.getElementById("checkout-guest-photo");
-      if (guestPhoto) {
-        guestPhoto.src = roomInfo.guest.photo;
-      }
-      photoContainer.style.display = "block";
-    } else {
-      photoContainer.style.display = "none";
     }
   }
 
@@ -1196,6 +1491,10 @@ function updateCheckoutModal(roomNumber) {
     const guestHasAc = roomInfo.guest && roomInfo.guest.isAC === true;
     acServiceBtn.style.display = (isAcCapableRoom && !guestHasAc) ? "" : "none";
   }
+
+  // ── Housekeeping chip ────────────────────────────────────────────────────
+  const sc = roomInfo.service_cleaning || {};
+  setupHkChip(roomNumber, sc);
 
   // Update renewal history
   updateRenewalHistory(roomNumber);

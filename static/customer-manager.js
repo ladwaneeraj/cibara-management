@@ -65,7 +65,7 @@
     });
 
     try {
-      const res  = await fetch(`/list_customers?${params}`);
+      const res  = await apiFetch(`/list_customers?${params}`);
       const data = await res.json();
       if (!data.success) throw new Error(data.message || "Load failed");
 
@@ -194,7 +194,7 @@
       `<div class="cm-detail-loading"><i class="fas fa-spinner fa-spin"></i> Loading…</div>`;
 
     try {
-      const res  = await fetch(`/get_customer/${encodeURIComponent(mobile)}`);
+      const res  = await apiFetch(`/get_customer/${encodeURIComponent(mobile)}`);
       const data = await res.json();
       if (!data.success) throw new Error(data.message || "Not found");
       currentCustomer = data.customer;
@@ -358,7 +358,7 @@
     btn.innerHTML = `<i class="fas fa-spinner fa-spin"></i>`;
 
     try {
-      const res  = await fetch("/toggle_customer_flag", {
+      const res  = await apiFetch("/toggle_customer_flag", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ mobile: currentCustomer.mobile, is_flagged: flagging, flag_notes: notes }),
@@ -408,7 +408,7 @@
     }
 
     try {
-      const res  = await fetch("/update_customer", {
+      const res  = await apiFetch("/update_customer", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ mobile: currentCustomer.mobile, name }),
@@ -469,7 +469,7 @@
         const fd = new FormData();
         fd.append("mobile",   mobile);
         fd.append("document", p.blob, `doc_${Date.now()}.jpg`);
-        const res  = await fetch("/upload_customer_document", { method: "POST", body: fd });
+        const res  = await apiFetch("/upload_customer_document", { method: "POST", body: fd });
         const data = await res.json();
         if (data.success) {
           currentCustomer.id_doc_urls = currentCustomer.id_doc_urls || [];
@@ -501,7 +501,7 @@
     if (!confirm("Remove this document?")) return;
 
     try {
-      const res  = await fetch("/delete_customer_document", {
+      const res  = await apiFetch("/delete_customer_document", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ mobile: currentCustomer.mobile, url }),
@@ -580,7 +580,7 @@
     const name   = document.getElementById("cm-add-name").value.trim();
 
     try {
-      const res  = await fetch("/add_customer", {
+      const res  = await apiFetch("/add_customer", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name, mobile }),
@@ -594,7 +594,7 @@
           const fd = new FormData();
           fd.append("mobile",   mobile);
           fd.append("document", p.blob, `doc_${Date.now()}.jpg`);
-          await fetch("/upload_customer_document", { method: "POST", body: fd });
+          await apiFetch("/upload_customer_document", { method: "POST", body: fd });
         } catch (_) {}
       }
       pendingPhotos.forEach(p => URL.revokeObjectURL(p.localUrl));

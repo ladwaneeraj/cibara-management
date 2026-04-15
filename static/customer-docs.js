@@ -1593,9 +1593,168 @@ document.addEventListener('DOMContentLoaded', () => {
   initNameMismatchDetection();
   initAddressToggle();
   initDocCamera();
+  initBookingMobileLookup();
 
   document.addEventListener('checkinModalOpened', resetCheckinDocState);
   document.querySelectorAll('#checkin-modal .close-btn').forEach(btn => {
     btn.addEventListener('click', resetCheckinDocState);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Booking modal — mobile lookup (suggestions + auto-fill name + ID preview)
+// ─────────────────────────────────────────────────────────────────────────────
+
+let _bookingMobileDebounce = null;
+
+function initBookingMobileLookup() {
+  const inp = document.getElementById('booking-guest-mobile');
+  if (!inp) return;
+
+  inp.addEventListener('input', function () {
+    clearTimeout(_bookingMobileDebounce);
+    const digits = this.value.replace(/\D/g, '');
+
+    if (digits.length === 0) {
+      _bkHideSuggestions();
+      _bkClearGuestInfo();
+      return;
+    }
+    if (digits.length < 4) { _bkHideSuggestions(); return; }
+
+    _bookingMobileDebounce = setTimeout(async () => {
+      if (digits.length >= 10) {
+        _bkHideSuggestions();
+        await _bkLookupAndFill(digits.slice(0, 10));
+      } else {
+        _bkFetchSuggestions(digits);
+      }
+    }, 180);
+  });
+
+  // Close dropdown on outside click
+  document.addEventListener('click', (e) => {
+    const sug = document.getElementById('booking-mobile-suggestions');
+    if (sug && !inp.contains(e.target) && !sug.contains(e.target)) {
+      _bkHideSuggestions();
+    }
+  });
+
+  // Reset guest info when booking modal is closed
+  document.getElementById('new-booking-modal')
+    ?.querySelector('.close-btn')
+    ?.addEventListener('click', _bkClearGuestInfo);
+}
+
+async function _bkFetchSuggestions(prefix) {
+  try {
+    const res  = await apiFetch('/search_customers_mobile', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prefix }),
+    });
+    const data = await res.json();
+    _bkRenderSuggestions(data.success ? (data.customers || []) : []);
+  } catch (e) { console.error('[booking-mobile] suggest error:', e); }
+}
+
+function _bkRenderSuggestions(customers) {
+  const sug = document.getElementById('booking-mobile-suggestions');
+  if (!sug) return;
+  if (!customers.length) { _bkHideSuggestions(); return; }
+
+  sug.innerHTML = '';
+  customers.slice(0, 6).forEach(c => {
+    const item = document.createElement('div');
+    item.style.cssText = 'padding:0.45rem 0.75rem;cursor:pointer;border-bottom:1px solid #f0f0f0;font-size:0.85rem;display:flex;align-items:center;gap:0.5rem;';
+
+    const stays = c.total_stays || 0;
+    const stayBadge = stays > 0
+      ? `<span style="background:#e3f2fd;color:#1565c0;border-radius:10px;padding:0.1rem 0.45rem;font-size:0.7rem;font-weight:700;white-space:nowrap;flex-shrink:0;">${stays}× stays</span>`
+      : '';
+
+    const sub = [c.mobile];
+    if (c.total_spent)    sub.push('₹' + Number(c.total_spent).toLocaleString('en-IN'));
+    if (c.last_stay_date) sub.push(_fmtDate(c.last_stay_date));
+
+    item.innerHTML = `
+      <div style="flex:1;min-width:0;">
+        <div style="font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${_fmtName(c.name) || '(No name)'}</div>
+        <div style="color:#888;font-size:0.76rem;">${sub.join(' · ')}</div>
+      </div>${stayBadge}`;
+
+    item.addEventListener('mouseover', () => { item.style.background = '#f5f5f5'; });
+    item.addEventListener('mouseout',  () => { item.style.background = ''; });
+    item.addEventListener('click', () => {
+      const mi = document.getElementById('booking-guest-mobile');
+      if (mi) mi.value = c.mobile;
+      _bkHideSuggestions();
+      _bkLookupAndFill(c.mobile);
+    });
+    sug.appendChild(item);
+  });
+  sug.style.display = 'block';
+}
+
+function _bkHideSuggestions() {
+  const sug = document.getElementById('booking-mobile-suggestions');
+  if (sug) sug.style.display = 'none';
+}
+
+async function _bkLookupAndFill(mobile) {
+  try {
+    const res  = await apiFetch(`/get_customer/${mobile}`);
+    const data = await res.json();
+
+    if (data.success && data.customer) {
+      const c = data.customer;
+
+      // Auto-fill name if blank
+      const nameInp = document.getElementById('booking-guest-name');
+      if (nameInp && !nameInp.value.trim()) {
+        nameInp.value = _fmtName(c.name) || '';
+      }
+
+      // Show returning guest info bar
+      const stays = c.total_stays || 0;
+      const staysEl = document.getElementById('booking-guest-stays');
+      if (staysEl) staysEl.textContent = stays > 0 ? `${stays} stay${stays !== 1 ? 's' : ''}` : 'first visit';
+
+      const infoBar = document.getElementById('booking-guest-info');
+      if (infoBar) infoBar.style.display = 'block';
+
+      // Show ID badge + thumbnails if docs exist
+      const urls    = c.id_doc_urls || [];
+      const badge   = document.getElementById('booking-id-badge');
+      const thumbEl = document.getElementById('booking-doc-thumbs');
+
+      if (urls.length > 0) {
+        if (badge) badge.style.display = 'inline';
+
+        if (thumbEl) {
+          thumbEl.style.display = 'flex';
+          thumbEl.innerHTML = urls.map(url => `
+            <img src="${url}" alt="ID"
+              style="width:56px;height:40px;object-fit:cover;border-radius:5px;
+                     border:1px solid #90caf9;cursor:pointer;"
+              onclick="window.open('${url}','_blank')"
+              title="Click to view full size" />`
+          ).join('');
+        }
+      } else {
+        if (badge)   badge.style.display   = 'none';
+        if (thumbEl) thumbEl.style.display = 'none';
+      }
+    } else {
+      _bkClearGuestInfo();
+    }
+  } catch (e) { console.error('[booking-mobile] lookup error:', e); }
+}
+
+function _bkClearGuestInfo() {
+  const infoBar = document.getElementById('booking-guest-info');
+  if (infoBar) infoBar.style.display = 'none';
+  const badge   = document.getElementById('booking-id-badge');
+  if (badge)   badge.style.display   = 'none';
+  const thumbEl = document.getElementById('booking-doc-thumbs');
+  if (thumbEl) { thumbEl.style.display = 'none'; thumbEl.innerHTML = ''; }
+}

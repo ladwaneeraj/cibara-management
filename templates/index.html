@@ -3042,9 +3042,10 @@
                 id="booking-guest-name"
                 placeholder="Full name"
                 required
+                autocomplete="off"
               />
             </div>
-            <div class="form-group">
+            <div class="form-group" style="position:relative;">
               <label class="form-label">Mobile</label>
               <input
                 type="tel"
@@ -3054,7 +3055,40 @@
                 required
                 pattern="[0-9]{10}"
                 title="10-digit mobile number"
+                autocomplete="off"
               />
+              <!-- Suggestions dropdown -->
+              <div
+                id="booking-mobile-suggestions"
+                style="display:none;position:absolute;top:100%;left:0;right:0;
+                       background:white;border:1px solid #ddd;border-radius:6px;
+                       z-index:9999;max-height:200px;overflow-y:auto;
+                       box-shadow:0 4px 12px rgba(0,0,0,0.15);"
+              ></div>
+            </div>
+          </div>
+
+          <!-- Returning guest info bar (shown when mobile matches a known guest) -->
+          <div id="booking-guest-info" style="display:none;margin-bottom:0.6rem;">
+            <div style="background:#e8f5e9;border:1px solid #a5d6a7;border-radius:8px;
+                        padding:0.45rem 0.75rem;display:flex;align-items:center;
+                        justify-content:space-between;gap:0.5rem;font-size:0.8rem;">
+              <span style="color:#2e7d32;font-weight:600;">
+                <i class="fas fa-user-check" style="margin-right:5px;"></i>
+                Returning guest &mdash; <span id="booking-guest-stays"></span>
+              </span>
+              <!-- ID-on-file pill -->
+              <span id="booking-id-badge" style="display:none;
+                    background:#1565c0;color:#fff;border-radius:10px;
+                    padding:2px 8px;font-size:0.72rem;font-weight:600;
+                    white-space:nowrap;">
+                <i class="fas fa-id-card" style="margin-right:3px;"></i>
+                ID on file
+              </span>
+            </div>
+            <!-- Thumbnail strip -->
+            <div id="booking-doc-thumbs"
+                 style="display:none;margin-top:0.35rem;display:flex;gap:0.4rem;flex-wrap:wrap;">
             </div>
           </div>
 

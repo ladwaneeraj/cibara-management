@@ -1867,6 +1867,27 @@ canvas {
   background-color: var(--success);
 }
 
+/* ── Calendar day-modal booking status badges ──────────────────────────── */
+.day-booking-status-badge {
+  display: inline-block;
+  padding: 2px 10px;
+  border-radius: 12px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: #fff;
+  background-color: #94a3b8; /* fallback grey */
+}
+
+/* Confirmed but not yet arrived — amber "Arriving" pill */
+.day-booking-status-badge.confirmed {
+  background-color: #f59e0b;
+}
+
+/* Already in the hotel — green "Checked In" pill */
+.day-booking-status-badge.checked_in {
+  background-color: #16a34a;
+}
+
 .today-badge {
   display: inline-block;
   padding: 0.2rem 0.5rem;

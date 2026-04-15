@@ -2384,7 +2384,9 @@ function showDayDetails(dateStr, bookings) {
       let statusText =
         booking.status.charAt(0).toUpperCase() + booking.status.slice(1);
       if (isCheckIn && booking.status === "confirmed") {
-        statusText = "Check-in Day";
+        statusText = "Arriving";
+      } else if (booking.status === "checked_in" && !isCheckOut) {
+        statusText = "Checked In";
       } else if (
         isCheckOut &&
         (booking.status === "confirmed" || booking.status === "checked_in")
@@ -2862,72 +2864,177 @@ Thank you for choosing us! 🙏`;
 
 // ─── MMT Settlements View ───────────────────────────────────────────────────
 
+// Cache fetched data so tab switches don't re-fetch
+let _mmtUnsettled  = null;
+let _mmtSettled    = null;
+let _mmtActiveTab  = "pending";
+
 async function showMmtSettlementsModal() {
-  const modal = document.getElementById("mmt-settlements-modal");
+  const modal  = document.getElementById("mmt-settlements-modal");
   const listEl = document.getElementById("mmt-settlements-list");
   if (!modal || !listEl) return;
 
-  // Show modal with loading state
-  listEl.innerHTML = `<div class="loading-indicator"><span class="loader"></span><p>Loading settlements...</p></div>`;
+  // Reset cache on each open so data is always fresh
+  _mmtUnsettled = null;
+  _mmtSettled   = null;
+  _mmtActiveTab = "pending";
+
   modal.classList.add("show");
+  _mmtSetActiveTab("pending");
 
-  try {
-    const response = await apiFetch("/get_ota_settlements");
-    const data = await response.json();
+  // Wire up tab buttons (safe to call multiple times — replaces listeners)
+  document.querySelectorAll(".mmt-tab-btn").forEach((btn) => {
+    btn.onclick = () => _mmtSetActiveTab(btn.dataset.tab);
+  });
+}
 
-    if (!data.success) {
-      listEl.innerHTML = `<p style="color:var(--danger);text-align:center;padding:1rem;">${data.message || "Failed to load settlements."}</p>`;
-      return;
-    }
+function _mmtSetActiveTab(tab) {
+  _mmtActiveTab = tab;
 
-    const settlements = data.settlements || [];
+  // Update tab styling
+  document.querySelectorAll(".mmt-tab-btn").forEach((btn) => {
+    const isActive = btn.dataset.tab === tab;
+    btn.style.color        = isActive ? "#0c6fcd" : "var(--text-secondary)";
+    btn.style.borderBottom = isActive ? "2px solid #0c6fcd" : "2px solid transparent";
+  });
 
-    if (settlements.length === 0) {
-      listEl.innerHTML = `
-        <div style="text-align:center;padding:2rem;color:var(--text-secondary);">
-          <i class="fas fa-university" style="font-size:2rem;margin-bottom:0.75rem;opacity:0.4;display:block;"></i>
-          No MMT settlements recorded yet.<br>
-          <small>Use "Mark Settlement" in a booking's details once MMT pays you.</small>
-        </div>`;
-      return;
-    }
-
-    // Calculate totals
-    const totalSettled = settlements.reduce((sum, s) => sum + (s.settlement_amount || 0), 0);
-
-    let html = `
-      <div style="display:flex;justify-content:space-between;align-items:center;
-                  background:rgba(12,111,205,0.07);border:1px solid rgba(12,111,205,0.2);
-                  border-radius:8px;padding:0.6rem 0.85rem;margin-bottom:0.75rem;font-size:0.85rem;">
-        <span style="color:var(--text-secondary);">${settlements.length} settlement${settlements.length !== 1 ? "s" : ""}</span>
-        <span style="font-weight:600;color:#0c6fcd;">Total: ₹${totalSettled.toLocaleString("en-IN")}</span>
-      </div>`;
-
-    settlements.forEach((s) => {
-      const guestName = s.guest_name || "—";
-      const room = s.room || "—";
-      const amount = s.settlement_amount != null ? `₹${s.settlement_amount.toLocaleString("en-IN")}` : "—";
-      const date = s.settlement_date || s.created_at || "—";
-      const bookingId = s.booking_id || "—";
-
-      html += `
-        <div style="border:1px solid var(--border);border-radius:8px;padding:0.65rem 0.85rem;
-                    margin-bottom:0.5rem;background:var(--surface);">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.3rem;">
-            <span style="font-weight:600;">${guestName}</span>
-            <span style="font-weight:700;color:var(--success);">${amount}</span>
-          </div>
-          <div style="display:flex;gap:1rem;font-size:0.78rem;color:var(--text-secondary);">
-            <span><i class="fas fa-door-open" style="margin-right:3px;"></i>Room ${room}</span>
-            <span><i class="fas fa-calendar" style="margin-right:3px;"></i>${date}</span>
-            <span style="margin-left:auto;font-family:monospace;font-size:0.72rem;">${bookingId.slice(-8)}</span>
-          </div>
-        </div>`;
-    });
-
-    listEl.innerHTML = html;
-  } catch (error) {
-    console.error("Error loading MMT settlements:", error);
-    listEl.innerHTML = `<p style="color:var(--danger);text-align:center;padding:1rem;">Error loading settlements: ${error.message}</p>`;
+  if (tab === "pending") {
+    _mmtRenderPending();
+  } else {
+    _mmtRenderReceived();
   }
+}
+
+async function _mmtRenderPending() {
+  const listEl = document.getElementById("mmt-settlements-list");
+  if (!listEl) return;
+
+  if (!_mmtUnsettled) {
+    listEl.innerHTML = `<div class="loading-indicator"><span class="loader"></span><p>Loading...</p></div>`;
+    try {
+      const res  = await apiFetch("/get_mmt_unsettled");
+      const data = await res.json();
+      _mmtUnsettled = data.success ? (data.unsettled || []) : [];
+    } catch (e) {
+      listEl.innerHTML = `<p style="color:var(--danger);text-align:center;padding:1rem;">Error: ${e.message}</p>`;
+      return;
+    }
+  }
+
+  // Update badge
+  const badge = document.getElementById("mmt-pending-badge");
+  if (badge) {
+    if (_mmtUnsettled.length > 0) {
+      badge.textContent = _mmtUnsettled.length;
+      badge.style.display = "inline";
+    } else {
+      badge.style.display = "none";
+    }
+  }
+
+  if (_mmtUnsettled.length === 0) {
+    listEl.innerHTML = `
+      <div style="text-align:center;padding:2rem;color:var(--text-secondary);">
+        <i class="fas fa-check-circle" style="font-size:2rem;margin-bottom:0.75rem;opacity:0.4;display:block;color:#16a34a;"></i>
+        All MMT bookings are settled!
+      </div>`;
+    return;
+  }
+
+  const totalPending = _mmtUnsettled.reduce((s, b) => s + (b.net_receivable || 0), 0);
+
+  let html = `
+    <div style="display:flex;justify-content:space-between;align-items:center;
+                background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.3);
+                border-radius:8px;padding:0.6rem 0.85rem;margin-bottom:0.75rem;font-size:0.85rem;">
+      <span style="color:var(--text-secondary);">${_mmtUnsettled.length} pending</span>
+      <span style="font-weight:600;color:#d97706;">Expected: ₹${totalPending.toLocaleString("en-IN")}</span>
+    </div>`;
+
+  _mmtUnsettled.forEach((b) => {
+    const net    = b.net_receivable != null ? `₹${Number(b.net_receivable).toLocaleString("en-IN")}` : "—";
+    const checkin  = b.check_in_date  || "—";
+    const checkout = b.check_out_date || "—";
+
+    html += `
+      <div style="border:1px solid #fde68a;border-radius:8px;padding:0.65rem 0.85rem;
+                  margin-bottom:0.5rem;background:#fffbeb;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.3rem;">
+          <span style="font-weight:600;">${b.guest_name || "—"}</span>
+          <span style="font-weight:700;color:#d97706;">${net}</span>
+        </div>
+        <div style="display:flex;gap:1rem;font-size:0.78rem;color:var(--text-secondary);flex-wrap:wrap;margin-bottom:0.45rem;">
+          <span><i class="fas fa-door-open" style="margin-right:3px;"></i>Room ${b.room || "—"}</span>
+          <span><i class="fas fa-sign-in-alt" style="margin-right:3px;"></i>${checkin}</span>
+          <span><i class="fas fa-sign-out-alt" style="margin-right:3px;"></i>${checkout}</span>
+        </div>
+        <button
+          onclick="document.getElementById('mmt-settlements-modal').classList.remove('show'); showBookingDetails('${b.booking_id}');"
+          style="width:100%;padding:0.35rem;border-radius:6px;border:1px solid #f59e0b;
+                 background:#fff;color:#b45309;font-size:0.78rem;font-weight:600;cursor:pointer;">
+          <i class="fas fa-check" style="margin-right:4px;"></i>Mark Settlement Received
+        </button>
+      </div>`;
+  });
+
+  listEl.innerHTML = html;
+}
+
+async function _mmtRenderReceived() {
+  const listEl = document.getElementById("mmt-settlements-list");
+  if (!listEl) return;
+
+  if (!_mmtSettled) {
+    listEl.innerHTML = `<div class="loading-indicator"><span class="loader"></span><p>Loading...</p></div>`;
+    try {
+      const res  = await apiFetch("/get_ota_settlements");
+      const data = await res.json();
+      _mmtSettled = data.success ? (data.settlements || []) : [];
+    } catch (e) {
+      listEl.innerHTML = `<p style="color:var(--danger);text-align:center;padding:1rem;">Error: ${e.message}</p>`;
+      return;
+    }
+  }
+
+  if (_mmtSettled.length === 0) {
+    listEl.innerHTML = `
+      <div style="text-align:center;padding:2rem;color:var(--text-secondary);">
+        <i class="fas fa-university" style="font-size:2rem;margin-bottom:0.75rem;opacity:0.4;display:block;"></i>
+        No MMT settlements recorded yet.<br>
+        <small>Use "Mark Settlement" in a booking's details once MMT pays you.</small>
+      </div>`;
+    return;
+  }
+
+  const totalSettled = _mmtSettled.reduce((s, x) => s + (x.settlement_amount || 0), 0);
+
+  let html = `
+    <div style="display:flex;justify-content:space-between;align-items:center;
+                background:rgba(12,111,205,0.07);border:1px solid rgba(12,111,205,0.2);
+                border-radius:8px;padding:0.6rem 0.85rem;margin-bottom:0.75rem;font-size:0.85rem;">
+      <span style="color:var(--text-secondary);">${_mmtSettled.length} settlement${_mmtSettled.length !== 1 ? "s" : ""}</span>
+      <span style="font-weight:600;color:#0c6fcd;">Total: ₹${totalSettled.toLocaleString("en-IN")}</span>
+    </div>`;
+
+  _mmtSettled.forEach((s) => {
+    const amount    = s.settlement_amount != null ? `₹${s.settlement_amount.toLocaleString("en-IN")}` : "—";
+    const date      = s.settlement_date || s.created_at || "—";
+    const bookingId = s.booking_id || "—";
+
+    html += `
+      <div style="border:1px solid var(--border);border-radius:8px;padding:0.65rem 0.85rem;
+                  margin-bottom:0.5rem;background:var(--surface);">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.3rem;">
+          <span style="font-weight:600;">${s.guest_name || "—"}</span>
+          <span style="font-weight:700;color:var(--success);">${amount}</span>
+        </div>
+        <div style="display:flex;gap:1rem;font-size:0.78rem;color:var(--text-secondary);">
+          <span><i class="fas fa-door-open" style="margin-right:3px;"></i>Room ${s.room || "—"}</span>
+          <span><i class="fas fa-calendar" style="margin-right:3px;"></i>${date}</span>
+          <span style="margin-left:auto;font-family:monospace;font-size:0.72rem;">${bookingId.slice(-8)}</span>
+        </div>
+      </div>`;
+  });
+
+  listEl.innerHTML = html;
 }

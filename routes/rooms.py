@@ -75,6 +75,7 @@ def checkin():
                 "renewal_count": 0,
                 "last_renewal_time": None,
                 "last_renewal_date": None,
+                "checkin_time_edit_count": 0,
             })
 
         try:
@@ -384,6 +385,7 @@ def checkout():
                 "renewal_count": 0,
                 "last_renewal_time": None,
                 "last_renewal_date": None,
+                "checkin_time_edit_count": 0,
                 "cleaning_status": "in_progress",
                 "cleaning_start_time": datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S")
             })
@@ -721,13 +723,19 @@ def update_checkin_time():
             except Exception as e:
                 logger.warning(f"Failed to update payments collection for date change: {e}")
 
-        # Update the room document
-        rooms_ref.document(room).update({
+        # Build update payload — only reset renewal cycle if the DATE changed.
+        # A time-only correction (same calendar day) should NOT wipe out
+        # the renewal count; the guest is still on the same day cycle.
+        update_payload = {
             "checkin_time": new_checkin_time,
-            "renewal_count": 0,
             "last_renewal_time": None,
-            "last_renewal_date": None
-        })
+            "checkin_time_edit_count": (room_data.get("checkin_time_edit_count") or 0) + 1,
+        }
+        if date_changed:
+            update_payload["renewal_count"] = 0
+            update_payload["last_renewal_date"] = None
+
+        rooms_ref.document(room).update(update_payload)
 
         invalidate_cache()
 
@@ -1276,18 +1284,20 @@ def get_room_numbers():
 
 @rooms_bp.route("/get_transaction_metadata", methods=["GET"])
 def get_transaction_metadata():
+    """
+    Returns today's serial-number counter only.
+    - daily_counters: single-doc read for today's date (was: full collection stream)
+    - transaction_metadata: deprecated, always returns {} (was: full collection stream, never used by frontend)
+    """
     try:
-        from config import counters_ref, metadata_ref
-        counters_stream = counters_ref.stream()
-        daily_counters = {doc.id: doc.to_dict().get('count', 0) for doc in counters_stream}
-
-        metadata_stream = metadata_ref.stream()
-        transaction_metadata = {doc.id: doc.to_dict() for doc in metadata_stream}
+        today = datetime.now(IST).strftime("%Y-%m-%d")
+        today_doc = counters_ref.document(today).get()
+        today_count = today_doc.to_dict().get("count", 0) if today_doc.exists else 0
 
         return jsonify(
             success=True,
-            daily_counters=daily_counters,
-            transaction_metadata=transaction_metadata
+            daily_counters={today: today_count},
+            transaction_metadata={}   # deprecated — no longer streamed
         )
     except Exception as e:
         logger.error(f"Error getting transaction metadata: {str(e)}")

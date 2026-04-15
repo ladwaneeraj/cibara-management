@@ -669,3 +669,32 @@ def get_ota_settlements():
     except Exception as e:
         logger.error(f"Error fetching OTA settlements: {str(e)}")
         return jsonify(success=False, message=f"Error: {str(e)}")
+
+
+@bookings_bp.route("/get_mmt_unsettled", methods=["GET"])
+def get_mmt_unsettled():
+    """
+    Return all MMT bookings where settlement has NOT been received yet.
+    Queries bookings collection for booking_source=mmt AND settlement_status=pending.
+    Sorted by check-in date descending (most recent first).
+    """
+    try:
+        docs = (
+            bookings_ref
+            .where("booking_source", "==", "mmt")
+            .where("settlement_status", "==", "pending")
+            .stream()
+        )
+        unsettled = []
+        for doc in docs:
+            b = doc.to_dict()
+            b["booking_id"] = doc.id
+            unsettled.append(b)
+
+        # Sort by check_in_date descending (string sort works for YYYY-MM-DD)
+        unsettled.sort(key=lambda x: x.get("check_in_date", ""), reverse=True)
+
+        return jsonify(success=True, unsettled=unsettled)
+    except Exception as e:
+        logger.error(f"Error fetching unsettled MMT bookings: {str(e)}")
+        return jsonify(success=False, message=f"Error: {str(e)}")

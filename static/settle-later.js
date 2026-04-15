@@ -837,37 +837,10 @@ document.addEventListener("DOMContentLoaded", function () {
     initSettleLater();
     enhanceCheckoutConfirmation();
 
-    // Lazy-load settlements: only fetch when the transactions tab is first opened.
-    // Previously this fetched on every page load — even when the user never visits
-    // the transactions tab. Now we watch for the tab to become visible.
-    let settlementsLoaded = false;
-    const transactionsTab = document.getElementById("transactions-tab");
-    if (transactionsTab) {
-      new MutationObserver(function (mutations) {
-        mutations.forEach(function (mutation) {
-          if (
-            mutation.attributeName === "class" &&
-            !transactionsTab.classList.contains("hidden") &&
-            !settlementsLoaded
-          ) {
-            settlementsLoaded = true;
-            fetchPendingSettlements().then(() => {
-              updateStatsWithSettlements();
-              updateDashboardWithSettlements();
-            });
-          }
-        });
-      }).observe(transactionsTab, { attributes: true, attributeFilter: ["class"] });
-
-      // Also handle the case where transactions is already the active tab on load
-      if (!transactionsTab.classList.contains("hidden") && !settlementsLoaded) {
-        settlementsLoaded = true;
-        fetchPendingSettlements().then(() => {
-          updateStatsWithSettlements();
-          updateDashboardWithSettlements();
-        });
-      }
-    }
+    // Settlements are loaded on-demand only — when the user opens the
+    // "Pending Payments" quick-action modal (showPendingSettlementsModal).
+    // No auto-load on tab switch or page startup: avoids an unnecessary
+    // Firestore read on every session where the modal is never opened.
   }, 1000);
 });
 // Render the pending settlements list

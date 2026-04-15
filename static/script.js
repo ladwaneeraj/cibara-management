@@ -1,7 +1,6 @@
 // Global variables
 let rooms = {};
-let transactionMetadata = {};
-let dailyCounters = {};
+let dailyCounters = {}; // today's check-in serial counter, keyed by date string
 // Upcoming bookings map: roomNumber (string) → booking info object
 let upcomingBookings = {};
 
@@ -826,17 +825,16 @@ async function fetchData() {
     logs = data.logs;
     totals = data.totals;
 
-    // Process transaction metadata from the parallel response
+    // Load today's daily counter (single-doc read — serial number for today)
     try {
       if (metadataResponse && metadataResponse.ok) {
         const metadataData = await metadataResponse.json();
         if (metadataData.success) {
-          transactionMetadata = metadataData.transaction_metadata || {};
           dailyCounters = metadataData.daily_counters || {};
         }
       }
     } catch (error) {
-      console.warn("Could not fetch transaction metadata:", error);
+      console.warn("Could not fetch daily counters:", error);
     }
 
     // Process upcoming bookings from parallel response
@@ -1051,13 +1049,12 @@ function getRoomRenewalStatus(roomInfo) {
   };
 }
 
-// Format date-time for display
+// Format date-time for display — uses LOCAL time (not UTC) so IST staff see correct times
 function formatDateTime(date) {
-  if (!(date instanceof Date)) {
-    date = new Date(date);
-  }
-
-  return date.toISOString().substring(0, 19).replace("T", " ");
+  if (!(date instanceof Date)) date = new Date(date);
+  const pad = n => String(n).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ` +
+         `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
 }
 
 // Process rent renewal for a room
@@ -2128,9 +2125,19 @@ function showEditTimeModal(roomNumber, currentCheckInTime) {
           }
         }
 
-        // Patch local state directly — no server round-trip needed for a simple time edit
+        // Patch local state — preserve renewal_count unless the DATE changed
         if (rooms[roomNumber]) {
+          const oldDatePart = (rooms[roomNumber].checkin_time || "").split(" ")[0];
+          const newDatePart = newCheckInTime.split(" ")[0];
           rooms[roomNumber].checkin_time = newCheckInTime;
+          if (oldDatePart !== newDatePart) {
+            // Date changed — reset renewal cycle (backend does the same)
+            rooms[roomNumber].renewal_count     = 0;
+            rooms[roomNumber].last_renewal_date = null;
+          }
+          // Track edit count locally
+          rooms[roomNumber].checkin_time_edit_count =
+            (rooms[roomNumber].checkin_time_edit_count || 0) + 1;
         }
         renderRooms();
 
@@ -4629,17 +4636,26 @@ document.addEventListener("DOMContentLoaded", function () {
     });
   }
 
-  // Edit check-in time button
+  // Edit check-in time button — locked after first edit (requires manager password)
   const editCheckinTimeBtn = document.getElementById("edit-checkin-time");
   if (editCheckinTimeBtn) {
     editCheckinTimeBtn.addEventListener("click", () => {
-      const roomNumber = document.getElementById(
-        "checkout-room-number",
-      )?.textContent;
-      const currentTime = document.getElementById(
-        "checkout-checkin-time",
-      )?.textContent;
-      if (roomNumber) {
+      const roomNumber = document.getElementById("checkout-room-number")?.textContent?.trim();
+      const currentTime = document.getElementById("checkout-checkin-time")?.textContent?.trim();
+      if (!roomNumber) return;
+
+      const editCount = (rooms[roomNumber] && rooms[roomNumber].checkin_time_edit_count) || 0;
+
+      if (editCount >= 1) {
+        // Already edited once — require manager password
+        openMgrAccessModal(
+          "Edit Check-in Time",
+          `Check-in time for Room ${roomNumber} was already edited. Manager password required to change it again.`,
+          "fa-clock",
+          () => showEditTimeModal(roomNumber, currentTime)
+        );
+      } else {
+        // First edit — open freely
         showEditTimeModal(roomNumber, currentTime);
       }
     });

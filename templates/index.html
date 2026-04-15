@@ -1090,13 +1090,40 @@
                 &times;
               </button>
             </div>
+
+            <!-- Tab bar -->
+            <div style="display:flex;border-bottom:2px solid var(--border);margin-bottom:0.75rem;">
+              <button
+                id="mmt-tab-pending"
+                class="mmt-tab-btn active"
+                data-tab="pending"
+                style="flex:1;padding:0.55rem 0.5rem;background:none;border:none;
+                       font-size:0.85rem;font-weight:600;cursor:pointer;
+                       color:var(--text-secondary);border-bottom:2px solid transparent;margin-bottom:-2px;"
+              >
+                ⏳ Pending
+                <span id="mmt-pending-badge" style="display:none;background:#f59e0b;color:#fff;
+                      border-radius:10px;font-size:0.7rem;padding:1px 6px;margin-left:4px;">0</span>
+              </button>
+              <button
+                id="mmt-tab-received"
+                class="mmt-tab-btn"
+                data-tab="received"
+                style="flex:1;padding:0.55rem 0.5rem;background:none;border:none;
+                       font-size:0.85rem;font-weight:600;cursor:pointer;
+                       color:var(--text-secondary);border-bottom:2px solid transparent;margin-bottom:-2px;"
+              >
+                ✅ Received
+              </button>
+            </div>
+
             <div
               id="mmt-settlements-list"
-              style="padding: 0.5rem 0; max-height: 420px; overflow-y: auto"
+              style="padding: 0.5rem 0; max-height: 400px; overflow-y: auto"
             >
               <div class="loading-indicator">
                 <span class="loader"></span>
-                <p>Loading settlements...</p>
+                <p>Loading...</p>
               </div>
             </div>
           </div>

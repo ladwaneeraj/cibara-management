@@ -882,27 +882,26 @@ def transfer_room():
         new_room_data = rooms_dict[old_room].copy()
 
         # ── Snapshot pre-transfer charges before changing price ──────────────────
-        # Use CALENDAR DATES to count days — not renewal_count.
-        # renewal_count is incremented at midnight, so if staff transfers a guest
-        # before the renewal runs (e.g. 9am), renewal_count is still 0 for the day
-        # and the old segment would get 0 days — wrong.
-        # Date-based calculation: days = (today - checkin_date) - already_offset
-        # Same-day transfer  → 0 days in old room (correct: guest never slept there).
-        # Next-day transfer  → 1 day  in old room (correct: 1 night in old room).
+        # Use 24-HOUR CYCLES (from actual check-in time), not calendar dates.
+        # Business rule: rent is per 24-hr window starting at check-in time.
+        # A guest who checks in at 10 PM and transfers at 10 AM the next calendar
+        # day has only completed ~12 hours — 0 full cycles → 0 days in old room.
+        # Calendar-date subtraction would wrongly give 1 day across midnight.
         old_price        = new_room_data["guest"].get("price", 0)
         existing_offset  = new_room_data["guest"].get("transfer_day_offset", 0)
 
-        _now_date     = datetime.now(IST).date()
         _checkin_str  = new_room_data.get("checkin_time", "")
+        _transfer_now = datetime.now(IST).replace(tzinfo=None)
         try:
-            _checkin_date = datetime.strptime(_checkin_str[:10], "%Y-%m-%d").date()
+            _checkin_dt = datetime.strptime(_checkin_str[:16], "%Y-%m-%d %H:%M")
         except (ValueError, TypeError):
-            _checkin_date = _now_date
+            _checkin_dt = _transfer_now
 
-        # Total calendar days elapsed since original check-in
-        _total_elapsed = (_now_date - _checkin_date).days
-        # Days in THIS (old) room = elapsed − days already captured in prior segments
-        old_days = max(0, _total_elapsed - existing_offset)
+        # Completed 24-hr billing cycles since original check-in
+        _hours_elapsed    = (_transfer_now - _checkin_dt).total_seconds() / 3600
+        _completed_cycles = int(_hours_elapsed / 24)
+        # Days in THIS (old) room = completed cycles − days already captured
+        old_days = max(0, _completed_cycles - existing_offset)
 
         existing_pre_transfer = list(new_room_data["guest"].get("pre_transfer_charges", []) or [])
         if old_days > 0:
@@ -916,8 +915,20 @@ def transfer_room():
         # Advance the offset by the days just recorded
         new_room_data["guest"]["transfer_day_offset"] = existing_offset + old_days
         # Store the transfer date so checkout can compute current-room days by date
-        new_room_data["guest"]["last_transfer_date"] = _now_date.strftime("%Y-%m-%d")
+        new_room_data["guest"]["last_transfer_date"] = _transfer_now.strftime("%Y-%m-%d")
         # renewal_count carries over unchanged — still used for non-transfer stays
+        # ────────────────────────────────────────────────────────────────────────
+
+        # ── Same-cycle upgrade/downgrade: adjust room balance ───────────────────
+        # When old_days == 0 the guest hasn't completed a full 24-hr cycle in the
+        # old room, so they already paid for it at the OLD rate. We adjust the
+        # balance by the price difference so the room card instantly shows what
+        # the guest still owes (upgrade) or is owed back (downgrade).
+        # e.g. paid ₹700 for Rm 211, moving to ₹1800 Rm 204 → balance += ₹1100
+        balance_adjustment = 0
+        if old_days == 0 and new_price:
+            balance_adjustment = int(new_price) - old_price
+            new_room_data["balance"] = (new_room_data.get("balance") or 0) + balance_adjustment
         # ────────────────────────────────────────────────────────────────────────
 
         if new_price:
@@ -967,7 +978,8 @@ def transfer_room():
 
         return jsonify(
             success=True,
-            message=f"Guest transferred successfully from Room {old_room} to Room {new_room}."
+            message=f"Guest transferred successfully from Room {old_room} to Room {new_room}.",
+            balance_adjustment=balance_adjustment,
         )
 
     except Exception as e:

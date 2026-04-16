@@ -156,20 +156,86 @@ function showQuickTransferModal() {
     }
   });
 
+  // Helper — show upgrade/downgrade balance hint for same-24hr-cycle transfers
+  function updateTransferBalanceHint(sourceRoom, newPrice) {
+    const hintEl = document.getElementById("transfer-balance-hint");
+    if (!hintEl) return;
+
+    const roomData = rooms[sourceRoom];
+    if (!roomData) { hintEl.style.display = "none"; return; }
+
+    // Only relevant when guest hasn't completed a full 24-hr cycle yet
+    // (renewal_count == 0 means no full cycle has been manually renewed)
+    const renewalCount = (roomData.renewal_count !== undefined)
+      ? roomData.renewal_count
+      : (roomData.guest && roomData.guest.renewal_count !== undefined ? roomData.guest.renewal_count : 0);
+
+    if (renewalCount !== 0) { hintEl.style.display = "none"; return; }
+
+    const oldPrice = (roomData.guest && roomData.guest.price) ? roomData.guest.price : 0;
+    const diff = newPrice - oldPrice;
+
+    if (diff === 0) { hintEl.style.display = "none"; return; }
+
+    if (diff > 0) {
+      // Upgrade — guest owes more
+      hintEl.style.background = "#fff3cd";
+      hintEl.style.color = "#856404";
+      hintEl.style.border = "1px solid #ffc107";
+      hintEl.textContent = `Same-day upgrade: ₹${diff} balance will be added (₹${oldPrice} → ₹${newPrice})`;
+    } else {
+      // Downgrade — refund due
+      hintEl.style.background = "#d1e7dd";
+      hintEl.style.color = "#0f5132";
+      hintEl.style.border = "1px solid #198754";
+      hintEl.textContent = `Same-day downgrade: ₹${Math.abs(diff)} refund due (₹${oldPrice} → ₹${newPrice})`;
+    }
+    hintEl.style.display = "block";
+  }
+
   // Set up destination room change handler
   destRoomSelect.addEventListener("change", function () {
     const destRoom = this.value;
     const sourceRoom = sourceRoomSelect.value;
 
+    // Hide hint when selection is cleared
+    const hintEl = document.getElementById("transfer-balance-hint");
     if (!destRoom || !sourceRoom) {
       if (roomPriceSection) roomPriceSection.style.display = "none";
       if (acToggleSection) acToggleSection.style.display = "none";
+      if (hintEl) hintEl.style.display = "none";
       return;
     }
 
     // Calculate suggested room price based on destination room
     const guestCount = rooms[sourceRoom].guest.guests || 1;
-    const suggestedPrice = roomPricing.calculatePrice(destRoom, guestCount);
+    // calculatePrice() returns the NON-AC base (matches check-in modal logic):
+    //   rooms 200-207: 1200 base, +600 if AC enabled = 1800
+    const basePrice = roomPricing.calculatePrice(destRoom, guestCount);
+    const acPrice   = basePrice + 600;
+
+    // Show AC toggle for premium AC rooms (202-205) BEFORE setting price
+    if (acToggleSection && newRoomAcToggle) {
+      if (destRoom >= 202 && destRoom <= 205) {
+        // Default: non-AC (toggle unchecked), price = basePrice
+        newRoomAcToggle.checked = false;
+        acToggleSection.style.display = "block";
+
+        // AC ON → base + 600; AC OFF → base (same logic as check-in modal)
+        newRoomAcToggle.addEventListener("change", function () {
+          const price = this.checked ? acPrice : basePrice;
+          if (newRoomPriceInput) {
+            newRoomPriceInput.value = price;
+          }
+          updateTransferBalanceHint(sourceRoom, price);
+        });
+      } else {
+        acToggleSection.style.display = "none";
+      }
+    }
+
+    // Initial price shown: basePrice (non-AC) for AC rooms since toggle starts off
+    const suggestedPrice = basePrice;
 
     // Show room price section
     if (roomPriceSection && newRoomPriceInput) {
@@ -177,28 +243,8 @@ function showQuickTransferModal() {
       roomPriceSection.style.display = "block";
     }
 
-    // Show AC toggle for premium AC rooms (202-205)
-    if (acToggleSection && newRoomAcToggle) {
-      if (destRoom >= 202 && destRoom <= 205) {
-        // Reset AC toggle to unchecked (non-AC by default)
-        newRoomAcToggle.checked = false;
-        acToggleSection.style.display = "block";
-
-        // Update price when AC toggle changes
-        newRoomAcToggle.addEventListener("change", function () {
-          let price = roomPricing.calculatePrice(destRoom, guestCount);
-          if (!this.checked) {
-            // Reduce price by 600 if AC is turned off
-            price -= 600;
-          }
-          if (newRoomPriceInput) {
-            newRoomPriceInput.value = price;
-          }
-        });
-      } else {
-        acToggleSection.style.display = "none";
-      }
-    }
+    // Show balance/refund hint for same-cycle transfers
+    updateTransferBalanceHint(sourceRoom, suggestedPrice);
   });
 
   // Set up form submission
@@ -338,6 +384,13 @@ async function processEnhancedRoomTransfer(
       }
       if (newRoom >= 202 && newRoom <= 205) {
         successMessage += isAC ? " (AC)" : " (Non-AC)";
+      }
+      // Show balance/refund notice after same-cycle transfer
+      const adj = result.balance_adjustment || 0;
+      if (adj > 0) {
+        successMessage += `. Balance due: ₹${adj}`;
+      } else if (adj < 0) {
+        successMessage += `. Refund due: ₹${Math.abs(adj)}`;
       }
 
       showNotification(successMessage, "success");

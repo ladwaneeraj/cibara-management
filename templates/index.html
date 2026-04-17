@@ -3,7 +3,9 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Lodge Management System</title>
+    <title>Cibara Comforts — Lodge Management</title>
+    <!-- PIN lock screen — loads first, blocks app until PIN is verified -->
+    <script src="/static/pin-lock.js"></script>
     <link
       href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css"
       rel="stylesheet"
@@ -15,6 +17,14 @@
       href="https://cdnjs.cloudflare.com/ajax/libs/flatpickr/4.6.13/flatpickr.min.css"
     />
     <style>
+      /* ── AC toggle slider ── */
+      #booking-ac-toggle:checked + #booking-ac-slider { background: #0ea5e9; }
+      #booking-ac-toggle:checked + #booking-ac-slider:before { transform: translateX(18px); }
+      #booking-ac-slider:before {
+        position: absolute; content: ""; height: 16px; width: 16px;
+        left: 3px; bottom: 3px; background: white; border-radius: 50%; transition: .3s;
+      }
+
       /* ── Compact booking modal ── */
       .booking-modal-compact {
         max-width: 520px;
@@ -608,6 +618,16 @@
             onclick="openSettingsModal()"
           >
             <i class="fas fa-cog"></i>
+          </button>
+          <button
+            id="lock-btn"
+            class="header-icon-btn"
+            aria-label="Lock Screen"
+            title="Lock screen"
+            onclick="window.lodgeLock && window.lodgeLock()"
+            style="color: #94a3b8;"
+          >
+            <i class="fas fa-lock"></i>
           </button>
         </div>
       </header>
@@ -3126,9 +3146,37 @@
             </select>
           </div>
 
+          <!-- AC Toggle for rooms 200-206 -->
+          <div id="booking-ac-toggle-container" style="display:none; margin-bottom:0.6rem;">
+            <div style="display:flex; align-items:center; gap:0.6rem; background:linear-gradient(135deg,#e0f2fe,#bae6fd); border:1px solid #7dd3fc; border-radius:8px; padding:0.5rem 0.75rem;">
+              <span style="font-size:1.1rem;">❄️</span>
+              <label for="booking-ac-toggle" style="font-weight:600; font-size:0.88rem; color:#0369a1; cursor:pointer; flex:1; margin:0;">AC Room</label>
+              <label style="position:relative; display:inline-block; width:40px; height:22px; margin:0;">
+                <input type="checkbox" id="booking-ac-toggle" style="opacity:0; width:0; height:0;">
+                <span style="position:absolute; cursor:pointer; top:0; left:0; right:0; bottom:0; background:#ccc; border-radius:22px; transition:.3s;"
+                  id="booking-ac-slider"></span>
+              </label>
+              <span id="booking-ac-label" style="font-size:0.8rem; color:#0369a1; font-weight:500; min-width:40px;">OFF</span>
+            </div>
+          </div>
+
           <!-- Normal / Booking.com payment fields -->
           <div id="booking-normal-payment-fields">
             <div class="bk-row">
+              <div class="form-group">
+                <label class="form-label" id="booking-total-label">Rate/Night (₹)</label>
+                <div style="display:flex; align-items:center; gap:0.4rem;">
+                  <input
+                    type="number"
+                    class="form-control"
+                    id="booking-rate-per-night"
+                    placeholder="Rate"
+                    min="1"
+                    style="flex:1;"
+                  />
+                  <span style="font-size:0.8rem; color:var(--gray); white-space:nowrap;">× <span id="booking-nights-count">0</span>N</span>
+                </div>
+              </div>
               <div class="form-group">
                 <label class="form-label">Total Amount (₹)</label>
                 <input
@@ -3970,7 +4018,8 @@
 
     <script>
       // Global API fetch wrapper — must load before all other scripts
-      const _API_KEY = "cibara-secure-2026";
+      // API key is injected server-side from env var
+      const _API_KEY = "{{ api_key }}";
       function apiFetch(url, options = {}) {
         options.headers = Object.assign(
           { "X-API-Key": _API_KEY },
@@ -4009,6 +4058,8 @@
     <script defer src="/static/customer-docs.js"></script>
     <!-- Customer Manager Panel -->
     <script defer src="/static/customer-manager.js"></script>
+    <!-- Firebase config served from env vars — must load before google_sync module -->
+    <script src="/firebase-config.js"></script>
     <script
       type="module"
       src="{{ url_for('static', filename='google_sync.js') }}"

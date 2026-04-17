@@ -89,6 +89,8 @@ def create_booking():
             "total_amount": total_amount,
             "paid_amount": paid_amount_val,
             "balance": total_amount - paid_amount_val,
+            "is_ac": bool(booking_data.get("is_ac", False)),
+            "rate_per_night": int(booking_data.get("rate_per_night") or 0) or None,
             "payment_method": booking_data.get("payment_method", "cash") if not is_mmt else "ota",
             "notes": booking_data.get("notes", ""),
             "photo_path": booking_data.get("photo_path", None),
@@ -313,12 +315,14 @@ def convert_booking_to_checkin():
         
         room_price = int(booking_data.get("room_price", booking["total_amount"]))
         is_ac = False
-        
-        if room_number in ["202", "203", "204", "205"]:
+
+        # Rooms 200-206 support AC; use stored booking flag or frontend override
+        AC_ROOMS = {"200","201","202","203","204","205","206"}
+        if str(room_number) in AC_ROOMS:
             if "is_ac" in booking:
-                is_ac = booking["is_ac"]
-            else:
-                is_ac = True
+                is_ac = bool(booking["is_ac"])
+            elif "is_ac" in booking_data:
+                is_ac = bool(booking_data["is_ac"])
         
         guest = {
             "name": booking["guest_name"],

@@ -2,6 +2,7 @@
 let bookings = [];
 let filteredBookings = [];
 let currentBookingFilter = "upcoming";
+let _activeBookingForWhatsApp = null; // stores the full booking object currently shown in details modal
 
 // DOM Elements
 document.addEventListener("DOMContentLoaded", function () {
@@ -85,6 +86,83 @@ document.addEventListener("DOMContentLoaded", function () {
   initializeUpdateBookingForm();
 });
 
+// ── Booking-form price auto-calculator ──────────────────────────────────────
+// Returns per-night rate for a room + guest count (mirrors script.js roomPricing)
+function getBookingRatePerNight(roomNumber, guestCount) {
+  roomNumber = String(roomNumber);
+  guestCount = parseInt(guestCount) || 1;
+  const n = parseInt(roomNumber);
+
+  if ((n >= 3 && n <= 5) || (n >= 13 && n <= 20)) return 250;
+  if (n >= 23 && n <= 27) return guestCount === 1 ? 300 : 500;
+  if (["200","201","202","203","204","205","206","207"].includes(roomNumber)) {
+    return 1200 + Math.max(0, guestCount - 2) * 300;
+  }
+  if (n >= 223 && n <= 227) return 900 + Math.max(0, guestCount - 2) * 300;
+  if (n >= 220 && n <= 222) return guestCount === 1 ? 450 : 700 + Math.max(0, guestCount - 2) * 300;
+  if ((n >= 208 && n <= 211) || n === 215) return guestCount === 1 ? 450 : 700 + Math.max(0, guestCount - 2) * 300;
+  if ((n >= 212 && n <= 214) || (n >= 216 && n <= 219)) return guestCount === 1 ? 450 : 700;
+  return 500;
+}
+
+// AC rooms in the booking form (200-206, not 207 which has no AC)
+const BOOKING_AC_ROOMS = ["200","201","202","203","204","205","206"];
+const BOOKING_AC_SURCHARGE = 600;
+
+function updateBookingPriceCalc() {
+  const roomSelect   = document.getElementById("booking-room");
+  const checkInEl    = document.getElementById("booking-check-in");
+  const checkOutEl   = document.getElementById("booking-check-out");
+  const guestCountEl = document.getElementById("booking-guest-count");
+  const rateEl       = document.getElementById("booking-rate-per-night");
+  const totalEl      = document.getElementById("booking-total-amount");
+  const nightsEl     = document.getElementById("booking-nights-count");
+  const acToggle     = document.getElementById("booking-ac-toggle");
+  const acContainer  = document.getElementById("booking-ac-toggle-container");
+  const acLabel      = document.getElementById("booking-ac-label");
+  const acSlider     = document.getElementById("booking-ac-slider");
+
+  const room      = roomSelect ? roomSelect.value : "";
+  const checkIn   = checkInEl ? checkInEl.value : "";
+  const checkOut  = checkOutEl ? checkOutEl.value : "";
+  const guests    = guestCountEl ? parseInt(guestCountEl.value) || 1 : 1;
+
+  // Show/hide AC toggle
+  const isAcRoom = BOOKING_AC_ROOMS.includes(String(room));
+  if (acContainer) acContainer.style.display = isAcRoom ? "block" : "none";
+  if (!isAcRoom && acToggle) acToggle.checked = false;
+
+  // Update AC label + slider color dynamically
+  if (acToggle && acLabel && acSlider) {
+    const on = acToggle.checked;
+    acLabel.textContent = on ? "ON" : "OFF";
+    acLabel.style.color = on ? "#0284c7" : "#64748b";
+    acSlider.style.background = on ? "#0ea5e9" : "#cbd5e1";
+  }
+
+  // Calculate nights
+  let nights = 0;
+  if (checkIn && checkOut) {
+    const ci = new Date(checkIn);
+    const co = new Date(checkOut);
+    nights = Math.round((co - ci) / (1000 * 60 * 60 * 24));
+  }
+  if (nightsEl) nightsEl.textContent = nights > 0 ? nights : "0";
+
+  if (!room || nights <= 0) return;
+
+  // Base rate + AC surcharge
+  let rate = getBookingRatePerNight(room, guests);
+  if (isAcRoom && acToggle && acToggle.checked) rate += BOOKING_AC_SURCHARGE;
+
+  if (rateEl) rateEl.value = rate;
+  if (totalEl) {
+    totalEl.value = rate * nights;
+    // Fire input event so remaining recalculates
+    totalEl.dispatchEvent(new Event("input"));
+  }
+}
+
 // Initialize Booking Form
 function initializeBookingForm() {
   const bookingForm = document.getElementById("booking-form");
@@ -112,6 +190,42 @@ function initializeBookingForm() {
     checkOutDate.addEventListener("change", function () {
       checkAvailability();
     });
+  }
+
+  // Rate-per-night field: when manually changed, recalc total
+  const ratePerNightEl = document.getElementById("booking-rate-per-night");
+  if (ratePerNightEl) {
+    ratePerNightEl.addEventListener("input", function () {
+      const checkIn  = document.getElementById("booking-check-in")?.value;
+      const checkOut = document.getElementById("booking-check-out")?.value;
+      if (!checkIn || !checkOut) return;
+      const nights = Math.round((new Date(checkOut) - new Date(checkIn)) / (1000 * 60 * 60 * 24));
+      const rate   = parseInt(this.value) || 0;
+      const totalEl = document.getElementById("booking-total-amount");
+      if (totalEl && nights > 0) {
+        totalEl.value = rate * nights;
+        totalEl.dispatchEvent(new Event("input"));
+      }
+    });
+  }
+
+  // Guest count change → recalc price
+  const guestCountEl = document.getElementById("booking-guest-count");
+  if (guestCountEl) {
+    guestCountEl.addEventListener("input", updateBookingPriceCalc);
+    guestCountEl.addEventListener("change", updateBookingPriceCalc);
+  }
+
+  // AC toggle change → recalc price
+  const acToggle = document.getElementById("booking-ac-toggle");
+  if (acToggle) {
+    acToggle.addEventListener("change", updateBookingPriceCalc);
+  }
+
+  // Room selection change → show/hide AC toggle + recalc price
+  const roomSelect = document.getElementById("booking-room");
+  if (roomSelect) {
+    roomSelect.addEventListener("change", updateBookingPriceCalc);
   }
 
   // Booking Source toggle
@@ -227,6 +341,13 @@ async function createBooking(event) {
   const notes = document.getElementById("booking-notes").value;
   const bookingSource = document.getElementById("booking-source")?.value || "normal";
 
+  // AC toggle for rooms 200-206
+  const acToggleEl = document.getElementById("booking-ac-toggle");
+  const isAc = BOOKING_AC_ROOMS.includes(String(room)) && acToggleEl ? acToggleEl.checked : false;
+
+  // Rate per night (for storage, used in bill calculation reference)
+  const ratePerNight = parseInt(document.getElementById("booking-rate-per-night")?.value || 0) || null;
+
   // OTA vs normal fields
   const isMmt = bookingSource === "mmt";
   const totalAmount = isMmt
@@ -306,6 +427,8 @@ async function createBooking(event) {
       notes,
       photo_path: uploadedPhotoUrl,
       booking_source: bookingSource,
+      is_ac: isAc,
+      rate_per_night: ratePerNight,
     };
 
     // Add OTA fields for MMT
@@ -340,6 +463,16 @@ async function createBooking(event) {
 
       // Reset form
       event.target.reset();
+
+      // Reset AC toggle + price fields
+      const acContainer = document.getElementById("booking-ac-toggle-container");
+      if (acContainer) acContainer.style.display = "none";
+      const acToggleReset = document.getElementById("booking-ac-toggle");
+      if (acToggleReset) acToggleReset.checked = false;
+      const rateReset = document.getElementById("booking-rate-per-night");
+      if (rateReset) rateReset.value = "";
+      const nightsReset = document.getElementById("booking-nights-count");
+      if (nightsReset) nightsReset.textContent = "0";
 
       // Reset photo
       uploadedPhotoUrl = null;
@@ -538,13 +671,19 @@ function renderBookings() {
     }
     // Normal bookings: no badge (keeps UI clean)
 
+    // AC badge for rooms 200-206
+    const acBadge = booking.is_ac
+      ? '<span class="booking-source-badge" style="background:linear-gradient(135deg,#e0f2fe,#bae6fd);color:#0369a1;border:1px solid #7dd3fc;">❄️ AC</span>'
+      : "";
+
     html += `
       <div class="booking-item" data-id="${booking.booking_id}">
         <div class="booking-header">
-          <div class="booking-room">Room ${booking.room}</div>
+          <div class="booking-room">Room ${booking.room}${booking.is_ac ? ' <span style="font-size:0.7rem;color:#0ea5e9;">❄️</span>' : ''}</div>
           <div class="booking-badges">
             ${statusBadge}
             ${todayBadge}
+            ${acBadge}
             ${sourceBadge}
           </div>
         </div>
@@ -636,6 +775,9 @@ function showBookingDetails(bookingId) {
   const booking = bookings.find((b) => b.booking_id === bookingId);
   if (!booking) return;
 
+  // Store for WhatsApp and other actions
+  _activeBookingForWhatsApp = booking;
+
   const detailsModal = document.getElementById("booking-details-modal");
   if (!detailsModal) return;
 
@@ -657,7 +799,13 @@ function showBookingDetails(bookingId) {
 
   // Set booking details
   document.getElementById("details-booking-id").textContent = bookingId;
-  document.getElementById("details-room-number").textContent = booking.room;
+  // Room number with AC indicator in details modal
+  const roomEl = document.getElementById("details-room-number");
+  if (roomEl) {
+    roomEl.innerHTML = booking.is_ac
+      ? `${booking.room} <span style="font-size:0.7rem;background:#e0f2fe;color:#0369a1;border:1px solid #7dd3fc;border-radius:10px;padding:1px 6px;font-weight:600;">❄️ AC</span>`
+      : booking.room;
+  }
   document.getElementById("details-guest-name").textContent = booking.guest_name;
   document.getElementById("details-guest-mobile").textContent = booking.guest_mobile;
   document.getElementById("details-guest-mobile-link").href = `tel:${booking.guest_mobile}`;
@@ -881,7 +1029,9 @@ async function checkAvailability() {
           roomSelect.appendChild(secondFloorGroup);
         }
 
-        // Log for debugging
+        // Auto-calculate price once rooms are populated
+        updateBookingPriceCalc();
+
         console.log(
           `Found ${availableRooms.length} available rooms for dates ${checkInDate} to ${checkOutDate}`,
         );
@@ -2781,24 +2931,15 @@ window.addEventListener("resize", function () {
 
 function sendWhatsAppBookingConfirmation() {
   try {
-    // Get booking details from the modal
-    const bookingId = document.getElementById("details-booking-id").textContent;
-    const guestName = document.getElementById("details-guest-name").textContent;
-    const guestMobile = document.getElementById(
-      "details-guest-mobile",
-    ).textContent;
-    const room = document.getElementById("details-room-number").textContent;
-    const checkIn = document.getElementById("details-check-in").textContent;
-    const checkOut = document.getElementById("details-check-out").textContent;
-    const totalAmount = document.getElementById(
-      "details-total-amount",
-    ).textContent;
-    const paidAmount = document.getElementById(
-      "details-paid-amount",
-    ).textContent;
-    const balance = document.getElementById("details-balance").textContent;
-    const nights = document.getElementById("details-nights").textContent;
-    const guests = document.getElementById("details-guests").textContent;
+    // Use the stored booking object for rich data (falls back to DOM text if missing)
+    const bk = _activeBookingForWhatsApp || {};
+
+    const bookingId   = bk.booking_id  || document.getElementById("details-booking-id")?.textContent  || "";
+    const guestName   = bk.guest_name  || document.getElementById("details-guest-name")?.textContent  || "";
+    const guestMobile = bk.guest_mobile || document.getElementById("details-guest-mobile")?.textContent || "";
+    const room        = bk.room        || document.getElementById("details-room-number")?.textContent  || "";
+    const guestCount  = bk.guest_count || 1;
+    const src         = bk.booking_source || "normal";
 
     // Validate phone number
     if (!guestMobile || guestMobile.trim() === "") {
@@ -2807,55 +2948,104 @@ function sendWhatsAppBookingConfirmation() {
     }
 
     // Format phone number
-    let phone = guestMobile.trim();
-    // Remove any non-digit characters except +
-    phone = phone.replace(/[^\d+]/g, "");
+    let phone = guestMobile.trim().replace(/[^\d+]/g, "");
+    if (phone.startsWith("0")) phone = phone.substring(1);
+    if (!phone.startsWith("91")) phone = `91${phone}`;
 
-    if (phone.startsWith("0")) {
-      phone = phone.substring(1); // Remove leading 0
+    // ── Dates & duration ─────────────────────────────────────────────────
+    const checkInDateStr  = bk.check_in_date  || "";
+    const checkOutDateStr = bk.check_out_date || "";
+    const checkInTimeRaw  = bk.check_in_time  || "14:00";
+
+    // Human-readable dates
+    const fmtDate = (d) => d ? new Date(d + "T00:00:00").toLocaleDateString("en-IN", { weekday:"short", day:"numeric", month:"short", year:"numeric" }) : "—";
+    const formattedCheckIn  = fmtDate(checkInDateStr);
+    const formattedCheckOut = fmtDate(checkOutDateStr);
+
+    // Nights
+    let nights = 0;
+    if (checkInDateStr && checkOutDateStr) {
+      nights = Math.round((new Date(checkOutDateStr) - new Date(checkInDateStr)) / (1000 * 60 * 60 * 24));
     }
-    if (!phone.startsWith("91")) {
-      phone = `91${phone}`; // Add country code
+    const nightsText = nights > 0 ? `${nights} night${nights !== 1 ? "s" : ""}` : "—";
+
+    // Check-in time (approx)
+    const fmtTime = (t) => {
+      if (!t) return "2:00 PM";
+      const [h, m] = t.split(":");
+      const hr = parseInt(h);
+      const ampm = hr >= 12 ? "PM" : "AM";
+      return `${hr % 12 || 12}:${m} ${ampm}`;
+    };
+    const checkInTimeDisplay = fmtTime(checkInTimeRaw);
+
+    // ── AC info ───────────────────────────────────────────────────────────
+    const isAc = bk.is_ac === true;
+    const acLine = isAc ? "\n• Room Type: ❄️ AC Room" : "";
+
+    // ── Payment ───────────────────────────────────────────────────────────
+    const ratePerNight = bk.rate_per_night || 0;
+    const totalAmount  = bk.total_amount   || 0;
+    const paidAmount   = bk.paid_amount    || 0;
+    const balance      = bk.balance        != null ? bk.balance : (totalAmount - paidAmount);
+
+    // For MMT: no payment section from guest side
+    const isMmt = src === "mmt";
+    let paymentSection = "";
+    if (!isMmt) {
+      const rateLineStr = (ratePerNight > 0 && nights > 0)
+        ? `\n• Rate: ₹${ratePerNight}/night × ${nights} night${nights !== 1 ? "s" : ""} = ₹${totalAmount}`
+        : `\n• Total Amount: ₹${totalAmount}`;
+
+      paymentSection = `
+
+💰 *Payment Details:*${rateLineStr}
+• Advance Paid: ₹${paidAmount}
+• Balance Due at Check-in: ₹${balance > 0 ? balance : 0}`;
+    } else {
+      paymentSection = `
+
+🏷️ *Booking Source:* MakeMyTrip (Prepaid)
+• Payment already settled via MMT`;
     }
 
-    // Google Maps link to your lodge
+    // ── Google Maps ───────────────────────────────────────────────────────
     const mapsLink = "https://maps.app.goo.gl/Mz5rTrvC3ctyMmUt5";
 
-    // Build WhatsApp message
-    const message = `🏨 *BOOKING CONFIRMATION*
+    // ── Build message ─────────────────────────────────────────────────────
+    const message =
+`🏨 *CIBARA COMFORTS — BOOKING CONFIRMED* ✅
 
-Hello ${guestName},
+Namaste ${guestName}! 🙏
 
-Your booking at our lodge has been confirmed!
+We're delighted to confirm your reservation. Here are your booking details:
 
-📋 *Booking Details:*
-• Booking ID: ${bookingId.substring(0, 8).toUpperCase()}
-• Room: ${room}
-• Check-in: ${checkIn}
-• Check-out: ${checkOut}
-• Duration: ${nights}
-• Guests: ${guests}
+🛏️ *Stay Details:*
+• Booking ID: #${bookingId.substring(0, 8).toUpperCase()}
+• Room: ${room}${acLine}
+• Guests: ${guestCount} guest${guestCount !== 1 ? "s" : ""}
+• Check-in: 📅 ${formattedCheckIn}
+• ⏰ Approx. Arrival Time: ${checkInTimeDisplay}
+• Check-out: 📅 ${formattedCheckOut}
+• Duration: 🌙 ${nightsText}${paymentSection}
 
-💰 *Payment Status:*
-• Total Amount: ${totalAmount}
-• Paid: ${paidAmount}
-• Balance Due: ${balance}
-
-📍 *Location:*
+📍 *Find Us Here:*
 ${mapsLink}
 
-Thank you for choosing us! 🙏`;
+🔔 *Important Reminders:*
+• Please carry a valid govt. photo ID (Aadhaar / Passport / DL)
+• We offer *24-hour checkout* — check-out time matches your check-in time
+• Contact us if you need any assistance
 
-    // Encode message for URL
-    const encodedMessage = encodeURIComponent(message);
+We look forward to hosting you! 😊
+For any queries, reply to this message.
 
-    // Create WhatsApp URL
-    const whatsappUrl = `https://wa.me/${phone}?text=${encodedMessage}`;
+— *Team Cibara Comforts*`;
 
-    // Open WhatsApp with pre-filled message
-    window.open(whatsappUrl, "_blank");
-
+    // Open WhatsApp
+    window.open(`https://wa.me/${phone}?text=${encodeURIComponent(message)}`, "_blank");
     showNotification("✅ Opening WhatsApp...", "success");
+
   } catch (error) {
     console.error("Error sending WhatsApp confirmation:", error);
     showNotification("Error preparing message: " + error.message, "error");

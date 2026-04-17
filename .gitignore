@@ -68,3 +68,5 @@ htmlcov/
 # Backup files
 *.bak
 *.backup
+# Sensitive config — served dynamically from env vars
+static/firebase-config.js

@@ -1037,9 +1037,31 @@ def _build_bill_html(b: dict) -> str:
     other_svc_total    = sum(s.get("price", 0) for s in other_services)
 
     # ── Water vs non-water split (water = GST 5% inclusive / MRP; others = non-taxable) ──
-    water_services     = [s for s in other_services if "water" in s.get("item", "").lower()]
-    non_water_services = [s for s in other_services if "water" not in s.get("item", "").lower()]
-    water_svc_total    = sum(s.get("price", 0) for s in water_services)
+    water_services_raw     = [s for s in other_services if "water" in s.get("item", "").lower()]
+    non_water_services_raw = [s for s in other_services if "water" not in s.get("item", "").lower()]
+
+    # ── Consolidate duplicate items (e.g. "Water 2L" added at different times → one row) ──
+    def _consolidate_services(svc_list):
+        """Group by item name, sum qty and price; keep unit_price from first entry."""
+        grouped = {}
+        for s in svc_list:
+            key = (s.get("item") or "Service").strip().lower()
+            if key not in grouped:
+                grouped[key] = {
+                    "item":               s.get("item", "Service"),
+                    "quantity":           int(s.get("quantity", 1)),
+                    "unit_price":         float(s.get("unit_price") or s.get("price", 0)),
+                    "price":              float(s.get("price", 0)),
+                    "accommodation_charge": s.get("accommodation_charge", False),
+                }
+            else:
+                grouped[key]["quantity"] += int(s.get("quantity", 1))
+                grouped[key]["price"]    += float(s.get("price", 0))
+        return list(grouped.values())
+
+    water_services      = _consolidate_services(water_services_raw)
+    non_water_services  = _consolidate_services(non_water_services_raw)
+    water_svc_total     = sum(s.get("price", 0) for s in water_services)
     non_water_svc_total = sum(s.get("price", 0) for s in non_water_services)
 
     gst_rate_pct = b.get("gst_rate", 0)

@@ -3,6 +3,8 @@ import {
   getFirestore,
   collection,
   doc,
+  query,
+  where,
   onSnapshot,
 } from "https://www.gstatic.com/firebasejs/9.15.0/firebase-firestore.js";
 
@@ -18,6 +20,15 @@ const firebaseConfig = {
 
 const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);
+
+// Today's date string (YYYY-MM-DD) — computed once at load time.
+// All date-filtered listeners use this so they all share the same boundary.
+const _todayStr = new Date().toISOString().split("T")[0];
+
+// Tomorrow's date string (used by bookings listener)
+const _tomorrowDate = new Date();
+_tomorrowDate.setDate(_tomorrowDate.getDate() + 1);
+const _tomorrowStr = _tomorrowDate.toISOString().split("T")[0];
 
 // ─── Rooms listener ────────────────────────────────────────────────────────
 // Skip the first snapshot (page already loaded via fetchData on startup).
@@ -88,67 +99,108 @@ onSnapshot(doc(db, "totals", "current_totals"), (snap) => {
   }
 });
 
-// ─── Payments listener ─────────────────────────────────────────────────────
+// ─── Payments listener (today only) ───────────────────────────────────────
+// Filtered to today's date so only ~today's docs are transferred on load.
+// Previously listened to the full collection (~2 000+ docs) — very costly.
 // Each payment is its own Firestore document so docChanges() gives exactly
 // the one record that was added — no array diffing needed.
-// On "added": patch the local logs cache and smooth-insert the row in the
-// transactions tab without any Flask round-trip.
 let paymentsInitialLoad = true;
 
-onSnapshot(collection(db, "payments"), (snapshot) => {
-  if (paymentsInitialLoad) {
-    paymentsInitialLoad = false;
-    return;
+onSnapshot(
+  query(collection(db, "payments"), where("date", "==", _todayStr)),
+  (snapshot) => {
+    if (paymentsInitialLoad) {
+      paymentsInitialLoad = false;
+      return;
+    }
+
+    if (snapshot.metadata.hasPendingWrites || snapshot.metadata.fromCache) return;
+
+    snapshot.docChanges().forEach((change) => {
+      if (change.type !== "added") return;   // edits/deletes handled by room sync
+      const p = change.doc.data();
+      if (!p || !p.date) return;
+
+      console.log("⚡ Remote payment added — patching transactions");
+
+      // 1. Patch the local `logs` cache so the in-memory state stays correct
+      _patchLocalLogs(p);
+
+      // 2. If the transactions tab is open AND this payment is in the currently
+      //    displayed date range, smooth-insert the row without re-rendering everything.
+      _smoothInsertPaymentRow(p);
+
+      // 3. Fire a lightweight event so bills + register can react to new payments
+      //    without waiting for a room-level change (e.g. mid-stay add-on payments).
+      window.dispatchEvent(new CustomEvent("cibaraPaymentAdded", { detail: p }));
+
+      showSyncToast();
+    });
   }
+);
 
-  if (snapshot.metadata.hasPendingWrites || snapshot.metadata.fromCache) return;
-
-  const todayStr = new Date().toISOString().split("T")[0];
-
-  snapshot.docChanges().forEach((change) => {
-    if (change.type !== "added") return;          // edits/deletes handled by room sync
-    const p = change.doc.data();
-    if (!p || !p.date) return;
-
-    console.log("⚡ Remote payment added — patching transactions");
-
-    // 1. Patch the local `logs` cache so the in-memory state stays correct
-    _patchLocalLogs(p);
-
-    // 2. If the transactions tab is open AND this payment is in the currently
-    //    displayed date range, smooth-insert the row without re-rendering everything.
-    _smoothInsertPaymentRow(p);
-
-    // 3. Fire a lightweight event so bills + register can react to new payments
-    //    without waiting for a room-level change (e.g. mid-stay add-on payments).
-    window.dispatchEvent(new CustomEvent("cibaraPaymentAdded", { detail: p }));
-
-    // 4. Only toast for today's payments to avoid noise on historical data loads
-    if (p.date === todayStr) showSyncToast();
-  });
-});
-
-// ─── Bills listener ────────────────────────────────────────────────────────
-// Fires when a checkout bill is created/updated on another device.
+// ─── Bills listener (today only) ──────────────────────────────────────────
+// Filtered to bills checked out today. `checkout_time` is stored as
+// "YYYY-MM-DD HH:MM" so a >= / <= range on the date prefix works cleanly.
+// Previously listened to all historical bills — very costly.
 let billsInitialLoad = true;
 
-onSnapshot(collection(db, "bills"), (snapshot) => {
-  if (billsInitialLoad) {
-    billsInitialLoad = false;
-    return;
-  }
-
-  if (snapshot.metadata.hasPendingWrites || snapshot.metadata.fromCache) return;
-
-  snapshot.docChanges().forEach((change) => {
-    if (change.type === "added" || change.type === "modified") {
-      const bill = change.doc.data();
-      console.log("⚡ Remote bill change — notifying tabs");
-      window.dispatchEvent(new CustomEvent("cibaraBillChanged", { detail: bill }));
-      showSyncToast();
+onSnapshot(
+  query(
+    collection(db, "bills"),
+    where("checkout_time", ">=", _todayStr + " 00:00"),
+    where("checkout_time", "<=", _todayStr + " 23:59")
+  ),
+  (snapshot) => {
+    if (billsInitialLoad) {
+      billsInitialLoad = false;
+      return;
     }
-  });
-});
+
+    if (snapshot.metadata.hasPendingWrites || snapshot.metadata.fromCache) return;
+
+    snapshot.docChanges().forEach((change) => {
+      if (change.type === "added" || change.type === "modified") {
+        const bill = change.doc.data();
+        console.log("⚡ Remote bill change — notifying tabs");
+        window.dispatchEvent(new CustomEvent("cibaraBillChanged", { detail: bill }));
+        showSyncToast();
+      }
+    });
+  }
+);
+
+// ─── Bookings listener (today + tomorrow check-ins) ───────────────────────
+// Fires when a new booking is created for today or tomorrow so the rooms
+// view can show an alert without needing a manual refresh.
+// `check_in_date` is stored as "YYYY-MM-DD".
+let bookingsInitialLoad = true;
+
+onSnapshot(
+  query(
+    collection(db, "bookings"),
+    where("check_in_date", ">=", _todayStr),
+    where("check_in_date", "<=", _tomorrowStr)
+  ),
+  (snapshot) => {
+    if (bookingsInitialLoad) {
+      bookingsInitialLoad = false;
+      return;
+    }
+
+    if (snapshot.metadata.hasPendingWrites || snapshot.metadata.fromCache) return;
+
+    snapshot.docChanges().forEach((change) => {
+      if (change.type !== "added") return;
+      const booking = change.doc.data();
+      console.log("⚡ Remote booking added — notifying rooms view");
+
+      // Let the rooms module show a banner / badge for the new booking
+      window.dispatchEvent(new CustomEvent("cibaraBookingAdded", { detail: booking }));
+      showSyncToast("📋 New Booking Added");
+    });
+  }
+);
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
 
@@ -168,8 +220,6 @@ function _patchLocalLogs(p) {
   let bucket = null;
   if (_refundTypes.has(type)) {
     bucket = "refunds";
-  } else if (type === "expense" && p.expense_type === "transaction") {
-    bucket = "expenses";
   } else if (method === "cash" || method === "pay_later") {
     bucket = "cash";
   } else if (method === "online") {
@@ -214,9 +264,9 @@ function _smoothInsertPaymentRow(p) {
   const method = p.method || "";
 
   let logType = "cash";
-  if (_refundTypes.has(type))                              logType = "refunds";
-  else if (type === "expense")                             logType = "expenses";
-  else if (method === "online")                            logType = "online";
+  if (_refundTypes.has(type))   logType = "refunds";
+  else if (type === "expense")  logType = "expenses";
+  else if (method === "online") logType = "online";
 
   // Build the HTML for just this one row
   const html = transactionLogManager.renderEnhancedLogItem({ ...p, logType }, logType);
@@ -264,9 +314,9 @@ function _smoothInsertPaymentRow(p) {
 }
 
 // ─── Toast helper ──────────────────────────────────────────────────────────
-function showSyncToast() {
+function showSyncToast(message = "☁️ Data Updated Automatically") {
   const toast = document.createElement("div");
-  toast.innerHTML = "☁️ Data Updated Automatically";
+  toast.innerHTML = message;
   toast.style.cssText = `
     position: fixed; bottom: 20px; right: 20px;
     background: #34495e; color: white; padding: 12px 24px;

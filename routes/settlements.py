@@ -86,6 +86,13 @@ def collect_settlement():
             settlement["payment_date"] = datetime.now(IST).strftime("%Y-%m-%d")
             settlement["payment_time"] = datetime.now(IST).strftime("%H:%M")
             settlement["payment_mode"] = payment_mode
+
+            # Clear pending-settlement flag from the customer record so the
+            # next check-in no longer shows the balance warning.
+            _settle_mobile = settlement.get("guest_mobile", "")
+            if _settle_mobile:
+                from services import customer_service as _cs
+                _cs.clear_pending_settlement(_settle_mobile)
         else:
             settlement["status"] = "partial"
             settlement["amount"] -= payment_amount

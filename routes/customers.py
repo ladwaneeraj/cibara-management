@@ -32,6 +32,12 @@ def _format_customer(c: dict) -> dict:
         "flag_notes": c.get("flag_notes", ""),
         "flagged_at": c.get("flagged_at", ""),
         "flagged_by": c.get("flagged_by", ""),
+        # Pending settlement — auto-set on settle-later checkout, cleared on payment
+        "has_pending_settlement":    c.get("has_pending_settlement", False),
+        "pending_settlement_id":     c.get("pending_settlement_id"),
+        "pending_settlement_amount": c.get("pending_settlement_amount"),
+        "pending_settlement_date":   c.get("pending_settlement_date"),
+        "pending_settlement_room":   c.get("pending_settlement_room"),
     }
 
 

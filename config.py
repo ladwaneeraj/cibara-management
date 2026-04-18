@@ -15,7 +15,7 @@ import threading
 import pytz
 import base64
 
-from services import payment_service, customer_service, pdf_service
+from services import payment_service, customer_service, pdf_service, expense_service
 
 # Configure logging
 logging.basicConfig(
@@ -49,10 +49,11 @@ try:
     bucket = storage.bucket()
     logger.info("Firebase initialized successfully")
 
-    # Initialise optimisation services (payments + customers + pdf collections)
+    # Initialise optimisation services (payments + customers + pdf + expenses collections)
     payment_service.init(db)
     customer_service.init(db)
     pdf_service.init(db)
+    expense_service.init(db)
 except Exception as e:
     logger.error(f"Error initializing Firebase: {str(e)}")
     raise
@@ -68,6 +69,7 @@ ota_settlements_ref = db.collection('ota_settlements')   # MMT / OTA bank settle
 counters_ref = db.collection('daily_counters')
 metadata_ref = db.collection('transaction_metadata')
 bills_ref = db.collection('bills')
+expenses_ref = db.collection('expenses')
 
 # Upload folder
 UPLOAD_FOLDER = 'uploads'

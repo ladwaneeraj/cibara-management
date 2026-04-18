@@ -1525,45 +1525,32 @@
     if (!tab.classList.contains("hidden")) loadData(true);
   }
 
-  // ── Live refresh on checkin / checkout ───────────────────────────────────────
+  // ── Live refresh (debounced) ──────────────────────────────────────────────
   // Dispatched by settle-later-fix.js (checkout), script.js (checkin),
-  // and booking.js (booking conversion). Refreshes only today's range since
-  // all these operations are happening right now.
-  window.addEventListener("cibaraRoomUpdate", function (e) {
-    const tab = dom("register-tab");
+  // and booking.js (booking conversion). All three events can fire in the same
+  // millisecond burst — debounce collapses them into one loadDataSilent() call.
+  let _regSilentTimer = null;
+  function _debouncedSilentLoad(forceInvalidate) {
+    const today = todayStr();
+    const tab   = dom("register-tab");
     if (tab && !tab.classList.contains("hidden")) {
-      // Tab is visible — silently refresh (only changed rows re-render)
-      const today = todayStr();
-      if (state.dateRange.end === today) loadDataSilent();
+      if (state.dateRange.end === today) {
+        clearTimeout(_regSilentTimer);
+        _regSilentTimer = setTimeout(() => loadDataSilent(), 600);
+      }
     } else {
-      // Tab is not visible — bust the cache so next open gets fresh data
-      state.lastLoadedRange = null;
+      // Tab not visible — bust cache so next open gets fresh data
+      if (forceInvalidate) state.lastLoadedRange = null;
     }
-  });
+  }
 
-  // ── Live payment sync — fires when any payment is added on another device ──
-  window.addEventListener("cibaraPaymentAdded", function (e) {
+  window.addEventListener("cibaraRoomUpdate",   () => _debouncedSilentLoad(true));
+  window.addEventListener("cibaraPaymentAdded", (e) => {
     const p = e.detail || {};
-    const today = todayStr();
-    if (p.date !== today) return;
-    const tab = dom("register-tab");
-    if (tab && !tab.classList.contains("hidden")) {
-      if (state.dateRange.end === today) loadDataSilent();
-    } else {
-      state.lastLoadedRange = null;
-    }
+    if (p.date !== todayStr()) return;
+    _debouncedSilentLoad(true);
   });
-
-  // ── Bill created/updated on another device → refresh register ──────────────
-  window.addEventListener("cibaraBillChanged", function (e) {
-    const today = todayStr();
-    const tab = dom("register-tab");
-    if (tab && !tab.classList.contains("hidden")) {
-      if (state.dateRange.end === today) loadDataSilent();
-    } else {
-      state.lastLoadedRange = null;
-    }
-  });
+  window.addEventListener("cibaraBillChanged",  () => _debouncedSilentLoad(true));
 
   // ══════════════════════════════════════════════════════════════════════════════
   // ID DOCUMENTS MODAL — view customer docs, no password required

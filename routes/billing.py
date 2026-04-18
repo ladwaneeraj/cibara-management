@@ -2,6 +2,7 @@
 Billing & Register routes.
 
 All READ operations use the `payments` collection as primary data source.
+Expense reads use the dedicated `expenses` collection via expense_service.
 Old `logs` collection is NOT used for reads anymore.
 """
 
@@ -16,7 +17,7 @@ from config import (
     _build_active_entry_fast, _find_serial_fast, _batch_fill_serials,
     get_all_rooms, invalidate_rooms_and_totals,
 )
-from services import payment_service, pdf_service
+from services import payment_service, pdf_service, expense_service
 
 billing_bp = Blueprint('billing', __name__)
 
@@ -306,9 +307,10 @@ def get_register_data():
                 elif method == _bank_settlement or ptype == _bank_settlement:
                     tally["mmt_received_today"] += amount
 
-            # Expenses today
-            for p in today_payments:
-                if p.get("type") == "expense" and p.get("expense_type") == "transaction":
+            # Expenses today — read from dedicated expenses collection
+            today_expenses = expense_service.query_expenses_for_today(today_str)
+            for p in today_expenses:
+                if p.get("expense_type") == "transaction":
                     tally["expenses_today"] += (p.get("amount") or 0)
 
             tally["revenue_today"] = tally["cash_today"] + tally["upi_today"]
@@ -387,11 +389,13 @@ def search_bills():
         bills_query = bills_ref.where('bill_number', '==', search_term).limit(10).stream()
         results = [doc.to_dict() for doc in bills_query]
 
-        # If no results, search by guest name / mobile across ALL bills
-        # ordered by most recent checkout so newest results surface first
+        # If no results, search by guest name / mobile — limit to last 90 days so we
+        # don't stream the entire historical bills collection on every name search.
         if not results:
+            cutoff = (datetime.now() - timedelta(days=90)).strftime("%Y-%m-%d") + " 00:00"
             all_bills = (
                 bills_ref
+                .where("checkin_time", ">=", cutoff)
                 .order_by("checkin_time", direction="DESCENDING")
                 .stream()
             )
@@ -1613,9 +1617,9 @@ def render_bill_pdf():
             success=True,
             pdf_url=upload["url"],
             version=upload["version"],
-            message=f"PDF v{upload['version']} generated and saved",
+            message=f"PDF v{upload['version']} generated successfully",
         )
 
     except Exception as e:
-        logger.error(f"render_bill_pdf error: {e}", exc_info=True)
-        return jsonify(success=False, message=str(e)), 500
+        logger.error(f"render_bill_pdf error: {str(e)}", exc_info=True)
+        return jsonify(success=False, message=f"Error generating PDF: {str(e)}"), 500

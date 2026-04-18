@@ -539,6 +539,75 @@ def upload_document(mobile: str, image_bytes: bytes, filename: str) -> str:
         return ""
 
 
+# ---------------------------------------------------------------------------
+# PENDING SETTLEMENT FLAG — set / clear automatically during checkout flow
+# ---------------------------------------------------------------------------
+
+def set_pending_settlement(mobile: str, settlement_data: dict):
+    """
+    Flag a customer as having a pending (unpaid) settlement from their last checkout.
+    Called automatically when a guest is checked out with 'settle_later=True'.
+    Runs in a background thread so it never blocks the checkout response.
+    """
+    if _customers_ref is None:
+        return
+    clean = _clean_mobile(mobile)
+    if not clean:
+        return
+    threading.Thread(
+        target=_set_pending_settlement,
+        args=(clean, settlement_data),
+        daemon=True,
+    ).start()
+
+
+def _set_pending_settlement(mobile: str, settlement_data: dict):
+    try:
+        _customers_ref.document(mobile).set({
+            "has_pending_settlement": True,
+            "pending_settlement_id":     settlement_data.get("id"),
+            "pending_settlement_amount": settlement_data.get("amount"),
+            "pending_settlement_date":   settlement_data.get("checkout_date"),
+            "pending_settlement_room":   settlement_data.get("room"),
+        }, merge=True)
+        logger.info(f"CustomerService: pending settlement flagged for {mobile}, "
+                    f"₹{settlement_data.get('amount')}")
+    except Exception as e:
+        logger.error(f"CustomerService set_pending_settlement failed for {mobile}: {e}")
+
+
+def clear_pending_settlement(mobile: str):
+    """
+    Remove the pending settlement flag after it has been fully paid.
+    Called automatically from collect_settlement when status becomes 'paid'.
+    Runs in a background thread.
+    """
+    if _customers_ref is None:
+        return
+    clean = _clean_mobile(mobile)
+    if not clean:
+        return
+    threading.Thread(
+        target=_clear_pending_settlement,
+        args=(clean,),
+        daemon=True,
+    ).start()
+
+
+def _clear_pending_settlement(mobile: str):
+    try:
+        _customers_ref.document(mobile).update({
+            "has_pending_settlement":    False,
+            "pending_settlement_id":     None,
+            "pending_settlement_amount": None,
+            "pending_settlement_date":   None,
+            "pending_settlement_room":   None,
+        })
+        logger.info(f"CustomerService: pending settlement cleared for {mobile}")
+    except Exception as e:
+        logger.error(f"CustomerService clear_pending_settlement failed for {mobile}: {e}")
+
+
 def _delete_storage_url(url: str):
     """Delete a Firebase Storage blob by its download URL. Silently ignores errors."""
     if not url.startswith("https://firebasestorage.googleapis.com"):

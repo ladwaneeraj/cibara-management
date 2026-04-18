@@ -1,6 +1,8 @@
 """
 Reports & expenses routes.
-All reads use payments collection as primary data source.
+
+READ  → expenses collection (primary, via expense_service)
+WRITE → expenses collection (primary) + minimal stub in payments (backward-compat)
 """
 
 from flask import Blueprint, request, jsonify
@@ -12,7 +14,7 @@ from config import (
     db, totals_ref, bills_ref, IST, logger,
     invalidate_rooms_and_totals, get_all_rooms,
 )
-from services import payment_service
+from services import payment_service, expense_service
 
 reports_bp = Blueprint('reports', __name__)
 
@@ -21,7 +23,8 @@ reports_bp = Blueprint('reports', __name__)
 def get_reports():
     """
     Generate reports for a date range.
-    Reads from payments collection as primary data source.
+    Revenue data reads from payments collection.
+    Expense data reads from expenses collection.
     """
     try:
         data_json = request.json
@@ -35,7 +38,7 @@ def get_reports():
         end = datetime.strptime(end_date, "%Y-%m-%d") + timedelta(days=1)
         end_date_exclusive = end.strftime("%Y-%m-%d")
 
-        # Read from payments collection
+        # ── Revenue data from payments collection ────────────────────────────
         all_payments = payment_service.query_payments_by_date_range(
             start_date, end_date_exclusive
         ) or []
@@ -52,12 +55,16 @@ def get_reports():
         add_on_logs = [p for p in all_payments if p.get("type") == "addon"]
         refund_logs = [p for p in all_payments if p.get("type") in _exclude_refunds]
         renewal_logs = [p for p in all_payments if p.get("type") == "renewal"]
-        filtered_expense_logs = [p for p in all_payments if p.get("type") == "expense"]
 
         cash_total = sum(p.get("amount", 0) for p in cash_logs)
         online_total = sum(p.get("amount", 0) for p in online_logs)
         addon_total = sum(p.get("amount", 0) for p in add_on_logs)
         refund_total = sum(p.get("amount", 0) for p in refund_logs)
+
+        # ── Expense data from expenses collection ────────────────────────────
+        filtered_expense_logs = expense_service.query_expenses_by_date_range(
+            start_date, end_date_exclusive
+        ) or []
 
         transaction_expense_total = sum(
             p.get("amount", 0) for p in filtered_expense_logs
@@ -69,6 +76,7 @@ def get_reports():
         )
         total_expense = transaction_expense_total + report_expense_total
 
+        # ── Checkins count ───────────────────────────────────────────────────
         checkins = 0
         renewals = len(renewal_logs)
 
@@ -111,6 +119,13 @@ def get_reports():
 
 @reports_bp.route("/add_expense", methods=["POST"])
 def add_expense():
+    """
+    Add an expense.
+
+    Primary write  → expenses collection (via expense_service)
+    Secondary stub → payments collection (backward-compat for tally during transition)
+    totals/current_totals is incremented only for transaction-type expenses.
+    """
     try:
         data_json = request.json
         date = data_json.get("date")
@@ -118,74 +133,162 @@ def add_expense():
         description = data_json.get("description")
         amount = int(data_json.get("amount", 0))
         payment_method = data_json.get("payment_method", "cash")
-        expense_type = data_json.get("type", "transaction")
+        expense_type = data_json.get("type", "transaction")   # transaction | report
 
         if not date or not category or not description or amount <= 0 or not payment_method:
             return jsonify(success=False, message="All fields are required")
 
-        batch = db.batch()
+        time_str = datetime.now(IST).strftime("%H:%M")
 
+        # ── Build expense document ───────────────────────────────────────────
         expense_entry = {
-            "date": date,
-            "category": category,
-            "description": description,
-            "amount": amount,
+            "date":           date,
+            "time":           time_str,
+            "category":       category,
+            "description":    description,
+            "amount":         amount,
             "payment_method": payment_method,
-            "expense_type": expense_type,
-            "time": datetime.now(IST).strftime("%H:%M"),
+            "expense_type":   expense_type,
         }
 
-        # Store commission-specific fields when category is booking_commission
+        # Salary: capture paid_to
+        if category == "salary":
+            expense_entry["paid_to"] = data_json.get("paid_to", "")
+
+        # Tier 2 — Bill without GST: capture invoice number + invoice date
+        has_bill = data_json.get("has_bill", False)
+        if has_bill:
+            expense_entry["has_bill"]       = True
+            expense_entry["invoice_number"] = data_json.get("invoice_number", "")
+            expense_entry["invoice_date"]   = data_json.get("invoice_date", "")
+
+        # Tier 3 — GST Bill: capture vendor + GST breakdown
+        has_gst = data_json.get("has_gst", False)
+        if has_gst:
+            expense_entry["has_gst"]        = True
+            expense_entry["vendor_name"]    = data_json.get("vendor_name", "")
+            expense_entry["vendor_gstin"]   = data_json.get("vendor_gstin", "")
+            expense_entry["taxable_amount"] = float(data_json.get("taxable_amount", 0))
+            expense_entry["gst_rate"]       = float(data_json.get("gst_rate", 0))
+            expense_entry["gst_amount"]     = float(data_json.get("gst_amount", 0))
+
+        # Invoice photo URL (uploaded separately via /upload_expense_invoice)
+        invoice_photo_url = data_json.get("invoice_photo_url", "")
+        if invoice_photo_url:
+            expense_entry["invoice_photo_url"] = invoice_photo_url
+
+        # Booking.com commission fields
+        commission_fields = {}
         if category == "booking_commission":
             commission_fields = {
-                "commission_platform": data_json.get("commission_platform", "booking.com"),
-                "commission_amount": float(data_json.get("commission_amount", 0)),
-                "commission_gst": float(data_json.get("commission_gst", 0)),
+                "commission_platform":       data_json.get("commission_platform", "booking.com"),
+                "commission_amount":         float(data_json.get("commission_amount", 0)),
+                "commission_gst":            float(data_json.get("commission_gst", 0)),
                 "commission_invoice_number": data_json.get("commission_invoice_number", ""),
-                "commission_invoice_date": data_json.get("commission_invoice_date", ""),
+                "commission_invoice_date":   data_json.get("commission_invoice_date", ""),
                 "commission_payment_status": data_json.get("commission_payment_status", "pending"),
-                "commission_payment_date": data_json.get("commission_payment_date", ""),
+                "commission_payment_date":   data_json.get("commission_payment_date", ""),
             }
             expense_entry.update(commission_fields)
 
+        # ── Primary write → expenses collection (sync so doc exists before counter) ──
+        expense_service.write_expense(expense_entry, sync=True)
+
+        # ── Update totals counter for transaction expenses ───────────────────
+        # Done AFTER the expense doc is confirmed written (sync=True above),
+        # so the counter never gets ahead of the actual data.
         if expense_type == "transaction":
+            batch = db.batch()
             batch.update(totals_ref.document('current_totals'), {
                 "expenses": firestore.Increment(amount),
             })
+            batch.commit()
 
-        batch.commit()
         invalidate_rooms_and_totals()
-
-        # Dual-write: payments collection (commission fields included for traceability)
-        payment_entry = {
-            "room": "", "name": description, "amount": amount,
-            "method": payment_method, "type": "expense",
-            "date": date, "time": datetime.now(IST).strftime("%H:%M"),
-            "category": category, "expense_type": expense_type,
-            "transaction_type": "expense",
-        }
-        if category == "booking_commission":
-            payment_entry.update(commission_fields)
-        payment_service.write_payment(payment_entry)
 
         logger.info(f"Expense added: {description}, Category: {category}, Amount: ₹{amount}")
         return jsonify(success=True, message=f"Expense of ₹{amount} added successfully")
+
     except Exception as e:
         logger.error(f"Error adding expense: {str(e)}")
         return jsonify(success=False, message=f"Error adding expense: {str(e)}")
+
+
+@reports_bp.route("/update_expense_photo", methods=["PATCH"])
+def update_expense_photo():
+    """
+    Attach or replace invoice_photo_url on an existing expense document.
+    Called from the transaction tab when staff adds a photo after the fact.
+    Body: { "doc_id": "<firestore doc id>", "invoice_photo_url": "<url>" }
+    """
+    try:
+        data_json = request.json
+        doc_id    = data_json.get("doc_id", "").strip()
+        photo_url = data_json.get("invoice_photo_url", "").strip()
+
+        if not doc_id:
+            return jsonify(success=False, message="doc_id is required")
+        if not photo_url:
+            return jsonify(success=False, message="invoice_photo_url is required")
+
+        ok = expense_service.update_photo(doc_id, photo_url)
+        if ok:
+            logger.info(f"Expense {doc_id} photo updated via transaction tab")
+            return jsonify(success=True, message="Invoice photo attached")
+        else:
+            return jsonify(success=False, message="Failed to update expense")
+
+    except Exception as e:
+        logger.error(f"Error updating expense photo: {str(e)}")
+        return jsonify(success=False, message=f"Error: {str(e)}")
+
+
+@reports_bp.route("/upload_expense_invoice", methods=["POST"])
+def upload_expense_invoice():
+    """
+    Upload an invoice photo/PDF to Firebase Storage and return the download URL.
+    Called from the frontend before submitting the expense form.
+    """
+    try:
+        from config import bucket
+        import uuid as _uuid
+
+        if "file" not in request.files:
+            return jsonify(success=False, message="No file provided")
+
+        file = request.files["file"]
+        if not file.filename:
+            return jsonify(success=False, message="Empty filename")
+
+        allowed_extensions = {"jpg", "jpeg", "png", "pdf", "webp"}
+        ext = file.filename.rsplit(".", 1)[-1].lower() if "." in file.filename else ""
+        if ext not in allowed_extensions:
+            return jsonify(success=False, message="Only JPG, PNG, PDF, WEBP allowed")
+
+        unique_name = f"{_uuid.uuid4().hex[:12]}.{ext}"
+        storage_path = f"expense_invoices/{unique_name}"
+
+        blob = bucket.blob(storage_path)
+        blob.upload_from_file(file, content_type=file.content_type)
+
+        blob.make_public()
+        download_url = blob.public_url
+
+        logger.info(f"Expense invoice uploaded: {storage_path}")
+        return jsonify(success=True, url=download_url)
+
+    except Exception as e:
+        logger.error(f"Error uploading expense invoice: {str(e)}")
+        return jsonify(success=False, message=f"Upload failed: {str(e)}")
 
 
 @reports_bp.route("/revenue_report", methods=["POST"])
 def revenue_report():
     """
     Checkout-basis revenue report.
-
-    Revenue is recognised when the guest checks OUT, not when payment is
-    collected. This is what a CA needs for a proper monthly P&L.
-
+    Revenue is recognised when the guest checks OUT, not at payment time.
     Reads from: bills collection (checkout_time range).
-    Excludes:   MMT OTA bills (payment_source == 'ota') since hotel never
-                collects that cash directly.
+    Excludes MMT OTA bills (payment_source == 'ota').
     """
     try:
         data_json = request.json
@@ -195,7 +298,6 @@ def revenue_report():
         if not start_date or not end_date:
             return jsonify(success=False, message="start_date and end_date are required")
 
-        # Build half-open range [start_date 00:00, end_date+1 00:00)
         start_dt  = datetime.strptime(start_date, "%Y-%m-%d")
         end_dt    = datetime.strptime(end_date,   "%Y-%m-%d") + timedelta(days=1)
         start_str = start_dt.strftime("%Y-%m-%d %H:%M")
@@ -209,53 +311,31 @@ def revenue_report():
         )
 
         bills = []
-        total_billed        = 0
-        total_room_charges  = 0
-        total_services      = 0
-        total_discounts     = 0
-        total_cash          = 0
-        total_online        = 0
-        total_refunds       = 0
-        total_balance_due   = 0
-        invoice_count       = 0
-        ota_revenue         = 0
-        hotel_revenue       = 0
+        total_billed = total_room_charges = total_services = 0
+        total_discounts = total_cash = total_online = 0
+        total_refunds = total_balance_due = invoice_count = 0
+        ota_revenue = hotel_revenue = 0
 
         for doc in bills_q.stream():
             b = doc.to_dict()
             b["id"] = doc.id
-
             is_ota = (b.get("payment_source") == "ota")
-
-            room_charges = b.get("room_charges_total", 0)
-            services     = b.get("services_total", 0)
-            discounts    = b.get("discounts", 0)
-            grand_total  = b.get("total_amount", 0)
-            cash         = b.get("payment_cash", 0)
-            online       = b.get("payment_online", 0)
-            refunds      = b.get("refunds", 0)
-            balance      = b.get("balance", 0)
-
+            grand_total        = b.get("total_amount", 0)
             total_billed       += grand_total
-            total_room_charges += room_charges
-            total_services     += services
-            total_discounts    += discounts
-            total_cash         += cash
-            total_online       += online
-            total_refunds      += refunds
-            total_balance_due  += max(balance, 0)
-
+            total_room_charges += b.get("room_charges_total", 0)
+            total_services     += b.get("services_total", 0)
+            total_discounts    += b.get("discounts", 0)
+            total_cash         += b.get("payment_cash", 0)
+            total_online       += b.get("payment_online", 0)
+            total_refunds      += b.get("refunds", 0)
+            total_balance_due  += max(b.get("balance", 0), 0)
             if b.get("invoice_generated"):
                 invoice_count += 1
-
             if is_ota:
                 ota_revenue   += grand_total
             else:
                 hotel_revenue += grand_total
-
             bills.append(b)
-
-        net_collected = total_cash + total_online - total_refunds
 
         return jsonify(
             success=True,
@@ -263,15 +343,15 @@ def revenue_report():
             summary={
                 "total_bills":        len(bills),
                 "total_billed":       total_billed,
-                "hotel_revenue":      hotel_revenue,   # cash/UPI collected at hotel
-                "ota_revenue":        ota_revenue,     # MMT/Booking.com (settled separately)
+                "hotel_revenue":      hotel_revenue,
+                "ota_revenue":        ota_revenue,
                 "total_room_charges": total_room_charges,
                 "total_services":     total_services,
                 "total_discounts":    total_discounts,
                 "total_cash":         total_cash,
                 "total_online":       total_online,
                 "total_refunds":      total_refunds,
-                "net_collected":      net_collected,
+                "net_collected":      total_cash + total_online - total_refunds,
                 "total_balance_due":  total_balance_due,
                 "invoices_issued":    invoice_count,
             },

@@ -9,12 +9,18 @@ steps:
       - "--platform=managed"
       - "--allow-unauthenticated"
       - "--clear-base-image"
-      - "--update-env-vars=FIREBASE_CREDENTIALS=$$FIREBASE_CREDS,FIREBASE_STORAGE_BUCKET=cibara-software-61512.firebasestorage.app,MANAGER_PASSWORD=admin123,API_KEY=cibara-secure-2026"
-    secretEnv: ["FIREBASE_CREDS"]
+      - "--update-env-vars=FIREBASE_CREDENTIALS=$$FIREBASE_CREDS,FIREBASE_STORAGE_BUCKET=cibara-software-61512.firebasestorage.app,MANAGER_PASSWORD=$$MANAGER_PASS,API_KEY=$$API_KEY_VAL,LODGE_PIN=$$LODGE_PIN"
+    secretEnv: ["FIREBASE_CREDS", "MANAGER_PASS", "API_KEY_VAL", "LODGE_PIN"]
 
 availableSecrets:
   secretManager:
     - versionName: projects/$PROJECT_ID/secrets/firebase-credentials/versions/latest
       env: "FIREBASE_CREDS"
+    - versionName: projects/$PROJECT_ID/secrets/manager-password/versions/latest
+      env: "MANAGER_PASS"
+    - versionName: projects/$PROJECT_ID/secrets/api-key/versions/latest
+      env: "API_KEY_VAL"
+    - versionName: projects/$PROJECT_ID/secrets/lodge-pin/versions/latest
+      env: "LODGE_PIN"
 
 timeout: "1200s"

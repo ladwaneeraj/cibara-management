@@ -885,6 +885,23 @@ async function fetchData() {
 
     renderRooms();
 
+    // If the checkout modal is open, re-sync it with the fresh server data.
+    // This prevents a stale balance (e.g. a spurious "Refund" UI) from
+    // persisting in the modal after the background fetchData corrects rooms[].
+    try {
+      const _checkoutModal = document.getElementById("checkout-modal");
+      const _checkoutRoomEl = document.getElementById("checkout-room-number");
+      if (
+        _checkoutModal && _checkoutModal.classList.contains("show") &&
+        _checkoutRoomEl
+      ) {
+        const _openRoom = _checkoutRoomEl.textContent.trim();
+        if (_openRoom && rooms[_openRoom] && typeof updateCheckoutModal === "function") {
+          updateCheckoutModal(_openRoom);
+        }
+      }
+    } catch (_e) { /* non-fatal — never break the fetch cycle */ }
+
     // Use transaction log manager for rendering logs
     if (typeof renderEnhancedLogs === "function") {
       renderEnhancedLogs();
@@ -2904,6 +2921,16 @@ async function addPayment(mode) {
       );
     }
 
+    // ── Capture balance NOW, before the async API call ─────────────────────
+    // Firestore onSnapshot (WebSocket) can fire and update rooms[room].balance
+    // to the server's new value *before* the HTTP response arrives.  If we
+    // read rooms[room].balance after the response we'd be subtracting `amount`
+    // from an already-updated balance, producing a spurious negative (refund).
+    const balanceBeforePayment = (rooms[roomNumber] && rooms[roomNumber].balance != null)
+      ? rooms[roomNumber].balance
+      : 0;
+    // ────────────────────────────────────────────────────────────────────────
+
     // Proceed with payment API call - using the fixed backend endpoint
     const response = await apiFetch("/checkout", {
       method: "POST",
@@ -2922,13 +2949,10 @@ async function addPayment(mode) {
 
     const result = await response.json();
     if (result.success) {
-      // Patch local balance immediately
+      // Patch local balance using the pre-request snapshot (race-condition safe).
+      // Simple subtraction mirrors the server: new_balance = old_balance - amount.
       if (rooms[roomNumber]) {
-        const currentBalance = rooms[roomNumber].balance || 0;
-        const newBalance = currentBalance > 0
-          ? Math.max(currentBalance - amount, currentBalance - amount) // may go negative (overpayment)
-          : currentBalance - amount;
-        rooms[roomNumber].balance = newBalance;
+        rooms[roomNumber].balance = balanceBeforePayment - amount;
       }
       debouncedFetchData(2000, roomNumber); // background sync + bust pay history cache
 
@@ -4819,6 +4843,27 @@ document.addEventListener("DOMContentLoaded", function () {
   if (settingsBtnEl) {
     settingsBtnEl.addEventListener("click", openSettingsModal);
   }
+
+  // ── Booking added on another device (from google_sync.js) ──────────────
+  // Show a notification on the rooms view so staff know a new booking arrived.
+  window.addEventListener("cibaraBookingAdded", function (e) {
+    const b = e.detail || {};
+    const guestName  = b.guest_name  || b.name  || "Guest";
+    const roomNum    = b.room_number || b.room   || "";
+    const checkIn    = b.check_in_date || "";
+    const todayStr   = new Date().toISOString().split("T")[0];
+    const isToday    = checkIn === todayStr;
+
+    const roomInfo   = roomNum ? ` — Room ${roomNum}` : "";
+    const whenLabel  = isToday ? "Today" : `Check-in ${checkIn}`;
+    const msg        = `📋 New Booking: ${guestName}${roomInfo} (${whenLabel})`;
+
+    if (typeof showNotification === "function") {
+      showNotification(msg, "info", 5000);
+    }
+    // Also refresh the rooms grid so any booking-indicator logic can update
+    if (typeof renderRooms === "function") renderRooms();
+  });
 
   debugLog("Initialization complete");
 });

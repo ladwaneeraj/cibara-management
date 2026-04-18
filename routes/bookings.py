@@ -1,6 +1,6 @@
 """Booking management routes"""
 from flask import Blueprint, request, jsonify
-from datetime import datetime
+from datetime import datetime, timedelta
 import uuid
 from firebase_admin import firestore
 from config import (
@@ -19,7 +19,14 @@ VALID_PAYMENT_METHODS = {"cash", "upi", "card", "online", "balance", "ota", "alr
 @bookings_bp.route("/get_bookings", methods=["GET"])
 def get_bookings():
     try:
-        bookings_stream = bookings_ref.stream()
+        # Only fetch bookings from the last 60 days onward (active + future + recent).
+        # Older cancelled/checked-out bookings are not needed in the UI.
+        cutoff = (datetime.now(IST) - timedelta(days=60)).strftime("%Y-%m-%d")
+        bookings_stream = (
+            bookings_ref
+            .where("check_in_date", ">=", cutoff)
+            .stream()
+        )
         bookings_list = []
         for booking_doc in bookings_stream:
             booking = booking_doc.to_dict()
@@ -462,37 +469,45 @@ def check_availability():
         except ValueError:
             return jsonify(success=False, message="Invalid date format. Use YYYY-MM-DD")
         
-        bookings_stream = bookings_ref.stream()
+        # Only fetch bookings whose check_out_date is on or after our check_in,
+        # and check_in_date is on or before our check_out — i.e. potential overlaps only.
+        # This avoids streaming the whole collection. Add a small backward buffer (1 day)
+        # so same-day bookings are always caught.
+        query_from = (check_in - timedelta(days=1)).strftime("%Y-%m-%d")
+        bookings_stream = (
+            bookings_ref
+            .where("check_out_date", ">=", check_in.strftime("%Y-%m-%d"))
+            .where("check_in_date",  "<=", check_out.strftime("%Y-%m-%d"))
+            .stream()
+        )
         booked_rooms = set()
-        
+
         for booking_doc in bookings_stream:
             booking = booking_doc.to_dict()
-            
+
             if booking.get("status") in ["cancelled", "checked_in"]:
                 continue
-                
-            booking_check_in = datetime.strptime(booking["check_in_date"], "%Y-%m-%d")
+
+            booking_check_in  = datetime.strptime(booking["check_in_date"],  "%Y-%m-%d")
             booking_check_out = datetime.strptime(booking["check_out_date"], "%Y-%m-%d")
-            
-            if (check_in < booking_check_out and check_out > booking_check_in):
+
+            if check_in < booking_check_out and check_out > booking_check_in:
                 booked_rooms.add(booking["room"])
-        
+
+        # Read all rooms ONCE — reuse for both occupied-status check and full list
         today = datetime.now(IST).replace(hour=0, minute=0, second=0, microsecond=0)
-        
+        all_room_docs = list(rooms_ref.stream())
+
         if check_in.date() == today.date():
-            rooms_stream = rooms_ref.stream()
-            
-            for room_doc in rooms_stream:
+            for room_doc in all_room_docs:
                 room_data = room_doc.to_dict()
-                if room_data["status"] == "occupied":
+                if room_data.get("status") == "occupied":
                     booked_rooms.add(room_doc.id)
-        
-        all_rooms_stream = rooms_ref.stream()
-        all_rooms = [room_doc.id for room_doc in all_rooms_stream]
-        
+
+        all_rooms      = [room_doc.id for room_doc in all_room_docs]
         available_rooms = [room for room in all_rooms if room not in booked_rooms]
         available_rooms.sort(key=lambda r: (int(r) if r.isdigit() else float('inf'), r))
-        
+
         return jsonify(success=True, available_rooms=available_rooms)
         
     except Exception as e:

@@ -15,6 +15,19 @@ function initSettleLater() {
   if (settleLaterCheckbox && settlementNotesContainer) {
     settleLaterCheckbox.addEventListener("change", function () {
       settlementNotesContainer.style.display = this.checked ? "block" : "none";
+      // Clear password and error when settle-later is toggled off
+      if (!this.checked) {
+        const pwInput   = document.getElementById('checkout-manager-password');
+        const pwErrorEl = document.getElementById('checkout-password-error');
+        if (pwInput)   pwInput.value = '';
+        if (pwErrorEl) pwErrorEl.style.display = 'none';
+      } else {
+        // Focus password field when settle-later is enabled
+        setTimeout(() => {
+          const pwInput = document.getElementById('checkout-manager-password');
+          if (pwInput) pwInput.focus();
+        }, 100);
+      }
     });
   }
 

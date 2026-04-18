@@ -687,8 +687,9 @@
         <div class="tab-content hidden" id="transactions-tab">
           <div class="section-title">
             <h2>Transactions</h2>
-            <button id="add-expense-btn" class="action-btn btn-sm btn-danger">
-              <i class="fas fa-plus"></i> Add Expense
+            <button id="add-expense-btn"
+              style="display:inline-flex;align-items:center;gap:0.35rem;background:#e53e3e;color:#fff;border:none;border-radius:8px;padding:0.38rem 0.85rem;font-size:0.8rem;font-weight:600;cursor:pointer;box-shadow:0 1px 4px rgba(229,62,62,0.25);letter-spacing:0.01em;">
+              <i class="fas fa-plus" style="font-size:0.75rem;"></i> Expense
             </button>
           </div>
 
@@ -790,6 +791,8 @@
               </div>
             </div>
           </div>
+          <!-- Hidden file input for attaching photos to existing expenses -->
+          <input type="file" id="txn-expense-photo-file" accept="image/*,.pdf" style="display:none;" />
 
           <!-- Password modal for custom date range -->
           <div class="modal-backdrop" id="txn-date-pwd-modal">
@@ -863,12 +866,18 @@
         <div class="tab-content hidden" id="reports-tab">
           <div class="section-title">
             <h2>Analytics & Reports</h2>
-            <button
-              id="add-report-expense-btn"
-              class="action-btn btn-sm btn-danger"
-            >
-              <i class="fas fa-plus"></i> Add Report Expense
-            </button>
+            <div style="display:flex;gap:0.5rem;align-items:center;">
+              <button id="download-report-csv-btn"
+                style="display:none;align-items:center;gap:0.35rem;background:#2b6cb0;color:#fff;border:none;border-radius:8px;padding:0.38rem 0.85rem;font-size:0.8rem;font-weight:600;cursor:pointer;">
+                <i class="fas fa-download" style="font-size:0.75rem;"></i> CSV
+              </button>
+              <button
+                id="add-report-expense-btn"
+                class="action-btn btn-sm btn-danger"
+              >
+                <i class="fas fa-plus"></i> Add Report Expense
+              </button>
+            </div>
           </div>
 
           <!-- Date Filter (Keep the existing one) -->
@@ -1725,6 +1734,30 @@
               </div>
             </div>
 
+            <!-- ── Pending settlement alert — shown when guest has an unpaid balance from last stay ── -->
+            <div
+              id="checkin-pending-settlement-alert"
+              style="
+                display: none;
+                margin-top: 0.6rem;
+                background: #fffbeb;
+                border: 1.5px solid #f59e0b;
+                border-radius: 8px;
+                padding: 0.65rem 0.75rem;
+              "
+            >
+              <div style="display: flex; align-items: flex-start; gap: 0.5rem">
+                <span style="font-size: 1.15rem; line-height: 1">💰</span>
+                <div style="flex:1">
+                  <div style="font-weight: 700; color: #92400e; font-size: 0.88rem; margin-bottom: 0.25rem;">
+                    Pending Balance from Last Stay
+                  </div>
+                  <div id="checkin-pending-settlement-details" style="font-size: 0.83rem; color: #78350f; margin-bottom: 0.15rem;"></div>
+                  <div id="checkin-pending-settlement-date" style="font-size: 0.78rem; color: #92400e; opacity: 0.8;"></div>
+                </div>
+              </div>
+            </div>
+
             <!-- Stored ID doc preview — shown when returning guest with docs on file -->
             <div
               id="checkin-stored-doc-preview"
@@ -2538,6 +2571,25 @@
                   placeholder="Add notes about when/how payment will be made"
                   rows="2"
                 ></textarea>
+
+                <!-- Manager password — required to unlock Settle Later -->
+                <div style="margin-top: 0.6rem;">
+                  <label style="display: block; font-weight: 600; color: #4a5568; font-size: 0.82rem; margin-bottom: 0.3rem;">
+                    🔐 Manager Password to allow Settle Later
+                  </label>
+                  <input
+                    type="password"
+                    id="checkout-manager-password"
+                    class="form-control"
+                    placeholder="Enter manager password"
+                    autocomplete="off"
+                    style="font-size: 0.88rem;"
+                  />
+                  <div
+                    id="checkout-password-error"
+                    style="display: none; color: #c53030; font-size: 0.78rem; margin-top: 0.25rem;"
+                  ></div>
+                </div>
               </div>
             </div>
           </div>
@@ -2850,165 +2902,237 @@
 
     <!-- Add the Expense Modal -->
     <div class="modal-backdrop" id="expense-modal">
-      <div class="modal-content">
-        <div class="modal-header">
-          <h2>Add Expense</h2>
-          <button class="close-btn" aria-label="Close">&times;</button>
+      <div class="modal-content" style="max-width:480px;border-radius:14px;padding:0;display:flex;flex-direction:column;max-height:92vh;overflow:hidden;">
+
+        <!-- Modal Header — sticky, never scrolls away -->
+        <div class="modal-header" style="background:linear-gradient(135deg,#e53e3e,#c0392b);padding:1rem 1.25rem;border-radius:0;flex-shrink:0;">
+          <h2 id="expense-modal-title" style="color:#fff;font-size:1.05rem;display:flex;align-items:center;gap:0.5rem;">
+            <i class="fas fa-receipt"></i> Add Expense
+          </h2>
+          <button class="close-btn" aria-label="Close" style="color:#fff;opacity:0.85;">&times;</button>
         </div>
-        <form id="expense-form">
-          <div class="form-group">
-            <label class="form-label" for="expense-date">Date</label>
-            <input
-              type="date"
-              class="form-control"
-              id="expense-date"
-              required
-            />
+
+        <form id="expense-form" style="padding:1.1rem 1.25rem 1.25rem;overflow-y:auto;flex:1;-webkit-overflow-scrolling:touch;">
+
+          <!-- Expense Type — lock label (shown instead of toggle since type is fixed by entry point) -->
+          <div id="expense-type-lock-label"
+            style="display:none;align-items:center;gap:0.45rem;background:#f7f8fa;border:1.5px solid #e2e8f0;border-radius:9px;padding:0.45rem 0.75rem;margin-bottom:1rem;font-size:0.82rem;font-weight:600;">
           </div>
-          <div class="form-group">
-            <label class="form-label" for="expense-category">Category</label>
-            <select class="form-control" id="expense-category" required>
-              <option value="">Select Category</option>
-              <option value="salary">Salary</option>
-              <option value="utilities">Utilities</option>
-              <option value="purchase">Purchase</option>
-              <option value="sanitary">Sanitary</option>
-              <option value="rent">Rent</option>
-              <option value="maintenance">Maintenance</option>
-              <option value="booking_commission">Booking Commission</option>
-              <option value="others">Others</option>
-            </select>
-          </div>
-          <div class="form-group" id="expense-description-container">
-            <label class="form-label" for="expense-description"
-              >Description</label
-            >
-            <input
-              type="text"
-              class="form-control"
-              id="expense-description"
-              placeholder="Expense description"
-              required
-            />
-          </div>
-          <div class="form-group">
-            <label class="form-label" for="expense-amount">Amount (₹)</label>
-            <input
-              type="number"
-              class="form-control"
-              id="expense-amount"
-              placeholder="Enter amount"
-              required
-              min="1"
-            />
+          <!-- Expense Type Toggle (hidden by default, JS shows if ever needed) -->
+          <div id="expense-type-toggle" style="display:none;margin-bottom:1rem;">
+            <div style="display:flex;border-radius:10px;overflow:hidden;border:1.5px solid #e2e8f0;background:#f7f8fa;">
+              <button type="button" class="exp-type-btn active" data-type="transaction"
+                style="flex:1;padding:0.55rem 0.5rem;border:none;background:transparent;cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:2px;font-size:0.8rem;line-height:1.2;transition:background 0.15s,color 0.15s;">
+                <i class="fas fa-store" style="font-size:0.9rem;"></i>
+                <strong>Daily Expense</strong>
+                <span style="font-size:0.7rem;opacity:0.7;">From cash counter</span>
+              </button>
+              <button type="button" class="exp-type-btn" data-type="report"
+                style="flex:1;padding:0.55rem 0.5rem;border:none;background:transparent;cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:2px;font-size:0.8rem;line-height:1.2;transition:background 0.15s,color 0.15s;border-left:1.5px solid #e2e8f0;">
+                <i class="fas fa-university" style="font-size:0.9rem;"></i>
+                <strong>From Account</strong>
+                <span style="font-size:0.7rem;opacity:0.7;">Home cash / bank</span>
+              </button>
+            </div>
           </div>
 
-          <!-- Extra fields shown only for Booking Commission -->
-          <div id="commission-fields" style="display: none">
-            <div class="form-group">
-              <label class="form-label" for="commission-platform"
-                >Platform</label
-              >
-              <select class="form-control" id="commission-platform">
+          <!-- Date + Category row -->
+          <div style="display:flex;gap:0.75rem;margin-bottom:0.75rem;">
+            <div style="flex:1;">
+              <label class="form-label" for="expense-date" style="font-size:0.78rem;">Date</label>
+              <input type="date" class="form-control" id="expense-date" required style="font-size:0.88rem;padding:0.42rem 0.6rem;" />
+            </div>
+            <div style="flex:2;">
+              <label class="form-label" for="expense-category" style="font-size:0.78rem;">Category</label>
+              <select class="form-control" id="expense-category" required style="font-size:0.88rem;padding:0.42rem 0.6rem;">
+                <option value="">Select…</option>
+                <option value="salary">Salary</option>
+                <option value="rent">Rent</option>
+                <option value="utilities">Utilities (Electricity / Water)</option>
+                <option value="petty_cash">Petty Cash (Tea, Small Items)</option>
+                <option value="purchase">Purchase (With Bill)</option>
+                <option value="maintenance">Maintenance</option>
+                <option value="sanitary">Sanitary / Housekeeping</option>
+                <option value="booking_commission">Booking.com Commission</option>
+                <option value="others">Others</option>
+              </select>
+            </div>
+          </div>
+
+          <!-- Description -->
+          <div class="form-group" id="expense-description-container" style="margin-bottom:0.75rem;">
+            <label class="form-label" for="expense-description" style="font-size:0.78rem;">Description / Notes</label>
+            <input type="text" class="form-control" id="expense-description"
+              placeholder="e.g. Ramu salary April, Electricity bill March"
+              required style="font-size:0.88rem;padding:0.42rem 0.6rem;" />
+          </div>
+
+          <!-- Salary: Paid To -->
+          <div class="form-group" id="salary-fields" style="display:none;margin-bottom:0.75rem;">
+            <label class="form-label" for="expense-paid-to" style="font-size:0.78rem;">Paid To (Staff Name)</label>
+            <input type="text" class="form-control" id="expense-paid-to"
+              placeholder="Employee name" style="font-size:0.88rem;padding:0.42rem 0.6rem;" />
+          </div>
+
+          <!-- Amount -->
+          <div class="form-group" style="margin-bottom:0.75rem;">
+            <label class="form-label" for="expense-amount" style="font-size:0.78rem;">Total Amount (₹)</label>
+            <input type="number" class="form-control" id="expense-amount"
+              placeholder="0" required min="1"
+              style="font-size:1rem;font-weight:600;padding:0.42rem 0.6rem;" />
+          </div>
+
+          <!-- Divider + Bill section -->
+          <div id="has-bill-group" style="display:none;margin-bottom:0.5rem;">
+            <div style="border-top:1px solid #edf2f7;margin-bottom:0.65rem;"></div>
+            <label style="display:flex;align-items:center;gap:0.5rem;cursor:pointer;font-size:0.85rem;font-weight:500;">
+              <input type="checkbox" id="expense-has-bill" style="width:15px;height:15px;accent-color:#e53e3e;" />
+              Has a bill / invoice
+            </label>
+          </div>
+
+          <!-- Bill fields -->
+          <div id="bill-fields" style="display:none;">
+            <div style="display:flex;gap:0.75rem;margin-bottom:0.75rem;">
+              <div style="flex:1;">
+                <label class="form-label" for="expense-invoice-number" style="font-size:0.78rem;">Invoice / Bill No.</label>
+                <input type="text" class="form-control" id="expense-invoice-number"
+                  placeholder="INV-001" style="font-size:0.88rem;padding:0.42rem 0.6rem;" />
+              </div>
+              <div style="flex:1;">
+                <label class="form-label" for="expense-invoice-date" style="font-size:0.78rem;">Invoice Date</label>
+                <input type="date" class="form-control" id="expense-invoice-date" style="font-size:0.88rem;padding:0.42rem 0.6rem;" />
+              </div>
+            </div>
+
+            <!-- Has GST checkbox -->
+            <div style="margin-bottom:0.5rem;">
+              <label style="display:flex;align-items:center;gap:0.5rem;cursor:pointer;font-size:0.85rem;font-weight:500;">
+                <input type="checkbox" id="expense-has-gst" style="width:15px;height:15px;accent-color:#e53e3e;" />
+                Has GST (claim input credit)
+              </label>
+            </div>
+
+            <!-- GST fields -->
+            <div id="gst-fields" style="display:none;background:#fafbfc;border-radius:8px;padding:0.75rem;margin-bottom:0.5rem;border:1px solid #edf2f7;">
+              <div class="form-group" style="margin-bottom:0.6rem;">
+                <label class="form-label" for="expense-vendor-name" style="font-size:0.78rem;">Vendor / Supplier Name</label>
+                <input type="text" class="form-control" id="expense-vendor-name"
+                  placeholder="Vendor name" style="font-size:0.88rem;padding:0.42rem 0.6rem;" />
+              </div>
+              <div class="form-group" style="margin-bottom:0.6rem;">
+                <label class="form-label" for="expense-vendor-gstin" style="font-size:0.78rem;">Vendor GSTIN <span style="font-weight:normal;opacity:0.6;">(optional)</span></label>
+                <input type="text" class="form-control" id="expense-vendor-gstin"
+                  placeholder="29AABCT1332L1ZR" maxlength="15"
+                  style="text-transform:uppercase;font-size:0.88rem;padding:0.42rem 0.6rem;" />
+              </div>
+              <div style="display:flex;gap:0.75rem;margin-bottom:0.6rem;">
+                <div style="flex:1;">
+                  <label class="form-label" for="expense-taxable-amount" style="font-size:0.78rem;">Taxable Amount (₹)</label>
+                  <input type="number" class="form-control" id="expense-taxable-amount"
+                    placeholder="Before GST" min="0" style="font-size:0.88rem;padding:0.42rem 0.6rem;" />
+                </div>
+                <div style="flex:1;">
+                  <label class="form-label" for="expense-gst-rate" style="font-size:0.78rem;">GST Rate (%)</label>
+                  <select class="form-control" id="expense-gst-rate" style="font-size:0.88rem;padding:0.42rem 0.6rem;">
+                    <option value="">Select %</option>
+                    <option value="5">5%</option>
+                    <option value="12">12%</option>
+                    <option value="18">18%</option>
+                    <option value="28">28%</option>
+                  </select>
+                </div>
+              </div>
+              <div>
+                <label class="form-label" for="expense-gst-amount" style="font-size:0.78rem;">
+                  GST Amount (₹) <span style="font-weight:normal;opacity:0.6;">auto-calculated</span>
+                </label>
+                <input type="number" class="form-control" id="expense-gst-amount"
+                  placeholder="0" min="0" readonly
+                  style="background:#f0f4f8;font-size:0.88rem;padding:0.42rem 0.6rem;" />
+              </div>
+            </div>
+          </div>
+
+          <!-- Booking Commission fields -->
+          <div id="commission-fields" style="display:none;">
+            <div style="border-top:1px solid #edf2f7;margin-bottom:0.65rem;"></div>
+            <div class="form-group" style="margin-bottom:0.6rem;">
+              <label class="form-label" for="commission-platform" style="font-size:0.78rem;">Platform</label>
+              <select class="form-control" id="commission-platform" style="font-size:0.88rem;padding:0.42rem 0.6rem;">
                 <option value="booking.com">Booking.com</option>
               </select>
             </div>
-            <div class="form-row" style="display: flex; gap: 0.75rem">
-              <div class="form-group" style="flex: 1">
-                <label class="form-label" for="commission-amount"
-                  >Commission (₹)</label
-                >
-                <input
-                  type="number"
-                  class="form-control"
-                  id="commission-amount"
-                  placeholder="Commission amount"
-                  min="0"
-                />
+            <div style="display:flex;gap:0.75rem;margin-bottom:0.6rem;">
+              <div style="flex:1;">
+                <label class="form-label" for="commission-amount" style="font-size:0.78rem;">Commission (₹)</label>
+                <input type="number" class="form-control" id="commission-amount" placeholder="0" min="0" style="font-size:0.88rem;padding:0.42rem 0.6rem;" />
               </div>
-              <div class="form-group" style="flex: 1">
-                <label class="form-label" for="commission-gst"
-                  >GST on Commission (₹)</label
-                >
-                <input
-                  type="number"
-                  class="form-control"
-                  id="commission-gst"
-                  placeholder="GST amount"
-                  min="0"
-                />
+              <div style="flex:1;">
+                <label class="form-label" for="commission-gst" style="font-size:0.78rem;">GST on Commission (₹)</label>
+                <input type="number" class="form-control" id="commission-gst" placeholder="0" min="0" style="font-size:0.88rem;padding:0.42rem 0.6rem;" />
               </div>
             </div>
-            <div class="form-row" style="display: flex; gap: 0.75rem">
-              <div class="form-group" style="flex: 1">
-                <label class="form-label" for="commission-invoice-number"
-                  >Invoice Number</label
-                >
-                <input
-                  type="text"
-                  class="form-control"
-                  id="commission-invoice-number"
-                  placeholder="e.g. BDC/2026/001"
-                />
+            <div style="display:flex;gap:0.75rem;margin-bottom:0.6rem;">
+              <div style="flex:1;">
+                <label class="form-label" for="commission-invoice-number" style="font-size:0.78rem;">Invoice No.</label>
+                <input type="text" class="form-control" id="commission-invoice-number" placeholder="BDC/2026/001" style="font-size:0.88rem;padding:0.42rem 0.6rem;" />
               </div>
-              <div class="form-group" style="flex: 1">
-                <label class="form-label" for="commission-invoice-date"
-                  >Invoice Date</label
-                >
-                <input
-                  type="date"
-                  class="form-control"
-                  id="commission-invoice-date"
-                />
+              <div style="flex:1;">
+                <label class="form-label" for="commission-invoice-date" style="font-size:0.78rem;">Invoice Date</label>
+                <input type="date" class="form-control" id="commission-invoice-date" style="font-size:0.88rem;padding:0.42rem 0.6rem;" />
               </div>
             </div>
-            <div class="form-group">
-              <label class="form-label" for="commission-payment-status"
-                >Payment Status</label
-              >
-              <select class="form-control" id="commission-payment-status">
+            <div class="form-group" style="margin-bottom:0.6rem;">
+              <label class="form-label" for="commission-payment-status" style="font-size:0.78rem;">Payment Status</label>
+              <select class="form-control" id="commission-payment-status" style="font-size:0.88rem;padding:0.42rem 0.6rem;">
                 <option value="pending">Pending</option>
                 <option value="paid">Paid</option>
               </select>
             </div>
-            <div
-              class="form-group"
-              id="commission-payment-date-group"
-              style="display: none"
-            >
-              <label class="form-label" for="commission-payment-date"
-                >Payment Date</label
-              >
-              <input
-                type="date"
-                class="form-control"
-                id="commission-payment-date"
-              />
+            <div class="form-group" id="commission-payment-date-group" style="display:none;margin-bottom:0.6rem;">
+              <label class="form-label" for="commission-payment-date" style="font-size:0.78rem;">Payment Date</label>
+              <input type="date" class="form-control" id="commission-payment-date" style="font-size:0.88rem;padding:0.42rem 0.6rem;" />
             </div>
           </div>
-          <div class="form-group">
-            <label class="form-label">Payment Method</label>
+
+          <!-- Invoice Photo — compact inline attach -->
+          <div style="border-top:1px solid #edf2f7;margin:0.65rem 0;">
+            <div style="display:flex;align-items:center;gap:0.6rem;margin-top:0.65rem;">
+              <input type="file" id="expense-invoice-file" accept="image/*,.pdf" style="display:none;" />
+              <button type="button" id="invoice-attach-btn"
+                style="display:flex;align-items:center;gap:0.35rem;background:#f0f4f8;border:1px solid #cbd5e0;border-radius:7px;padding:0.35rem 0.75rem;font-size:0.8rem;cursor:pointer;color:#4a5568;white-space:nowrap;">
+                <i class="fas fa-paperclip" style="font-size:0.78rem;"></i> Attach Invoice
+              </button>
+              <span id="invoice-attach-status" style="font-size:0.78rem;color:#718096;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+                No file attached
+              </span>
+              <button type="button" id="invoice-upload-remove"
+                style="display:none;background:none;border:none;color:#e53e3e;cursor:pointer;font-size:1rem;line-height:1;padding:0 4px;"
+                title="Remove">×</button>
+            </div>
+            <input type="hidden" id="expense-invoice-photo-url" value="" />
+          </div>
+
+          <!-- Payment Method -->
+          <div class="form-group" style="margin-bottom:0.9rem;">
+            <label class="form-label" style="font-size:0.78rem;">Payment Method</label>
             <div class="payment-options">
-              <button
-                type="button"
-                class="payment-btn cash active"
-                data-payment="cash"
-              >
+              <button type="button" class="payment-btn cash active" data-payment="cash">
                 <i class="fas fa-money-bill"></i> Cash
               </button>
-              <button
-                type="button"
-                class="payment-btn online"
-                data-payment="online"
-              >
-                <i class="fas fa-mobile-alt"></i> Online
+              <button type="button" class="payment-btn online" data-payment="online">
+                <i class="fas fa-mobile-alt"></i> UPI / Online
               </button>
             </div>
             <input type="hidden" id="expense-payment-method" value="cash" />
           </div>
+
           <input type="hidden" id="expense-type" value="transaction" />
-          <button type="submit" class="action-btn btn-danger">
-            Add Expense
+
+          <button type="submit" class="action-btn btn-danger"
+            style="width:100%;padding:0.7rem;font-size:0.95rem;border-radius:9px;letter-spacing:0.02em;">
+            <i class="fas fa-check"></i> Save Expense
           </button>
         </form>
       </div>

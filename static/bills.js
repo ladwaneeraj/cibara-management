@@ -2779,40 +2779,31 @@
     if (!tab.classList.contains("hidden")) loadData(true);
   }
 
-  // ── Live refresh on checkin / checkout ────────────────────────────────────────
-  window.addEventListener("cibaraRoomUpdate", function (e) {
-    const tab = dom("bills-tab");
+  // ── Live refresh (debounced) ───────────────────────────────────────────────
+  // All three events (room update, payment added, bill changed) can fire within
+  // milliseconds of each other on the same user action (e.g. checkout). A single
+  // debounce timer collapses them into one loadDataSilent() call per burst.
+  let _billsSilentTimer = null;
+  function _debouncedSilentLoad(forceInvalidate) {
+    const today = todayStr();
+    const tab   = dom("bills-tab");
     if (tab && !tab.classList.contains("hidden")) {
-      const today = todayStr();
-      if (state.dateRange.end === today) loadDataSilent();
+      if (state.dateRange.end === today) {
+        clearTimeout(_billsSilentTimer);
+        _billsSilentTimer = setTimeout(() => loadDataSilent(), 600);
+      }
     } else {
-      state.lastLoadedRange = null;
+      if (forceInvalidate) state.lastLoadedRange = null;
     }
-  });
+  }
 
-  // ── Live payment sync — fires when any payment is added on another device ──
-  window.addEventListener("cibaraPaymentAdded", function (e) {
+  window.addEventListener("cibaraRoomUpdate",    () => _debouncedSilentLoad(true));
+  window.addEventListener("cibaraPaymentAdded",  (e) => {
     const p = e.detail || {};
-    const today = todayStr();
-    if (p.date !== today) return;
-    const tab = dom("bills-tab");
-    if (tab && !tab.classList.contains("hidden")) {
-      if (state.dateRange.end === today) loadDataSilent();
-    } else {
-      state.lastLoadedRange = null;
-    }
+    if (p.date !== todayStr()) return;
+    _debouncedSilentLoad(true);
   });
-
-  // ── Bill created/updated on another device ─────────────────────────────────
-  window.addEventListener("cibaraBillChanged", function (e) {
-    const today = todayStr();
-    const tab = dom("bills-tab");
-    if (tab && !tab.classList.contains("hidden")) {
-      if (state.dateRange.end === today) loadDataSilent();
-    } else {
-      state.lastLoadedRange = null;
-    }
-  });
+  window.addEventListener("cibaraBillChanged",   () => _debouncedSilentLoad(true));
 
   // ── Init ─────────────────────────────────────────────────────────────────
   function init() {

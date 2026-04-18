@@ -461,7 +461,35 @@ class TransactionLogManager {
       // description is the user-entered text; for payments-collection entries it
       // gets stored in the `name` field, so fall back to that.
       const expenseLabel = log.description || log.name || "Expense";
-      titleContent = `<strong>${expenseLabel}</strong>`;
+      const catDisplay = (log.category || "others")
+        .charAt(0).toUpperCase() +
+        (log.category || "others").slice(1).replace(/_/g, " ");
+
+      // Photo icon or attach button
+      let photoHtml = "";
+      if (log.invoice_photo_url) {
+        photoHtml = `<a href="${log.invoice_photo_url}" target="_blank" rel="noopener"
+          title="View Invoice"
+          style="margin-left:5px;color:#3182ce;font-size:0.78rem;text-decoration:none;">
+          <i class="fas fa-file-image"></i>
+        </a>`;
+      } else if (log._doc_id) {
+        photoHtml = `<button type="button"
+          class="txn-attach-photo-btn"
+          data-doc-id="${log._doc_id}"
+          title="Attach invoice photo"
+          style="margin-left:5px;background:none;border:1px solid #cbd5e0;border-radius:5px;padding:1px 6px;font-size:0.7rem;color:#718096;cursor:pointer;line-height:1.6;">
+          <i class="fas fa-paperclip"></i> Photo
+        </button>`;
+      }
+
+      const gstBadge = log.has_gst
+        ? `<span style="font-size:0.68rem;background:#e8f5e9;color:#2e7d32;border-radius:4px;padding:1px 5px;margin-left:4px;">GST ₹${log.gst_amount || 0}</span>`
+        : "";
+
+      titleContent = `<strong>${expenseLabel}</strong>
+        <span style="font-size:0.7rem;background:#fed7d7;color:#c53030;border-radius:4px;padding:1px 6px;margin-left:4px;font-weight:500;">${catDisplay}</span>
+        ${gstBadge}${photoHtml}`;
     } else {
       titleContent = `Room ${log.room} - ${log.name}`;
     }
@@ -959,6 +987,60 @@ document.addEventListener("DOMContentLoaded", function () {
 
   transactionTracker.initialize();
   addTransactionTrackingStyles();
+
+  // ── Expense photo-attach from transaction tab ──────────────────────────────
+  // Event delegation: catch clicks on .txn-attach-photo-btn anywhere in the log
+  let _pendingAttachDocId = null;
+  const txnPhotoFile = document.getElementById("txn-expense-photo-file");
+
+  document.addEventListener("click", function (e) {
+    const btn = e.target.closest(".txn-attach-photo-btn");
+    if (!btn) return;
+    _pendingAttachDocId = btn.getAttribute("data-doc-id");
+    if (_pendingAttachDocId && txnPhotoFile) txnPhotoFile.click();
+  });
+
+  if (txnPhotoFile) {
+    txnPhotoFile.addEventListener("change", async function () {
+      const file = this.files[0];
+      if (!file || !_pendingAttachDocId) return;
+      txnPhotoFile.value = "";  // reset for re-use
+
+      if (file.size > 5 * 1024 * 1024) {
+        if (typeof showNotification === "function") showNotification("File too large. Max 5 MB.", "error");
+        return;
+      }
+
+      // 1. Upload file
+      try {
+        if (typeof showNotification === "function") showNotification("Uploading photo…", "info");
+
+        const formData = new FormData();
+        formData.append("file", file);
+        const upRes  = await fetch("/upload_expense_invoice", { method: "POST", body: formData });
+        const upData = await upRes.json();
+        if (!upData.success) throw new Error(upData.message || "Upload failed");
+
+        // 2. Attach to expense doc
+        const patchRes  = await fetch("/update_expense_photo", {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ doc_id: _pendingAttachDocId, invoice_photo_url: upData.url }),
+        });
+        const patchData = await patchRes.json();
+        if (!patchData.success) throw new Error(patchData.message || "Attach failed");
+
+        if (typeof showNotification === "function") showNotification("Invoice photo attached!", "success");
+        // Refresh the transaction log so the photo icon appears
+        if (typeof debouncedFetchData === "function") debouncedFetchData();
+      } catch (err) {
+        console.error("Attach photo error:", err);
+        if (typeof showNotification === "function") showNotification(`Error: ${err.message}`, "error");
+      } finally {
+        _pendingAttachDocId = null;
+      }
+    });
+  }
 
   console.log("Transaction tracking and log management system initialized");
 });

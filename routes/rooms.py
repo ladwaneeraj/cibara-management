@@ -22,7 +22,7 @@ from config import (
     find_serial_number_for_checkin, _build_active_entry_fast, _find_serial_fast,
     _batch_fill_serials
 )
-from services import payment_service, customer_service
+from services import payment_service, customer_service, expense_service
 from routes.billing import auto_generate_bill_pdf
 
 rooms_bp = Blueprint('rooms', __name__)
@@ -319,6 +319,13 @@ def checkout():
                 totals_update["balance"] = firestore.Increment(-settlement_amount)
 
                 logger.info(f"Settlement created for room {room}, amount: ₹{settlement_amount}")
+
+                # Auto-flag the customer as having a pending settlement so the
+                # next check-in shows a warning with the outstanding balance.
+                _guest_mobile = guest_info.get("mobile", "")
+                if _guest_mobile:
+                    from services import customer_service as _cs
+                    _cs.set_pending_settlement(_guest_mobile, settlement)
 
             elif balance > 0 and not settle_later:
                 return jsonify(success=False, message="Please clear the balance before checkout")
@@ -1094,25 +1101,31 @@ def get_data():
         # data when the tab is opened.  The only live use of `logs` on the rooms
         # tab is the renewal-history badge, which is covered by today's renewals.
         # Totals are accurate from the `totals` collection regardless of date range.
-        # Run all 3 Firestore queries in parallel (saves ~2s)
-        with ThreadPoolExecutor(max_workers=3) as pool:
-            f_rooms = pool.submit(get_all_rooms)
-            f_totals = pool.submit(get_totals)
+        # Run all 4 Firestore queries in parallel (rooms, totals, payments, expenses)
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            f_rooms    = pool.submit(get_all_rooms)
+            f_totals   = pool.submit(get_totals)
             f_payments = pool.submit(
                 payment_service.query_payments_by_date_range,
                 today_str, tomorrow
+            )
+            f_expenses = pool.submit(
+                expense_service.query_expenses_for_today,
+                today_str
             )
 
         rooms = f_rooms.result()
         totals = f_totals.result()
         recent_payments = f_payments.result() or []
+        expense_logs    = f_expenses.result() or []
         t1 = _time.time()
-        logger.info(f"[PERF] parallel fetch (rooms+totals+payments): {t1-t0:.3f}s, {len(recent_payments)} payment docs")
+        logger.info(f"[PERF] parallel fetch (rooms+totals+payments+expenses): {t1-t0:.3f}s, "
+                    f"{len(recent_payments)} payment docs, {len(expense_logs)} expense docs")
 
         _refund_types = ("refund", "checkout_refund", "manual_refund",
                          "booking_cancel_refund")
 
-        # Build logs in the shape the frontend expects — all from one query
+        # Build logs in the shape the frontend expects
         # "pay_later" method is used for settle-later check-ins; include alongside cash
         cash_logs = [p for p in recent_payments
                      if p.get("method") in ("cash", "pay_later")
@@ -1124,8 +1137,7 @@ def get_data():
                        and p.get("type") not in ("expense", "discount")]
         refund_logs = [p for p in recent_payments
                        if p.get("type") in _refund_types]
-        expense_logs = [p for p in recent_payments
-                        if p.get("type") == "expense"]
+        # expense_logs already fetched from expenses collection above
 
         renewals_for_frontend = []
         for p in recent_payments:
@@ -1359,6 +1371,8 @@ def get_transactions_range():
         end_exclusive = (_dt.strptime(to_date, "%Y-%m-%d") + _td(days=1)).strftime("%Y-%m-%d")
 
         payments = payment_service.query_payments_by_date_range(from_date, end_exclusive) or []
+        # Expenses from dedicated collection
+        all_expenses = expense_service.query_expenses_by_date_range(from_date, end_exclusive) or []
 
         _refund_types = ("refund", "checkout_refund", "manual_refund", "booking_cancel_refund")
 
@@ -1370,10 +1384,9 @@ def get_transactions_range():
                          and p.get("type") not in _refund_types
                          and p.get("type") not in ("expense", "discount")],
             "refunds":  [p for p in payments if p.get("type") in _refund_types],
-            # Only transaction-type expenses (expense_type="transaction"), not report/accounting ones
-            "expenses": [p for p in payments
-                         if p.get("type") == "expense"
-                         and p.get("expense_type") == "transaction"],
+            # Only transaction-type expenses from the expenses collection
+            "expenses": [e for e in all_expenses
+                         if e.get("expense_type") == "transaction"],
         }
         return jsonify(success=True, logs=logs)
     except Exception as e:
@@ -1735,18 +1748,18 @@ def get_upcoming_bookings():
             # If multiple bookings for the same room, keep the soonest one
             if room not in result or hours_until < result[room]["hours_until"]:
                 result[room] = {
-                    "booking_id": b["booking_id"],
-                    "guest_name": b.get("guest_name", "Guest"),
-                    "check_in_date": check_in_date,
-                    "check_in_time": check_in_time,
-                    "hours_until": round(hours_until, 1),
-                    "status": status,
-                    "total_amount": b.get("total_amount", 0),
-                    "paid_amount": b.get("paid_amount", 0),
+                    "booking_id":     b.get("booking_id", ""),
+                    "name":           b.get("name", ""),
+                    "mobile":         b.get("mobile", ""),
+                    "check_in_date":  check_in_date,
+                    "check_in_time":  check_in_time,
+                    "hours_until":    round(hours_until, 1),
+                    "booking_source": b.get("booking_source", "normal"),
+                    "status":         status,
                 }
 
         return jsonify(success=True, upcoming=result)
 
     except Exception as e:
         logger.error(f"get_upcoming_bookings error: {e}", exc_info=True)
-        return jsonify(success=False, message=f"Error: {str(e)}"), 500
+        return jsonify(success=False, message=str(e)), 500

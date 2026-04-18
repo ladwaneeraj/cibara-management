@@ -478,6 +478,7 @@ async function lookupAndFillCustomer(mobile) {
       _applyDocViewBtn(data.customer);
       _showCheckinStoredDocs(data.customer);
       _applyFlagAlert(data.customer);
+      _applyPendingSettlementAlert(data.customer);
     } else {
       _currentCheckinCustomer = null;
       clearNameMismatch();
@@ -485,6 +486,7 @@ async function lookupAndFillCustomer(mobile) {
       _setIndicator('yellow');
       _hideCheckinStoredDocs();
       _hideFlagAlert();
+      _hidePendingSettlementAlert();
     }
   } catch (err) { console.error('[customer-docs] Mobile lookup error:', err); }
 }
@@ -535,6 +537,51 @@ function _hideFlagAlert() {
   const notesEl = document.getElementById('checkin-flag-alert-notes');
   if (notesEl) notesEl.textContent = '';
   const dateEl = document.getElementById('checkin-flag-alert-date');
+  if (dateEl) dateEl.textContent = '';
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Pending settlement alert helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+function _applyPendingSettlementAlert(customer) {
+  const alertEl   = document.getElementById('checkin-pending-settlement-alert');
+  const detailsEl = document.getElementById('checkin-pending-settlement-details');
+  const dateEl    = document.getElementById('checkin-pending-settlement-date');
+  if (!alertEl) return;
+
+  if (customer && customer.has_pending_settlement && customer.pending_settlement_amount) {
+    const amt  = Number(customer.pending_settlement_amount).toLocaleString('en-IN');
+    const room = customer.pending_settlement_room ? ` (Room ${customer.pending_settlement_room})` : '';
+    if (detailsEl) detailsEl.textContent = `Outstanding: ₹${amt}${room} — please collect before check-in.`;
+
+    if (dateEl && customer.pending_settlement_date) {
+      try {
+        const d     = new Date(customer.pending_settlement_date);
+        const day   = String(d.getDate()).padStart(2, '0');
+        const month = d.toLocaleString('en-IN', { month: 'short' });
+        const year  = d.getFullYear();
+        dateEl.textContent = `Checked out on: ${day} ${month} ${year}`;
+      } catch (e) {
+        dateEl.textContent = `Checked out on: ${customer.pending_settlement_date}`;
+      }
+    } else if (dateEl) {
+      dateEl.textContent = '';
+    }
+    alertEl.style.display = 'block';
+  } else {
+    alertEl.style.display = 'none';
+    if (detailsEl) detailsEl.textContent = '';
+    if (dateEl)    dateEl.textContent    = '';
+  }
+}
+
+function _hidePendingSettlementAlert() {
+  const alertEl = document.getElementById('checkin-pending-settlement-alert');
+  if (alertEl) alertEl.style.display = 'none';
+  const detailsEl = document.getElementById('checkin-pending-settlement-details');
+  if (detailsEl) detailsEl.textContent = '';
+  const dateEl = document.getElementById('checkin-pending-settlement-date');
   if (dateEl) dateEl.textContent = '';
 }
 
@@ -1499,6 +1546,7 @@ function resetCheckinDocState() {
   hideDocViewBtn();
   _hideCheckinStoredDocs();
   _hideFlagAlert();
+  _hidePendingSettlementAlert();
   _setIndicator('grey');
   hideMobileSuggestions();
   clearNameMismatch();

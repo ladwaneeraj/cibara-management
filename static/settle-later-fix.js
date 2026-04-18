@@ -62,6 +62,41 @@
 
         console.log(`Balance: ${balance}, Settle Later: ${settleLaterEnabled}`);
 
+        // ── Manager password verification (only when Settle Later is enabled) ──
+        if (settleLaterEnabled && balance > 0) {
+          const pwInput   = document.getElementById('checkout-manager-password');
+          const pwErrorEl = document.getElementById('checkout-password-error');
+          const password  = pwInput ? pwInput.value.trim() : '';
+
+          if (!password) {
+            if (pwErrorEl) { pwErrorEl.textContent = 'Manager password is required to use Settle Later.'; pwErrorEl.style.display = 'block'; }
+            if (pwInput) pwInput.focus();
+            this.resetButton();
+            return;
+          }
+
+          try {
+            const pwRes  = await apiFetch('/verify_manager_password', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ password }),
+            });
+            const pwData = await pwRes.json();
+            if (!pwData.success) {
+              if (pwErrorEl) { pwErrorEl.textContent = 'Incorrect password. Please try again.'; pwErrorEl.style.display = 'block'; }
+              if (pwInput) { pwInput.value = ''; pwInput.focus(); }
+              this.resetButton();
+              return;
+            }
+            if (pwErrorEl) pwErrorEl.style.display = 'none';
+          } catch (pwErr) {
+            showNotification('Could not verify manager password. Please retry.', 'error');
+            this.resetButton();
+            return;
+          }
+        }
+        // ── End password verification ──────────────────────────────────────────
+
         // *** ENHANCED BALANCE VALIDATION ***
 
         // 1. STRICT BLOCKING for positive balance without settle later
@@ -302,6 +337,12 @@
             balanceContainer.style.display = "none";
           }
         }
+
+        // Reset manager password field each time the confirmation modal opens
+        const pwField = document.getElementById('checkout-manager-password');
+        if (pwField) pwField.value = '';
+        const pwErrEl = document.getElementById('checkout-password-error');
+        if (pwErrEl) pwErrEl.style.display = 'none';
 
         // Reset flag section each time the confirmation modal opens
         const flagCb = document.getElementById("checkout-flag-customer");

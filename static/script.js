@@ -1557,8 +1557,9 @@ function showCheckoutModal(roomNumber) {
 
       const currentRoomNumber = roomNumberElement.textContent.trim();
       const balance = rooms[currentRoomNumber].balance;
+      const isOta1 = rooms[currentRoomNumber]?.guest?.payment === "ota";
 
-      if (balance > 0) {
+      if (balance > 0 && !isOta1) {
         showNotification("Please clear the balance before checkout", "error");
         checkoutInProgress = false;
         this.disabled = false;
@@ -4049,8 +4050,10 @@ function setupCheckoutConfirmation() {
       : "Unknown";
     const balance = rooms[roomNumber].balance;
 
-    // If balance is positive, show warning and don't proceed
-    if (balance > 0) {
+    // If balance is positive, show warning and don't proceed.
+    // MMT/OTA rooms are exempt — their balance is settled via the settlement modal, not at checkout.
+    const isOtaCheckout = rooms[roomNumber]?.guest?.payment === "ota";
+    if (balance > 0 && !isOtaCheckout) {
       console.log("Checkout blocked - positive balance");
       showNotification("Please clear the balance before checkout", "error");
       return;
@@ -4134,9 +4137,10 @@ function setupCheckoutConfirmation() {
 
       const roomNumber = roomNumberElement.textContent;
       const balance = rooms[roomNumber].balance;
+      const isOta2 = rooms[roomNumber]?.guest?.payment === "ota";
 
-      // Block checkout if there's still a positive balance
-      if (balance > 0) {
+      // Block checkout if there's still a positive balance (OTA/MMT rooms exempt)
+      if (balance > 0 && !isOta2) {
         console.log("Checkout blocked in proceed step - positive balance");
         showNotification("Please clear the balance before checkout", "error");
         checkoutInProgress = false;

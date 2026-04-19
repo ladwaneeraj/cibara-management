@@ -99,8 +99,13 @@
 
         // *** ENHANCED BALANCE VALIDATION ***
 
+        // MMT/OTA rooms: balance is settled via the OTA settlement modal after
+        // checkout, not at the time of checkout — so skip the balance block entirely.
+        const isOtaCheckout = rooms[roomNumber]?.guest?.payment === "ota";
+
         // 1. STRICT BLOCKING for positive balance without settle later
-        if (balance > 0 && !settleLaterEnabled) {
+        // OTA rooms are exempt — their dues are tracked in settlements, not here.
+        if (balance > 0 && !settleLaterEnabled && !isOtaCheckout) {
           console.log(
             "Checkout blocked - positive balance without settle later"
           );

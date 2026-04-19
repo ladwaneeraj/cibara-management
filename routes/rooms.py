@@ -327,7 +327,7 @@ def checkout():
                     from services import customer_service as _cs
                     _cs.set_pending_settlement(_guest_mobile, settlement)
 
-            elif balance > 0 and not settle_later:
+            elif balance > 0 and not settle_later and guest_info.get("payment") != "ota":
                 return jsonify(success=False, message="Please clear the balance before checkout")
 
             # Handle refund for negative balance

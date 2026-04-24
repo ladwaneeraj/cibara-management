@@ -94,8 +94,12 @@ function showQuickTransferModal() {
   destRoomSelect.disabled = true;
 
   // Set up source room change handler
-  sourceRoomSelect.addEventListener("change", function () {
-    const selectedRoom = this.value;
+  // NOTE: use .onchange (single-slot) instead of addEventListener — this
+  // function runs every time the modal opens and addEventListener would
+  // stack duplicate handlers, which previously caused the AC toggle to
+  // flicker or disappear after multiple transfers.
+  sourceRoomSelect.onchange = function () {
+    const selectedRoom = sourceRoomSelect.value;
 
     if (!selectedRoom) {
       // Reset UI if no room selected
@@ -154,7 +158,7 @@ function showQuickTransferModal() {
 
       showNotification("No vacant rooms available for transfer", "warning");
     }
-  });
+  };
 
   // Helper — show upgrade/downgrade balance hint for same-24hr-cycle transfers
   function updateTransferBalanceHint(sourceRoom, newPrice) {
@@ -194,8 +198,11 @@ function showQuickTransferModal() {
   }
 
   // Set up destination room change handler
-  destRoomSelect.addEventListener("change", function () {
-    const destRoom = this.value;
+  // Use .onchange (single-slot) to prevent duplicate handlers from stacking
+  // across repeated modal opens — this was the cause of the intermittent
+  // AC-toggle-missing bug.
+  destRoomSelect.onchange = function () {
+    const destRoom = destRoomSelect.value;
     const sourceRoom = sourceRoomSelect.value;
 
     // Hide hint when selection is cleared
@@ -214,23 +221,31 @@ function showQuickTransferModal() {
     const basePrice = roomPricing.calculatePrice(destRoom, guestCount);
     const acPrice   = basePrice + 600;
 
-    // Show AC toggle for premium AC rooms (202-205) BEFORE setting price
+    // Show AC toggle for premium AC rooms (202-205) BEFORE setting price.
+    // Coerce to number — destRoom is a <select> value (string) and
+    // lexical comparison is brittle for anything outside 3-digit rooms.
     if (acToggleSection && newRoomAcToggle) {
-      if (destRoom >= 202 && destRoom <= 205) {
+      const destNum = parseInt(destRoom, 10);
+      if (destNum >= 202 && destNum <= 205) {
         // Default: non-AC (toggle unchecked), price = basePrice
         newRoomAcToggle.checked = false;
         acToggleSection.style.display = "block";
 
-        // AC ON → base + 600; AC OFF → base (same logic as check-in modal)
-        newRoomAcToggle.addEventListener("change", function () {
-          const price = this.checked ? acPrice : basePrice;
+        // AC ON → base + 600; AC OFF → base (same logic as check-in modal).
+        // .onchange replaces any prior closure so stale basePrice/acPrice
+        // values from a previous destination selection can't leak through.
+        newRoomAcToggle.onchange = function () {
+          const price = newRoomAcToggle.checked ? acPrice : basePrice;
           if (newRoomPriceInput) {
             newRoomPriceInput.value = price;
           }
           updateTransferBalanceHint(sourceRoom, price);
-        });
+        };
       } else {
         acToggleSection.style.display = "none";
+        // Clear any handler from a prior AC-room selection so it can't
+        // fire against the wrong destination later.
+        newRoomAcToggle.onchange = null;
       }
     }
 
@@ -245,7 +260,7 @@ function showQuickTransferModal() {
 
     // Show balance/refund hint for same-cycle transfers
     updateTransferBalanceHint(sourceRoom, suggestedPrice);
-  });
+  };
 
   // Set up form submission
   const quickTransferForm = document.getElementById("quick-transfer-form");

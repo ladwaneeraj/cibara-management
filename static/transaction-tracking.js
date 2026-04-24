@@ -1617,6 +1617,51 @@ window.renderEnhancedLogs = function () {
   _renderWithLogs(fromDate || null, toDate || null, txnExtendedLogs || null);
 };
 
+// ─── Real-time payment / expense sync ─────────────────────────────────────
+// When Firestore pushes a new payment or expense to this browser,
+// refresh the transactions view so it stays current without a manual reload.
+(function _wireTransactionSync() {
+  function _isDateInRange(dateStr) {
+    const { fromDate, toDate } = txnActiveDateRange;
+    if (!fromDate) return false;
+    return dateStr >= fromDate && dateStr <= (toDate || fromDate);
+  }
+
+  function _refreshTxnView(dateStr) {
+    const txnTab = document.getElementById("transaction-tab");
+    const tabVisible = txnTab && !txnTab.classList.contains("hidden");
+
+    if (!_isDateInRange(dateStr)) {
+      // Payment outside current range — nothing to do
+      return;
+    }
+
+    if (_isWithinCache(txnActiveDateRange.fromDate)) {
+      // Today's data — logs were already patched by _patchLocalLogs in google_sync.js
+      // Just re-render from the patched in-memory logs
+      if (tabVisible) {
+        _renderWithLogs(txnActiveDateRange.fromDate, txnActiveDateRange.toDate, null);
+      }
+    } else {
+      // Extended range — invalidate the cached server result so next render re-fetches
+      txnExtendedLogs = null;
+      if (tabVisible) {
+        _triggerRender(txnActiveDateRange.fromDate, txnActiveDateRange.toDate);
+      }
+    }
+  }
+
+  window.addEventListener("cibaraPaymentAdded", (e) => {
+    const p = e.detail || {};
+    if (p.date) _refreshTxnView(p.date);
+  });
+
+  window.addEventListener("cibaraExpenseAdded", (e) => {
+    const exp = e.detail || {};
+    if (exp.date) _refreshTxnView(exp.date);
+  });
+})();
+
 document.addEventListener("DOMContentLoaded", function () {
   setTimeout(() => {
     initTxnDateFilter();

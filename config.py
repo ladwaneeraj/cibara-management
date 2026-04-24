@@ -594,9 +594,14 @@ def create_bill_record(room, room_data, checkout_time, batch=None,
             p.get("type") == "addon" and p.get("method") == "online"
             for p in stay_payments
         )
+        # any service/addon (cash OR online) — used for MMT service-only bill trigger
+        any_addon = any(p.get("type") == "addon" for p in stay_payments)
         is_same_day = checkin_dt.date() == checkout_dt.date()
         is_mmt_ota = (booking_source == "mmt" and payment_source == "ota")
         is_booking_com = (booking_source == "booking.com")
+        # MMT service-only bill: room rent is billed by MMT, hotel issues an
+        # invoice for the in-hotel service/addon portion only (cash or UPI).
+        mmt_service_only = is_mmt_ota and any_addon
 
         # Determine whether this checkout qualifies for a bill + invoice.
         # Same-day + cash-only = no folio, no GST invoice (walk-in, no overnight stay).
@@ -607,8 +612,8 @@ def create_bill_record(room, room_data, checkout_time, batch=None,
             and not any_addon_online
         )
 
-        if is_mmt_ota and any_addon_online:
-            # MMT room (no hotel invoice) BUT guest paid for a service via UPI →
+        if mmt_service_only:
+            # MMT room (no hotel invoice for room) BUT guest took a service →
             # generate a hotel invoice for the addon portion only
             invoice_generated = True
         elif is_mmt_ota:
@@ -634,10 +639,14 @@ def create_bill_record(room, room_data, checkout_time, batch=None,
 
         # Only generate bill_number (CC/...) when a bill is actually warranted.
         # Same-day cash-only stays are excluded — they won't appear in the Bills module.
-        if not is_no_bill and not is_mmt_ota:
-            bill_number = generate_sequential_bill_number(checkout_dt)
-        else:
+        # MMT stays get a real bill_number ONLY when a service is taken (service-only bill).
+        if is_no_bill:
             bill_number = "-"
+        elif is_mmt_ota and not mmt_service_only:
+            # Pure MMT room stay (no service) — no hotel bill
+            bill_number = "-"
+        else:
+            bill_number = generate_sequential_bill_number(checkout_dt)
 
         # ── Build clean room_segments array ──────────────────────────────────────
         # Each entry: {room, date_from, date_to, nights, rate, total}
@@ -672,6 +681,30 @@ def create_bill_record(room, room_data, checkout_time, batch=None,
             "total":     current_room_charges,
         })
         # ─────────────────────────────────────────────────────────────────────────
+
+        # ── MMT service-only invoice override ─────────────────────────────────
+        # For MMT stays the room rent is already billed by MakeMyTrip. When the
+        # guest takes an in-hotel service (water, extras, etc.) we issue a
+        # hotel invoice for the SERVICE PORTION ONLY — room charges and room
+        # segments are zeroed out, and GST is recomputed on the service base.
+        if mmt_service_only:
+            room_charges_total = 0
+            days_stayed = 0
+            clean_segments = []
+            total_amount = services_total - total_discounts
+            balance = total_amount - payment_cash - payment_online + total_refunds
+            # Recompute GST: only accommodation-charge addons (AC, Extra Bed)
+            # are taxable. Water / misc services are non-accommodation.
+            if accommodation_addons_total > 0 and gst_rate > 0:
+                _divisor = 100 + gst_rate
+                gst_amount = round(accommodation_addons_total * gst_rate / _divisor, 2)
+                accommodation_taxable = round(accommodation_addons_total - gst_amount, 2)
+            else:
+                gst_rate = 0
+                gst_amount = 0
+                accommodation_taxable = 0
+            non_accommodation_total = services_total - accommodation_addons_total
+        # ─────────────────────────────────────────────────────────────────────
 
         bill_record = {
             "bill_number": bill_number,

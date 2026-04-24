@@ -2560,9 +2560,13 @@ function showDayDetails(dateStr, bookings) {
         </div>`;
       }
 
+      const acBadge = booking.is_ac
+        ? `<span class="day-bk-ac" title="AC Room">❄️</span>`
+        : "";
+
       bookingItem.innerHTML = `
         <div class="day-booking-header">
-          <div class="day-booking-room">Room ${booking.room}</div>
+          <div class="day-booking-room">Room ${booking.room}${acBadge}</div>
           ${timeDisplay}
         </div>
         <div class="day-booking-guest">${booking.guest_name}</div>
@@ -2765,6 +2769,27 @@ fetchBookings = async function () {
     renderCalendar();
   }
 };
+
+// ─── Real-time booking sync ────────────────────────────────────────────────
+// Debounce so rapid Firestore changes don't trigger back-to-back fetches.
+let _bookingRefreshTimer = null;
+function _debouncedFetchBookings(delayMs = 800) {
+  clearTimeout(_bookingRefreshTimer);
+  _bookingRefreshTimer = setTimeout(() => {
+    // Only re-fetch when the bookings tab is actually visible.
+    // If the tab is hidden, just mark stale so the next tab-open triggers a fresh load.
+    const bookingsTab = document.getElementById("bookings-tab");
+    if (bookingsTab && !bookingsTab.classList.contains("hidden")) {
+      fetchBookings();
+    } else {
+      // Flag stale — fetchBookings() is already called on every tab open (line 29)
+      console.log("⚡ Booking change received — will refresh on next tab open");
+    }
+  }, delayMs);
+}
+
+window.addEventListener("cibaraBookingAdded",    () => _debouncedFetchBookings());
+window.addEventListener("cibaraBookingModified", () => _debouncedFetchBookings());
 // Optimize the calendar layout for laptop screens
 function optimizeCalendarForScreenSize() {
   // Get the container width

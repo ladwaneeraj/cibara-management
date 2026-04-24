@@ -170,17 +170,16 @@ onSnapshot(
   }
 );
 
-// ─── Bookings listener (today + tomorrow check-ins) ───────────────────────
-// Fires when a new booking is created for today or tomorrow so the rooms
-// view can show an alert without needing a manual refresh.
-// `check_in_date` is stored as "YYYY-MM-DD".
+// ─── Bookings listener (all future bookings) ──────────────────────────────
+// Watches all bookings with check_in_date >= today so that any new booking —
+// regardless of how far in the future — or any status change (e.g. cancellation)
+// is immediately reflected on all devices without a manual refresh.
 let bookingsInitialLoad = true;
 
 onSnapshot(
   query(
     collection(db, "bookings"),
-    where("check_in_date", ">=", _todayStr),
-    where("check_in_date", "<=", _tomorrowStr)
+    where("check_in_date", ">=", _todayStr)
   ),
   (snapshot) => {
     if (bookingsInitialLoad) {
@@ -190,14 +189,46 @@ onSnapshot(
 
     if (snapshot.metadata.hasPendingWrites || snapshot.metadata.fromCache) return;
 
+    let hasAdded = false, hasModified = false;
+
+    snapshot.docChanges().forEach((change) => {
+      const booking = change.doc.data();
+      if (change.type === "added") {
+        hasAdded = true;
+        console.log("⚡ Remote booking added:", booking.room, booking.check_in_date);
+        window.dispatchEvent(new CustomEvent("cibaraBookingAdded", { detail: booking }));
+        showSyncToast("📋 New Booking — " + (booking.guest_name || "Guest"));
+      } else if (change.type === "modified") {
+        hasModified = true;
+        console.log("⚡ Remote booking modified:", booking.room, booking.status);
+        window.dispatchEvent(new CustomEvent("cibaraBookingModified", { detail: booking }));
+      } else if (change.type === "removed") {
+        hasModified = true;
+        window.dispatchEvent(new CustomEvent("cibaraBookingModified", { detail: { ...change.doc.data(), _removed: true } }));
+      }
+    });
+
+    if (hasModified && !hasAdded) showSyncToast("📋 Booking Updated");
+  }
+);
+
+// ─── Expenses listener (today only) ───────────────────────────────────────
+// Expenses are written to the `expenses` collection (not `payments`).
+// Listen for new expenses so the transaction tab stays current on all devices.
+let expensesInitialLoad = true;
+
+onSnapshot(
+  query(collection(db, "expenses"), where("date", "==", _todayStr)),
+  (snapshot) => {
+    if (expensesInitialLoad) { expensesInitialLoad = false; return; }
+    if (snapshot.metadata.hasPendingWrites || snapshot.metadata.fromCache) return;
+
     snapshot.docChanges().forEach((change) => {
       if (change.type !== "added") return;
-      const booking = change.doc.data();
-      console.log("⚡ Remote booking added — notifying rooms view");
-
-      // Let the rooms module show a banner / badge for the new booking
-      window.dispatchEvent(new CustomEvent("cibaraBookingAdded", { detail: booking }));
-      showSyncToast("📋 New Booking Added");
+      const exp = change.doc.data();
+      console.log("⚡ Remote expense added — notifying transactions");
+      window.dispatchEvent(new CustomEvent("cibaraExpenseAdded", { detail: exp }));
+      showSyncToast("🧾 Expense Added");
     });
   }
 );

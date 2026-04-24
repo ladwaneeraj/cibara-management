@@ -951,7 +951,7 @@ def transfer_room():
         current_checkin_time = datetime.strptime(checkin_time, "%Y-%m-%d %H:%M")
 
         batch.update(rooms_ref.document(old_room), {
-            "status": "vacant",
+            "status": "cleaning",
             "guest": None,
             "checkin_time": None,
             "balance": 0,
@@ -959,8 +959,8 @@ def transfer_room():
             "discounts": [],
             "renewal_count": 0,
             "last_renewal_time": None,
-            "cleaning_status": None,
-            "cleaning_start_time": None
+            "cleaning_status": "in_progress",
+            "cleaning_start_time": datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S")
         })
 
         batch.commit()
@@ -1450,24 +1450,26 @@ def get_stay_payments():
         except ValueError:
             return jsonify(success=False, message="checkin_time must be YYYY-MM-DD HH:MM"), 400
 
+        # ── Multi-query approach — mirrors payment_service.query_payments_for_stay ─
+        # but preserves Firestore doc IDs (needed for edit/delete).
+        # Q1 uses only room + date (two-field query, no composite index needed),
+        # then filters by name in Python — avoids the 3-field index requirement.
+        # Q2 uses stay_room_key (single-field equality, always index-free) to
+        # catch booking advances and any payment linked before the stay started.
+        _exclude_types  = {"expense", "discount"}
+        _payments_col   = db.collection("payments")
         checkin_date_str = checkin_dt.strftime("%Y-%m-%d")
-
-        # ── Query payments collection ─────────────────────────────────────────
-        _payments_ref = db.collection("payments")
-        _exclude_types = ("expense", "discount")
-
-        query = (
-            _payments_ref
-            .where(filter=FieldFilter("room",  "==", room))
-            .where(filter=FieldFilter("name",  "==", guest_name))
-            .where(filter=FieldFilter("date",  ">=", checkin_date_str))
-        )
-
+        stay_key         = f"{room}_{checkin_dt.strftime('%Y-%m-%d %H:%M')}"
+        seen_ids = set()
         payments = []
-        for doc in query.stream():
+
+        def _add_doc(doc):
+            if doc.id in seen_ids:
+                return
             d = doc.to_dict()
             if d.get("type") in _exclude_types:
-                continue
+                return
+            seen_ids.add(doc.id)
             payments.append({
                 "id":     doc.id,
                 "amount": d.get("amount", 0),
@@ -1478,7 +1480,27 @@ def get_stay_payments():
                 "note":   d.get("note", ""),
             })
 
-        # Sort in Python — avoids requiring a composite Firestore index
+        # Q1: room + date >= checkin_date, filter name in Python
+        try:
+            q1 = (
+                _payments_col
+                .where(filter=FieldFilter("room", "==", room))
+                .where(filter=FieldFilter("date", ">=", checkin_date_str))
+            )
+            for doc in q1.stream():
+                if doc.to_dict().get("name") == guest_name:
+                    _add_doc(doc)
+        except Exception as e:
+            logger.warning(f"get_stay_payments Q1 failed: {e}")
+
+        # Q2: stay_room_key — catches booking advances + any pay linked pre-checkin
+        try:
+            q2 = _payments_col.where(filter=FieldFilter("stay_room_key", "==", stay_key))
+            for doc in q2.stream():
+                _add_doc(doc)
+        except Exception as e:
+            logger.warning(f"get_stay_payments Q2 failed: {e}")
+
         payments.sort(key=lambda p: (p.get("date", ""), p.get("time", "")))
 
         logger.info(f"get_stay_payments: room={room} guest={guest_name} "
@@ -1646,6 +1668,86 @@ def update_stay_payment():
 
     except Exception as e:
         logger.error(f"update_stay_payment error: {e}", exc_info=True)
+        return jsonify(success=False, message=f"Error: {str(e)}"), 500
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Delete a single payment record
+# ─────────────────────────────────────────────────────────────────────────────
+
+@rooms_bp.route("/delete_stay_payment", methods=["POST"])
+def delete_stay_payment():
+    """
+    Permanently delete a single payment record.
+
+    Body: {
+        password: str,
+        payment_id: str   -- Firestore document ID in payments collection
+    }
+
+    Side effects:
+      - Removes the doc from the `payments` collection.
+      - Reverses its contribution to `current_totals` (cash/online).
+      - If room is still occupied: adds the deleted amount back to room balance
+        (guest now owes that money again).
+    """
+    try:
+        data = request.json or {}
+        password   = data.get("password", "")
+        payment_id = data.get("payment_id", "").strip()
+
+        if not _check_manager_password(password):
+            return jsonify(success=False, message="Incorrect password"), 403
+
+        if not payment_id:
+            return jsonify(success=False, message="payment_id is required"), 400
+
+        _payments_ref = db.collection("payments")
+        pay_doc_ref   = _payments_ref.document(payment_id)
+        pay_snap      = pay_doc_ref.get()
+
+        if not pay_snap.exists:
+            return jsonify(success=False, message="Payment record not found"), 404
+
+        old_data   = pay_snap.to_dict()
+        old_method = old_data.get("method", "")
+        old_amount = int(old_data.get("amount", 0))
+        room_id    = str(old_data.get("room", ""))
+
+        batch = db.batch()
+
+        # 1. Delete the payment doc
+        batch.delete(pay_doc_ref)
+
+        # 2. Reverse contribution to current_totals (cash/online only)
+        valid_total_methods = ("cash", "online")
+        if old_method in valid_total_methods and old_amount > 0:
+            totals_doc_ref = totals_ref.document("current_totals")
+            batch.update(totals_doc_ref, {old_method: firestore.Increment(-old_amount)})
+
+        # 3. If room is still occupied, add the amount back to balance
+        #    (guest paid this, but we're removing the record → they owe it again)
+        if room_id and old_amount > 0:
+            room_snap = rooms_ref.document(room_id).get()
+            if room_snap.exists and room_snap.to_dict().get("status") == "occupied":
+                current_balance = int(room_snap.to_dict().get("balance", 0))
+                new_balance = current_balance + old_amount
+                batch.update(rooms_ref.document(room_id), {"balance": new_balance})
+                logger.info(
+                    f"delete_stay_payment: room {room_id} balance adjusted "
+                    f"{current_balance} → {new_balance} (deleted amount {old_amount})"
+                )
+
+        batch.commit()
+        invalidate_rooms_and_totals()
+
+        logger.info(
+            f"delete_stay_payment: id={payment_id} method={old_method} amount={old_amount}"
+        )
+        return jsonify(success=True, message="Transaction deleted")
+
+    except Exception as e:
+        logger.error(f"delete_stay_payment error: {e}", exc_info=True)
         return jsonify(success=False, message=f"Error: {str(e)}"), 500
 
 

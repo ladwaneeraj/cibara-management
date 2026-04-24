@@ -574,8 +574,76 @@
   border: none; border-radius: 4px; cursor: pointer; font-size: .76rem;
 }
 .rp-cancel-edit-btn:hover { opacity: .85; }
+.rp-delete-btn {
+  padding: .28rem .55rem; background: #dc3545; color: #fff;
+  border: none; border-radius: 4px; cursor: pointer; font-size: .73rem;
+  font-weight: 600; margin-left: .25rem; transition: opacity .15s;
+}
+.rp-delete-btn:hover { opacity: .8; }
+
+/* ── Delete confirmation modal ── */
+.rpd-overlay {
+  display: none; position: fixed; inset: 0;
+  background: rgba(0,0,0,.55); z-index: 1400;
+  align-items: center; justify-content: center;
+}
+.rpd-overlay.show { display: flex; }
+.rpd-box {
+  background: #fff; border-radius: 12px; width: 340px;
+  box-shadow: 0 12px 40px rgba(0,0,0,.25);
+  overflow: hidden;
+}
+.rpd-header {
+  background: #dc3545; color: #fff;
+  padding: .85rem 1.1rem;
+  display: flex; align-items: center; gap: .55rem;
+}
+.rpd-header i { font-size: 1.15rem; }
+.rpd-header h3 { margin: 0; font-size: .95rem; font-weight: 700; }
+.rpd-body { padding: 1.1rem 1.2rem .9rem; }
+.rpd-warn {
+  font-size: .82rem; color: #555; margin-bottom: .85rem; line-height: 1.55;
+}
+.rpd-detail {
+  background: #fff5f5; border: 1px solid #fecaca;
+  border-radius: 8px; padding: .6rem .9rem;
+  font-size: .8rem; color: #333; line-height: 1.6;
+  margin-bottom: 1rem;
+}
+.rpd-detail .rpd-row { display: flex; justify-content: space-between; gap: .5rem; }
+.rpd-detail .rpd-row .lbl { color: #888; font-size: .74rem; }
+.rpd-detail .rpd-row .val { font-weight: 700; }
+.rpd-detail .rpd-row .val.amt { color: #dc3545; font-size: .95rem; }
+.rpd-notice {
+  background: #fef9c3; border: 1px solid #fde68a;
+  border-radius: 6px; padding: .45rem .75rem;
+  font-size: .73rem; color: #92400e;
+  display: flex; align-items: flex-start; gap: .4rem;
+  margin-bottom: 1rem; line-height: 1.45;
+}
+.rpd-notice i { margin-top: .05rem; flex-shrink: 0; }
+.rpd-actions { display: flex; gap: .55rem; justify-content: flex-end; }
+.rpd-cancel-btn {
+  padding: .38rem .85rem; background: #fff;
+  border: 1px solid #d0d0d0; border-radius: 7px;
+  cursor: pointer; font-size: .82rem; color: #555; font-weight: 600;
+  transition: background .15s;
+}
+.rpd-cancel-btn:hover { background: #f5f5f5; }
+.rpd-confirm-btn {
+  padding: .38rem .95rem; background: #dc3545; color: #fff;
+  border: none; border-radius: 7px; cursor: pointer;
+  font-size: .82rem; font-weight: 700;
+  display: flex; align-items: center; gap: .4rem;
+  transition: background .15s;
+}
+.rpd-confirm-btn:hover:not(:disabled) { background: #b91c1c; }
+.rpd-confirm-btn:disabled { opacity: .6; cursor: not-allowed; }
 .rp-method-cash   { color: #28a745; font-weight: 700; font-size: .72rem; }
 .rp-method-online { color: #1565c0; font-weight: 700; font-size: .72rem; }
+.rp-method-upi    { color: #6f42c1; font-weight: 700; font-size: .72rem; }
+.rp-method-ota    { color: #e67e22; font-weight: 700; font-size: .72rem; }
+.rp-method-other  { color: #555;    font-weight: 700; font-size: .72rem; }
 .rp-empty { text-align: center; color: #999; padding: 1.5rem; font-size: .82rem; }
 .rp-spinner { text-align: center; padding: 1.5rem; color: #888; font-size: .82rem; }
 
@@ -1045,6 +1113,35 @@
   </div>
 </div>
 
+<!-- ── Delete confirmation modal ──────────────────────────────────────── -->
+<div id="rpd-overlay" class="rpd-overlay" role="dialog" aria-modal="true">
+  <div class="rpd-box">
+    <div class="rpd-header">
+      <i class="fas fa-exclamation-triangle"></i>
+      <h3>Delete Transaction?</h3>
+    </div>
+    <div class="rpd-body">
+      <p class="rpd-warn">You are about to permanently delete this payment record. Please review the details below:</p>
+      <div class="rpd-detail">
+        <div class="rpd-row"><span class="lbl">Amount</span><span class="val amt" id="rpd-amount">—</span></div>
+        <div class="rpd-row"><span class="lbl">Method</span><span class="val" id="rpd-method">—</span></div>
+        <div class="rpd-row"><span class="lbl">Type</span><span class="val" id="rpd-type">—</span></div>
+        <div class="rpd-row"><span class="lbl">Date</span><span class="val" id="rpd-date">—</span></div>
+      </div>
+      <div class="rpd-notice">
+        <i class="fas fa-info-circle"></i>
+        <span>This <strong>cannot be undone</strong>. If the room is still occupied, the balance will be adjusted accordingly.</span>
+      </div>
+      <div class="rpd-actions">
+        <button class="rpd-cancel-btn" id="rpd-cancel">Cancel</button>
+        <button class="rpd-confirm-btn" id="rpd-confirm">
+          <i class="fas fa-trash"></i> Yes, Delete
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- ── Bill viewer modal ──────────────────────────────────────────────── -->
 <div id="reg-bill-overlay" class="bill-modal" role="dialog" aria-modal="true">
   <div class="bill-content">
@@ -1229,6 +1326,20 @@
     const regBillOverlay = dom("reg-bill-overlay");
     if (regBillOverlay) regBillOverlay.addEventListener("click", (e) => {
       if (e.target === regBillOverlay) _closeRegBill();
+    });
+
+    // Delete confirm modal
+    const rpdCancel = dom("rpd-cancel");
+    if (rpdCancel) rpdCancel.addEventListener("click", _closeDeleteModal);
+    const rpdOverlay = dom("rpd-overlay");
+    if (rpdOverlay) rpdOverlay.addEventListener("click", (e) => {
+      if (e.target === rpdOverlay) _closeDeleteModal();
+    });
+    // Escape key closes the delete modal
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && dom("rpd-overlay")?.classList.contains("show")) {
+        _closeDeleteModal();
+      }
     });
   }
 
@@ -1826,15 +1937,35 @@
     // Do NOT clear pmState.password — user may open another entry without re-typing
   }
 
+  function _methodCls(method) {
+    if (method === "cash")   return "rp-method-cash";
+    if (method === "online") return "rp-method-online";
+    if (method === "upi")    return "rp-method-upi";
+    if (method === "ota")    return "rp-method-ota";
+    return "rp-method-other";
+  }
+  function _methodLbl(method) {
+    const map = { cash: "Cash", online: "Online", upi: "UPI", ota: "OTA",
+                  balance: "Balance", card: "Card",
+                  already_paid: "Pre-paid", bank_settlement: "Bank" };
+    return map[method] || (method ? method.charAt(0).toUpperCase() + method.slice(1) : "-");
+  }
+
   function _renderPaymentsTable(container) {
     if (!container) return;
-    // Only show cash / online payments and refund entries — exclude checkin, checkout,
-    // addon, renewal, pay_later, expense, discount and any other internal log types.
-    const ALLOWED_METHODS = new Set(["cash", "online"]);
-    const REFUND_TYPES    = new Set(["refund", "checkout_refund", "manual_refund"]);
-    const payments = (pmState.payments || []).filter(
-      p => ALLOWED_METHODS.has(p.method) || REFUND_TYPES.has(p.type)
-    );
+    // Show ALL records returned by backend (backend already excludes expense/discount).
+    // Only hide records with 0 amount and a non-payment internal type.
+    const REFUND_TYPES    = new Set(["refund", "checkout_refund", "manual_refund", "booking_cancel_refund"]);
+    const INTERNAL_TYPES  = new Set(["checkin", "checkout"]);
+    const payments = (pmState.payments || []).filter(p => {
+      // Always show if there's an amount
+      if ((p.amount || 0) > 0) return true;
+      // Show refunds even if amount=0
+      if (REFUND_TYPES.has(p.type)) return true;
+      // Hide zero-amount internal log entries
+      if (INTERNAL_TYPES.has(p.type)) return false;
+      return true;
+    });
 
     if (!payments.length) {
       container.innerHTML = `<div class="rp-empty">No payment records found for this stay.</div>`;
@@ -1844,8 +1975,6 @@
     let rows = "";
     payments.forEach((p) => {
       const isEditing = (pmState.editId === p.id);
-      const methodCls = p.method === "cash" ? "rp-method-cash" : "rp-method-online";
-      const methodLbl = p.method === "cash" ? "Cash" : (p.method === "online" ? "Online" : p.method);
       const isRefund  = REFUND_TYPES.has(p.type);
 
       if (isEditing) {
@@ -1859,6 +1988,8 @@
               <select id="rp-edit-mode-${p.id}">
                 <option value="cash"   ${p.method === "cash"   ? "selected" : ""}>Cash</option>
                 <option value="online" ${p.method === "online" ? "selected" : ""}>Online</option>
+                <option value="upi"    ${p.method === "upi"    ? "selected" : ""}>UPI</option>
+                <option value="ota"    ${p.method === "ota"    ? "selected" : ""}>OTA</option>
               </select>
               ${!isRefund ? `
               <label style="font-size:.75rem;font-weight:600;color:#555;white-space:nowrap;">Amount (₹):</label>
@@ -1873,10 +2004,13 @@
         rows += `
         <tr data-pid="${p.id}">
           <td>${_fmtPmDate(p.date)}${p.time ? ' <span style="color:#999;font-size:.7rem;">' + p.time + '</span>' : ''}</td>
-          <td><span class="${methodCls}">${methodLbl}</span></td>
+          <td><span class="${_methodCls(p.method)}">${_methodLbl(p.method)}</span></td>
           <td><strong>₹${(p.amount || 0).toLocaleString("en-IN")}</strong></td>
           <td style="color:#666;font-size:.73rem;">${_typeLabel(p.type)}</td>
-          <td><button class="rp-edit-btn" onclick="_rpStartEdit('${p.id}')">Edit</button></td>
+          <td style="white-space:nowrap">
+            <button class="rp-edit-btn"   onclick="_rpStartEdit('${p.id}')">Edit</button>
+            <button class="rp-delete-btn" onclick="_rpDelete('${p.id}')">Delete</button>
+          </td>
         </tr>`;
       }
     });
@@ -1997,6 +2131,73 @@
       _notify("Network error. Please try again.", "error");
     } finally {
       if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = "Save"; }
+    }
+  };
+
+  function _closeDeleteModal() {
+    const ov = dom("rpd-overlay");
+    if (ov) ov.classList.remove("show");
+  }
+
+  window._rpDelete = function(payId) {
+    const p = (pmState.payments || []).find(x => x.id === payId);
+    if (!p) return;
+
+    // Populate the modal with this payment's details
+    const amtEl    = dom("rpd-amount");
+    const methEl   = dom("rpd-method");
+    const typeEl   = dom("rpd-type");
+    const dateEl   = dom("rpd-date");
+    const confirmBtn = dom("rpd-confirm");
+
+    if (amtEl)  amtEl.textContent  = `₹${(p.amount || 0).toLocaleString("en-IN")}`;
+    if (methEl) methEl.textContent = _methodLbl(p.method);
+    if (typeEl) typeEl.textContent = _typeLabel(p.type);
+    if (dateEl) dateEl.textContent = p.date || "—";
+
+    // Show the modal
+    const ov = dom("rpd-overlay");
+    if (ov) ov.classList.add("show");
+
+    // Wire the confirm button (replace any previous handler)
+    if (confirmBtn) {
+      const newBtn = confirmBtn.cloneNode(true);
+      confirmBtn.parentNode.replaceChild(newBtn, confirmBtn);
+      newBtn.addEventListener("click", async () => {
+        newBtn.disabled = true;
+        newBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Deleting…';
+        try {
+          const res = await apiFetch("/delete_stay_payment", {
+            method:  "POST",
+            headers: { "Content-Type": "application/json" },
+            body:    JSON.stringify({ password: pmState.password, payment_id: payId }),
+          });
+          const data = await res.json();
+          if (!data.success) {
+            _notify(data.message || "Delete failed.", "error");
+            newBtn.disabled = false;
+            newBtn.innerHTML = '<i class="fas fa-trash"></i> Yes, Delete';
+            return;
+          }
+          _closeDeleteModal();
+          // Remove from local state and re-render instantly
+          pmState.payments = (pmState.payments || []).filter(x => x.id !== payId);
+          _renderPaymentsTable(dom("rp-content"));
+          _notify("Transaction deleted.", "success");
+          // Bust register cache
+          state.lastLoadedRange = null;
+          // Refresh room balances
+          if (typeof window.fetchData === "function") {
+            window.fetchData().then(() => {
+              if (typeof window.renderRooms === "function") window.renderRooms();
+            }).catch(() => {});
+          }
+        } catch (err) {
+          _notify("Network error. Please try again.", "error");
+          newBtn.disabled = false;
+          newBtn.innerHTML = '<i class="fas fa-trash"></i> Yes, Delete';
+        }
+      });
     }
   };
 

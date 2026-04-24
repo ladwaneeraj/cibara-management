@@ -9,6 +9,7 @@ from routes.settlements import settlements_bp
 from routes.reports import reports_bp
 from routes.customers import customers_bp
 from routes.utils import utils_bp
+from routes.laundry import laundry_bp
 import os
 import threading
 import json
@@ -130,6 +131,7 @@ app.register_blueprint(settlements_bp, url_prefix="")
 app.register_blueprint(reports_bp,     url_prefix="")
 app.register_blueprint(customers_bp,   url_prefix="")
 app.register_blueprint(utils_bp,       url_prefix="")
+app.register_blueprint(laundry_bp,    url_prefix="")
 
 # ---------------------------------------------------------------------------
 # Error handlers

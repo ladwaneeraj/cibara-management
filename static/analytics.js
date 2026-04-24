@@ -58,8 +58,8 @@ function initializeAnalytics() {
   const today = new Date();
   const startOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
 
-  const startDateInput = document.getElementById("start-date");
-  const endDateInput = document.getElementById("end-date");
+  const startDateInput = document.getElementById("report-start-date");
+  const endDateInput = document.getElementById("report-end-date");
 
   if (startDateInput && endDateInput) {
     startDateInput.valueAsDate = startOfMonth;
@@ -70,92 +70,246 @@ function initializeAnalytics() {
   initializeAnalyticsView();
 }
 
-// Generate all analytics charts and summary cards
+// Generate all analytics charts, KPI cards, insights, and billing strip
 async function generateAnalytics(reportData) {
-  if (!reportData) {
-    console.error("No report data available for analytics");
-    return;
-  }
+  if (!reportData) return;
 
-  // Update summary cards
+  // Reset any "no data" placeholders from previous render
+  document.querySelectorAll(".chart-empty-msg").forEach(el => el.remove());
+  document.querySelectorAll(".chart-body canvas").forEach(c => { c.style.display = ""; });
+
+  // KPI cards + insights
   updateSummaryCards(reportData);
 
-  // Generate all charts
+  // Charts
   generateRevenueExpenseChart(reportData);
-  generateTopRoomsChart(reportData);
-  generatePaymentMethodsChart(reportData);
-  generateExpenseCategoriesChart(reportData);
   generateDailyRevenueChart(reportData);
+  generatePaymentMethodsChart(reportData);
+  generateTopRoomsChart(reportData);
+  generateExpenseCategoriesChart(reportData);
+  generateExpenseTrendChart(reportData);
   generateTopServicesChart(reportData);
+
+  // Billing strip (separate API call, non-blocking)
+  const startDate = document.getElementById("report-start-date")?.value;
+  const endDate   = document.getElementById("report-end-date")?.value;
+  if (startDate && endDate) {
+    try {
+      const resp = await apiFetch("/revenue_report", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ start_date: startDate, end_date: endDate }),
+      });
+      if (resp.ok) {
+        const bd = await resp.json();
+        if (bd.success) updateBillingStrip(bd.summary);
+      }
+    } catch (e) {
+      console.warn("Billing data unavailable:", e);
+    }
+  }
 }
 
-// Update summary cards with data - FIXED NET REVENUE CALCULATION
+// ── 8-card KPI grid ──────────────────────────────────────────────────────────
 function updateSummaryCards(data) {
-  const summaryContainer = document.getElementById("analytics-summary");
-  if (!summaryContainer) return;
+  const grid = document.getElementById("analytics-summary");
+  if (!grid) return;
 
-  const cashTotal = data.cash_total || 0;
-  const onlineTotal = data.online_total || 0;
-  const totalIncome = cashTotal + onlineTotal;
+  const fmt  = (n) => Math.round(n || 0).toLocaleString("en-IN");
+  const cash = data.cash_total   || 0;
+  const upi  = data.online_total || 0;
+  const rev  = cash + upi;
+  const exp  = data.expense_total || 0;
+  const net  = rev - exp;
+  const ref  = data.refund_total  || 0;
+  const adon = data.addon_total   || 0;
+  const ci   = data.checkins  || 0;
+  const rn   = data.renewals  || 0;
+  const stays= ci + rn;
 
-  // FIXED: Include both transaction and report expenses
-  const totalExpense = data.expense_total || 0; // This includes both daily and report expenses
+  const startDate = document.getElementById("report-start-date")?.value;
+  const endDate   = document.getElementById("report-end-date")?.value;
+  let days = 1;
+  if (startDate && endDate)
+    days = Math.max(1, Math.round((new Date(endDate) - new Date(startDate)) / 86400000) + 1);
 
-  // FIXED: Net revenue = Total Income - Total Expenses
-  const netRevenue = totalIncome - totalExpense;
+  const margin     = rev > 0 ? ((net / rev) * 100).toFixed(1) : "0.0";
+  const netPos     = net >= 0;
+  const avgDaily   = Math.round(rev / days);
+  const avgStay    = stays > 0 ? Math.round(rev / stays) : 0;
+  const refRate    = stays > 0 ? ((data.refund_logs?.length || 0) / stays * 100).toFixed(0) : 0;
+  const txnExp     = data.transaction_expense_total || 0;
+  const repExp     = data.report_expense_total      || 0;
 
-  const checkins = data.checkins || 0;
-  const renewals = data.renewals || 0;
-
-  // Calculate occupancy rate (example calculation - modify as needed)
-  // This is a placeholder - you should use actual data from your backend
-  const totalRooms = 30; // Assumption - replace with actual value
-  const occupancyRate = Math.round((checkins / totalRooms) * 100);
-
-  summaryContainer.innerHTML = `
-    <div class="analytics-card">
-      <div class="analytics-card-header">Total Income</div>
-      <div class="analytics-card-value">₹${totalIncome}</div>
-      <div class="analytics-card-footer">
-        <span>Cash: ₹${cashTotal}</span>
-        <span>Online: ₹${onlineTotal}</span>
+  function card(accent, iconBg, icon, label, value, badges) {
+    return `
+    <div class="kpi-card" style="--kpi-accent:${accent};--kpi-icon-bg:${iconBg}">
+      <div class="kpi-top">
+        <div class="kpi-icon"><i class="${icon}"></i></div>
+        <div class="kpi-label">${label}</div>
       </div>
-    </div>
-    
-    <div class="analytics-card">
-      <div class="analytics-card-header">Total Expenses</div>
-      <div class="analytics-card-value">₹${totalExpense}</div>
-      <div class="analytics-card-footer">
-        <span>Categories: ${
-          (data.expense_logs || []).length > 0
-            ? Object.keys(
-                (data.expense_logs || []).reduce((acc, log) => {
-                  acc[log.category] = true;
-                  return acc;
-                }, {})
-              ).length
-            : 0
-        }</span>
+      <div class="kpi-value">${value}</div>
+      <div class="kpi-meta">${badges}</div>
+    </div>`;
+  }
+  function badge(bg, color, text) {
+    return `<span class="kpi-badge" style="background:${bg};color:${color}">${text}</span>`;
+  }
+
+  grid.innerHTML =
+    card("#2563eb","#eff6ff","fas fa-rupee-sign","Total Revenue",`₹${fmt(rev)}`,
+      badge("#f0fdf4","#16a34a",`₹${fmt(cash)} Cash`) +
+      badge("#eff6ff","#2563eb",`₹${fmt(upi)} UPI`)) +
+
+    card(netPos?"#16a34a":"#dc2626", netPos?"#f0fdf4":"#fef2f2","fas fa-chart-line","Net Profit",
+      `<span style="color:${netPos?"#16a34a":"#dc2626"}">₹${fmt(net)}</span>`,
+      badge(netPos?"#f0fdf4":"#fef2f2", netPos?"#16a34a":"#dc2626", `${margin}% margin`)) +
+
+    card("#ef4444","#fef2f2","fas fa-receipt","Total Expenses",`₹${fmt(exp)}`,
+      badge("#fef9c3","#854d0e",`₹${fmt(txnExp)} Daily`) +
+      badge("#f3e8ff","#6b21a8",`₹${fmt(repExp)} Report`)) +
+
+    card("#7c3aed","#f5f3ff","fas fa-calendar-day","Avg Daily Revenue",`₹${fmt(avgDaily)}`,
+      badge("#f5f3ff","#7c3aed",`${days} day${days!==1?"s":""}`)) +
+
+    card("#f59e0b","#fffbeb","fas fa-sign-in-alt","Check-ins & Renewals",`${ci}`,
+      badge("#fffbeb","#b45309",`${rn} Renewals`) +
+      badge("#fffbeb","#b45309",`${stays} Total Stays`)) +
+
+    card("#0891b2","#ecfeff","fas fa-concierge-bell","Add-on Revenue",`₹${fmt(adon)}`,
+      badge("#ecfeff","#0e7490",`${(data.addon_logs||[]).length} items`)) +
+
+    card("#ea580c","#fff7ed","fas fa-undo","Refunds",`₹${fmt(ref)}`,
+      badge("#fff7ed","#9a3412",`${(data.refund_logs||[]).length} txns`) +
+      badge("#fff7ed","#9a3412",`${refRate}% rate`)) +
+
+    card("#16a34a","#f0fdf4","fas fa-hand-holding-usd","Avg per Stay",`₹${fmt(avgStay)}`,
+      badge("#f0fdf4","#166534",`${stays} stays`));
+
+  // Trigger insights update
+  generateInsightsSection(data, days);
+}
+
+// ── Key Insights panel (6 cells) ─────────────────────────────────────────────
+function generateInsightsSection(data, dayCount) {
+  const el = document.getElementById("analytics-insights");
+  if (!el) return;
+
+  const fmt = (n) => Math.round(n || 0).toLocaleString("en-IN");
+  const cash = data.cash_total || 0;
+  const upi  = data.online_total || 0;
+  const rev  = cash + upi;
+  const allPay = [...(data.cash_logs||[]), ...(data.online_logs||[])];
+
+  // Best day by revenue
+  const dayRev = {};
+  allPay.forEach(l => { dayRev[l.date] = (dayRev[l.date]||0) + l.amount; });
+  const bestDay = Object.entries(dayRev).sort((a,b)=>b[1]-a[1])[0];
+  let bestDayStr = "—";
+  if (bestDay) {
+    const [,m,d] = bestDay[0].split("-");
+    bestDayStr = `${d}/${m}  ₹${fmt(bestDay[1])}`;
+  }
+
+  // Worst day
+  const worstDay = Object.entries(dayRev).sort((a,b)=>a[1]-b[1])[0];
+  let worstDayStr = "—";
+  if (worstDay && worstDay[0] !== bestDay?.[0]) {
+    const [,m,d] = worstDay[0].split("-");
+    worstDayStr = `${d}/${m}  ₹${fmt(worstDay[1])}`;
+  }
+
+  // Top room
+  const roomRev = {};
+  allPay.forEach(l => { if(l.room) roomRev[l.room]=(roomRev[l.room]||0)+l.amount; });
+  const topRoom = Object.entries(roomRev).sort((a,b)=>b[1]-a[1])[0];
+  const topRoomStr = topRoom ? `Room ${topRoom[0]}  ₹${fmt(topRoom[1])}` : "—";
+
+  // Cash vs UPI
+  const cashPct = rev>0 ? Math.round((cash/rev)*100) : 0;
+
+  // Top expense category
+  const expCat = {};
+  (data.expense_logs||[]).forEach(l=>{ const c=l.category||"other"; expCat[c]=(expCat[c]||0)+l.amount; });
+  const topExp = Object.entries(expCat).sort((a,b)=>b[1]-a[1])[0];
+  const topExpStr = topExp
+    ? `${topExp[0].charAt(0).toUpperCase()+topExp[0].slice(1)}  ₹${fmt(topExp[1])}`
+    : "None";
+
+  // Expense ratio
+  const expRatio = rev>0 ? ((data.expense_total||0)/rev*100).toFixed(0) : 0;
+
+  // Busiest day of week
+  const dayNames=["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+  const dowCount={};
+  allPay.forEach(l=>{ if(l.date){ const d=new Date(l.date).getDay(); dowCount[d]=(dowCount[d]||0)+1; }});
+  const busiest=Object.entries(dowCount).sort((a,b)=>b[1]-a[1])[0];
+  const busiestStr = busiest ? `${dayNames[+busiest[0]]} (${busiest[1]} txns)` : "—";
+
+  // Most-paid-by-cash vs UPI guest
+  const cashGuests={}, upiGuests={};
+  (data.cash_logs||[]).forEach(l=>{ if(l.name) cashGuests[l.name]=(cashGuests[l.name]||0)+l.amount; });
+  (data.online_logs||[]).forEach(l=>{ if(l.name) upiGuests[l.name]=(upiGuests[l.name]||0)+l.amount; });
+  const topCashGuest=Object.entries(cashGuests).sort((a,b)=>b[1]-a[1])[0];
+  const topUpiGuest =Object.entries(upiGuests).sort((a,b)=>b[1]-a[1])[0];
+  const guestStr = topCashGuest ? topCashGuest[0].split(" ")[0]+" ₹"+fmt(topCashGuest[1]) : "—";
+
+  function cell(iconBg, iconColor, icon, lbl, val) {
+    return `<div class="insight-cell">
+      <div class="insight-icon-wrap" style="background:${iconBg};color:${iconColor}">
+        <i class="${icon}"></i>
       </div>
-    </div>
-    
-    <div class="analytics-card highlighted">
-      <div class="analytics-card-header">Net Revenue</div>
-      <div class="analytics-card-value">₹${netRevenue}</div>
-      <div class="analytics-card-footer">
-        <span>Income: ₹${totalIncome}</span>
-        <span>Expenses: ₹${totalExpense}</span>
+      <div>
+        <div class="insight-lbl">${lbl}</div>
+        <div class="insight-val">${val}</div>
       </div>
+    </div>`;
+  }
+
+  el.innerHTML = `
+    <div class="insights-hdr">
+      <i class="fas fa-lightbulb"></i> Key Insights
+      <span class="hdr-sub">${dayCount} day${dayCount!==1?"s":""} period</span>
     </div>
-    
-    <div class="analytics-card">
-      <div class="analytics-card-header">Check-ins</div>
-      <div class="analytics-card-value">${checkins}</div>
-      <div class="analytics-card-footer">
-        <span>Renewals: ${renewals}</span>
+    <div class="insights-cells">
+      ${cell("#fef9c3","#b45309","fas fa-trophy","Best Revenue Day",bestDayStr)}
+      ${cell("#dbeafe","#1d4ed8","fas fa-bed","Top Earning Room",topRoomStr)}
+      ${cell("#dcfce7","#166534","fas fa-exchange-alt","Cash vs UPI",`${cashPct}% Cash / ${100-cashPct}% UPI`)}
+      ${cell("#fef2f2","#dc2626","fas fa-arrow-up","Top Expense Category",topExpStr)}
+      ${cell("#f3e8ff","#7c3aed","fas fa-fire","Busiest Day of Week",busiestStr)}
+      ${cell("#e0f2fe","#0369a1","fas fa-percentage","Expense Ratio",`${expRatio}% of Revenue`)}
+    </div>`;
+}
+
+// ── Billing strip (populated after /revenue_report API call) ─────────────────
+function updateBillingStrip(summary) {
+  const panel = document.getElementById("billing-panel");
+  const strip = document.getElementById("billing-strip");
+  if (!panel || !strip || !summary) return;
+
+  const fmt = (n) => Math.round(n || 0).toLocaleString("en-IN");
+
+  function bk(iconBg, iconColor, icon, lbl, val) {
+    return `<div class="billing-kpi">
+      <div class="billing-icon" style="background:${iconBg};color:${iconColor}">
+        <i class="${icon}"></i>
       </div>
-    </div>
-  `;
+      <div>
+        <div class="billing-lbl">${lbl}</div>
+        <div class="billing-val">${val}</div>
+      </div>
+    </div>`;
+  }
+
+  strip.innerHTML =
+    bk("#dbeafe","#1d4ed8","fas fa-file-invoice","Checkouts", summary.total_bills||0) +
+    bk("#dcfce7","#166534","fas fa-hotel","Direct Revenue",`₹${fmt(summary.hotel_revenue)}`) +
+    bk("#fef9c3","#854d0e","fas fa-globe","OTA Revenue",`₹${fmt(summary.ota_revenue)}`) +
+    bk("#f3e8ff","#6b21a8","fas fa-concierge-bell","Services",`₹${fmt(summary.total_services)}`) +
+    bk("#fef3c7","#92400e","fas fa-tag","Discounts Given",`₹${fmt(summary.total_discounts)}`) +
+    bk("#fef2f2","#dc2626","fas fa-hourglass-half","Balance Due",`₹${fmt(summary.total_balance_due)}`);
+
+  panel.style.display = "block";
 }
 
 // Revenue & Expense Chart (Line Chart)
@@ -607,6 +761,19 @@ function generateDailyRevenueChart(data) {
 }
 
 // Top Services/Add-ons Chart (Horizontal Bar) - NEW CHART
+// Show "no data" placeholder inside a chart canvas container
+function showChartEmpty(canvas, message) {
+  const parent = canvas.parentElement;
+  canvas.style.display = "none";
+  const existing = parent.querySelector(".chart-empty-msg");
+  if (!existing) {
+    const el = document.createElement("div");
+    el.className = "chart-empty-msg";
+    el.innerHTML = `<i class="fas fa-chart-bar"></i><span>${message}</span>`;
+    parent.appendChild(el);
+  }
+}
+
 function generateTopServicesChart(data) {
   const chartCanvas = document.getElementById("top-services-chart");
   if (!chartCanvas) return;
@@ -614,22 +781,28 @@ function generateTopServicesChart(data) {
   // Clear any existing chart
   if (chartCanvas.chart) {
     chartCanvas.chart.destroy();
+    chartCanvas.chart = null;
   }
 
   // Group add-ons by type
   const serviceRevenue = {};
   (data.addon_logs || []).forEach((log) => {
-    const serviceName = log.item || "Other";
+    const serviceName = log.item || log.description || "Other";
     if (!serviceRevenue[serviceName]) {
       serviceRevenue[serviceName] = 0;
     }
-    serviceRevenue[serviceName] += log.price;
+    serviceRevenue[serviceName] += (log.amount || 0);   // stored as "amount" in payments collection
   });
 
   // Sort services by revenue and get top 8
   const topServices = Object.entries(serviceRevenue)
     .sort((a, b) => b[1] - a[1])
     .slice(0, 8);
+
+  if (topServices.length === 0) {
+    showChartEmpty(chartCanvas, "No add-on services recorded in this period");
+    return;
+  }
 
   const serviceNames = topServices.map((service) => service[0]);
   const serviceValues = topServices.map((service) => service[1]);
@@ -686,116 +859,135 @@ function generateTopServicesChart(data) {
   });
 }
 
-// Create HTML for analytics widgets
+// ── Expense Trend Chart (bar + cumulative line) ───────────────────────────────
+function generateExpenseTrendChart(data) {
+  const canvas = document.getElementById("expense-trend-chart");
+  if (!canvas) return;
+  if (canvas.chart) canvas.chart.destroy();
+
+  const expLogs = data.expense_logs || [];
+  if (expLogs.length === 0) {
+    canvas.chart = null;
+    showChartEmpty(canvas, "No expense records in this period");
+    return;
+  }
+
+  const dates = [...new Set(expLogs.map(l => l.date))].sort();
+  const daily = dates.map(d => expLogs.filter(l => l.date === d).reduce((s,l) => s+(l.amount||0), 0));
+
+  // Cumulative
+  const cumul = [];
+  daily.reduce((acc, v, i) => { cumul[i] = acc + v; return cumul[i]; }, 0);
+
+  const labels = dates.map(d => { const [,m,day]=d.split("-"); return `${day}/${m}`; });
+
+  const ctx = canvas.getContext("2d");
+  canvas.chart = new Chart(ctx, {
+    type: "bar",        // root type required for mixed charts in Chart.js v3+
+    data: {
+      labels,
+      datasets: [
+        {
+          type: "bar",
+          label: "Daily",
+          data: daily,
+          backgroundColor: "rgba(239,68,68,0.55)",
+          borderColor: "#ef4444",
+          borderWidth: 1,
+          borderRadius: 4,
+          yAxisID: "y",
+        },
+        {
+          type: "line",
+          label: "Cumulative",
+          data: cumul,
+          borderColor: "#f97316",
+          backgroundColor: "rgba(249,115,22,0.08)",
+          borderWidth: 2,
+          pointRadius: 3,
+          tension: 0.35,
+          fill: true,
+          yAxisID: "y1",
+        },
+      ],
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false, animation: false,
+      plugins: {
+        legend: { position: "top" },
+        tooltip: { callbacks: { label: ctx => `${ctx.dataset.label}: ₹${(ctx.raw||0).toLocaleString("en-IN")}` } },
+      },
+      scales: {
+        y:  { beginAtZero: true, ticks: { callback: v => "₹"+v } },
+        y1: { position: "right", beginAtZero: true, ticks: { callback: v => "₹"+v }, grid: { drawOnChartArea: false } },
+      },
+    },
+  });
+}
+
+// ── Full analytics view HTML (new layout) ────────────────────────────────────
 function initializeAnalyticsView() {
-  const analyticsView = document.getElementById("analytics-view");
-  if (!analyticsView) return;
+  const view = document.getElementById("analytics-view");
+  if (!view) return;
 
-  analyticsView.innerHTML = `
-    <!-- Summary Cards -->
-    <div class="analytics-summary" id="analytics-summary">
-      <!-- Cards will be populated dynamically -->
-      <div class="analytics-card">
-        <div class="analytics-card-header">Total Income</div>
-        <div class="analytics-card-value">₹0</div>
-        <div class="analytics-card-footer">
-          <span>Cash: ₹0</span>
-          <span>Online: ₹0</span>
-        </div>
+  function chartCard(id, iconColor, icon, title, height = 270) {
+    return `<div class="chart-card" style="height:${height}px">
+      <div class="chart-hdr">
+        <i class="chart-hdr-icon ${icon}" style="color:${iconColor}"></i>
+        <span class="chart-hdr-title">${title}</span>
       </div>
-      
-      <div class="analytics-card">
-        <div class="analytics-card-header">Total Expenses</div>
-        <div class="analytics-card-value">₹0</div>
-        <div class="analytics-card-footer">
-          <span>Categories: 0</span>
-        </div>
-      </div>
-      
-      <div class="analytics-card highlighted">
-        <div class="analytics-card-header">Net Revenue</div>
-        <div class="analytics-card-value">₹0</div>
-        <div class="analytics-card-footer">
-          <span>Income: ₹0</span>
-          <span>Expenses: ₹0</span>
-        </div>
-      </div>
-      
-      <div class="analytics-card">
-        <div class="analytics-card-header">Check-ins</div>
-        <div class="analytics-card-value">0</div>
-        <div class="analytics-card-footer">
-          <span>Renewals: 0</span>
-        </div>
+      <div class="chart-body"><canvas id="${id}"></canvas></div>
+    </div>`;
+  }
+
+  view.innerHTML = `
+    <!-- 8-card KPI grid -->
+    <div class="kpi-grid" id="analytics-summary"></div>
+
+    <!-- Insights panel -->
+    <div class="insights-panel" id="analytics-insights">
+      <div class="insights-hdr"><i class="fas fa-lightbulb"></i> Key Insights <span class="hdr-sub">Tap Apply to load</span></div>
+      <div class="insights-cells">
+        <div class="insight-cell"><div class="insight-icon-wrap" style="background:#fef9c3;color:#b45309"><i class="fas fa-trophy"></i></div><div><div class="insight-lbl">Best Day</div><div class="insight-val">—</div></div></div>
+        <div class="insight-cell"><div class="insight-icon-wrap" style="background:#dbeafe;color:#1d4ed8"><i class="fas fa-bed"></i></div><div><div class="insight-lbl">Top Room</div><div class="insight-val">—</div></div></div>
+        <div class="insight-cell"><div class="insight-icon-wrap" style="background:#dcfce7;color:#166534"><i class="fas fa-exchange-alt"></i></div><div><div class="insight-lbl">Cash vs UPI</div><div class="insight-val">—</div></div></div>
+        <div class="insight-cell"><div class="insight-icon-wrap" style="background:#fef2f2;color:#dc2626"><i class="fas fa-arrow-up"></i></div><div><div class="insight-lbl">Top Expense</div><div class="insight-val">—</div></div></div>
+        <div class="insight-cell"><div class="insight-icon-wrap" style="background:#f3e8ff;color:#7c3aed"><i class="fas fa-fire"></i></div><div><div class="insight-lbl">Busiest Day</div><div class="insight-val">—</div></div></div>
+        <div class="insight-cell"><div class="insight-icon-wrap" style="background:#e0f2fe;color:#0369a1"><i class="fas fa-percentage"></i></div><div><div class="insight-lbl">Expense Ratio</div><div class="insight-val">—</div></div></div>
       </div>
     </div>
 
-    <div class="analytics-row">
-      <!-- Revenue & Expense Chart -->
-      <div class="analytics-widget">
-        <div class="widget-header">
-          <h3>Revenue & Expenses</h3>
-        </div>
-        <div class="widget-content">
-          <canvas id="revenue-expense-chart"></canvas>
-        </div>
-      </div>
+    <!-- Row 1: Revenue vs Expenses + Daily Revenue -->
+    <div class="chart-row chart-row-2">
+      ${chartCard("revenue-expense-chart","#4361ee","fas fa-chart-area","Revenue vs Expenses", 280)}
+      ${chartCard("daily-revenue-chart","#27ae60","fas fa-chart-bar","Daily Revenue — Cash vs UPI", 280)}
     </div>
 
-    <div class="analytics-row">
-      <!-- Daily Revenue Breakdown -->
-      <div class="analytics-widget">
-        <div class="widget-header">
-          <h3>Daily Revenue by Payment Method</h3>
-        </div>
-        <div class="widget-content">
-          <canvas id="daily-revenue-chart"></canvas>
-        </div>
-      </div>
+    <!-- Row 2: Payment Split + Top Rooms -->
+    <div class="chart-row chart-row-2">
+      ${chartCard("payment-methods-chart","#0891b2","fas fa-wallet","Payment Split", 280)}
+      ${chartCard("top-rooms-chart","#4361ee","fas fa-bed","Top Rooms by Revenue", 280)}
     </div>
 
-    <div class="analytics-row">
-      <!-- Top 10 Rooms Chart -->
-      <div class="analytics-widget">
-        <div class="widget-header">
-          <h3>Top 10 Rooms</h3>
-        </div>
-        <div class="widget-content">
-          <canvas id="top-rooms-chart"></canvas>
-        </div>
-      </div>
-      
-      <!-- Top Services/Add-ons Chart -->
-      <div class="analytics-widget">
-        <div class="widget-header">
-          <h3>Top Services by Revenue</h3>
-        </div>
-        <div class="widget-content">
-          <canvas id="top-services-chart"></canvas>
-        </div>
-      </div>
+    <!-- Row 3: Expense Categories + Expense Trend -->
+    <div class="chart-row chart-row-2">
+      ${chartCard("expense-categories-chart","#e63946","fas fa-tags","Expense Breakdown by Category", 280)}
+      ${chartCard("expense-trend-chart","#ef4444","fas fa-receipt","Daily Expense Trend", 280)}
     </div>
-    
-    <div class="analytics-row">
-      <!-- Payment Methods Chart -->
-      <div class="analytics-widget">
-        <div class="widget-header">
-          <h3>Payment Methods</h3>
-        </div>
-        <div class="widget-content">
-          <canvas id="payment-methods-chart"></canvas>
-        </div>
+
+    <!-- Row 4: Top Add-ons -->
+    <div class="chart-row chart-row-2">
+      ${chartCard("top-services-chart","#f59e0b","fas fa-concierge-bell","Top Add-on Services", 280)}
+      <div class="chart-card chart-card-empty" style="height:280px"></div>
+    </div>
+
+    <!-- Billing analytics strip (hidden until /revenue_report loads) -->
+    <div class="billing-panel" id="billing-panel" style="display:none">
+      <div class="billing-hdr">
+        <i class="fas fa-file-invoice-dollar"></i> Billing Analytics
+        <span>(based on guest checkouts)</span>
       </div>
-      
-      <!-- Expense Categories Chart -->
-      <div class="analytics-widget">
-        <div class="widget-header">
-          <h3>Expense Categories</h3>
-        </div>
-        <div class="widget-content">
-          <canvas id="expense-categories-chart"></canvas>
-        </div>
-      </div>
+      <div class="billing-strip" id="billing-strip"></div>
     </div>
   `;
 }
@@ -820,8 +1012,8 @@ function formatDateTime(dateStr, timeStr) {
 
 // Updated report generation to support both analytics and detailed reports
 async function generateEnhancedReport() {
-  const startDate = document.getElementById("start-date")?.value;
-  const endDate = document.getElementById("end-date")?.value;
+  const startDate = document.getElementById("report-start-date")?.value;
+  const endDate = document.getElementById("report-end-date")?.value;
 
   if (!startDate || !endDate) {
     showNotification("Please select both start and end dates", "error");
@@ -981,8 +1173,8 @@ function exportToExcel() {
 
   try {
     const data = window.reportData;
-    const startDate = document.getElementById("start-date")?.value || "N/A";
-    const endDate = document.getElementById("end-date")?.value || "N/A";
+    const startDate = document.getElementById("report-start-date")?.value || "N/A";
+    const endDate = document.getElementById("report-end-date")?.value || "N/A";
 
     // Create a new workbook
     const workbook = XLSX.utils.book_new();
@@ -1134,254 +1326,222 @@ function exportToExcel() {
   }
 }
 
-// UPDATED: Render compact report data with collapsible sections (CLOSED BY DEFAULT) and no add-ons
+// Store raw report data globally for client-side filtering
+window.rawReportData = null;
+
+// Render report data – wires filters, populates category dropdown, renders
 function renderCompactReportData(data) {
   const reportContent = document.getElementById("report-content");
   if (!reportContent) return;
 
-  // Hide loading indicator
-  const loadingIndicator = reportContent.querySelector(".loading-indicator");
-  if (loadingIndicator) loadingIndicator.classList.add("hidden");
+  window.rawReportData = data;
 
-  // Remove empty state if it exists
-  const emptyState = reportContent.querySelector(".empty-state");
-  if (emptyState) emptyState.remove();
+  // Hide loading / empty state
+  const loadingEl = reportContent.querySelector(".loading-indicator");
+  if (loadingEl) loadingEl.classList.add("hidden");
+  const emptyEl = reportContent.querySelector(".empty-state");
+  if (emptyEl) emptyEl.remove();
 
-  // Start building HTML with Excel export button
-  let html = `
-    <div style="margin-bottom: 1rem; text-align: right;">
-      <button onclick="exportToExcel()" class="action-btn btn-success btn-sm">
-        <i class="fas fa-file-excel"></i> Export to Excel
-      </button>
-    </div>
-  `;
-
-  // Cash Payments logs - COLLAPSIBLE AND CLOSED BY DEFAULT
-  let cashTotal = 0;
-  html += `
-    <div class="logs-container transaction-section">
-      <h3 style="cursor: pointer; display: flex; justify-content: space-between; align-items: center;" onclick="toggleSection('cash-section')">
-        Cash Payments 
-        <i class="fas fa-chevron-right" id="cash-section-icon"></i>
-      </h3>
-      <div class="transaction-logs" id="cash-section" style="display: none;">
-  `;
-
-  if (!data.cash_logs || data.cash_logs.length === 0) {
-    html += '<div class="log-item">No cash payments in this period</div>';
-  } else {
-    data.cash_logs.forEach((log) => {
-      cashTotal += log.amount;
-      html += `
-        <div class="log-item">
-          <div class="log-details">
-            <div class="log-title">Room ${log.room} - ${log.name} ${
-        log.item ? `<span class="transaction-item">(${log.item})</span>` : ""
-      }</div>
-            <div class="log-subtitle">${log.date} ${log.time || ""}</div>
-          </div>
-          <div class="log-amount">₹${log.amount}</div>
-        </div>
-      `;
-    });
-
-    // Add section total
-    html += `
-      <div class="log-item section-total">
-        <div class="log-details">
-          <div class="log-title">Total Cash Payments</div>
-        </div>
-        <div class="log-amount">₹${cashTotal}</div>
-      </div>
-    `;
+  // Populate expense category dropdown from actual data
+  const catSelect = document.getElementById("expense-category-filter");
+  if (catSelect) {
+    const cats = [...new Set((data.expense_logs || []).map(l => l.category || "other"))].sort();
+    const capFirst = s => s.charAt(0).toUpperCase() + s.slice(1);
+    catSelect.innerHTML = `<option value="all">All Categories</option>` +
+      cats.map(c => `<option value="${c}">${capFirst(c.replace(/_/g," "))}</option>`).join("");
   }
 
-  html += `</div></div>`;
+  // Wire up filter controls (once)
+  ["report-search","report-type-filter","expense-category-filter","report-sort"].forEach(id => {
+    const el = document.getElementById(id);
+    if (el && !el._filterWired) {
+      el.addEventListener(id === "report-search" ? "input" : "change", applyReportFilters);
+      el._filterWired = true;
+    }
+  });
 
-  // Online Payments logs - COLLAPSIBLE AND CLOSED BY DEFAULT
-  let onlineTotal = 0;
-  html += `
-    <div class="logs-container transaction-section">
-      <h3 style="cursor: pointer; display: flex; justify-content: space-between; align-items: center;" onclick="toggleSection('online-section')">
-        Online Payments 
-        <i class="fas fa-chevron-right" id="online-section-icon"></i>
-      </h3>
-      <div class="transaction-logs" id="online-section" style="display: none;">
-  `;
-
-  if (!data.online_logs || data.online_logs.length === 0) {
-    html += '<div class="log-item">No online payments in this period</div>';
-  } else {
-    data.online_logs.forEach((log) => {
-      onlineTotal += log.amount;
-      html += `
-        <div class="log-item">
-          <div class="log-details">
-            <div class="log-title">Room ${log.room} - ${log.name} ${
-        log.item ? `<span class="transaction-item">(${log.item})</span>` : ""
-      }</div>
-            <div class="log-subtitle">${log.date} ${log.time || ""}</div>
-          </div>
-          <div class="log-amount">₹${log.amount}</div>
-        </div>
-      `;
+  // Show/hide category filter based on type
+  const typeEl = document.getElementById("report-type-filter");
+  if (typeEl && !typeEl._visWired) {
+    typeEl.addEventListener("change", () => {
+      const catEl = document.getElementById("expense-category-filter");
+      if (catEl) catEl.style.display = typeEl.value === "expenses" ? "" : "none";
     });
-
-    // Add section total
-    html += `
-      <div class="log-item section-total">
-        <div class="log-details">
-          <div class="log-title">Total Online Payments</div>
-        </div>
-        <div class="log-amount">₹${onlineTotal}</div>
-      </div>
-    `;
+    typeEl._visWired = true;
   }
 
-  html += `</div></div>`;
+  // Reset to defaults
+  const searchEl = document.getElementById("report-search");
+  if (searchEl) searchEl.value = "";
+  if (typeEl) { typeEl.value = "all"; }
+  if (catSelect) { catSelect.value = "all"; catSelect.style.display = "none"; }
+  const sortEl = document.getElementById("report-sort");
+  if (sortEl) sortEl.value = "oldest";
 
-  // Expenses - COLLAPSIBLE AND CLOSED BY DEFAULT, SORTED BY FORM TIME (OLDEST FIRST)
-  let expenseTotal = 0;
-  html += `
-    <div class="logs-container transaction-section">
-      <h3 style="cursor: pointer; display: flex; justify-content: space-between; align-items: center;" onclick="toggleSection('expense-section')">
-        Expenses 
-        <i class="fas fa-chevron-right" id="expense-section-icon"></i>
-      </h3>
-      <div class="transaction-logs" id="expense-section" style="display: none;">
-  `;
+  applyReportFilters();
+}
 
-  if (!data.expense_logs || data.expense_logs.length === 0) {
-    html += '<div class="log-item">No expenses in this period</div>';
-  } else {
-    // FIXED: Sort expenses by form date and time - OLDEST FIRST, LATEST LAST
-    const sortedExpenses = [...data.expense_logs].sort((a, b) => {
-      const dateTimeA = new Date(`${a.date} ${a.time || "00:00"}`);
-      const dateTimeB = new Date(`${b.date} ${b.time || "00:00"}`);
-      return dateTimeA - dateTimeB; // Oldest first, latest last
+// Apply filters + expense category filter and re-render
+function applyReportFilters() {
+  const data = window.rawReportData;
+  if (!data) return;
+
+  const reportContent = document.getElementById("report-content");
+  if (!reportContent) return;
+
+  const fmt = n => Math.round(n||0).toLocaleString("en-IN");
+  const capFirst = s => (s||"other").charAt(0).toUpperCase()+(s||"other").slice(1).replace(/_/g," ");
+
+  const search     = (document.getElementById("report-search")?.value||"").toLowerCase().trim();
+  const typeFilter = document.getElementById("report-type-filter")?.value||"all";
+  const catFilter  = document.getElementById("expense-category-filter")?.value||"all";
+  const sortOrder  = document.getElementById("report-sort")?.value||"oldest";
+
+  // Category filter badge color map
+  const catClass = { salary:"cat-badge-salary", utilities:"cat-badge-utilities",
+    maintenance:"cat-badge-maintenance", supplies:"cat-badge-supplies",
+    booking_commission:"cat-badge-commission" };
+
+  function sortLogs(logs) {
+    return [...logs].sort((a, b) => {
+      if (sortOrder==="highest") return (b.amount||0)-(a.amount||0);
+      if (sortOrder==="lowest")  return (a.amount||0)-(b.amount||0);
+      const da = new Date(`${a.date||"2000-01-01"} ${a.time||"00:00"}`);
+      const db = new Date(`${b.date||"2000-01-01"} ${b.time||"00:00"}`);
+      return sortOrder==="newest" ? db-da : da-db;
     });
-
-    sortedExpenses.forEach((log) => {
-      expenseTotal += log.amount;
-      const categoryDisplay =
-        log.category.charAt(0).toUpperCase() + log.category.slice(1);
-
-      html += `
-        <div class="log-item ${
-          log.expense_type === "transaction"
-            ? "transaction-expense"
-            : "report-expense"
-        }">
-          <div class="log-details">
-            <div class="log-title">
-              ${log.name || log.description || 'N/A'}
-              <span class="expense-category-badge">${categoryDisplay}</span>
-            </div>
-            <div class="log-subtitle">${formatDateTime(
-              log.date,
-              log.time
-            )}</div>
-          </div>
-          <div class="log-amount">₹${log.amount}</div>
-        </div>
-      `;
-    });
-
-    // Add section total
-    html += `
-      <div class="log-item section-total">
-        <div class="log-details">
-          <div class="log-title">Total Expenses</div>
-        </div>
-        <div class="log-amount">₹${expenseTotal}</div>
-      </div>
-    `;
+  }
+  function hasSearch(log, fields) {
+    return !search || fields.some(f => String(log[f]||"").toLowerCase().includes(search));
   }
 
-  html += `</div></div>`;
+  const showCash    = typeFilter==="all" || typeFilter==="cash";
+  const showOnline  = typeFilter==="all" || typeFilter==="online";
+  const showExp     = typeFilter==="all" || typeFilter==="expenses";
+  const showRef     = typeFilter==="all" || typeFilter==="refunds";
 
-  // Refunds - COLLAPSIBLE AND CLOSED BY DEFAULT
-  let refundTotal = 0;
-  html += `
-    <div class="logs-container transaction-section">
-      <h3 style="cursor: pointer; display: flex; justify-content: space-between; align-items: center;" onclick="toggleSection('refund-section')">
-        Refunds 
-        <i class="fas fa-chevron-right" id="refund-section-icon"></i>
-      </h3>
-      <div class="transaction-logs" id="refund-section" style="display: none;">
-  `;
+  const cashLogs   = showCash   ? sortLogs((data.cash_logs||[]).filter(l=>hasSearch(l,["room","name","item"]))) : [];
+  const onlineLogs = showOnline ? sortLogs((data.online_logs||[]).filter(l=>hasSearch(l,["room","name","item"]))) : [];
+  const refLogs    = showRef    ? sortLogs((data.refund_logs||[]).filter(l=>hasSearch(l,["room","name"]))) : [];
+  const expLogs    = showExp
+    ? sortLogs((data.expense_logs||[]).filter(l => {
+        const catOk = catFilter==="all" || (l.category||"other")===catFilter;
+        return catOk && hasSearch(l,["name","description","category","paid_to"]);
+      }))
+    : [];
 
-  if (!data.refund_logs || data.refund_logs.length === 0) {
-    html += '<div class="log-item">No refunds in this period</div>';
-  } else {
-    data.refund_logs.forEach((log) => {
-      refundTotal += log.amount;
-      html += `
-        <div class="log-item">
-          <div class="log-details">
-            <div class="log-title">Room ${log.room} - ${log.name}</div>
-            <div class="log-subtitle">${log.date} ${log.time || ""}</div>
-          </div>
-          <div class="log-amount" style="color: var(--danger);">₹${
-            log.amount
-          }</div>
-        </div>
-      `;
-    });
+  // Count active filters for result bar
+  const total = cashLogs.length + onlineLogs.length + expLogs.length + refLogs.length;
+  const isFiltered = search || typeFilter!=="all" || catFilter!=="all";
 
-    // Add section total
-    html += `
-      <div class="log-item section-total">
-        <div class="log-details">
-          <div class="log-title">Total Refunds</div>
-        </div>
-        <div class="log-amount" style="color: var(--danger);">₹${refundTotal}</div>
-      </div>
-    `;
+  let html = "";
+  if (isFiltered) {
+    const filterDesc = [
+      search ? `"${search}"` : "",
+      typeFilter!=="all" ? typeFilter : "",
+      catFilter!=="all" && showExp ? capFirst(catFilter) : "",
+    ].filter(Boolean).join(", ");
+    html += `<div class="filter-result-bar"><i class="fas fa-filter"></i>&nbsp; <strong>${total}</strong> result${total!==1?"s":""} ${filterDesc ? `for <em>${filterDesc}</em>` : ""}</div>`;
   }
 
-  html += `</div></div>`;
+  // ---- helper to build a collapsible section ----
+  function section(id, iconClass, iconColor, badgeBg, badgeColor, title, count, rows, totalAmt, amtColor) {
+    const emptyMsg = search || isFiltered ? "No results match your filters" : `No ${title.toLowerCase()} in this period`;
+    return `
+    <div class="transaction-section">
+      <h3 onclick="toggleSection('${id}')">
+        <span><i class="${iconClass}" style="color:${iconColor};margin-right:0.4rem"></i>${title}</span>
+        <span style="display:flex;align-items:center;gap:0.5rem">
+          <span class="section-badge" style="background:${badgeBg};color:${badgeColor}">${count}</span>
+          <i class="fas fa-chevron-right" id="${id}-icon"></i>
+        </span>
+      </h3>
+      <div class="transaction-logs" id="${id}" style="display:none">
+        ${rows.length ? rows.join("") + `<div class="log-item section-total"><div class="log-details"><div class="log-title">Subtotal</div></div><div class="log-amount" style="color:${amtColor}">₹${fmt(totalAmt)}</div></div>` : `<div class="log-item log-empty">${emptyMsg}</div>`}
+      </div>
+    </div>`;
+  }
 
-  // NOTE: ADD-ONS SECTION REMOVED AS REQUESTED
+  function payRow(log) {
+    return `<div class="log-item">
+      <div class="log-details">
+        <div class="log-title">Room ${log.room} — ${log.name}${log.item?` <span class="transaction-item">(${log.item})</span>`:""}
+          ${log.type==="addon"?'<span class="expense-category-badge" style="background:#fef9c3;color:#92400e">Add-on</span>':""}
+        </div>
+        <div class="log-subtitle">${log.date} ${log.time||""}</div>
+      </div>
+      <div class="log-amount">₹${fmt(log.amount)}</div>
+    </div>`;
+  }
 
-  // Grand total summary
-  const totalIncome = cashTotal + onlineTotal;
-  const totalExpenses = expenseTotal;
-  const netRevenue = totalIncome - totalExpenses; // FIXED: Subtract expenses from income
+  function expRow(log) {
+    const cat = log.category||"other";
+    const cls = catClass[cat]||"cat-badge-other";
+    const moreInfo = log.vendor_name ? `· ${log.vendor_name}` : (log.paid_to ? `· ${log.paid_to}` : "");
+    return `<div class="log-item">
+      <div class="log-details">
+        <div class="log-title">
+          ${log.name||log.description||"N/A"}
+          <span class="expense-category-badge ${cls}">${capFirst(cat)}</span>
+          ${log.has_gst?'<span class="expense-category-badge" style="background:#e0f2fe;color:#0369a1">GST</span>':""}
+        </div>
+        <div class="log-subtitle">${formatDateTime(log.date,log.time)} ${moreInfo} · ${(log.payment_method||"cash").toUpperCase()}</div>
+      </div>
+      <div class="log-amount" style="color:#dc2626">₹${fmt(log.amount)}</div>
+    </div>`;
+  }
 
-  html += `
-    <div class="logs-container grand-total-section">
+  function refRow(log) {
+    return `<div class="log-item">
+      <div class="log-details">
+        <div class="log-title">Room ${log.room} — ${log.name}</div>
+        <div class="log-subtitle">${log.date} ${log.time||""}</div>
+      </div>
+      <div class="log-amount" style="color:#dc2626">₹${fmt(log.amount)}</div>
+    </div>`;
+  }
+
+  if (showCash)
+    html += section("cash-section","fas fa-money-bill-wave","#16a34a","#f0fdf4","#16a34a",
+      "Cash Payments", cashLogs.length, cashLogs.map(payRow),
+      cashLogs.reduce((s,l)=>s+(l.amount||0),0), "#1e293b");
+
+  if (showOnline)
+    html += section("online-section","fas fa-mobile-alt","#2563eb","#eff6ff","#2563eb",
+      "Online / UPI Payments", onlineLogs.length, onlineLogs.map(payRow),
+      onlineLogs.reduce((s,l)=>s+(l.amount||0),0), "#1e293b");
+
+  if (showExp)
+    html += section("expense-section","fas fa-receipt","#dc2626","#fef2f2","#dc2626",
+      "Expenses" + (catFilter!=="all" ? ` — ${capFirst(catFilter)}` : ""),
+      expLogs.length, expLogs.map(expRow),
+      expLogs.reduce((s,l)=>s+(l.amount||0),0), "#dc2626");
+
+  if (showRef)
+    html += section("refund-section","fas fa-undo","#ea580c","#fff7ed","#ea580c",
+      "Refunds", refLogs.length, refLogs.map(refRow),
+      refLogs.reduce((s,l)=>s+(l.amount||0),0), "#dc2626");
+
+  // Grand total – only when showing all + no filters
+  if (typeFilter==="all" && !search && catFilter==="all") {
+    const tCash   = cashLogs.reduce((s,l)=>s+(l.amount||0),0);
+    const tOnline = onlineLogs.reduce((s,l)=>s+(l.amount||0),0);
+    const tInc    = tCash + tOnline;
+    const tExp    = expLogs.reduce((s,l)=>s+(l.amount||0),0);
+    const tRef    = refLogs.reduce((s,l)=>s+(l.amount||0),0);
+    const net     = tInc - tExp;
+    html += `
+    <div class="grand-total-section">
       <h3>Grand Total</h3>
       <div class="transaction-logs">
-        <div class="log-item">
-          <div class="log-details">
-            <div class="log-title">Total Income (Cash + Online)</div>
-          </div>
-          <div class="log-amount">₹${totalIncome}</div>
-        </div>
-        <div class="log-item">
-          <div class="log-details">
-            <div class="log-title">Total Expenses</div>
-          </div>
-          <div class="log-amount" style="color: var(--danger);">₹${totalExpenses}</div>
-        </div>
-        <div class="log-item">
-          <div class="log-details">
-            <div class="log-title">Total Refunds</div>
-          </div>
-          <div class="log-amount" style="color: var(--danger);">₹${refundTotal}</div>
-        </div>
-        <div class="log-item grand-total">
-          <div class="log-details">
-            <div class="log-title">Net Revenue</div>
-          </div>
-          <div class="log-amount">₹${netRevenue}</div>
-        </div>
+        <div class="log-item"><div class="log-details"><div class="log-title">Cash + UPI Income</div></div><div class="log-amount">₹${fmt(tInc)}</div></div>
+        <div class="log-item"><div class="log-details"><div class="log-title">Total Expenses</div></div><div class="log-amount" style="color:#dc2626">₹${fmt(tExp)}</div></div>
+        <div class="log-item"><div class="log-details"><div class="log-title">Total Refunds</div></div><div class="log-amount" style="color:#dc2626">₹${fmt(tRef)}</div></div>
+        <div class="log-item grand-total"><div class="log-details"><div class="log-title">Net Revenue</div></div><div class="log-amount">₹${fmt(net)}</div></div>
       </div>
-    </div>
-  `;
+    </div>`;
+  }
 
-  // Set the HTML content
   reportContent.innerHTML = html;
 }
 
@@ -1401,6 +1561,55 @@ function toggleSection(sectionId) {
   }
 }
 
+// Initialize date preset buttons (Today / This Week / This Month / Last Month)
+function initializeDatePresets() {
+  const presetBtns = document.querySelectorAll(".preset-btn");
+  presetBtns.forEach((btn) => {
+    btn.addEventListener("click", function () {
+      presetBtns.forEach((b) => b.classList.remove("active"));
+      this.classList.add("active");
+
+      const preset = this.dataset.preset;
+      const today = new Date();
+      let startDate, endDate;
+
+      if (preset === "today") {
+        startDate = endDate = today;
+      } else if (preset === "week") {
+        startDate = new Date(today);
+        startDate.setDate(today.getDate() - 6); // Last 7 days
+        endDate = today;
+      } else if (preset === "month") {
+        startDate = new Date(today.getFullYear(), today.getMonth(), 1);
+        endDate = today;
+      } else if (preset === "last-month") {
+        startDate = new Date(today.getFullYear(), today.getMonth() - 1, 1);
+        endDate = new Date(today.getFullYear(), today.getMonth(), 0);
+      }
+
+      // Use local date (not UTC) to avoid IST timezone offset issues
+      const fmt = (d) => {
+        const y   = d.getFullYear();
+        const m   = String(d.getMonth() + 1).padStart(2, "0");
+        const day = String(d.getDate()).padStart(2, "0");
+        return `${y}-${m}-${day}`;
+      };
+      const startInput = document.getElementById("report-start-date");
+      const endInput = document.getElementById("report-end-date");
+      if (startInput) startInput.value = fmt(startDate);
+      if (endInput) endInput.value = fmt(endDate);
+    });
+  });
+
+  // Clear "active" preset when user manually changes dates
+  const dateInputs = document.querySelectorAll("#report-start-date, #report-end-date");
+  dateInputs.forEach((input) => {
+    input.addEventListener("change", () => {
+      presetBtns.forEach((b) => b.classList.remove("active"));
+    });
+  });
+}
+
 // Initialize Analytics on document load
 document.addEventListener("DOMContentLoaded", function () {
   // Set up chart defaults to prevent resizing
@@ -1409,23 +1618,23 @@ document.addEventListener("DOMContentLoaded", function () {
   // Initialize analytics components
   initializeAnalytics();
 
-  // Override the apply report filter button
+  // Initialize date preset buttons
+  initializeDatePresets();
+
+  // Wire up apply button
   const applyReportFilterBtn = document.getElementById("apply-report-filter");
   if (applyReportFilterBtn) {
     applyReportFilterBtn.addEventListener("click", generateEnhancedReport);
 
-    // Force the analytics view to show first when loading reports
+    // Switch to analytics view after loading
     applyReportFilterBtn.addEventListener("click", function () {
-      const analyticsBtn = document.querySelector(
-        '.view-btn[data-view="analytics"]'
-      );
-      if (analyticsBtn) {
-        analyticsBtn.click();
-      }
+      const analyticsBtn = document.querySelector('.view-btn[data-view="analytics"]');
+      if (analyticsBtn) analyticsBtn.click();
     });
   }
 
-  // Make toggleSection function global
+  // Make global functions accessible
   window.toggleSection = toggleSection;
   window.exportToExcel = exportToExcel;
+  window.applyReportFilters = applyReportFilters;
 });

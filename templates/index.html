@@ -12,6 +12,7 @@
     />
     <link rel="stylesheet" href="/static/style.css" />
     <link rel="stylesheet" href="/static/booking.css" />
+    <link rel="stylesheet" href="/static/laundry.css" />
     <link
       rel="stylesheet"
       href="https://cdnjs.cloudflare.com/ajax/libs/flatpickr/4.6.13/flatpickr.min.css"
@@ -29,6 +30,40 @@
       .booking-modal-compact {
         max-width: 520px;
       }
+
+      /* ── Booking details action buttons grid ── */
+      .bk-action-grid {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 0.4rem;
+      }
+      .bk-act-btn {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 0.25rem;
+        padding: 0.5rem 0.3rem;
+        border: none;
+        border-radius: 10px;
+        font-size: 0.72rem;
+        font-weight: 600;
+        cursor: pointer;
+        transition: opacity 0.15s, transform 0.1s;
+        color: #fff;
+        min-width: 0;
+      }
+      .bk-act-btn i { font-size: 1.05rem; }
+      .bk-act-btn:active { transform: scale(0.95); opacity: 0.85; }
+      .bk-act-primary { background: var(--primary, #4361ee); }
+      .bk-act-success { background: #16a34a; }
+      .bk-act-warning { background: #d97706; }
+      .bk-act-danger  { background: #dc2626; }
+      .bk-act-teal    { background: #0891b2; }
+      .bk-act-wa      { background: #25d366; }
+
+      /* AC snowflake badge in day detail */
+      .day-bk-ac { font-size: 0.75rem; margin-left: 4px; }
       .bk-row {
         display: grid;
         grid-template-columns: 1fr 1fr;
@@ -867,48 +902,43 @@
           <div class="section-title">
             <h2>Analytics & Reports</h2>
             <div style="display:flex;gap:0.5rem;align-items:center;">
-              <button id="download-report-csv-btn"
-                style="display:none;align-items:center;gap:0.35rem;background:#2b6cb0;color:#fff;border:none;border-radius:8px;padding:0.38rem 0.85rem;font-size:0.8rem;font-weight:600;cursor:pointer;">
-                <i class="fas fa-download" style="font-size:0.75rem;"></i> CSV
-              </button>
               <button
                 id="add-report-expense-btn"
                 class="action-btn btn-sm btn-danger"
               >
-                <i class="fas fa-plus"></i> Add Report Expense
+                <i class="fas fa-plus"></i> Add Expense
               </button>
             </div>
           </div>
 
-          <!-- Date Filter (Keep the existing one) -->
-          <div class="date-filter">
-            <input
-              type="date"
-              class="form-control date-input"
-              id="start-date"
-              aria-label="Start Date"
-            />
-            <input
-              type="date"
-              class="form-control date-input"
-              id="end-date"
-              aria-label="End Date"
-            />
-            <button
-              id="apply-report-filter"
-              class="action-btn btn-primary"
-              style="margin-top: 0"
-            >
-              Apply
-            </button>
+          <!-- Sleek Date Filter Bar -->
+          <div class="report-filter-bar">
+            <div class="date-presets">
+              <button class="preset-btn" data-preset="today">Today</button>
+              <button class="preset-btn" data-preset="week">Last 7 Days</button>
+              <button class="preset-btn active" data-preset="month">This Month</button>
+              <button class="preset-btn" data-preset="last-month">Last Month</button>
+            </div>
+            <div class="analytics-date-row">
+              <label class="analytics-date-lbl" for="report-start-date">From</label>
+              <input type="date" id="report-start-date" class="analytics-date-inp" />
+              <span class="analytics-date-sep">→</span>
+              <label class="analytics-date-lbl" for="report-end-date">To</label>
+              <input type="date" id="report-end-date" class="analytics-date-inp" />
+              <button id="apply-report-filter" class="btn-apply">
+                <i class="fas fa-search"></i> Generate
+              </button>
+            </div>
           </div>
 
           <!-- Analytics/Reports Selector -->
           <div class="view-selector">
             <button class="view-btn active" data-view="analytics">
-              Analytics
+              <i class="fas fa-chart-bar"></i> Analytics
             </button>
-            <button class="view-btn" data-view="reports">Reports</button>
+            <button class="view-btn" data-view="reports">
+              <i class="fas fa-list-alt"></i> Reports
+            </button>
           </div>
 
           <!-- Analytics View -->
@@ -918,6 +948,40 @@
 
           <!-- Reports View -->
           <div id="reports-view" class="view-content hidden">
+
+            <!-- Report Filter Controls -->
+            <div class="report-controls" id="report-controls">
+              <div class="report-filter-controls">
+                <input
+                  type="text"
+                  id="report-search"
+                  placeholder="Search room, guest or description…"
+                  class="filter-input"
+                />
+                <select id="report-type-filter" class="filter-select">
+                  <option value="all">All Transactions</option>
+                  <option value="cash">Cash Only</option>
+                  <option value="online">Online / UPI Only</option>
+                  <option value="expenses">Expenses Only</option>
+                  <option value="refunds">Refunds Only</option>
+                </select>
+                <!-- Expense category filter — shown only when Expenses is selected -->
+                <select id="expense-category-filter" class="filter-select" style="display:none">
+                  <option value="all">All Categories</option>
+                </select>
+                <select id="report-sort" class="filter-select">
+                  <option value="oldest">Oldest First</option>
+                  <option value="newest">Newest First</option>
+                  <option value="highest">Highest Amount</option>
+                  <option value="lowest">Lowest Amount</option>
+                </select>
+                <button onclick="exportToExcel()" class="action-btn btn-success btn-sm">
+                  <i class="fas fa-file-excel"></i> Export
+                </button>
+              </div>
+            </div>
+
+            <!-- Revenue Summary Card -->
             <div class="summary-card">
               <div class="summary-title">
                 Revenue Report <span id="report-date-range"></span>
@@ -939,7 +1003,7 @@
                 <div class="summary-value" id="report-refund-total">₹0</div>
               </div>
               <div class="summary-row">
-                <div class="summary-label">Daily Expenses</div>
+                <div class="summary-label">Expenses</div>
                 <div
                   class="summary-value"
                   id="report-expense-total"
@@ -949,14 +1013,13 @@
                 </div>
               </div>
               <div class="summary-row total-row">
-                <div class="summary-label">Total Net Revenue</div>
+                <div class="summary-label">Net Revenue</div>
                 <div class="summary-value" id="report-net-revenue">₹0</div>
               </div>
             </div>
 
             <!-- Transaction logs -->
             <div id="report-content">
-              <!-- Logs will be dynamically populated here -->
               <div class="loading-indicator hidden">
                 <span class="loader"></span>
                 <p>Generating report...</p>
@@ -2510,6 +2573,12 @@
           <i class="fas fa-exchange-alt"></i>
           <span>Transfer Room</span>
         </div>
+
+        <!-- Laundry button -->
+        <div class="quick-action-item" id="quick-laundry-btn">
+          <i class="fas fa-tshirt"></i>
+          <span>Laundry</span>
+        </div>
       </div>
     </div>
     <!-- Checkout Confirmation Modal -->
@@ -3678,38 +3747,25 @@
           </div>
         </div>
 
-        <div class="action-row" style="margin-top: 0.5rem">
-          <button class="action-btn btn-primary" id="update-booking-btn">
-            <i class="fas fa-edit"></i> Edit
+        <div class="bk-action-grid" style="margin-top:0.5rem">
+          <button class="bk-act-btn bk-act-primary" id="update-booking-btn">
+            <i class="fas fa-edit"></i><span>Edit</span>
           </button>
-          <button class="action-btn btn-success" id="convert-booking-btn">
-            <i class="fas fa-check-circle"></i> Check In
+          <button class="bk-act-btn bk-act-success" id="convert-booking-btn">
+            <i class="fas fa-check-circle"></i><span>Check In</span>
           </button>
-          <button class="action-btn btn-warning" id="add-payment-btn">
-            <i class="fas fa-money-bill-wave"></i> Add Payment
+          <button class="bk-act-btn bk-act-warning" id="add-payment-btn">
+            <i class="fas fa-money-bill-wave"></i><span>Payment</span>
           </button>
-          <button class="action-btn btn-danger" id="cancel-booking-btn">
-            <i class="fas fa-times-circle"></i> Cancel
+          <button class="bk-act-btn bk-act-danger" id="cancel-booking-btn">
+            <i class="fas fa-times-circle"></i><span>Cancel</span>
           </button>
-          <button
-            class="action-btn btn-success"
-            id="mark-settlement-btn"
-            style="display: none; background: #17a2b8; border-color: #17a2b8"
-          >
-            <i class="fas fa-university"></i> Mark Settlement
+          <button class="bk-act-btn bk-act-teal" id="mark-settlement-btn" style="display:none">
+            <i class="fas fa-university"></i><span>Settle</span>
           </button>
-          <button
-            class="action-btn btn-sm"
-            id="send-whatsapp-btn"
-            style="
-              background-color: #25d366;
-              border-color: #25d366;
-              color: white;
-            "
-            onclick="sendWhatsAppBookingConfirmation()"
-            title="Send WhatsApp Confirmation"
-          >
-            <i class="fab fa-whatsapp"></i> WhatsApp
+          <button class="bk-act-btn bk-act-wa" id="send-whatsapp-btn"
+            onclick="sendWhatsAppBookingConfirmation()" title="WhatsApp Confirmation">
+            <i class="fab fa-whatsapp"></i><span>WA</span>
           </button>
         </div>
       </div>
@@ -4182,6 +4238,8 @@
     <script defer src="/static/customer-docs.js"></script>
     <!-- Customer Manager Panel -->
     <script defer src="/static/customer-manager.js"></script>
+    <!-- Laundry Management -->
+    <script defer src="/static/laundry.js"></script>
     <!-- Firebase config served from env vars — must load before google_sync module -->
     <script src="/firebase-config.js"></script>
     <script
@@ -4619,5 +4677,240 @@
         </div>
       </div>
     </div>
+
+    <!-- ── Laundry Management Modal (Full-Screen) ──────────────────────────── -->
+    <div class="modal-backdrop" id="laundry-modal">
+      <div class="modal-content">
+
+        <!-- Header -->
+        <div class="modal-header" style="flex-shrink:0">
+          <h2 style="display:flex;align-items:center;gap:0.5rem">
+            <i class="fas fa-tshirt" style="color:var(--primary)"></i>
+            Laundry Manager
+          </h2>
+          <button class="close-btn" aria-label="Close">&times;</button>
+        </div>
+
+        <!-- Tabs -->
+        <div class="laundry-tabs">
+          <button class="laundry-tab-btn active" data-tab="send">
+            <i class="fas fa-table"></i> Daily Log
+          </button>
+          <button class="laundry-tab-btn" data-tab="bill">
+            <i class="fas fa-file-invoice-dollar"></i> Monthly Bill
+          </button>
+        </div>
+
+        <!-- ══════════════════════════════════════════════════════════════════
+             TAB 1 — Daily Excel-style Grid
+        ══════════════════════════════════════════════════════════════════ -->
+        <div class="laundry-tab-pane active" id="laundry-tab-send">
+
+          <!-- Toolbar: month navigation -->
+          <div class="laundry-grid-toolbar">
+            <button class="laundry-nav-btn" id="laundry-grid-prev" title="Previous month">&#8249;</button>
+            <span class="laundry-grid-month-label" id="laundry-grid-month-label">—</span>
+            <button class="laundry-nav-btn" id="laundry-grid-next" title="Next month">&#8250;</button>
+            <input type="month" class="laundry-grid-month-inp" id="laundry-grid-month-inp" title="Jump to month" />
+            <div class="laundry-grid-legend">
+              <span class="laundry-legend-item"><span class="laundry-legend-dot" style="background:#fefcbf;border:1px solid #f6e05e"></span>Sent</span>
+              <span class="laundry-legend-item"><span class="laundry-legend-dot" style="background:#c6f6d5;border:1px solid #9ae6b4"></span>Received</span>
+              <span class="laundry-legend-item"><span class="laundry-legend-dot" style="background:#fefce8;border:1px solid #fde68a"></span>Today</span>
+              <span class="laundry-legend-item"><span class="laundry-legend-dot" style="background:#ebf8ff;border:1px solid #bee3f8"></span>Editable</span>
+            </div>
+          </div>
+
+          <!-- Excel grid -->
+          <div class="laundry-excel-wrap">
+            <table class="laundry-excel-table">
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Single</th>
+                  <th>Double</th>
+                  <th>Pillow</th>
+                  <th>Towel</th>
+                  <th>S.Rug</th>
+                  <th>D.Rug</th>
+                  <th>Mat</th>
+                  <th>Curtain</th>
+                  <th class="col-total">Total</th>
+                  <th class="col-status">Status</th>
+                  <th class="col-action">Actions</th>
+                </tr>
+              </thead>
+              <tbody id="laundry-excel-body">
+                <tr><td colspan="12" class="laundry-empty-state">Loading…</td></tr>
+              </tbody>
+              <tfoot>
+                <tr id="laundry-excel-foot"></tr>
+              </tfoot>
+            </table>
+          </div>
+
+        </div><!-- end TAB 1 -->
+
+        <!-- ══════════════════════════════════════════════════════════════════
+             TAB 2 — Monthly Bill (single-column, mobile-friendly)
+        ══════════════════════════════════════════════════════════════════ -->
+        <div class="laundry-tab-pane" id="laundry-tab-bill">
+          <div class="laundry-bill-scroll">
+
+            <!-- ── Row 1: Month selector (compact inline) ────────── -->
+            <div class="lbill-top-bar">
+              <div class="lbill-month-wrap">
+                <i class="fas fa-calendar-alt" style="color:var(--text-muted);font-size:0.85rem"></i>
+                <label style="font-size:0.8rem;font-weight:600;color:var(--text-muted);white-space:nowrap">Month:</label>
+                <input type="month" class="lbill-month-inp" id="laundry-bill-month" />
+              </div>
+              <button class="laundry-prices-toggle" id="laundry-prices-toggle"
+                style="margin:0;width:auto;padding:0.3rem 0.75rem;font-size:0.75rem;display:flex;align-items:center;gap:0.35rem">
+                <i class="fas fa-lock"></i> Edit Prices
+              </button>
+            </div>
+
+            <!-- Price editor (password-gated, hidden by default) -->
+            <div class="laundry-price-editor" id="laundry-price-editor" style="margin-bottom:0.6rem">
+              <div class="laundry-form-card">
+                <div class="laundry-form-card-title"><span><i class="fas fa-tags" style="margin-right:0.3rem"></i>Price per Piece (₹)</span></div>
+                <div class="laundry-form-card-body">
+                  <div class="laundry-price-grid">
+                    <div class="laundry-price-row"><label>Single</label>    <input type="number" class="laundry-price-input" id="lprice-single"     value="100" min="0" /></div>
+                    <div class="laundry-price-row"><label>Double</label>    <input type="number" class="laundry-price-input" id="lprice-double"     value="100" min="0" /></div>
+                    <div class="laundry-price-row"><label>Pillow</label>    <input type="number" class="laundry-price-input" id="lprice-pillow"     value="100" min="0" /></div>
+                    <div class="laundry-price-row"><label>Towel</label>     <input type="number" class="laundry-price-input" id="lprice-towel"      value="100" min="0" /></div>
+                    <div class="laundry-price-row"><label>S.Rug</label>     <input type="number" class="laundry-price-input" id="lprice-single_rug" value="100" min="0" /></div>
+                    <div class="laundry-price-row"><label>D.Rug</label>     <input type="number" class="laundry-price-input" id="lprice-double_rug" value="100" min="0" /></div>
+                    <div class="laundry-price-row"><label>Mat</label>       <input type="number" class="laundry-price-input" id="lprice-mat"        value="100" min="0" /></div>
+                    <div class="laundry-price-row"><label>Curtain</label>   <input type="number" class="laundry-price-input" id="lprice-curtain"    value="100" min="0" /></div>
+                  </div>
+                  <button class="action-btn btn-secondary" id="laundry-save-prices-btn"
+                    style="width:100%;font-size:0.8rem;padding:0.35rem;margin-top:0.5rem">
+                    <i class="fas fa-save"></i> Save Prices
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <!-- ── Item totals + Payment history side-by-side on desktop, stacked on mobile ── -->
+            <div class="lbill-summary-row">
+
+              <!-- Item totals from daily log -->
+              <div class="laundry-form-card" style="flex:1;min-width:0">
+                <div class="laundry-form-card-title">
+                  <span><i class="fas fa-boxes" style="margin-right:0.3rem"></i>Monthly Item Totals</span>
+                  <span id="laundry-auto-amount" style="font-size:0.72rem;color:#3182ce;font-weight:600"></span>
+                </div>
+                <div class="laundry-form-card-body">
+                  <div class="laundry-bill-summary-grid" id="laundry-bill-summary-grid">
+                    <div style="color:var(--text-muted);font-size:0.82rem;grid-column:span 4">Select a month…</div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Payment history -->
+              <div class="laundry-form-card lbill-hist-card">
+                <div class="laundry-form-card-title"><span><i class="fas fa-history" style="margin-right:0.3rem"></i>Payment History</span></div>
+                <div style="overflow-y:auto;max-height:160px">
+                  <table class="laundry-bill-hist-table">
+                    <thead>
+                      <tr><th>Month</th><th>Bill</th><th>Paid</th><th>Balance</th><th>Date</th></tr>
+                    </thead>
+                    <tbody id="laundry-bill-hist-body">
+                      <tr><td colspan="5" style="text-align:center;padding:0.75rem;color:var(--text-muted);font-size:0.8rem">Loading…</td></tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+            </div><!-- end summary row -->
+
+            <!-- ── Bill Entry ─────────────────────────────────────── -->
+            <div class="laundry-form-card">
+              <div class="laundry-form-card-title"><span><i class="fas fa-file-invoice" style="margin-right:0.3rem"></i>Bill Entry</span></div>
+              <div class="laundry-form-card-body">
+
+                <!-- Bill amount + date -->
+                <div class="lbill-field-grid">
+                  <div class="laundry-field-group">
+                    <label>Bill Amount (₹)</label>
+                    <div style="display:flex;gap:0.4rem;align-items:center">
+                      <input type="number" class="form-control" id="laundry-bill-amount" placeholder="From laundry guy" min="0" style="flex:1;min-width:0" />
+                      <button class="laundry-tbl-btn save" id="laundry-use-auto-btn" style="white-space:nowrap;padding:0.3rem 0.55rem;font-size:0.72rem">Auto</button>
+                    </div>
+                  </div>
+                  <div class="laundry-field-group">
+                    <label>Bill Date</label>
+                    <input type="date" class="form-control" id="laundry-bill-date" />
+                  </div>
+                  <div class="laundry-field-group">
+                    <label>Old Balance (₹)</label>
+                    <input type="number" class="form-control" id="laundry-old-balance" value="0" min="0" />
+                    <span style="font-size:0.65rem;color:#3182ce">Auto from prev month</span>
+                  </div>
+                  <div class="laundry-field-group">
+                    <label>Paying Now (₹)</label>
+                    <input type="number" class="form-control" id="laundry-paid-amount" placeholder="0" min="0" />
+                  </div>
+                </div>
+
+                <!-- Totals strip -->
+                <div class="laundry-bill-totals" style="margin-top:0.6rem">
+                  <div class="laundry-bill-total-cell">
+                    <span class="lbl">Bill</span>
+                    <span class="val" id="laundry-bill-total-display">₹0</span>
+                  </div>
+                  <div class="laundry-bill-total-cell">
+                    <span class="lbl">Old Bal</span>
+                    <span class="val" id="laundry-old-bal-display">₹0</span>
+                  </div>
+                  <div class="laundry-bill-total-cell highlight">
+                    <span class="lbl">Grand Total</span>
+                    <span class="val" id="laundry-grand-total-display">₹0</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- ── Payment ─────────────────────────────────────────── -->
+            <div class="laundry-form-card">
+              <div class="laundry-form-card-title"><span><i class="fas fa-rupee-sign" style="margin-right:0.3rem"></i>Record Payment</span></div>
+              <div class="laundry-form-card-body">
+
+                <div class="lbill-pay-grid">
+                  <div>
+                    <div style="font-size:0.72rem;font-weight:600;color:var(--text-muted);margin-bottom:0.3rem">Expense Type</div>
+                    <div class="laundry-toggle-row">
+                      <button class="laundry-toggle-btn active-exp" data-exptype="transaction"><i class="fas fa-coins"></i> Daily</button>
+                      <button class="laundry-toggle-btn" data-exptype="report"><i class="fas fa-home"></i> Report</button>
+                    </div>
+                  </div>
+                  <div>
+                    <div style="font-size:0.72rem;font-weight:600;color:var(--text-muted);margin-bottom:0.3rem">Method</div>
+                    <div class="laundry-toggle-row">
+                      <button class="laundry-toggle-btn active-pay" data-paymethod="cash"><i class="fas fa-money-bill-wave"></i> Cash</button>
+                      <button class="laundry-toggle-btn" data-paymethod="upi"><i class="fas fa-mobile-alt"></i> UPI</button>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="laundry-balance-box" id="laundry-balance-box" style="margin-top:0.6rem">
+                  <span class="lbl">Remaining Balance</span>
+                  <span class="val" id="laundry-balance-display">₹0</span>
+                </div>
+
+                <button class="action-btn btn-primary" id="laundry-bill-submit-btn" style="width:100%">
+                  <i class="fas fa-save"></i> Save Bill &amp; Record Expense
+                </button>
+              </div>
+            </div>
+
+          </div><!-- end bill-scroll -->
+        </div><!-- end TAB 2 -->
+
+      </div><!-- end modal-content -->
+    </div>
+    <!-- ── End Laundry Modal ─────────────────────────────────────────────── -->
+
   </body>
 </html>

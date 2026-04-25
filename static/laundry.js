@@ -202,9 +202,9 @@
       // Item cells
       const itemCells = ITEMS.map(item => {
         if (!hasData || editing) {
-          // Editable input
-          const val = editing ? (log[item.key] || 0) : 0;
-          return `<td><input type="number" class="laundry-cell-input" data-date="${date}" data-key="${item.key}" data-docid="${log?.doc_id || ""}" value="${val}" min="0" /></td>`;
+          // Editable input — empty by default so typing replaces nothing
+          const val = editing ? (log[item.key] || "") : "";
+          return `<td><input type="number" class="laundry-cell-input" data-date="${date}" data-key="${item.key}" data-docid="${log?.doc_id || ""}" value="${val}" min="0" placeholder="0" /></td>`;
         } else {
           const v = log[item.key] || 0;
           return `<td><span class="laundry-cell-val ${v === 0 ? "zero" : ""}">${v === 0 ? "−" : v}</span></td>`;
@@ -275,9 +275,20 @@
       <td colspan="2"></td>
     </tr>`;
 
-    // Wire input listeners for live row-total calc
+    // Wire input listeners for live row-total calc + focus-select behaviour
     body.querySelectorAll(".laundry-cell-input").forEach(inp => {
       inp.addEventListener("input", () => _recalcRowTotal(inp.dataset.date));
+      // Select all on focus so typing always replaces the existing value cleanly
+      inp.addEventListener("focus", () => inp.select());
+      // Enter → move to next cell (next column, or first cell of next row)
+      inp.addEventListener("keydown", e => {
+        if (e.key !== "Enter") return;
+        e.preventDefault();
+        const all = Array.from(body.querySelectorAll(".laundry-cell-input"));
+        const idx = all.indexOf(inp);
+        const next = all[idx + 1];
+        if (next) { next.focus(); next.select(); }
+      });
     });
 
     // Scroll today into view

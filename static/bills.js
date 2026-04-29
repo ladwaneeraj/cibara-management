@@ -2779,31 +2779,100 @@
     if (!tab.classList.contains("hidden")) loadData(true);
   }
 
-  // ── Live refresh (debounced) ───────────────────────────────────────────────
-  // All three events (room update, payment added, bill changed) can fire within
-  // milliseconds of each other on the same user action (e.g. checkout). A single
-  // debounce timer collapses them into one loadDataSilent() call per burst.
-  let _billsSilentTimer = null;
-  function _debouncedSilentLoad(forceInvalidate) {
-    const today = todayStr();
-    const tab   = dom("bills-tab");
-    if (tab && !tab.classList.contains("hidden")) {
-      if (state.dateRange.end === today) {
-        clearTimeout(_billsSilentTimer);
-        _billsSilentTimer = setTimeout(() => loadDataSilent(), 600);
-      }
-    } else {
-      if (forceInvalidate) state.lastLoadedRange = null;
-    }
+  // ── Live patch from remote events (no refetch) ────────────────────────────
+  // Every backend mutation that affects the Bills view writes to the `bills`
+  // Firestore collection, which fires `cibaraBillChanged` with the full bill
+  // document attached. We patch `state.allEntries` in place — no network call.
+  //
+  // `cibaraRoomUpdate` and `cibaraPaymentAdded` are intentionally NOT listened
+  // to here: they are upstream of bill changes, and any effect on a bill is
+  // already reflected by a follow-up `bills_ref.update(...)` on the backend.
+  // Listening to them caused unnecessary full reloads on every room/payment
+  // event, even when nothing visible to this tab had changed.
+
+  function _bvDateInRange(dateStr) {
+    if (!dateStr) return false;
+    const { start, end } = state.dateRange;
+    if (!start || !end) return false;
+    return dateStr >= start && dateStr <= end;
   }
 
-  window.addEventListener("cibaraRoomUpdate",    () => _debouncedSilentLoad(true));
-  window.addEventListener("cibaraPaymentAdded",  (e) => {
-    const p = e.detail || {};
-    if (p.date !== todayStr()) return;
-    _debouncedSilentLoad(true);
+  // Surgically replace one row in the rendered table. Falls back to a quiet
+  // applyFilters() re-render if the target row isn't found (e.g. filters
+  // hid it, or the row hasn't been rendered yet).
+  function _bvReplaceRowInDOM(updated) {
+    const tbody = dom("bl-table-body");
+    if (!tbody) return false;
+    const tr = tbody.querySelector(`tr[data-entry-id="${updated.id}"]`);
+    if (!tr) return false;
+
+    // Re-derive the visible row index so rowIndex passed to rowHTML stays
+    // in sync with the rendered numbering.
+    const visibleIdx = state.filteredEntries.findIndex(e => e.id === updated.id);
+    const rowIndex = visibleIdx >= 0 ? visibleIdx + 1 : 1;
+    const dk = (updated.checkin_time || "").split(" ")[0] || "unknown";
+
+    const tmp = document.createElement("tbody");
+    tmp.innerHTML = rowHTML(updated, dk, rowIndex);
+    const newRow = tmp.querySelector("tr");
+    if (!newRow) return false;
+
+    tr.replaceWith(newRow);
+
+    // Brief highlight so the user can spot the changed row.
+    newRow.style.transition = "none";
+    newRow.style.backgroundColor = "#fffbcc";
+    requestAnimationFrame(() => {
+      newRow.style.transition = "background-color 0.8s ease";
+      newRow.style.backgroundColor = "";
+    });
+    return true;
+  }
+
+  function _patchBillFromEvent(bill) {
+    if (!bill || !bill.id) return;
+
+    // Only patch if the bill's checkout (or check-in, for pending_settlement
+    // entries that have no checkout yet) falls inside the visible date range.
+    const checkoutDate = (bill.checkout_time || "").split(" ")[0];
+    const checkinDate  = (bill.checkin_time  || "").split(" ")[0];
+    if (!_bvDateInRange(checkoutDate) && !_bvDateInRange(checkinDate)) return;
+
+    const idx = state.allEntries.findIndex(e => e.id === bill.id);
+    const isModified = idx >= 0;
+
+    if (isModified) {
+      // Skip no-op events (Firestore can deliver duplicate snapshots).
+      if (JSON.stringify(state.allEntries[idx]) === JSON.stringify(bill)) return;
+      state.allEntries[idx] = bill;
+    } else {
+      state.allEntries.push(bill);
+    }
+
+    // Re-run the visibility filter so `state.filteredEntries` reflects the
+    // change. This is in-memory only and cheap.
+    applyFilters();
+
+    // applyFilters() already re-renders the table. For a modified entry we
+    // could have done a surgical row replace before applyFilters() ran, but
+    // applyFilters() has rebuilt the DOM by now. The visual cost is one
+    // table re-render per remote event — acceptable, no network call.
+    void _bvReplaceRowInDOM; // kept for future surgical-update use
+  }
+
+  window.addEventListener("cibaraBillChanged", (e) => {
+    // Only act when the tab is visible — patching a hidden tab is wasted work.
+    // When the user re-opens the tab, the MutationObserver fires loadData(false)
+    // which renders from `state.allEntries` (already up to date) and skips the
+    // network call because `lastLoadedRange` is still the cached range.
+    const tab = dom("bills-tab");
+    if (!tab || tab.classList.contains("hidden")) {
+      // Still patch state silently so the tab is fresh on next open.
+      _patchBillFromEvent(e.detail);
+      return;
+    }
+    _patchBillFromEvent(e.detail);
   });
-  window.addEventListener("cibaraBillChanged",   () => _debouncedSilentLoad(true));
 
   // ── Init ─────────────────────────────────────────────────────────────────
   function init() {

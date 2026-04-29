@@ -67,24 +67,65 @@ function showQuickTransferModal() {
   if (roomPriceSection) roomPriceSection.style.display = "none";
   if (acToggleSection) acToggleSection.style.display = "none";
 
-  // Populate source room dropdown (only occupied rooms)
+  // Populate source room dropdown.
+  // Eligibility rules for quick transfer:
+  //   1. Room must be occupied.
+  //   2. Check-in must be within the last 24 hours (rolling window).
+  //
+  // Rationale: quick transfer is meant for early-stay corrections (wrong room
+  // assigned, AC issue, etc.). Once a stay is more than a day old it has
+  // accumulated services/payments and should go through the full transfer
+  // flow rather than the streamlined "quick" one.
+  //
+  // Implementation notes:
+  //   - checkin_time is stored as "YYYY-MM-DD HH:MM" (IST, no timezone suffix).
+  //     `new Date(...)` parses this in the browser's local zone, which matches
+  //     the rest of the codebase (see script.js:1021). If your devices are
+  //     ever in a different timezone than the property, this comparison will
+  //     drift — out of scope for this change.
+  //   - If checkin_time is missing or unparseable, the room is hidden out of
+  //     caution. This is consistent with the other guards in the codebase
+  //     (e.g. script.js:1003 returns early on the same condition).
+  const QUICK_TRANSFER_WINDOW_MS = 24 * 60 * 60 * 1000;
+  const _nowMs = Date.now();
+
   sourceRoomSelect.innerHTML = '<option value="">Select source room</option>';
   let occupiedRoomCount = 0;
+  let hiddenStaleCount  = 0;
 
   Object.entries(rooms).forEach(([roomNum, info]) => {
-    if (info.status === "occupied") {
-      const option = document.createElement("option");
-      option.value = roomNum;
-      option.textContent = `Room ${roomNum} - ${info.guest.name}`;
-      sourceRoomSelect.appendChild(option);
-      occupiedRoomCount++;
+    if (info.status !== "occupied") return;
+
+    // Apply the 24-hour eligibility window.
+    const ci = info.checkin_time;
+    if (!ci) {
+      hiddenStaleCount++;
+      return;
     }
+    const ciMs = new Date(ci).getTime();
+    if (Number.isNaN(ciMs)) {
+      hiddenStaleCount++;
+      return;
+    }
+    if (_nowMs - ciMs > QUICK_TRANSFER_WINDOW_MS) {
+      hiddenStaleCount++;
+      return;
+    }
+
+    const option = document.createElement("option");
+    option.value = roomNum;
+    option.textContent = `Room ${roomNum} - ${info.guest.name}`;
+    sourceRoomSelect.appendChild(option);
+    occupiedRoomCount++;
   });
 
   if (occupiedRoomCount === 0) {
     const option = document.createElement("option");
     option.disabled = true;
-    option.textContent = "No occupied rooms available";
+    // Distinguish the two empty states so staff understand why the list is empty.
+    option.textContent = hiddenStaleCount > 0
+      ? "No rooms eligible — all stays are older than 24 hrs"
+      : "No occupied rooms available";
     sourceRoomSelect.appendChild(option);
   }
 
@@ -285,6 +326,26 @@ function showQuickTransferModal() {
 
       if (newPrice && newPrice <= 0) {
         showNotification("Please enter a valid room price", "error");
+        return;
+      }
+
+      // Re-validate the 24-hour window at submit time. The dropdown was
+      // filtered when the modal opened, so this only matters if the modal
+      // was left open across the threshold — but it's cheap and prevents
+      // a stale UI from triggering a transfer that should no longer be
+      // allowed via the quick path.
+      const _src = rooms[oldRoom];
+      const _ci  = _src && _src.checkin_time;
+      const _ciMs = _ci ? new Date(_ci).getTime() : NaN;
+      if (
+        !_ci ||
+        Number.isNaN(_ciMs) ||
+        Date.now() - _ciMs > 24 * 60 * 60 * 1000
+      ) {
+        showNotification(
+          "Quick transfer is only allowed within 24 hours of check-in. Use the regular transfer flow.",
+          "error"
+        );
         return;
       }
 

@@ -9,7 +9,7 @@ from config import (
     rooms_ref, get_next_serial_number, store_transaction_metadata, send_whatsapp_message,
     settlements_ref, ota_settlements_ref  # logs_ref kept for whatsapp_messages only
 )
-from services import payment_service, customer_service
+from services import payment_service, customer_service, bills_service
 
 bookings_bp = Blueprint('bookings', __name__)
 
@@ -319,7 +319,7 @@ def convert_booking_to_checkin():
 
         if remaining_payment > 0:
             totals_update[payment_method] = firestore.Increment(remaining_payment)
-        
+
         room_price = int(booking_data.get("room_price", booking["total_amount"]))
         is_ac = False
 
@@ -330,7 +330,7 @@ def convert_booking_to_checkin():
                 is_ac = bool(booking["is_ac"])
             elif "is_ac" in booking_data:
                 is_ac = bool(booking_data["is_ac"])
-        
+
         guest = {
             "name": booking["guest_name"],
             "mobile": booking["guest_mobile"],
@@ -341,7 +341,21 @@ def convert_booking_to_checkin():
             "photo": booking.get("photo_path"),
             "isAC": is_ac
         }
-        
+
+        # Mint stay_id and create the draft bill — same lifecycle as /checkin.
+        # The booking_id is recorded on the draft so prior advance payments
+        # can be traced through the conversion.
+        stay_id = uuid.uuid4().hex
+        bills_service.create_draft(
+            room=room_number,
+            guest=guest,
+            checkin_time=checkin_datetime_str,
+            stay_id=stay_id,
+            booking_id=booking_id,
+            source="booking_conversion",
+            batch=batch,
+        )
+
         batch.update(rooms_ref.document(room_number), {
             "status": "occupied",
             "guest": guest,
@@ -349,15 +363,21 @@ def convert_booking_to_checkin():
             "balance": balance_after_payment if balance_after_payment > 0 else 0,
             "add_ons": [],
             "renewal_count": 0,
-            "last_renewal_time": None
+            "last_renewal_time": None,
+            # Pointer to the draft so /checkout finalizes it instead of
+            # creating a second bill record.
+            "active_bill_id": stay_id,
         })
-        
+
         if balance_after_payment > 0:
             totals_update["balance"] = firestore.Increment(balance_after_payment)
 
         booking["status"] = "checked_in"
         booking["check_in_time"] = checkin_datetime_str
         booking["actual_checkin_time"] = current_datetime.strftime("%Y-%m-%d %H:%M")
+        # Carry the new stay_id onto the booking so historical lookups can
+        # resolve "what stay did this booking become".
+        booking["stay_id"] = stay_id
 
         batch.set(bookings_ref.document(booking_id), booking)
         if totals_update:
@@ -371,7 +391,7 @@ def convert_booking_to_checkin():
 
         stay_key = f"{room_number}_{checkin_datetime_str}"
         if remaining_payment > 0:
-            payment_service.write_payment({
+            payment_service.write_payment_with_stay(stay_id, {
                 "room": room_number, "name": booking["guest_name"],
                 "amount": remaining_payment, "method": payment_method,
                 "type": "booking_conversion",
@@ -383,7 +403,7 @@ def convert_booking_to_checkin():
                 "mobile": booking["guest_mobile"],
             })
         else:
-            payment_service.write_payment({
+            payment_service.write_payment_with_stay(stay_id, {
                 "room": room_number, "name": booking["guest_name"],
                 "amount": 0, "method": "already_paid",
                 "type": "booking_conversion",
@@ -395,7 +415,7 @@ def convert_booking_to_checkin():
                 "mobile": booking["guest_mobile"],
             })
         if balance_after_payment > 0:
-            payment_service.write_payment({
+            payment_service.write_payment_with_stay(stay_id, {
                 "room": room_number, "name": booking["guest_name"],
                 "amount": balance_after_payment, "method": "balance",
                 "type": "booking_balance",
@@ -406,9 +426,9 @@ def convert_booking_to_checkin():
             })
 
         # --- Link prior booking advance payments to this stay ---
-        # The advance was paid on booking date (before checkin_date), so
-        # query_payments_for_stay(date >= checkin_date) misses it.
-        # Update those docs to add stay_room_key so they appear in history/bills.
+        # Stamp `stay_id` onto every advance so the canonical lookup
+        # (Phase-6: where stay_id == X) resolves them. Keep stay_room_key
+        # as a fallback for any code still using the legacy heuristic.
         try:
             from google.cloud.firestore_v1.base_query import FieldFilter as _FF
             payments_ref = db.collection("payments")
@@ -420,10 +440,11 @@ def convert_booking_to_checkin():
                 pdata = pdoc.to_dict()
                 if pdata.get("type") in ("booking_advance", "booking_payment"):
                     pdoc.reference.update({
-                        "stay_room_key": stay_key,
-                        "stay_checkin_date": current_date,
+                        "stay_id":            stay_id,
+                        "stay_room_key":      stay_key,
+                        "stay_checkin_date":  current_date,
                     })
-                    logger.info(f"Linked booking advance {pdoc.id} to stay {stay_key}")
+                    logger.info(f"Linked booking advance {pdoc.id} to stay_id={stay_id}")
         except Exception as e:
             logger.warning(f"Failed to link booking advances to stay: {e}")
 
@@ -649,7 +670,10 @@ def mark_ota_settlement():
         ota_settlements_ref.add(settlement_entry)
 
         # Also write to payments collection for traceability (method="bank_settlement")
-        payment_service.write_payment({
+        # If the booking has been converted to a stay, the booking doc carries
+        # the stay_id — use it. Otherwise fall back to legacy (OTA advance
+        # settlements that arrive before the guest checks in have no stay yet).
+        _ota_payload = {
             "room": booking.get("room", ""),
             "name": booking.get("guest_name", ""),
             "amount": settlement_amount,
@@ -660,7 +684,12 @@ def mark_ota_settlement():
             "booking_id": booking_id,
             "transaction_type": "bank_settlement",
             "platform": "mmt",
-        })
+        }
+        _booking_stay_id = booking.get("stay_id")
+        if _booking_stay_id:
+            payment_service.write_payment_with_stay(_booking_stay_id, _ota_payload)
+        else:
+            payment_service.write_payment(_ota_payload)
 
         logger.info(f"OTA settlement received for booking {booking_id}: ₹{settlement_amount} on {settlement_date}")
         return jsonify(success=True, message=f"Settlement of ₹{settlement_amount} marked as received")

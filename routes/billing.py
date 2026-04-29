@@ -140,6 +140,11 @@ def get_register_data():
 
             entry = {
                 "id": f"active_{room_number}_{int(checkin_dt.timestamp())}",
+                # Canonical stay foreign key. Set by /checkin (Phase 2). For
+                # legacy active stays (checked in before Phase 2 went live),
+                # this field is absent — the Payment Records modal will
+                # fall back to the heuristic lookup.
+                "stay_id": room_data_item.get("active_bill_id"),
                 "bill_number": "-",
                 "guest_name": guest_name,
                 "guest_mobile": guest.get("mobile", ""),
@@ -220,6 +225,12 @@ def get_register_data():
 
                 entry = {
                     "id": bill_doc.id,
+                    # Canonical stay foreign key. For new stays this equals
+                    # bill_doc.id (UUID4). For legacy stays, the Phase-7
+                    # backfill stamps stay_id == bill_doc.id; we fall through
+                    # to bill_doc.id as the default here for any not-yet-
+                    # backfilled bills so the Phase-6 lookup still works.
+                    "stay_id": bill_data.get("stay_id") or bill_doc.id,
                     "bill_number": bill_data.get("bill_number", "-"),
                     "guest_name": bill_data.get("guest_name", "Unknown"),
                     "guest_mobile": bill_data.get("guest_mobile", ""),
@@ -613,6 +624,12 @@ def add_bill_payment():
             if payment_mode == "online" and not bill_data.get("invoice_generated"):
                 bill_update["invoice_generated"] = True
 
+        # Make sure stay_id is stamped onto the bill doc (idempotent — the
+        # field equals the doc ID for every stay). Lets Phase-6 queries
+        # resolve linked payments without waiting for the Phase-7 backfill.
+        if not bill_data.get("stay_id"):
+            bill_update["stay_id"] = bill_id
+
         bills_ref.document(bill_id).update(bill_update)
         logger.info(f"Bill {bill_id} payment ₹{amount} ({payment_mode}), "
                     f"balance now ₹{new_balance}")
@@ -635,8 +652,13 @@ def add_bill_payment():
             "bill_id":     bill_id,
             "bill_number": bill_data.get("bill_number", ""),
         }
+        # bill_id is the canonical stay_id — for new stays it's the UUID
+        # minted at check-in; for legacy stays it's {room}_{ts} which the
+        # Phase-7 backfill stamps onto the bill doc as stay_id. Either way,
+        # passing it through write_payment_with_stay creates a payment that
+        # joins back to its bill via stay_id.
         if amount > 0:
-            payment_service.write_payment({
+            payment_service.write_payment_with_stay(bill_id, {
                 **_base,
                 "amount":           amount,
                 "method":           payment_mode,
@@ -644,7 +666,7 @@ def add_bill_payment():
                 "transaction_type": "settlement_payment",
             })
         if discount > 0:
-            payment_service.write_payment({
+            payment_service.write_payment_with_stay(bill_id, {
                 **_base,
                 "amount":           discount,
                 "method":           "discount",

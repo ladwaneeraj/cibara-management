@@ -1636,32 +1636,56 @@
     if (!tab.classList.contains("hidden")) loadData(true);
   }
 
-  // ── Live refresh (debounced) ──────────────────────────────────────────────
-  // Dispatched by settle-later-fix.js (checkout), script.js (checkin),
-  // and booking.js (booking conversion). All three events can fire in the same
-  // millisecond burst — debounce collapses them into one loadDataSilent() call.
-  let _regSilentTimer = null;
-  function _debouncedSilentLoad(forceInvalidate) {
-    const today = todayStr();
-    const tab   = dom("register-tab");
-    if (tab && !tab.classList.contains("hidden")) {
-      if (state.dateRange.end === today) {
-        clearTimeout(_regSilentTimer);
-        _regSilentTimer = setTimeout(() => loadDataSilent(), 600);
-      }
-    } else {
-      // Tab not visible — bust cache so next open gets fresh data
-      if (forceInvalidate) state.lastLoadedRange = null;
-    }
+  // ── Live patch from remote events (no refetch) ────────────────────────────
+  // The Register view is fed by the same `bills` collection as the Bills tab.
+  // Every backend mutation that affects a row writes to `bills`, which fires
+  // `cibaraBillChanged` with the full bill document attached. We patch
+  // `state.allEntries` in place instead of refetching the whole range.
+  //
+  // `cibaraRoomUpdate` and `cibaraPaymentAdded` are intentionally NOT listened
+  // to here: they are upstream of bill changes, and any effect on a Register
+  // row is already reflected by a follow-up `bills_ref.update(...)` on the
+  // backend. Listening to them caused a full reload on every room/payment
+  // event, even when nothing visible to this tab had actually changed.
+
+  function _rgDateInRange(dateStr) {
+    if (!dateStr) return false;
+    const { start, end } = state.dateRange;
+    if (!start || !end) return false;
+    return dateStr >= start && dateStr <= end;
   }
 
-  window.addEventListener("cibaraRoomUpdate",   () => _debouncedSilentLoad(true));
-  window.addEventListener("cibaraPaymentAdded", (e) => {
-    const p = e.detail || {};
-    if (p.date !== todayStr()) return;
-    _debouncedSilentLoad(true);
+  function _patchBillFromEvent(bill) {
+    if (!bill || !bill.id) return;
+
+    // Register groups by check-in date, so use that for range matching.
+    // Fall back to checkout_time for safety if check-in is missing.
+    const checkinDate  = (bill.checkin_time  || "").split(" ")[0];
+    const checkoutDate = (bill.checkout_time || "").split(" ")[0];
+    if (!_rgDateInRange(checkinDate) && !_rgDateInRange(checkoutDate)) return;
+
+    const idx = state.allEntries.findIndex(e => e.id === bill.id);
+    const isModified = idx >= 0;
+
+    if (isModified) {
+      // Skip no-op events — Firestore can deliver duplicate snapshots.
+      if (JSON.stringify(state.allEntries[idx]) === JSON.stringify(bill)) return;
+      state.allEntries[idx] = bill;
+    } else {
+      state.allEntries.push(bill);
+    }
+
+    // Re-run the visibility filter so `state.filteredEntries` reflects the
+    // change. This is in-memory only and re-renders the table — no network.
+    applyFilters();
+  }
+
+  window.addEventListener("cibaraBillChanged", (e) => {
+    // Patch state regardless of visibility so the tab is fresh on next open.
+    // The MutationObserver-driven loadData(false) will short-circuit because
+    // `lastLoadedRange` is still set, avoiding a redundant network call.
+    _patchBillFromEvent(e.detail);
   });
-  window.addEventListener("cibaraBillChanged",  () => _debouncedSilentLoad(true));
 
   // ══════════════════════════════════════════════════════════════════════════════
   // ID DOCUMENTS MODAL — view customer docs, no password required
@@ -1813,6 +1837,9 @@
         headers: { "Content-Type": "application/json" },
         body:    JSON.stringify({
           password:     pmState.password,
+          // Canonical foreign key (Phase-6). Backend falls back to the
+          // legacy heuristic when stay_id is absent (legacy active stays).
+          stay_id:      pmState.entry.stay_id || "",
           room:         pmState.entry.room,
           guest_name:   pmState.entry.guest_name,
           checkin_time: pmState.entry.checkin_time,
@@ -1870,6 +1897,9 @@
         headers: { "Content-Type": "application/json" },
         body:    JSON.stringify({
           password:     pass,
+          // Canonical foreign key (Phase-6). Backend falls back to the
+          // legacy heuristic when stay_id is absent (legacy active stays).
+          stay_id:      pmState.entry.stay_id || "",
           room:         pmState.entry.room,
           guest_name:   pmState.entry.guest_name,
           checkin_time: pmState.entry.checkin_time,

@@ -55,14 +55,11 @@ document.addEventListener("DOMContentLoaded", function () {
   // Initialize Booking Form
   initializeBookingForm();
 
-  // Initialize Modals
-  document.querySelectorAll(".close-btn").forEach((btn) => {
-    btn.addEventListener("click", function () {
-      document.querySelectorAll(".modal-backdrop").forEach((modal) => {
-        modal.classList.remove("show");
-      });
-    });
-  });
+  // Modal close-btn handler is centralized in script.js (scopes to the
+  // nearest .modal-backdrop so nested modals don't close their parents).
+  // The duplicate handler that used to live here closed every backdrop on
+  // the page, which broke the edit-time modal nested inside the check-in
+  // modal. Removed intentionally — do not re-add without scoping.
 
   // Initialize Booking Filters
   document.querySelectorAll(".booking-filter-btn").forEach((btn) => {

@@ -161,9 +161,13 @@ onSnapshot(
 
     snapshot.docChanges().forEach((change) => {
       if (change.type === "added" || change.type === "modified") {
-        const bill = change.doc.data();
-        console.log("⚡ Remote bill change — notifying tabs");
-        window.dispatchEvent(new CustomEvent("cibaraBillChanged", { detail: bill }));
+        // Inject the Firestore document ID — `change.doc.data()` doesn't
+        // include it by default, but Register/Bills key entries by `id`.
+        const bill = { id: change.doc.id, ...change.doc.data() };
+        console.log("⚡ Remote bill change — notifying tabs", change.type, bill.id);
+        window.dispatchEvent(new CustomEvent("cibaraBillChanged", {
+          detail: { ...bill, _changeType: change.type },
+        }));
         showSyncToast();
       }
     });

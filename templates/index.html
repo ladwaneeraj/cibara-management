@@ -1936,8 +1936,38 @@
                   <span class="toggle-label">AC</span>
                 </label>
               </div>
+              <!--
+                Check-in time icon — opens the shared #edit-time-modal in
+                "set-initial" mode. Picked value is stored in the hidden
+                #checkin-time-input and read by the check-in form submit.
+                Empty hidden value => server uses now().
+              -->
+              <button
+                type="button"
+                id="edit-new-checkin-time-btn"
+                style="
+                  margin-left: auto;
+                  background: none;
+                  border: none;
+                  color: var(--primary);
+                  cursor: pointer;
+                  padding: 0.25rem 0.4rem;
+                  font-size: 1rem;
+                  display: inline-flex;
+                  align-items: center;
+                  gap: 0.3rem;
+                "
+                aria-label="Edit check-in time"
+                title="Edit check-in time"
+              >
+                <i class="far fa-clock"></i>
+                <span
+                  id="checkin-time-display"
+                  style="font-size: 0.78rem; font-weight: 500; color: #4a5568;"
+                >Now</span>
+              </button>
+              <input type="hidden" id="checkin-time-input" />
             </div>
-
             <div class="form-row">
               <div class="form-group half-width">
                 <label class="form-label" for="guest-count"
@@ -2341,13 +2371,6 @@
                 <i class="fas fa-phone"></i>
                 <span id="checkout-mobile-number"></span>
               </a>
-            </div>
-          </div>
-          <div class="detail-row">
-            <div class="detail-label">Check-in Time</div>
-            <div class="detail-value" style="display: flex; align-items: center">
-              <span id="checkout-checkin-time"></span>
-              <button id="edit-checkin-time" style="margin-left: 8px; background: none; border: none; color: var(--primary); cursor: pointer;" aria-label="Edit check-in time"><i class="fas fa-edit"></i></button>
             </div>
           </div>
           <div class="detail-row">
@@ -4867,6 +4890,10 @@
                   <div class="laundry-bill-total-cell highlight">
                     <span class="lbl">Grand Total</span>
                     <span class="val" id="laundry-grand-total-display">₹0</span>
+                  </div>
+                  <div class="laundry-bill-total-cell" id="laundry-balance-box">
+                    <span class="lbl">Balance</span>
+                    <span class="val" id="laundry-balance-display" style="color:#dc2626">₹0</span>
                   </div>
                 </div>
               </div>

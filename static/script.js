@@ -472,10 +472,15 @@ function renderRooms() {
       } else {
         dotColor = "#2196F3"; pulseClass = "pulse-blue";    // normal <24hrs
       }
+      // Backend returns `name`; tolerate `guest_name` for forward-compat.
+      const guestName = upcoming.name || upcoming.guest_name || "Guest";
+      const checkInTime = upcoming.check_in_time || "";
       const arrivalLabel = hrs <= 0
-        ? `Overdue — ${upcoming.guest_name}`
-        : `${upcoming.guest_name} arriving at ${upcoming.check_in_time}`;
-      roomContent += `<div class="booking-indicator-dot ${pulseClass}" style="background:${dotColor};" title="${arrivalLabel}"></div>`;
+        ? `Overdue — ${guestName}`
+        : `${guestName} arriving${checkInTime ? " at " + checkInTime : ""}`;
+      // Escape double quotes so the title attribute can't be broken by guest names.
+      const safeLabel = arrivalLabel.replace(/"/g, "&quot;");
+      roomContent += `<div class="booking-indicator-dot ${pulseClass}" style="background:${dotColor};" title="${safeLabel}"></div>`;
     }
 
     roomCard.innerHTML = roomContent;
@@ -2023,11 +2028,27 @@ async function addService() {
 }
 
 // Show edit time modal
-function showEditTimeModal(roomNumber, currentCheckInTime) {
+// `options` (optional):
+//   - onConfirm(newCheckInTime): if provided, the form-submit handler calls
+//     this callback with the new "YYYY-MM-DD HH:MM" string and closes the
+//     modal, INSTEAD OF hitting /update_checkin_time. Used by the check-in
+//     modal to set the initial check-in time on a not-yet-checked-in room.
+//   - title: optional header label (defaults to "Edit Check-in Time").
+//   - submitLabel: optional submit-button label.
+//
+// When `options.onConfirm` is omitted, the legacy behaviour runs: server
+// API call to update an already checked-in room, plus local state patch.
+function showEditTimeModal(roomNumber, currentCheckInTime, options) {
   if (!editTimeModal) {
     debugLog("Edit time modal not found");
     return;
   }
+  options = options || {};
+  const _isCallbackMode = typeof options.onConfirm === "function";
+
+  // Update header / submit label if the caller provided one.
+  const _hdr = editTimeModal.querySelector(".modal-header h2");
+  if (_hdr) _hdr.textContent = options.title || "Edit Check-in Time";
 
   // Parse the current check-in time
   let date = new Date();
@@ -2088,6 +2109,15 @@ function showEditTimeModal(roomNumber, currentCheckInTime) {
     return;
   }
 
+  // Update the submit-button label if provided.
+  const _submitBtnEarly = form.querySelector("button[type=submit]");
+  if (_submitBtnEarly && options.submitLabel) {
+    _submitBtnEarly.innerHTML = options.submitLabel;
+  } else if (_submitBtnEarly && !options.submitLabel) {
+    // Restore default label in case a previous open changed it.
+    _submitBtnEarly.innerHTML = "Update Check-in Time";
+  }
+
   form.onsubmit = async (e) => {
     e.preventDefault();
 
@@ -2100,6 +2130,26 @@ function showEditTimeModal(roomNumber, currentCheckInTime) {
       const selectedDt = new Date(`${newDate}T${newTime}`);
       if (selectedDt > new Date()) {
         showNotification("Check-in time cannot be set to a future time.", "error");
+        return;
+      }
+
+      // Callback mode — used by the check-in modal. The room isn't
+      // checked in yet, so there's no /update_checkin_time call to make.
+      // The callback returns true on accept, false on reject. We only
+      // close the modal on accept so the user can correct rejected input
+      // (e.g. picked a previous day) without reopening the picker.
+      if (_isCallbackMode) {
+        let accepted = false;
+        try {
+          const ret = options.onConfirm(newCheckInTime);
+          accepted = ret !== false; // undefined / true → accept; false → reject
+        } catch (cbErr) {
+          console.error("onConfirm callback threw:", cbErr);
+          accepted = false;
+        }
+        if (accepted) {
+          editTimeModal.classList.remove("show");
+        }
         return;
       }
 
@@ -2454,6 +2504,21 @@ function showCheckinModal(selectedRoomNumber) {
     const checkinForm = document.getElementById("checkin-form");
     if (checkinForm) {
       checkinForm.reset();
+    }
+
+    // Reset the check-in time row to "Now" each time the modal opens.
+    // The hidden input stays empty until staff clicks the edit icon and
+    // picks a different time — at which point we store "YYYY-MM-DD HH:MM".
+    // An empty hidden input means "use server-side now()".
+    const _ctHidden  = document.getElementById("checkin-time-input");
+    const _ctDisplay = document.getElementById("checkin-time-display");
+    if (_ctHidden)  _ctHidden.value = "";
+    if (_ctDisplay) {
+      const _n = new Date();
+      const _pad = (x) => String(x).padStart(2, "0");
+      _ctDisplay.textContent =
+        `Now (${_pad(_n.getHours())}:${_pad(_n.getMinutes())})`;
+      _ctDisplay.style.color = "#1a202c";
     }
 
     const paymentMethodInput = document.getElementById("payment-method");
@@ -4565,6 +4630,40 @@ document.addEventListener("DOMContentLoaded", function () {
         return;
       }
 
+      // ── Check-in time override ───────────────────────────────────────────
+      // The hidden input holds either an empty string (= "use server now()")
+      // or "YYYY-MM-DD HH:MM" (set by the edit-time icon → showEditTimeModal
+      // callback). The server re-validates; these checks just give a clearer
+      // error message before the network call.
+      let checkinTimeOverride = null;
+      const _ctInput = document.getElementById("checkin-time-input");
+      const _raw = _ctInput && _ctInput.value ? _ctInput.value.trim() : "";
+      if (_raw) {
+        const [_d, _t] = _raw.split(" ");
+        const picked = _d && _t ? new Date(`${_d}T${_t}`) : new Date(NaN);
+        const now = new Date();
+        if (Number.isNaN(picked.getTime())) {
+          showNotification("Invalid check-in time", "error");
+          return;
+        }
+        if (picked.getTime() > now.getTime() + 60 * 1000) {
+          showNotification("Check-in time cannot be in the future", "error");
+          return;
+        }
+        const sameDay =
+          picked.getFullYear() === now.getFullYear() &&
+          picked.getMonth() === now.getMonth() &&
+          picked.getDate() === now.getDate();
+        if (!sameDay) {
+          showNotification(
+            "Check-in time must be today. Backdating to a previous day is not supported here.",
+            "error"
+          );
+          return;
+        }
+        checkinTimeOverride = _raw;
+      }
+
       // Don't allow amount paid > 0 when payment method is "balance"
       if (amountPaid > 0 && paymentMethod === "balance") {
         showNotification(
@@ -4615,6 +4714,9 @@ document.addEventListener("DOMContentLoaded", function () {
             amountPaid: amountPaid,
             photoPath: uploadedPhotoUrl,
             isAC: isAC,
+            // Optional override; server falls back to now() if absent or
+            // if it fails server-side validation.
+            checkin_time: checkinTimeOverride,
           }),
         });
 
@@ -4664,28 +4766,66 @@ document.addEventListener("DOMContentLoaded", function () {
     });
   }
 
-  // Edit check-in time button — locked after first edit (requires manager password)
-  const editCheckinTimeBtn = document.getElementById("edit-checkin-time");
-  if (editCheckinTimeBtn) {
-    editCheckinTimeBtn.addEventListener("click", () => {
-      const roomNumber = document.getElementById("checkout-room-number")?.textContent?.trim();
-      const currentTime = document.getElementById("checkout-checkin-time")?.textContent?.trim();
-      if (!roomNumber) return;
+  // ── New-checkin time icon (inside the check-in modal) ────────────────────
+  // Opens the shared #edit-time-modal in callback mode. The picked value is
+  // stored in #checkin-time-input (hidden) and displayed in
+  // #checkin-time-display. The check-in form submit handler reads the
+  // hidden input and forwards it to /checkin.
+  const editNewCheckinTimeBtn = document.getElementById("edit-new-checkin-time-btn");
+  if (editNewCheckinTimeBtn) {
+    editNewCheckinTimeBtn.addEventListener("click", () => {
+      const hidden  = document.getElementById("checkin-time-input");
+      const display = document.getElementById("checkin-time-display");
 
-      const editCount = (rooms[roomNumber] && rooms[roomNumber].checkin_time_edit_count) || 0;
-
-      if (editCount >= 1) {
-        // Already edited once — require manager password
-        openMgrAccessModal(
-          "Edit Check-in Time",
-          `Check-in time for Room ${roomNumber} was already edited. Manager password required to change it again.`,
-          "fa-clock",
-          () => showEditTimeModal(roomNumber, currentTime)
-        );
-      } else {
-        // First edit — open freely
-        showEditTimeModal(roomNumber, currentTime);
+      // Seed the picker with the currently-stored override (if any),
+      // otherwise with "now". Format expected by showEditTimeModal:
+      // "YYYY-MM-DD HH:MM".
+      let seed = hidden && hidden.value ? hidden.value : "";
+      if (!seed) {
+        const n = new Date();
+        const pad = (x) => String(x).padStart(2, "0");
+        seed =
+          `${n.getFullYear()}-${pad(n.getMonth() + 1)}-${pad(n.getDate())} ` +
+          `${pad(n.getHours())}:${pad(n.getMinutes())}`;
       }
+
+      showEditTimeModal(null, seed, {
+        title: "Set Check-in Time",
+        submitLabel: "Set Check-in Time",
+        // Return false to reject (modal stays open); true/undefined to accept.
+        onConfirm: (newCheckInTime) => {
+          // Re-validate same-day rule on the client. Server re-validates too.
+          const [d, t] = newCheckInTime.split(" ");
+          const picked = new Date(`${d}T${t}`);
+          const now = new Date();
+          const sameDay =
+            picked.getFullYear() === now.getFullYear() &&
+            picked.getMonth() === now.getMonth() &&
+            picked.getDate() === now.getDate();
+          if (!sameDay) {
+            showNotification(
+              "Check-in time must be today. Backdating to a previous day is not supported here.",
+              "error"
+            );
+            return false;
+          }
+          if (picked.getTime() > now.getTime() + 60 * 1000) {
+            showNotification("Check-in time cannot be in the future", "error");
+            return false;
+          }
+
+          if (hidden) hidden.value = newCheckInTime;
+          if (display) {
+            // Show "HH:MM" with a hint if it differs from current time.
+            const pad = (x) => String(x).padStart(2, "0");
+            const hhmm = `${pad(picked.getHours())}:${pad(picked.getMinutes())}`;
+            const nowHHMM = `${pad(now.getHours())}:${pad(now.getMinutes())}`;
+            display.textContent = hhmm === nowHHMM ? `Now (${hhmm})` : hhmm;
+            display.style.color = hhmm === nowHHMM ? "#1a202c" : "#b7791f";
+          }
+          return true;
+        },
+      });
     });
   }
 
@@ -4780,12 +4920,21 @@ document.addEventListener("DOMContentLoaded", function () {
     });
   }
 
-  // Close modals
+  // Close modals — scope to the nearest backdrop so a nested modal (e.g.
+  // the edit-time modal opened from inside the check-in modal) doesn't
+  // close every other modal beneath it. Falls back to closing all
+  // backdrops if the close button isn't inside one (shouldn't happen,
+  // but keeps the old behaviour as a safety net).
   document.querySelectorAll(".close-btn").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      document.querySelectorAll(".modal-backdrop").forEach((modal) => {
-        modal.classList.remove("show");
-      });
+    btn.addEventListener("click", (e) => {
+      const ownBackdrop = e.currentTarget.closest(".modal-backdrop");
+      if (ownBackdrop) {
+        ownBackdrop.classList.remove("show");
+      } else {
+        document.querySelectorAll(".modal-backdrop").forEach((modal) => {
+          modal.classList.remove("show");
+        });
+      }
 
       // Stop camera stream if active
       if (mediaStream) {
@@ -4848,12 +4997,39 @@ document.addEventListener("DOMContentLoaded", function () {
     settingsBtnEl.addEventListener("click", openSettingsModal);
   }
 
-  // ── Booking added on another device (from google_sync.js) ──────────────
-  // Show a notification on the rooms view so staff know a new booking arrived.
+  // ── Booking added/modified on another device (from google_sync.js) ─────
+  // Show a notification AND refresh the upcoming-bookings map so the
+  // indicator dot updates without a manual page refresh.
+  async function _refreshUpcomingAndRender() {
+    try {
+      const res = await apiFetch("/get_upcoming_bookings");
+      if (res && res.ok) {
+        const data = await res.json();
+        if (data && data.success) {
+          upcomingBookings = data.upcoming || {};
+        }
+      }
+    } catch (err) {
+      console.warn("Failed to refresh upcoming bookings:", err);
+      // Fall through and still re-render with whatever we have.
+    }
+    if (typeof renderRooms === "function") renderRooms();
+  }
+
+  // Coalesce rapid bursts (e.g. multi-doc batch writes) into one refresh.
+  let _upcomingRefreshTimer = null;
+  function _scheduleUpcomingRefresh() {
+    if (_upcomingRefreshTimer) return;
+    _upcomingRefreshTimer = setTimeout(() => {
+      _upcomingRefreshTimer = null;
+      _refreshUpcomingAndRender();
+    }, 400);
+  }
+
   window.addEventListener("cibaraBookingAdded", function (e) {
     const b = e.detail || {};
-    const guestName  = b.guest_name  || b.name  || "Guest";
-    const roomNum    = b.room_number || b.room   || "";
+    const guestName  = b.name || b.guest_name || "Guest";
+    const roomNum    = b.room || b.room_number || "";
     const checkIn    = b.check_in_date || "";
     const todayStr   = new Date().toISOString().split("T")[0];
     const isToday    = checkIn === todayStr;
@@ -4865,8 +5041,12 @@ document.addEventListener("DOMContentLoaded", function () {
     if (typeof showNotification === "function") {
       showNotification(msg, "info", 5000);
     }
-    // Also refresh the rooms grid so any booking-indicator logic can update
-    if (typeof renderRooms === "function") renderRooms();
+    _scheduleUpcomingRefresh();
+  });
+
+  // Modifications/cancellations may remove or change a dot; refresh too.
+  window.addEventListener("cibaraBookingModified", function () {
+    _scheduleUpcomingRefresh();
   });
 
   debugLog("Initialization complete");

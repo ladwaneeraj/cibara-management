@@ -112,8 +112,24 @@ def collect_settlement():
 
         invalidate_rooms_and_totals()
 
+        # Look up the linked bill so we can stamp stay_id (= bill doc ID)
+        # onto the settlement payments. Bills with this settlement_id were
+        # written at /checkout. For new stays the doc ID is the UUID; for
+        # legacy stays it's {room}_{ts}. Either way we use it as stay_id.
+        _linked_stay_id = None
+        try:
+            for _b in bills_ref.where("settlement_id", "==", settlement_id).limit(1).stream():
+                _linked_stay_id = _b.id
+                # Idempotent stamp on the bill so Phase-6 lookups resolve
+                # without waiting for the Phase-7 backfill.
+                if not _b.to_dict().get("stay_id"):
+                    bills_ref.document(_b.id).update({"stay_id": _b.id})
+                break
+        except Exception as _e:
+            logger.warning(f"collect_settlement: linked-bill lookup failed: {_e}")
+
         # Write settlement payment to payments collection
-        payment_service.write_payment({
+        _settle_pay = {
             "room": settlement["room"], "name": settlement["guest_name"],
             "amount": payment_amount, "method": payment_mode,
             "type": "settlement_payment",
@@ -122,11 +138,15 @@ def collect_settlement():
             "settlement_id": settlement_id,
             "transaction_type": "settlement_payment",
             "serial_number": original_serial,
-        })
+        }
+        if _linked_stay_id:
+            payment_service.write_payment_with_stay(_linked_stay_id, _settle_pay)
+        else:
+            payment_service.write_payment(_settle_pay)
 
         # Write discount to payments collection (previously missing — gap fix)
         if discount_amount > 0:
-            payment_service.write_payment({
+            _settle_disc = {
                 "room": settlement["room"], "name": settlement["guest_name"],
                 "amount": discount_amount, "method": "discount",
                 "type": "discount",
@@ -136,7 +156,11 @@ def collect_settlement():
                 "transaction_type": "settlement_discount",
                 "reason": discount_reason,
                 "serial_number": original_serial,
-            })
+            }
+            if _linked_stay_id:
+                payment_service.write_payment_with_stay(_linked_stay_id, _settle_disc)
+            else:
+                payment_service.write_payment(_settle_disc)
 
         # ── Update the linked bill record ────────────────────────────────────────
         try:

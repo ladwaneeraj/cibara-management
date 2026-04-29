@@ -100,6 +100,108 @@ def _write_async(doc: dict):
         logger.error(f"PaymentService async-write failed: {e}")
 
 
+# ---------------------------------------------------------------------------
+# STRICT WRITER — requires a stay_id (canonical foreign key). Phase-1 helper:
+# call sites are migrated to this in Phase 3, replacing the legacy
+# write_payment / write_payment_sync calls. Until then this lives alongside
+# the legacy writers and changes nothing about their behaviour.
+#
+# Why a separate function: the legacy writer accepts payments without a
+# foreign key to the stay (the bug we're fixing). Adding a required field
+# to the legacy writer's signature would break every existing call site.
+# A new function gives the migration a clean cut-over per call site.
+# ---------------------------------------------------------------------------
+
+class MissingStayIdError(ValueError):
+    """Raised when a strict-mode payment write is attempted without a stay_id."""
+    pass
+
+
+def write_payment_with_stay(stay_id: str, payment_data: dict, *,
+                             batch=None, sync: bool = False,
+                             verify_exists: bool = False) -> bool:
+    """
+    Strict payment writer. Refuses to write unless `stay_id` is a non-empty
+    string. Optionally verifies the stay_id resolves to a real bill doc
+    (one extra Firestore read; off by default).
+
+    Behaviour matches `write_payment` otherwise — async by default, batched
+    if `batch` is provided, blocking if `sync=True`.
+
+    Parameters
+    ----------
+    stay_id : str
+        The bill doc ID this payment belongs to. REQUIRED — empty/None raises.
+    payment_data : dict
+        Same shape as the legacy write_payment input. The function adds
+        `stay_id` to the doc; caller does not need to put it there.
+    batch : firestore.WriteBatch, optional
+        If provided, the write is added to the batch (caller commits).
+    sync : bool
+        If True, write blocks; otherwise async daemon thread.
+    verify_exists : bool
+        If True, performs a Firestore .exists check on the stay_id before
+        writing. Adds one round-trip; use only on critical paths.
+
+    Returns
+    -------
+    bool
+        True on success or successful dispatch. False on Firestore error.
+
+    Raises
+    ------
+    MissingStayIdError
+        If `stay_id` is missing, empty, or whitespace-only.
+    """
+    if not stay_id or not isinstance(stay_id, str) or not stay_id.strip():
+        raise MissingStayIdError(
+            "write_payment_with_stay requires a non-empty stay_id. "
+            "Every payment must be linked to a bill document; the stay_id "
+            "is the canonical foreign key. See docs/STAY_DOC_CONTRACT.md."
+        )
+
+    if _payments_ref is None:
+        return False
+
+    if verify_exists:
+        # Lazy import to avoid a circular dependency at module-load time.
+        try:
+            from services import bills_service
+            if not bills_service.exists(stay_id):
+                logger.error(
+                    f"write_payment_with_stay: stay_id={stay_id} does not "
+                    f"resolve to a bill doc; refusing to write orphan payment"
+                )
+                return False
+        except Exception as e:
+            # If verification itself fails (transient Firestore error), log
+            # and proceed — better to write the payment than to lose it.
+            logger.warning(f"write_payment_with_stay verify_exists check "
+                           f"errored, proceeding anyway: {e}")
+
+    doc = _normalise(payment_data)
+    doc["stay_id"] = stay_id
+
+    if batch is not None:
+        try:
+            batch.set(_payments_ref.document(), doc)
+            return True
+        except Exception as e:
+            logger.error(f"write_payment_with_stay batch-write failed: {e}")
+            return False
+
+    if sync:
+        try:
+            _payments_ref.document().set(doc)
+            return True
+        except Exception as e:
+            logger.error(f"write_payment_with_stay sync-write failed: {e}")
+            return False
+
+    threading.Thread(target=_write_async, args=(doc,), daemon=True).start()
+    return True
+
+
 def _normalise(data: dict) -> dict:
     """
     Ensure consistent field names and add created_at + idempotency_key.

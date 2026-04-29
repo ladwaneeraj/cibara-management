@@ -15,7 +15,7 @@ import threading
 import pytz
 import base64
 
-from services import payment_service, customer_service, pdf_service, expense_service
+from services import payment_service, customer_service, pdf_service, expense_service, bills_service
 
 # Configure logging
 logging.basicConfig(
@@ -54,6 +54,9 @@ try:
     customer_service.init(db)
     pdf_service.init(db)
     expense_service.init(db)
+    # Phase 1 of the stay_id migration — adds the bills/stay-document helper.
+    # Additive, no behaviour change. See docs/STAY_DOC_CONTRACT.md.
+    bills_service.init(db)
 except Exception as e:
     logger.error(f"Error initializing Firebase: {str(e)}")
     raise

@@ -486,14 +486,17 @@
   }
 
   function _populateBillForm(bill) {
+    const set = (id, v) => { const el = document.getElementById(id); if (el) el.value = v; };
     if (!bill) {
-      // Auto-fill old balance from previous bill
-      const prevBal = _getPrevBalance(_selectedBillMonth);
-      const obEl = document.getElementById("laundry-old-balance");
-      if (obEl) obEl.value = prevBal;
+      // Fresh month — clear bill fields so stale values from a previously
+      // viewed month don't bleed in. Only old_balance carries forward.
+      set("laundry-bill-amount", "");
+      set("laundry-bill-date",   "");
+      set("laundry-paid-amount", "");
+      set("laundry-old-balance", _getPrevBalance(_selectedBillMonth));
+      _updateMonthlyCalc();
       return;
     }
-    const set = (id, v) => { const el = document.getElementById(id); if (el) el.value = v; };
     set("laundry-bill-amount",  bill.bill_amount  || "");
     set("laundry-bill-date",    bill.bill_date    || "");
     set("laundry-old-balance",  bill.old_balance  || 0);
@@ -533,6 +536,12 @@
     set("laundry-old-bal-display",     _inr(oldBal));
     set("laundry-grand-total-display", _inr(grand));
     set("laundry-balance-display",     _inr(Math.abs(balance)) + (balance < 0 ? " (Overpaid)" : ""));
+
+    // Balance tile colour: red when owing, green when settled or overpaid.
+    const balValEl = document.getElementById("laundry-balance-display");
+    if (balValEl) {
+      balValEl.style.color = balance > 0 ? "#dc2626" : "#16a34a";
+    }
 
     const balBox = document.getElementById("laundry-balance-box");
     if (balBox) balBox.classList.toggle("zero", balance <= 0);

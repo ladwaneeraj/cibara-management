@@ -22,7 +22,7 @@ from config import (
     find_serial_number_for_checkin, _build_active_entry_fast, _find_serial_fast,
     _batch_fill_serials
 )
-from services import payment_service, customer_service, expense_service
+from services import payment_service, customer_service, expense_service, bills_service
 from routes.billing import auto_generate_bill_pdf
 
 rooms_bp = Blueprint('rooms', __name__)
@@ -51,10 +51,53 @@ def checkin():
             "isAC": is_ac
         }
 
-        current_time = datetime.now(IST).strftime("%Y-%m-%d %H:%M")
-        current_date = datetime.now(IST).strftime("%Y-%m-%d")
+        # `current_date` always reflects the actual moment of recording — the
+        # serial-number sequence, payment-record dates, and reporting buckets
+        # all key off this. Don't shift it based on the client's override.
+        _now_ist     = datetime.now(IST)
+        current_date = _now_ist.strftime("%Y-%m-%d")
+
+        # `current_time` is the guest's check-in time. By default this is
+        # "now"; staff can override it via `checkin_time` to record a stay
+        # that started a few hours ago. The override is constrained to:
+        #   - same calendar day as today (no backdating across days)
+        #   - not in the future
+        # If the override fails validation we silently fall back to now()
+        # rather than rejecting the check-in — the staff member already
+        # filled out the form, and a check-in time off by a few minutes
+        # is far less bad than blocking the check-in entirely. We log the
+        # rejection for traceability.
+        _override_raw = (data_json.get("checkin_time") or "").strip()
+        current_time  = _now_ist.strftime("%Y-%m-%d %H:%M")
+        if _override_raw:
+            try:
+                _ovr_naive = datetime.strptime(_override_raw, "%Y-%m-%d %H:%M")
+                _ovr = IST.localize(_ovr_naive)
+                _ok_same_day = _ovr.strftime("%Y-%m-%d") == current_date
+                # Allow up to 60s of clock skew on the future check.
+                _ok_not_future = _ovr <= _now_ist + timedelta(seconds=60)
+                if _ok_same_day and _ok_not_future:
+                    current_time = _ovr.strftime("%Y-%m-%d %H:%M")
+                else:
+                    logger.warning(
+                        f"Check-in time override rejected for room {room}: "
+                        f"value={_override_raw!r} same_day={_ok_same_day} "
+                        f"not_future={_ok_not_future} — using now() instead"
+                    )
+            except ValueError:
+                logger.warning(
+                    f"Check-in time override unparseable for room {room}: "
+                    f"value={_override_raw!r} — using now() instead"
+                )
 
         serial_number = get_next_serial_number(current_date)
+
+        # ── Stay document — Phase 2/4 of stay_id migration ───────────────────
+        # Mint a UUID4 stay_id BEFORE the transaction so we can stamp it on
+        # both the room update and the new draft bill doc atomically. The
+        # stay_id is the canonical foreign key used by every payment for
+        # this stay; see docs/STAY_DOC_CONTRACT.md.
+        stay_id = uuid.uuid4().hex
 
         # ── Fix 2: Atomically claim the room — prevents double check-in ──────
         room_ref = rooms_ref.document(room)
@@ -76,7 +119,21 @@ def checkin():
                 "last_renewal_time": None,
                 "last_renewal_date": None,
                 "checkin_time_edit_count": 0,
+                # Pointer to the draft stay doc so /checkout can finalize
+                # the existing record instead of creating a new bill.
+                "active_bill_id": stay_id,
             })
+            # Create the draft stay/bill doc inside the same transaction.
+            # If this fails, the whole claim rolls back — guarantees we
+            # never have an occupied room without its stay doc, or vice versa.
+            bills_service.create_draft(
+                room=room,
+                guest=guest,
+                checkin_time=current_time,
+                stay_id=stay_id,
+                source="checkin",
+                txn=txn,
+            )
 
         try:
             _claim_room(db.transaction(), room_ref)
@@ -107,9 +164,12 @@ def checkin():
         invalidate_rooms_and_totals()
 
         # --- Dual-write: payments collection ---
+        # Phase 2-4 of stay_id migration: every payment for this stay carries
+        # the canonical stay_id. The legacy stay_room_key field is kept for
+        # backward compatibility with any code still reading it.
         stay_key = f"{room}_{current_time}"
         if payment != "balance" and amount_paid > 0:
-            payment_service.write_payment({
+            payment_service.write_payment_with_stay(stay_id, {
                 "room": room, "name": guest["name"], "amount": amount_paid,
                 "method": payment, "type": "checkin", "date": current_date,
                 "time": datetime.now(IST).strftime("%H:%M"),
@@ -118,7 +178,7 @@ def checkin():
                 "mobile": data_json.get("mobile", ""),
             })
         elif payment == "balance":
-            payment_service.write_payment({
+            payment_service.write_payment_with_stay(stay_id, {
                 "room": room, "name": guest["name"], "amount": 0,
                 "method": "pay_later", "type": "checkin", "date": current_date,
                 "time": datetime.now(IST).strftime("%H:%M"),
@@ -127,7 +187,7 @@ def checkin():
                 "mobile": data_json.get("mobile", ""),
             })
         if balance > 0:
-            payment_service.write_payment({
+            payment_service.write_payment_with_stay(stay_id, {
                 "room": room, "name": guest["name"], "amount": balance,
                 "method": "balance", "type": "checkin_balance",
                 "date": current_date, "time": datetime.now(IST).strftime("%H:%M"),
@@ -179,6 +239,26 @@ def checkout():
                 return jsonify(success=False, message="Room not found")
             room_data = room_doc.to_dict()
 
+        # Stay-id linkage (Phase 2/4 of stay_doc migration).
+        # `active_bill_id` is set on the room at /checkin and points at the
+        # draft bill document for the current stay. Every payment for this
+        # stay carries it as `stay_id`. At final checkout we finalize that
+        # draft instead of creating a second bill record.
+        #
+        # Legacy stays that checked in before Phase 2 went live have no
+        # `active_bill_id` — we fall back to the legacy bill-create path
+        # for them. As a safety net (in case the client-supplied room_data
+        # is stale and doesn't include the field), re-read the room doc
+        # if it's missing rather than assuming legacy.
+        active_bill_id = room_data.get("active_bill_id")
+        if active_bill_id is None and _client_room_data:
+            try:
+                _live_snap = rooms_ref.document(room).get()
+                if _live_snap.exists:
+                    active_bill_id = _live_snap.to_dict().get("active_bill_id")
+            except Exception as _e:
+                logger.warning(f"checkout: active_bill_id refresh failed: {_e}")
+
         batch = db.batch()
 
         # Handle payment additions (not final checkout)
@@ -224,7 +304,7 @@ def checkout():
             invalidate_rooms_and_totals()
 
             # --- Dual-write: payments collection ---
-            payment_service.write_payment({
+            _mid_stay_payload = {
                 "room": room, "name": room_data["guest"]["name"],
                 "amount": amount, "method": payment_mode,
                 "type": "renewal" if is_renewal_payment else "payment",
@@ -232,7 +312,13 @@ def checkout():
                 "time": datetime.now(IST).strftime("%H:%M"),
                 "transaction_type": "renewal_payment" if is_renewal_payment else "regular_payment",
                 "stay_room_key": f"{room}_{room_data.get('checkin_time', '')}",
-            })
+            }
+            if active_bill_id:
+                payment_service.write_payment_with_stay(active_bill_id, _mid_stay_payload)
+            else:
+                # Legacy stay without a draft bill — fall back to the
+                # original writer so old stays still complete cleanly.
+                payment_service.write_payment(_mid_stay_payload)
 
             logger.info(f"Payment of ₹{amount} recorded for room {room}")
             return jsonify(success=True, message=message)
@@ -259,14 +345,18 @@ def checkout():
             invalidate_rooms_and_totals()
 
             # --- Dual-write: payments collection ---
-            payment_service.write_payment({
+            _manual_refund_payload = {
                 "room": room, "name": guest_name, "amount": amount,
                 "method": refund_method, "type": "manual_refund",
                 "date": data_json.get("date", datetime.now(IST).strftime("%Y-%m-%d")),
                 "time": data_json.get("time", datetime.now(IST).strftime("%H:%M")),
                 "transaction_type": "manual_refund",
                 "stay_room_key": f"{room}_{room_data.get('checkin_time', '')}",
-            })
+            }
+            if active_bill_id:
+                payment_service.write_payment_with_stay(active_bill_id, _manual_refund_payload)
+            else:
+                payment_service.write_payment(_manual_refund_payload)
 
             logger.info(f"Manual refund of ₹{amount} processed for room {room}")
             return jsonify(success=True, message=f"Refund of ₹{amount} processed successfully")
@@ -349,7 +439,16 @@ def checkout():
                     "stay_room_key": f"{room}_{room_data.get('checkin_time', '')}",
                 }
                 import threading as _thr
-                _thr.Thread(target=payment_service.write_payment, args=(_refund_payload,), daemon=True).start()
+                if active_bill_id:
+                    # Snapshot active_bill_id into a local for the closure
+                    _abid = active_bill_id
+                    _thr.Thread(
+                        target=payment_service.write_payment_with_stay,
+                        args=(_abid, _refund_payload),
+                        daemon=True,
+                    ).start()
+                else:
+                    _thr.Thread(target=payment_service.write_payment, args=(_refund_payload,), daemon=True).start()
                 logger.info(f"Checkout refund of ₹{refund_amount} queued for room {room}")
 
             # --- Dual-write: settlement (background thread) ---
@@ -364,11 +463,29 @@ def checkout():
                     "stay_room_key": f"{room}_{room_data.get('checkin_time', '')}",
                 }
                 import threading as _thr
-                _thr.Thread(target=payment_service.write_payment, args=(_settle_payload,), daemon=True).start()
+                if active_bill_id:
+                    _abid = active_bill_id
+                    _thr.Thread(
+                        target=payment_service.write_payment_with_stay,
+                        args=(_abid, _settle_payload),
+                        daemon=True,
+                    ).start()
+                else:
+                    _thr.Thread(target=payment_service.write_payment, args=(_settle_payload,), daemon=True).start()
 
             # Save to bills + mark room cleaning — all in one batch commit
             checkout_time = datetime.now(IST).strftime("%Y-%m-%d %H:%M")
-            bill_id = f"{room}_{int(datetime.now(IST).timestamp())}"
+
+            # bill_id selection (Phase 4 of stay_doc migration):
+            #   - New stays (post-Phase-2): finalize the existing draft.
+            #     Its UUID is the bill_id. No second doc is created.
+            #   - Legacy stays (pre-Phase-2): use the original {room}_{ts}
+            #     ID format and create a fresh bill doc, exactly as before.
+            if active_bill_id:
+                bill_id = active_bill_id
+            else:
+                bill_id = f"{room}_{int(datetime.now(IST).timestamp())}"
+
             _sid = settlement_id if (balance > 0 and settle_later) else None
             bill_record = create_bill_record(
                 room, room_data, checkout_time, batch,
@@ -377,9 +494,38 @@ def checkout():
             )
 
             if bill_record:
-                batch.set(bills_ref.document(bill_id), bill_record)
+                # Make sure the stay_id field stays correct on the doc even
+                # if create_bill_record didn't set it. For legacy stays this
+                # is the {room}_{ts} ID (same value as the doc ID); for new
+                # stays it's the UUID (the active_bill_id).
+                bill_record["stay_id"] = bill_id
+
+                if active_bill_id:
+                    # Finalize the existing draft — merges checkout fields
+                    # onto the doc that's been there since check-in. Goes
+                    # through the helper so the audit timestamps and the
+                    # "no revert to draft" guard are applied.
+                    bills_service.finalize(active_bill_id, bill_record, batch=batch)
+                else:
+                    # Legacy path: create a fresh bill doc as before.
+                    batch.set(bills_ref.document(bill_id), bill_record)
+
                 logger.info(f"Bill saved for room {room}: {bill_record.get('bill_number')}, "
-                            f"status={bill_record.get('status')}")
+                            f"status={bill_record.get('status')}, "
+                            f"path={'finalize' if active_bill_id else 'legacy'}")
+            elif active_bill_id:
+                # bill_record is None (guest data missing / parse error) but
+                # we have a draft pointing at this stay. Don't leave an
+                # orphan in "draft" status — flip it to cancelled so the
+                # canary in Phase 8 doesn't flag it as stuck.
+                batch.update(bills_ref.document(active_bill_id), {
+                    "status":        "cancelled",
+                    "cancel_reason": "checkout_without_bill_record",
+                    "cancelled_at":  datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S"),
+                })
+                logger.warning(f"Checkout for room {room}: bill_record was None "
+                               f"with active_bill_id={active_bill_id}; draft "
+                               f"flipped to cancelled to avoid orphan.")
 
             # Mark room as cleaning
             batch.update(rooms_ref.document(room), {
@@ -393,6 +539,9 @@ def checkout():
                 "last_renewal_time": None,
                 "last_renewal_date": None,
                 "checkin_time_edit_count": 0,
+                # Release the stay-doc pointer; the stay_id now lives on
+                # the (newly finalized) bill doc.
+                "active_bill_id": None,
                 "cleaning_status": "in_progress",
                 "cleaning_start_time": datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S")
             })
@@ -543,7 +692,7 @@ def add_on():
         invalidate_rooms_and_totals()
 
         # --- Dual-write: payments collection ---
-        payment_service.write_payment({
+        _addon_payload = {
             "room": room, "name": room_data["guest"]["name"],
             "amount": price, "method": payment_method, "type": "addon",
             "date": datetime.now(IST).strftime("%Y-%m-%d"),
@@ -552,7 +701,12 @@ def add_on():
             "transaction_type": "service",
             "accommodation_charge": accommodation_charge,
             "stay_room_key": f"{room}_{room_data.get('checkin_time', '')}",
-        })
+        }
+        _abid_addon = room_data.get("active_bill_id")
+        if _abid_addon:
+            payment_service.write_payment_with_stay(_abid_addon, _addon_payload)
+        else:
+            payment_service.write_payment(_addon_payload)
 
         logger.info(f"Add-on '{item}' added to room {room}, price: ₹{price}, payment: {payment_method}")
 
@@ -616,7 +770,7 @@ def renew_rent():
         update_last_rent_check()
 
         # --- Dual-write: payments collection ---
-        payment_service.write_payment({
+        _renewal_payload = {
             "room": room, "name": guest["name"], "amount": price,
             "method": "balance", "type": "renewal",
             "date": datetime.now(IST).strftime("%Y-%m-%d"),
@@ -624,7 +778,12 @@ def renew_rent():
             "transaction_type": "rent_renewal",
             "note": f"Day {renewal_count + 1} rent renewal",
             "stay_room_key": f"{room}_{room_data.get('checkin_time', '')}",
-        })
+        }
+        _abid_renew = room_data.get("active_bill_id")
+        if _abid_renew:
+            payment_service.write_payment_with_stay(_abid_renew, _renewal_payload)
+        else:
+            payment_service.write_payment(_renewal_payload)
 
         logger.info(f"Rent renewed for Room {room}, Day {renewal_count + 1}")
         return jsonify(success=True, message=f"Rent renewed for Room {room}")
@@ -744,6 +903,17 @@ def update_checkin_time():
 
         rooms_ref.document(room).update(update_payload)
 
+        # Keep the draft stay doc's checkin_time in sync with the room.
+        # The doc ID (stay_id) is intentionally NOT regenerated — the same
+        # stay continues, just with a corrected timestamp.
+        _abid = room_data.get("active_bill_id")
+        if _abid:
+            try:
+                bills_service.update(_abid, {"checkin_time": new_checkin_time})
+            except Exception as _e:
+                logger.warning(f"update_checkin_time: failed to sync draft "
+                               f"stay_id={_abid}: {_e}")
+
         invalidate_cache()
 
         msg = "Check-in time updated successfully."
@@ -846,14 +1016,19 @@ def apply_discount():
         invalidate_rooms_and_totals()
 
         # --- payments collection ---
-        payment_service.write_payment({
+        _discount_payload = {
             "room": room, "name": room_data["guest"]["name"],
             "amount": amount, "method": "discount", "type": "discount",
             "date": datetime.now(IST).strftime("%Y-%m-%d"),
             "time": datetime.now(IST).strftime("%H:%M"),
             "reason": reason, "transaction_type": "discount",
             "stay_room_key": f"{room}_{room_data.get('checkin_time', '')}",
-        })
+        }
+        _abid_disc = room_data.get("active_bill_id")
+        if _abid_disc:
+            payment_service.write_payment_with_stay(_abid_disc, _discount_payload)
+        else:
+            payment_service.write_payment(_discount_payload)
 
         logger.info(f"Discount of ₹{amount} applied to room {room}, reason: {reason}")
 
@@ -959,9 +1134,22 @@ def transfer_room():
             "discounts": [],
             "renewal_count": 0,
             "last_renewal_time": None,
+            # Stay continues in the new room — release the pointer here.
+            "active_bill_id": None,
             "cleaning_status": "in_progress",
             "cleaning_start_time": datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S")
         })
+
+        # The draft bill doc stays in place, but its `room` field needs to
+        # update from old_room to new_room so any future query by room
+        # finds the right doc. The stay_id (doc ID) does not change — same
+        # stay, new physical room.
+        _stay_id_for_transfer = new_room_data.get("active_bill_id")
+        if _stay_id_for_transfer:
+            batch.update(bills_ref.document(_stay_id_for_transfer), {
+                "room": str(new_room),
+                "updated_at": datetime.now(IST).isoformat(),
+            })
 
         batch.commit()
         invalidate_cache()
@@ -971,7 +1159,7 @@ def transfer_room():
             old_room, new_room, guest_name, current_checkin_time
         )
         # Write the shift log entry to payments
-        payment_service.write_payment({
+        _shift_payload = {
             "room": new_room, "name": guest_name, "amount": 0,
             "method": "none", "type": "room_shift",
             "date": datetime.now(IST).strftime("%Y-%m-%d"),
@@ -979,7 +1167,11 @@ def transfer_room():
             "old_room": old_room, "transaction_type": "room_shift",
             "stay_room_key": f"{new_room}_{checkin_time}",
             "mobile": guest_mobile,
-        })
+        }
+        if _stay_id_for_transfer:
+            payment_service.write_payment_with_stay(_stay_id_for_transfer, _shift_payload)
+        else:
+            payment_service.write_payment(_shift_payload)
 
         logger.info(f"Guest {guest_name} transferred from Room {old_room} to Room {new_room}")
 
@@ -1419,12 +1611,21 @@ def get_stay_payments():
 
     Body: {
         password: str,
+        stay_id: str,        -- canonical foreign key (UUID4 for new stays,
+                                {room}_{ts} for legacy bills, may also be
+                                an active_bill_id from the room doc).
+                                Preferred when present.
         room: str,
         guest_name: str,
-        checkin_time: str  -- "YYYY-MM-DD HH:MM"
+        checkin_time: str    -- "YYYY-MM-DD HH:MM"
     }
 
-    Queries the `payments` collection by room + name + date >= checkin_date.
+    Phase-6 lookup: when `stay_id` is provided, the canonical query
+    `payments where stay_id == X` runs first. The legacy heuristics (Q1
+    by room+name+date, Q2 by stay_room_key) still run as a safety net so
+    pre-migration payments and booking advances written before stamping
+    are still found.
+
     Returns each doc with its Firestore document ID so the frontend can
     address individual records for editing.
 
@@ -1433,6 +1634,7 @@ def get_stay_payments():
     try:
         data = request.json or {}
         password     = data.get("password", "")
+        stay_id      = (data.get("stay_id") or "").strip()
         room         = str(data.get("room", "")).strip()
         guest_name   = data.get("guest_name", "").strip()
         checkin_time = data.get("checkin_time", "").strip()
@@ -1441,25 +1643,37 @@ def get_stay_payments():
         if not _check_manager_password(password):
             return jsonify(success=False, message="Incorrect password"), 403
 
-        # ── Validate inputs ───────────────────────────────────────────────────
-        if not room or not guest_name or not checkin_time:
-            return jsonify(success=False, message="room, guest_name, checkin_time are required"), 400
+        # Either stay_id alone or the legacy (room, guest_name, checkin_time)
+        # tuple is sufficient. The endpoint accepts both and combines results.
+        if not stay_id and not (room and guest_name and checkin_time):
+            return jsonify(
+                success=False,
+                message="stay_id OR (room, guest_name, checkin_time) is required"
+            ), 400
 
-        try:
-            checkin_dt = datetime.strptime(checkin_time, "%Y-%m-%d %H:%M")
-        except ValueError:
-            return jsonify(success=False, message="checkin_time must be YYYY-MM-DD HH:MM"), 400
+        checkin_dt = None
+        if checkin_time:
+            try:
+                checkin_dt = datetime.strptime(checkin_time, "%Y-%m-%d %H:%M")
+            except ValueError:
+                return jsonify(success=False,
+                               message="checkin_time must be YYYY-MM-DD HH:MM"), 400
 
-        # ── Multi-query approach — mirrors payment_service.query_payments_for_stay ─
-        # but preserves Firestore doc IDs (needed for edit/delete).
-        # Q1 uses only room + date (two-field query, no composite index needed),
-        # then filters by name in Python — avoids the 3-field index requirement.
-        # Q2 uses stay_room_key (single-field equality, always index-free) to
-        # catch booking advances and any payment linked before the stay started.
-        _exclude_types  = {"expense", "discount"}
-        _payments_col   = db.collection("payments")
-        checkin_date_str = checkin_dt.strftime("%Y-%m-%d")
-        stay_key         = f"{room}_{checkin_dt.strftime('%Y-%m-%d %H:%M')}"
+        # ── Multi-query approach — Q0 is the canonical Phase-6 lookup; ────────
+        # Q1 + Q2 are legacy fallbacks for payments written before stamping
+        # (or for booking advances paid pre-conversion).
+        #
+        # Filtering rules:
+        #   - `_exclude_types`  : never relevant to a guest's payment record.
+        #   - `_include_methods`: only entries where money actually moved
+        #     (cash or online) are shown. "balance" / "pay_later" are
+        #     accruals (rent owed) — they appear on the room balance but
+        #     never as a payment the guest made. "discount", "settlement",
+        #     "none", "bank_settlement" are status markers / internal,
+        #     not money-in events from the guest.
+        _exclude_types   = {"expense", "discount"}
+        _include_methods = {"cash", "online"}
+        _payments_col    = db.collection("payments")
         seen_ids = set()
         payments = []
 
@@ -1468,6 +1682,8 @@ def get_stay_payments():
                 return
             d = doc.to_dict()
             if d.get("type") in _exclude_types:
+                return
+            if d.get("method") not in _include_methods:
                 return
             seen_ids.add(doc.id)
             payments.append({
@@ -1480,31 +1696,48 @@ def get_stay_payments():
                 "note":   d.get("note", ""),
             })
 
-        # Q1: room + date >= checkin_date, filter name in Python
-        try:
-            q1 = (
-                _payments_col
-                .where(filter=FieldFilter("room", "==", room))
-                .where(filter=FieldFilter("date", ">=", checkin_date_str))
-            )
-            for doc in q1.stream():
-                if doc.to_dict().get("name") == guest_name:
+        # Q0 — canonical lookup. Single-field equality, no composite index.
+        q0_count = 0
+        if stay_id:
+            try:
+                q0 = _payments_col.where(filter=FieldFilter("stay_id", "==", stay_id))
+                for doc in q0.stream():
                     _add_doc(doc)
-        except Exception as e:
-            logger.warning(f"get_stay_payments Q1 failed: {e}")
+                    q0_count += 1
+            except Exception as e:
+                logger.warning(f"get_stay_payments Q0 failed: {e}")
 
-        # Q2: stay_room_key — catches booking advances + any pay linked pre-checkin
-        try:
-            q2 = _payments_col.where(filter=FieldFilter("stay_room_key", "==", stay_key))
-            for doc in q2.stream():
-                _add_doc(doc)
-        except Exception as e:
-            logger.warning(f"get_stay_payments Q2 failed: {e}")
+        # Q1 — legacy heuristic. Runs only if we have the full tuple.
+        if checkin_dt and room and guest_name:
+            checkin_date_str = checkin_dt.strftime("%Y-%m-%d")
+            try:
+                q1 = (
+                    _payments_col
+                    .where(filter=FieldFilter("room", "==", room))
+                    .where(filter=FieldFilter("date", ">=", checkin_date_str))
+                )
+                for doc in q1.stream():
+                    if doc.to_dict().get("name") == guest_name:
+                        _add_doc(doc)
+            except Exception as e:
+                logger.warning(f"get_stay_payments Q1 failed: {e}")
+
+            # Q2 — stay_room_key fallback for unconverted booking advances.
+            try:
+                stay_key = f"{room}_{checkin_dt.strftime('%Y-%m-%d %H:%M')}"
+                q2 = _payments_col.where(filter=FieldFilter("stay_room_key", "==", stay_key))
+                for doc in q2.stream():
+                    _add_doc(doc)
+            except Exception as e:
+                logger.warning(f"get_stay_payments Q2 failed: {e}")
 
         payments.sort(key=lambda p: (p.get("date", ""), p.get("time", "")))
 
-        logger.info(f"get_stay_payments: room={room} guest={guest_name} "
-                    f"checkin={checkin_date_str} → {len(payments)} records")
+        logger.info(
+            f"get_stay_payments: stay_id={stay_id or '-'} room={room or '-'} "
+            f"guest={guest_name or '-'} → {len(payments)} records "
+            f"(Q0={q0_count}, total={len(payments)})"
+        )
         return jsonify(success=True, payments=payments)
 
     except Exception as e:

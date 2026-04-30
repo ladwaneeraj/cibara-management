@@ -4766,6 +4766,39 @@ document.addEventListener("DOMContentLoaded", function () {
     });
   }
 
+  // ── Edit check-in time (inside the checkout modal) ───────────────────────
+  // First edit per stay is free; subsequent edits require the manager
+  // password. The counter lives on the room doc as `checkin_time_edit_count`
+  // and is incremented server-side by /update_checkin_time.
+  const editCheckinTimeBtn = document.getElementById("edit-checkin-time");
+  if (editCheckinTimeBtn) {
+    editCheckinTimeBtn.addEventListener("click", () => {
+      const roomEl     = document.getElementById("checkout-room-number");
+      const roomNumber = roomEl ? roomEl.textContent.trim() : "";
+      if (!roomNumber || !rooms[roomNumber]) {
+        showNotification("Could not determine the room to edit.", "error");
+        return;
+      }
+      const currentCheckInTime = rooms[roomNumber].checkin_time || "";
+      const editCount = rooms[roomNumber].checkin_time_edit_count || 0;
+
+      const open = () => showEditTimeModal(roomNumber, currentCheckInTime);
+
+      if (editCount === 0) {
+        open();
+      } else if (typeof openMgrAccessModal === "function") {
+        openMgrAccessModal(
+          "Edit Check-in Time",
+          "This stay's check-in time has already been edited. Manager password required.",
+          "fa-clock",
+          open
+        );
+      } else {
+        open(); // dev fallback if mgr-access modal isn't available
+      }
+    });
+  }
+
   // ── New-checkin time icon (inside the check-in modal) ────────────────────
   // Opens the shared #edit-time-modal in callback mode. The picked value is
   // stored in #checkin-time-input (hidden) and displayed in

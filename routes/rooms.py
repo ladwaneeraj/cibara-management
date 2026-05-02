@@ -914,7 +914,9 @@ def update_checkin_time():
                 logger.warning(f"update_checkin_time: failed to sync draft "
                                f"stay_id={_abid}: {_e}")
 
-        invalidate_cache()
+        # Same _GET_DATA_CACHE concern as transfer_room — use the
+        # monkey-patched invalidator so the /get_data cache is busted too.
+        invalidate_rooms_and_totals()
 
         msg = "Check-in time updated successfully."
         if new_serial:
@@ -1116,8 +1118,22 @@ def transfer_room():
         if new_price:
             new_room_data["guest"]["price"] = int(new_price)
 
-        if new_room >= "202" and new_room <= "205":
-            new_room_data["guest"]["isAC"] = is_ac
+        # AC handling for the destination room.
+        # Premium AC range is 200-206 — must match shift.js toggle visibility
+        # and the room-card AC indicator. Use int comparison (string ">="
+        # comparison breaks for any room number outside the 3-digit window).
+        try:
+            _new_room_num = int(new_room)
+        except (TypeError, ValueError):
+            _new_room_num = -1
+        if 200 <= _new_room_num <= 206:
+            new_room_data["guest"]["isAC"] = bool(is_ac)
+        else:
+            # Destination is NOT AC-capable. Clear any isAC flag carried
+            # over from the source room so we don't end up with a phantom
+            # AC indicator on a non-premium room (e.g. transferring an AC
+            # guest from 204 → 211 must drop the flag).
+            new_room_data["guest"]["isAC"] = False
 
         batch = db.batch()
 
@@ -1152,7 +1168,13 @@ def transfer_room():
             })
 
         batch.commit()
-        invalidate_cache()
+        # Use invalidate_rooms_and_totals (the monkey-patched version below)
+        # so the 30-second /get_data payload cache is also busted. The plain
+        # invalidate_cache() only clears the @cached function-level cache and
+        # leaves _GET_DATA_CACHE serving the pre-transfer snapshot — which
+        # surfaces as "the destination room still shows vacant" until the TTL
+        # expires.
+        invalidate_rooms_and_totals()
 
         # --- Update payments collection ---
         payment_service.update_payments_room(

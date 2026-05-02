@@ -2478,8 +2478,14 @@ input:checked + .toggle-slider:before {
   background-color: #4361ee;
 }
 
+/* Legacy aliases — kept in case any old data attribute or external code
+   references them. New code uses the more specific classes below. */
 .room-category-non-attach {
   background-color: #74c69d;
+}
+
+.room-category-single {
+  background-color: #ff9e80;
 }
 
 .room-category-premium {
@@ -2491,8 +2497,34 @@ input:checked + .toggle-slider:before {
   background-color: #6f42c1;
 }
 
-.room-category-single {
-  background-color: #ff9e80;
+/* New category classes — colours match the Revenue-by-Room-Type chart
+   bars in analytics.js so the same room type looks consistent across
+   the app. White text on dark backgrounds; dark text on amber/lime so
+   the label stays legible. */
+.room-category-single-non-attach {
+  background-color: #84cc16;
+  color: #333;
+}
+
+.room-category-double-non-attach {
+  background-color: #ea580c;
+}
+
+.room-category-deluxe {
+  background-color: #f59e0b;
+  color: #333;
+}
+
+.room-category-single-attach {
+  background-color: #16a34a;
+}
+
+.room-category-party-hall {
+  background-color: #db2777;
+}
+
+.room-category-other {
+  background-color: #6b7280;
 }
 
 .submit-btn {

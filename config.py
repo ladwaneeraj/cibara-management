@@ -142,6 +142,102 @@ def invalidate_rooms_and_totals():
             del _cache[k]
 
 
+# ── Billing config ─────────────────────────────────────────────────────────────
+# A single Firestore doc (`settings/billing_config`) holds tenant-wide toggles
+# that affect bill generation. Currently:
+#   - always_generate_bill (bool, default False):
+#       True  → generate a bill for every stay regardless of payment mode.
+#       False → skip the bill when the entire stay (room + every service/addon)
+#               was paid in cash. Note: the OTA branches (pure MMT room stays,
+#               Booking.com) are intentionally unaffected by this flag — they
+#               are about WHO issues the invoice, not about payment mode.
+#
+# The 5-second TTL on get_billing_config() keeps create_bill_record() fast
+# while still propagating a flip from another device within a few seconds.
+# When the toggle is changed via /settings/billing_config (POST), the caller
+# invalidates this cache explicitly via invalidate_billing_config_cache().
+
+_BILLING_CONFIG_DEFAULTS = {
+    "always_generate_bill": False,
+}
+
+
+@cached(ttl=5)
+def get_billing_config():
+    """Return the billing-config doc as a plain dict.
+
+    Always returns a dict with all known keys filled in (so callers can do
+    `cfg.get("always_generate_bill")` without worrying about missing keys
+    on a fresh install). Read failures fall back to defaults rather than
+    raising, so a transient Firestore blip cannot break checkout.
+    """
+    try:
+        doc = settings_ref.document('billing_config').get()
+        data = doc.to_dict() if doc.exists else {}
+    except Exception as e:
+        logger.warning(f"get_billing_config: read failed, using defaults: {e}")
+        data = {}
+    merged = dict(_BILLING_CONFIG_DEFAULTS)
+    if isinstance(data, dict):
+        for k in _BILLING_CONFIG_DEFAULTS:
+            if k in data:
+                merged[k] = data[k]
+    return merged
+
+
+def invalidate_billing_config_cache():
+    """Drop the cached billing config so the next read sees fresh values."""
+    with _cache_lock:
+        keys_to_remove = [k for k in _cache if 'get_billing_config' in k]
+        for k in keys_to_remove:
+            del _cache[k]
+
+
+# ── UI config ─────────────────────────────────────────────────────────────────
+# Tenant-wide UI visibility flags. Stored in `settings/ui_config`. Currently:
+#   - hide_register_tab (bool, default False):
+#       True  → the Register tab is hidden from the navigation on every device.
+#               Frontend honours this both at server render time (no flash) and
+#               via a Firestore onSnapshot listener for live cross-browser sync.
+#       False → default; Register tab visible.
+#
+# Kept in a separate doc from billing_config so concerns don't mix and a UI
+# toggle change doesn't bust the billing-config cache.
+
+_UI_CONFIG_DEFAULTS = {
+    "hide_register_tab": False,
+}
+
+
+@cached(ttl=5)
+def get_ui_config():
+    """Return the ui-config doc as a plain dict with all known keys filled in.
+
+    Read failures fall back to defaults so a Firestore blip never crashes
+    page-render or settings reads.
+    """
+    try:
+        doc = settings_ref.document('ui_config').get()
+        data = doc.to_dict() if doc.exists else {}
+    except Exception as e:
+        logger.warning(f"get_ui_config: read failed, using defaults: {e}")
+        data = {}
+    merged = dict(_UI_CONFIG_DEFAULTS)
+    if isinstance(data, dict):
+        for k in _UI_CONFIG_DEFAULTS:
+            if k in data:
+                merged[k] = data[k]
+    return merged
+
+
+def invalidate_ui_config_cache():
+    """Drop the cached ui config so the next read sees fresh values."""
+    with _cache_lock:
+        keys_to_remove = [k for k in _cache if 'get_ui_config' in k]
+        for k in keys_to_remove:
+            del _cache[k]
+
+
 def get_last_rent_check():
     settings_doc = settings_ref.document('app_settings').get()
     if settings_doc.exists:
@@ -606,14 +702,34 @@ def create_bill_record(room, room_data, checkout_time, batch=None,
         # invoice for the in-hotel service/addon portion only (cash or UPI).
         mmt_service_only = is_mmt_ota and any_addon
 
-        # Determine whether this checkout qualifies for a bill + invoice.
-        # Same-day + cash-only = no folio, no GST invoice (walk-in, no overnight stay).
-        is_no_bill = (
-            is_same_day
-            and payment_cash > 0
-            and payment_online == 0
-            and not any_addon_online
-        )
+        # ── Determine whether this checkout qualifies for a bill + invoice ──
+        # The Settings → Bill Generation toggle controls the cash-only skip:
+        #   • always_generate_bill = True  → never skip (every stay gets a bill).
+        #   • always_generate_bill = False → skip the bill when the entire stay
+        #     (room + every service/addon) was paid in cash. This is the
+        #     date-independent rule: payment_cash > 0 AND payment_online == 0
+        #     AND no addon was paid online.
+        #
+        # OTA branches (pure MMT room stays, Booking.com) are NOT controlled by
+        # this toggle — they are evaluated separately further down. The toggle
+        # only governs the cash-only skip for non-OTA stays.
+        try:
+            _billing_cfg = get_billing_config()
+        except Exception as _cfg_err:
+            # Defensive: never let a settings read break checkout.
+            logger.warning(f"create_bill_record: billing_config read failed, "
+                           f"using defaults: {_cfg_err}")
+            _billing_cfg = dict(_BILLING_CONFIG_DEFAULTS)
+        always_generate_bill = bool(_billing_cfg.get("always_generate_bill", False))
+
+        if always_generate_bill:
+            is_no_bill = False
+        else:
+            is_no_bill = (
+                payment_cash > 0
+                and payment_online == 0
+                and not any_addon_online
+            )
 
         if mmt_service_only:
             # MMT room (no hotel invoice for room) BUT guest took a service →
@@ -625,8 +741,14 @@ def create_bill_record(room, room_data, checkout_time, batch=None,
         elif is_booking_com:
             # Booking.com: always generate invoice (spec requirement)
             invoice_generated = True
+        elif always_generate_bill:
+            # Toggle ON: every non-OTA stay gets a tax invoice. Without this
+            # branch, an all-cash stay with no online addon would fall through
+            # to the `else` (False) below — giving a bill_number but no
+            # invoice flag, which contradicts "generate bills for all stays".
+            invoice_generated = True
         elif is_no_bill:
-            # Same-day cash-only checkout → no bill number, no GST invoice
+            # Cash-only stay (toggle OFF): no bill number, no GST invoice
             invoice_generated = False
         elif payment_cash > 0 and payment_online > 0:
             # Split payment (cash + UPI) → generate invoice
@@ -641,8 +763,12 @@ def create_bill_record(room, room_data, checkout_time, batch=None,
             invoice_generated = False
 
         # Only generate bill_number (CC/...) when a bill is actually warranted.
-        # Same-day cash-only stays are excluded — they won't appear in the Bills module.
-        # MMT stays get a real bill_number ONLY when a service is taken (service-only bill).
+        # When the Bill-generation toggle is OFF, entirely-cash stays are
+        # excluded (is_no_bill = True) and won't appear in the Bills module.
+        # When ON, every non-OTA stay gets a sequential bill_number.
+        # MMT stays get a real bill_number ONLY when a service is taken
+        # (service-only bill); pure MMT room stays remain "-" regardless of
+        # the toggle.
         if is_no_bill:
             bill_number = "-"
         elif is_mmt_ota and not mmt_service_only:

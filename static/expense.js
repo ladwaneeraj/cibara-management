@@ -100,6 +100,14 @@ function initializeExpense() {
   if (closeBtn) closeBtn.addEventListener("click", () => document.getElementById("expense-modal")?.classList.remove("show"));
 }
 
+// Categories that don't get an invoice-photo attach option. These are
+// either pure cash transactions (no vendor invoice) or recurring fixed
+// payments where a photo adds no value:
+//   - salary     → paid to staff, recorded by name
+//   - rent       → fixed monthly account-level cost
+//   - petty_cash → small everyday items, no bill expected
+const NO_PHOTO_CATEGORIES = ["salary", "rent", "petty_cash"];
+
 // ─── Category change ──────────────────────────────────────────────────────────
 function _onCategoryChange() {
   const category = document.getElementById("expense-category")?.value || "";
@@ -110,6 +118,13 @@ function _onCategoryChange() {
   _setDisplay("bill-fields", false);
   _setDisplay("gst-fields", false);
   _setDisplay("commission-fields", false);
+
+  // Hide the invoice-photo attach section for categories that shouldn't
+  // collect proof. Also drop any pending file the user attached before
+  // switching categories so it doesn't silently get uploaded on submit.
+  const hidePhoto = NO_PHOTO_CATEGORIES.includes(category);
+  _setDisplay("invoice-photo-section", !hidePhoto);
+  if (hidePhoto) _clearInvoiceUpload();
 
   const amountInput = document.getElementById("expense-amount");
   if (amountInput) amountInput.readOnly = false;

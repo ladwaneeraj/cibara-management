@@ -262,12 +262,14 @@ function showQuickTransferModal() {
     const basePrice = roomPricing.calculatePrice(destRoom, guestCount);
     const acPrice   = basePrice + 600;
 
-    // Show AC toggle for premium AC rooms (202-205) BEFORE setting price.
-    // Coerce to number — destRoom is a <select> value (string) and
-    // lexical comparison is brittle for anything outside 3-digit rooms.
+    // Show AC toggle for premium AC rooms (200-206) BEFORE setting price.
+    // This matches the room-card AC indicator and the mid-stay "Add AC"
+    // button ranges. Coerce to number — destRoom is a <select> value
+    // (string) and lexical comparison is brittle for anything outside
+    // 3-digit rooms.
     if (acToggleSection && newRoomAcToggle) {
       const destNum = parseInt(destRoom, 10);
-      if (destNum >= 202 && destNum <= 205) {
+      if (destNum >= 200 && destNum <= 206) {
         // Default: non-AC (toggle unchecked), price = basePrice
         newRoomAcToggle.checked = false;
         acToggleSection.style.display = "block";
@@ -409,8 +411,10 @@ async function processEnhancedRoomTransfer(
       transferData.new_price = newPrice;
     }
 
-    // Add AC status for premium rooms
-    if (newRoom >= 202 && newRoom <= 205) {
+    // Add AC status for premium rooms (200-206 — matches the modal toggle
+    // visibility above and the room-card AC indicator).
+    const _newRoomNum = parseInt(newRoom, 10);
+    if (_newRoomNum >= 200 && _newRoomNum <= 206) {
       transferData.is_ac = isAC;
     }
 
@@ -458,7 +462,8 @@ async function processEnhancedRoomTransfer(
       if (newPrice) {
         successMessage += ` (Price updated to ₹${newPrice})`;
       }
-      if (newRoom >= 202 && newRoom <= 205) {
+      const _successRoomNum = parseInt(newRoom, 10);
+      if (_successRoomNum >= 200 && _successRoomNum <= 206) {
         successMessage += isAC ? " (AC)" : " (Non-AC)";
       }
       // Show balance/refund notice after same-cycle transfer

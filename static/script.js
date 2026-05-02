@@ -1,3 +1,31 @@
+// ── Disable mouse-wheel value change on number inputs ────────────────────────
+// Browser default for <input type="number">: when the input is focused and
+// the user scrolls over it, the value increments/decrements. This causes
+// silent edits to amounts (rent, payment, GST, etc.) when the user means to
+// scroll the page. We block the default only when the wheel event is fired
+// directly on a focused number input — page scrolling and arrow-key changes
+// are unaffected. A single document-level listener covers every number
+// input currently in the DOM and any rendered later (including dynamically-
+// generated ones in bills.js, register.js, laundry.js, etc.).
+//
+// passive:false is required because preventDefault() is a no-op on the
+// default-passive wheel listener.
+document.addEventListener(
+  "wheel",
+  function (e) {
+    const t = e.target;
+    if (
+      t &&
+      t.tagName === "INPUT" &&
+      t.type === "number" &&
+      document.activeElement === t
+    ) {
+      e.preventDefault();
+    }
+  },
+  { passive: false },
+);
+
 // Global variables
 let rooms = {};
 let dailyCounters = {}; // today's check-in serial counter, keyed by date string
@@ -3100,156 +3128,149 @@ function updateServiceTotalPrice() {
   }
 }
 
+// ── Room → category source of truth ──────────────────────────────────────────
+// Canonical mapping used by BOTH calculatePrice() and getRoomCategory().
+// Adding or moving a room only requires editing this one map.
+//
+// Notes on AC handling:
+//   • 200–206 are returned here as base category "premium". The AC-aware
+//     variant ("premium-ac") is computed at call-time by
+//     getRoomCategoryWithAC(roomNumber, isAC). This keeps the source of
+//     truth simple and prevents "Premium AC Room" labels from being
+//     applied to non-AC stays.
+//   • Rooms not in this map (e.g., 6–12, 21, 22 — not part of the
+//     property's published room list) fall back to category "other" /
+//     label "Other" / fallback price.
+const _ROOM_CATEGORY_MAP = (function () {
+  const m = new Map();
+  // First-floor: Single Non-Attach (1, 2, 3, 4, 5, 13–20)
+  [1, 2, 3, 4, 5].forEach((n) => m.set(String(n), "single-non-attach"));
+  for (let n = 13; n <= 20; n++) m.set(String(n), "single-non-attach");
+  // First-floor: Double Non-Attach (23–27)
+  for (let n = 23; n <= 27; n++) m.set(String(n), "double-non-attach");
+  // Second-floor: Premium (200–206 — AC toggle elsewhere)
+  for (let n = 200; n <= 206; n++) m.set(String(n), "premium");
+  // Second-floor: Regular (207, 208–211, 215, 220–222)
+  m.set("207", "regular");
+  for (let n = 208; n <= 211; n++) m.set(String(n), "regular");
+  m.set("215", "regular");
+  for (let n = 220; n <= 222; n++) m.set(String(n), "regular");
+  // Second-floor: Deluxe (223–227)
+  for (let n = 223; n <= 227; n++) m.set(String(n), "deluxe");
+  // Second-floor: Single Attach (212–214, 216–219)
+  for (let n = 212; n <= 214; n++) m.set(String(n), "single-attach");
+  for (let n = 216; n <= 219; n++) m.set(String(n), "single-attach");
+  // Party Hall (228)
+  m.set("228", "party-hall");
+  return m;
+})();
+
+const _CATEGORY_LABELS = {
+  "single-non-attach": "Single Non-Attach",
+  "double-non-attach": "Double Non-Attach",
+  "premium":           "Premium Room",
+  "premium-ac":        "Premium AC Room",
+  "regular":           "Regular Room",
+  "deluxe":            "Deluxe Room",
+  "single-attach":     "Single Attach",
+  "party-hall":        "Party Hall",
+  "other":             "Other",
+};
+
+// Display order used by analytics (left-to-right when not sorted by value).
+const _CATEGORY_DISPLAY_ORDER = [
+  "premium",
+  "premium-ac",
+  "regular",
+  "deluxe",
+  "single-attach",
+  "single-non-attach",
+  "double-non-attach",
+  "party-hall",
+];
+
 // Room pricing configuration
 const roomPricing = {
-  // Function to calculate price based on room number and guest count
+  // Compute the per-night base price for a room + guest count.
+  // The AC surcharge (+₹600 for premium with AC toggle on) is layered on
+  // separately by updateRoomPrice() — this function returns the non-AC base.
   calculatePrice: function (roomNumber, guestCount) {
-    roomNumber = String(roomNumber);
-    guestCount = parseInt(guestCount);
+    const key    = String(roomNumber);
+    const guests = parseInt(guestCount) || 1;
+    const cat    = _ROOM_CATEGORY_MAP.get(key) || "other";
 
-    // First floor regular rooms (3-5, 13-20)
-    if (
-      (roomNumber >= 3 && roomNumber <= 5) ||
-      (roomNumber >= 13 && roomNumber <= 20)
-    ) {
-      return 250; // Fixed price for 1 guest
+    switch (cat) {
+      case "single-non-attach":
+        // 1, 2, 3, 4, 5, 13–20: ₹250 (single-occupancy rooms)
+        return 250;
+      case "double-non-attach":
+        // 23–27: ₹300 for 1 guest, ₹500 for 2+
+        return guests === 1 ? 300 : 500;
+      case "premium":
+        // 200–206: ₹1200 base for 2 guests, +₹300 per extra guest.
+        // AC surcharge applied later by updateRoomPrice when toggle is on.
+        return 1200 + Math.max(0, guests - 2) * 300;
+      case "regular":
+        // 207, 208–211, 215: ₹450 for 1 guest, ₹700 for 2 guests,
+        // +₹300 per extra guest beyond 2. (207 was previously priced as
+        // Premium — moved here to match its new Regular categorization.)
+        //
+        // 220, 221, 222: priced differently from the rest of Regular —
+        // ₹700 base + ₹300 per extra guest beyond 1 (so ₹700 / ₹1000 /
+        // ₹1300 / ₹1600 for 1/2/3/4 guests). Same "Regular Room" label
+        // in the UI; the price divergence is intentional. Keep the
+        // special case localised here so the category stays simple.
+        if (key === "220" || key === "221" || key === "222") {
+          return 700 + Math.max(0, guests - 1) * 300;
+        }
+        return guests === 1 ? 450 : 700 + Math.max(0, guests - 2) * 300;
+      case "deluxe":
+        // 223–227: ₹900 base for 2 guests, +₹300 per extra guest.
+        return 900 + Math.max(0, guests - 2) * 300;
+      case "single-attach":
+        // 212–214, 216–219: ₹450 for 1, ₹700 for 2+ (no per-guest extra).
+        return guests === 1 ? 450 : 700;
+      case "party-hall":
+      case "other":
+      default:
+        // Party hall (228) and any out-of-list room — keep prior default.
+        return 500;
     }
-
-    // First floor rooms 23-27
-    else if (roomNumber >= 23 && roomNumber <= 27) {
-      if (guestCount === 1) return 300;
-      else return 500; // For 2 or more guests
-    }
-
-    // Second floor premium rooms (200-207) - Can be AC or Non-AC
-    // Base price for 2 guests (double occupancy)
-    // 1200 for non-AC, 1800 for AC (will be adjusted in updateRoomPrice based on AC toggle)
-    else if (
-      ["200", "201", "202", "203", "204", "205", "206", "207"].includes(
-        roomNumber,
-      )
-    ) {
-      return 1200 + Math.max(0, guestCount - 2) * 300; // +300 for each extra guest beyond 2
-    }
-
-    // Second floor rooms (223-227)
-    else if (roomNumber >= 223 && roomNumber <= 227) {
-      // Base price for 2 guests (double occupancy): 900
-      return 900 + Math.max(0, guestCount - 2) * 300; // +300 for each extra guest beyond 2
-    }
-
-    // Second floor rooms (220-222)
-    else if (roomNumber >= 220 && roomNumber <= 222) {
-      if (guestCount === 1) return 450;
-      else return 700 + Math.max(0, guestCount - 2) * 300; // 700 for 2 guests, +300 for each extra
-    }
-
-    // Second floor rooms (208-211, 215)
-    else if ((roomNumber >= 208 && roomNumber <= 211) || roomNumber === "215") {
-      if (guestCount === 1) return 450;
-      else return 700 + Math.max(0, guestCount - 2) * 300; // 700 for 2 guests, +300 for each extra
-    }
-
-    // Second floor rooms (212-214, 216-219)
-    else if (
-      (roomNumber >= 212 && roomNumber <= 214) ||
-      (roomNumber >= 216 && roomNumber <= 219)
-    ) {
-      if (guestCount === 1) return 450;
-      else return 700; // Fixed price for 2 or more guests
-    }
-
-    // Default fallback
-    return 500;
   },
 
-  // Function to get room category
+  // Return the BASE category (no AC awareness). Used by the check-in
+  // form badge and other UI surfaces. For an AC-aware variant (used by
+  // the analytics revenue-by-room-type chart), call
+  // getRoomCategoryWithAC(roomNumber, isAC) instead.
   getRoomCategory: function (roomNumber) {
-    roomNumber = String(roomNumber);
-
-    // First floor rooms (1-27) - Non-attach category
-    if (roomNumber >= 1 && roomNumber <= 27) {
-      return {
-        category: "non-attach",
-        label: "Non-Attach Room",
-        analytics: {
-          type: "non-attach",
-        },
-      };
-    }
-
-    // Premium AC rooms (200-207) - All can have AC toggle
-    else if (
-      ["200", "201", "202", "203", "204", "205", "206", "207"].includes(
-        roomNumber,
-      )
-    ) {
-      return {
-        category: "premium-ac",
-        label: "Premium AC Room",
-        analytics: {
-          type: "premium",
-          isAC: true,
-        },
-      };
-    }
-
-    // Single rooms (212-215, 216-219)
-    else if (
-      (roomNumber >= 212 && roomNumber <= 215) ||
-      (roomNumber >= 216 && roomNumber <= 219)
-    ) {
-      return {
-        category: "single",
-        label: "Single Room",
-        analytics: {
-          type: "single",
-        },
-      };
-    }
-
-    // Regular second floor rooms (223-227)
-    else if (roomNumber >= 223 && roomNumber <= 227) {
-      return {
-        category: "regular",
-        label: "Regular Room",
-        analytics: {
-          type: "regular",
-        },
-      };
-    }
-
-    // Regular second floor rooms (220-222)
-    else if (roomNumber >= 220 && roomNumber <= 222) {
-      return {
-        category: "regular",
-        label: "Regular Room",
-        analytics: {
-          type: "regular",
-        },
-      };
-    }
-
-    // Regular second floor rooms (208-211)
-    else if (roomNumber >= 208 && roomNumber <= 211) {
-      return {
-        category: "regular",
-        label: "Regular Room",
-        analytics: {
-          type: "regular",
-        },
-      };
-    }
-
-    // Default fallback
+    const key = String(roomNumber);
+    const cat = _ROOM_CATEGORY_MAP.get(key) || "other";
     return {
-      category: "regular",
-      label: "Regular Room",
-      analytics: {
-        type: "regular",
-      },
+      category: cat,
+      label:    _CATEGORY_LABELS[cat] || _CATEGORY_LABELS["other"],
+      analytics: { type: cat },
     };
   },
+
+  // AC-aware variant. Returns "premium-ac" only when the room is in the
+  // premium range AND the guest's isAC flag is true. Anywhere else it
+  // delegates to getRoomCategory().
+  getRoomCategoryWithAC: function (roomNumber, isAC) {
+    const base = this.getRoomCategory(roomNumber);
+    if (base.category === "premium" && isAC) {
+      return {
+        category: "premium-ac",
+        label:    _CATEGORY_LABELS["premium-ac"],
+        analytics: { type: "premium-ac", isAC: true },
+      };
+    }
+    return base;
+  },
+
+  // Expose the canonical display order so analytics can render bars in a
+  // consistent left-to-right sequence when not sorted by value.
+  CATEGORY_DISPLAY_ORDER: _CATEGORY_DISPLAY_ORDER,
+  CATEGORY_LABELS:        _CATEGORY_LABELS,
 };
 
 // Initialize enhanced check-in form functionality
@@ -3306,10 +3327,13 @@ function initEnhancedCheckinForm() {
       roomCategoryIndicator.className =
         "room-category-indicator room-category-" + category.category;
 
-      // Show AC toggle for rooms 200-207 (all premium rooms)
+      // Show AC toggle for premium rooms (200-206). 207 is now categorized
+      // as Regular and uses the regular pricing bracket — no AC option.
+      // This matches the room card AC indicator, the mid-stay "Add AC"
+      // button, and the transfer-modal AC toggle (all already 200-206).
       if (acToggleContainer) {
         if (
-          ["200", "201", "202", "203", "204", "205", "206", "207"].includes(
+          ["200", "201", "202", "203", "204", "205", "206"].includes(
             selectedRoom,
           )
         ) {
@@ -3670,9 +3694,238 @@ function openSettingsModal() {
     function () {
       const modal = document.getElementById("settings-modal");
       if (modal) modal.classList.add("show");
+      // Refresh toggle state every time the modal opens — covers the case
+      // where the flag was changed on another device.
+      loadBillingConfig();
+      loadUIConfig();
     }
   );
 }
+
+// ── Bill-generation toggle ────────────────────────────────────────────────────
+// The Settings modal exposes a single boolean: always_generate_bill.
+//   ON  → every stay generates a bill regardless of payment mode.
+//   OFF → entirely-cash stays (room + every service paid in cash) skip the bill.
+// State lives on the server (settings/billing_config). We always read from the
+// server when the modal opens so multiple devices stay consistent.
+
+function _setBillGenToggleUI(enabled) {
+  const toggle = document.getElementById("settings-billgen-toggle");
+  const slider = document.getElementById("settings-billgen-slider");
+  const knob   = document.getElementById("settings-billgen-knob");
+  const sub    = document.getElementById("settings-billgen-sub");
+  if (toggle) toggle.checked = !!enabled;
+  if (slider) slider.style.background = enabled ? "#3f51b5" : "#ccc";
+  if (knob)   knob.style.transform   = enabled ? "translateX(20px)" : "translateX(0)";
+  if (sub) {
+    sub.textContent = enabled
+      ? "All stays generate bills"
+      : "Skip bill for entirely-cash stays";
+  }
+}
+
+async function loadBillingConfig() {
+  // Show a neutral "loading" state while we fetch, but don't disable the
+  // toggle — if the user clicks during the fetch we just overwrite below.
+  const sub = document.getElementById("settings-billgen-sub");
+  if (sub) sub.textContent = "Loading…";
+  try {
+    const res = await apiFetch("/settings/billing_config");
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    if (!data.success) throw new Error(data.message || "Failed to load");
+    _setBillGenToggleUI(!!(data.config && data.config.always_generate_bill));
+  } catch (err) {
+    console.warn("[billing_config] load failed:", err);
+    if (sub) sub.textContent = "Could not load — tap to retry";
+    // Leave the toggle unchecked as a safe default; user can flip to retry.
+    const toggle = document.getElementById("settings-billgen-toggle");
+    if (toggle) toggle.checked = false;
+  }
+}
+
+async function toggleAlwaysGenerateBill(inputEl) {
+  // Optimistic UI: paint the new state immediately, then POST. If the POST
+  // fails, revert and show a notification.
+  const desired = !!(inputEl && inputEl.checked);
+  _setBillGenToggleUI(desired);
+
+  // Guard against rapid toggling — disable until the round-trip resolves.
+  if (inputEl) inputEl.disabled = true;
+  try {
+    const res = await apiFetch("/settings/billing_config", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ always_generate_bill: desired }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    if (!data.success) throw new Error(data.message || "Save failed");
+    // Re-paint from the server's authoritative response in case the server
+    // coerced or sanitised anything.
+    _setBillGenToggleUI(!!(data.config && data.config.always_generate_bill));
+    if (typeof showNotification === "function") {
+      showNotification(
+        desired ? "Bills will be generated for all stays."
+                : "Bills will be skipped for entirely-cash stays.",
+        "success",
+      );
+    }
+  } catch (err) {
+    console.error("[billing_config] save failed:", err);
+    // Revert UI to the previous (server-side) state.
+    _setBillGenToggleUI(!desired);
+    if (typeof showNotification === "function") {
+      showNotification(
+        "Could not save setting: " + (err.message || "network error"),
+        "error",
+      );
+    } else {
+      alert("Could not save setting: " + (err.message || "network error"));
+    }
+  } finally {
+    if (inputEl) inputEl.disabled = false;
+  }
+}
+
+// ── UI config (tab visibility) ────────────────────────────────────────────────
+// Currently one flag: hide_register_tab. State lives in settings/ui_config and
+// propagates via a Firestore onSnapshot listener in google_sync.js, which
+// dispatches a `cibaraUIConfigChanged` event picked up here.
+//
+// The first paint already has the correct visibility (Jinja-rendered from
+// app.py). applyUIConfig() is called once on init for symmetry — it's a no-op
+// when the DOM is already in the right state.
+
+function _setHideRegisterToggleUI(enabled) {
+  const toggle = document.getElementById("settings-hidereg-toggle");
+  const slider = document.getElementById("settings-hidereg-slider");
+  const knob   = document.getElementById("settings-hidereg-knob");
+  const sub    = document.getElementById("settings-hidereg-sub");
+  if (toggle) toggle.checked = !!enabled;
+  if (slider) slider.style.background = enabled ? "#3f51b5" : "#ccc";
+  if (knob)   knob.style.transform   = enabled ? "translateX(20px)" : "translateX(0)";
+  if (sub) {
+    sub.textContent = enabled
+      ? "Register tab is hidden on all devices"
+      : "Register tab is visible";
+  }
+}
+
+// Apply the UI config to the DOM. Idempotent. Also handles the case where the
+// user is currently viewing the Register tab and another device flips the
+// toggle — we switch them to Rooms so they don't get stuck on a hidden tab.
+function applyUIConfig(cfg) {
+  cfg = cfg || {};
+  const hideReg = !!cfg.hide_register_tab;
+
+  const navItem = document.getElementById("nav-item-register");
+  if (navItem) {
+    navItem.style.display = hideReg ? "none" : "";
+  }
+
+  // If Register is currently the visible tab and we're hiding it, switch to
+  // Rooms. Two signals to detect "currently on register":
+  //   • #register-tab is visible (does not have `.hidden`)
+  //   • OR the register nav-item has `.active`
+  if (hideReg) {
+    const regTabContent = document.getElementById("register-tab");
+    const regNavActive  = navItem && navItem.classList.contains("active");
+    const regVisible    = regTabContent && !regTabContent.classList.contains("hidden");
+    if (regNavActive || regVisible) {
+      // Trigger the Rooms tab the same way a click would — this reuses all the
+      // existing tab-switch wiring (active class, hidden class, etc.).
+      const roomsNav = document.querySelector('.nav-item[data-tab="rooms"]');
+      if (roomsNav) {
+        roomsNav.click();
+      } else {
+        // Fallback if the rooms nav isn't found for some reason.
+        document.querySelectorAll(".tab-content").forEach((c) =>
+          c.classList.add("hidden"),
+        );
+        const roomsTab = document.getElementById("rooms-tab");
+        if (roomsTab) roomsTab.classList.remove("hidden");
+      }
+    }
+  }
+
+  // Keep the Settings toggle UI in sync if the modal is open or will open.
+  _setHideRegisterToggleUI(hideReg);
+}
+
+async function loadUIConfig() {
+  const sub = document.getElementById("settings-hidereg-sub");
+  if (sub) sub.textContent = "Loading…";
+  try {
+    const res = await apiFetch("/settings/ui_config");
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    if (!data.success) throw new Error(data.message || "Failed to load");
+    applyUIConfig(data.config || {});
+  } catch (err) {
+    console.warn("[ui_config] load failed:", err);
+    if (sub) sub.textContent = "Could not load — tap to retry";
+    const toggle = document.getElementById("settings-hidereg-toggle");
+    if (toggle) toggle.checked = false;
+  }
+}
+
+async function toggleHideRegisterTab(inputEl) {
+  const desired = !!(inputEl && inputEl.checked);
+  // Optimistic UI: apply locally first, then persist.
+  applyUIConfig({ hide_register_tab: desired });
+  if (inputEl) inputEl.disabled = true;
+  try {
+    const res = await apiFetch("/settings/ui_config", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ hide_register_tab: desired }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    if (!data.success) throw new Error(data.message || "Save failed");
+    // Re-paint from server's authoritative response.
+    applyUIConfig(data.config || {});
+    if (typeof showNotification === "function") {
+      showNotification(
+        desired ? "Register tab hidden on all devices."
+                : "Register tab is now visible.",
+        "success",
+      );
+    }
+  } catch (err) {
+    console.error("[ui_config] save failed:", err);
+    // Revert.
+    applyUIConfig({ hide_register_tab: !desired });
+    if (typeof showNotification === "function") {
+      showNotification(
+        "Could not save setting: " + (err.message || "network error"),
+        "error",
+      );
+    } else {
+      alert("Could not save setting: " + (err.message || "network error"));
+    }
+  } finally {
+    if (inputEl) inputEl.disabled = false;
+  }
+}
+
+// Initial apply: window.__initialUIConfig is server-rendered. Re-applying it
+// in JS is idempotent and ensures the toggle UI inside Settings reflects the
+// current state when the modal first opens.
+(function _initUIConfigOnce() {
+  try {
+    applyUIConfig(window.__initialUIConfig || {});
+  } catch (e) {
+    console.warn("[ui_config] initial apply failed:", e);
+  }
+})();
+
+// React to remote flips (another device toggled the flag). The event is
+// dispatched by the onSnapshot listener in google_sync.js.
+window.addEventListener("cibaraUIConfigChanged", (e) => {
+  applyUIConfig((e && e.detail) || {});
+});
 
 function closeSettingsModal() {
   const modal = document.getElementById("settings-modal");
@@ -4481,16 +4734,101 @@ document.addEventListener("DOMContentLoaded", function () {
     });
   }
 
-  // Refresh button
+  // Refresh button — refreshes the currently-active tab with fresh
+  // (cache-bypassed) data. Always re-fetches the shared rooms/dashboard
+  // payload (rooms, logs, totals, upcoming bookings) and additionally
+  // delegates to the active tab's own refresh routine where one exists.
   if (refreshBtn) {
-    refreshBtn.addEventListener("click", () => {
+    refreshBtn.addEventListener("click", async () => {
+      // Guard against double-clicks while a refresh is in flight.
+      if (refreshBtn.dataset.busy === "1") return;
+      refreshBtn.dataset.busy = "1";
+      const originalHTML = '<i class="fas fa-sync-alt"></i>';
       refreshBtn.innerHTML =
         '<span class="loader" style="width: 20px; height: 20px;"></span>';
-      fetchData().then(() => {
+
+      // Determine the active tab. Prefer the footer nav, fall back to
+      // whichever .tab-content is visible (covers the Reports tab, which
+      // has no nav-item).
+      let activeTab =
+        document.querySelector(".nav-item.active")?.dataset?.tab || null;
+      if (!activeTab) {
+        const visible = document.querySelector(
+          ".tab-content:not(.hidden)",
+        );
+        if (visible && visible.id && visible.id.endsWith("-tab")) {
+          activeTab = visible.id.replace(/-tab$/, "");
+        }
+      }
+
+      // Turn on the cache-bypass flag for the duration of the refresh.
+      // apiFetch reads this and adds `cache: 'no-store'` + a `_t=` query
+      // param to GET/HEAD requests.
+      window.__forceFresh = true;
+
+      // Track tab-loader work that we cannot directly await (in-tab
+      // refresh buttons run async handlers without exposing a promise).
+      // We hold the spinner for at least minHoldMs so the click feels
+      // responsive even when delegating to those handlers.
+      let minHoldMs = 0;
+
+      const tasks = [];
+      // Always refresh the shared dashboard payload.
+      tasks.push(fetchData());
+
+      try {
+        switch (activeTab) {
+          case "bookings":
+            if (typeof window.fetchBookings === "function") {
+              tasks.push(Promise.resolve(window.fetchBookings()));
+            }
+            break;
+          case "bills": {
+            const bl = document.getElementById("bl-refresh-btn");
+            if (bl) {
+              bl.click();
+              minHoldMs = 1200;
+            }
+            break;
+          }
+          case "register": {
+            // register.js renders its own toolbar with #reg-refresh-btn.
+            // The static #refresh-register-btn in index.html is legacy
+            // markup and has no listener — skip it.
+            const reg = document.getElementById("reg-refresh-btn");
+            if (reg) {
+              reg.click();
+              minHoldMs = 1200;
+            }
+            break;
+          }
+          case "transactions":
+          case "rooms":
+          case "reports":
+          default:
+            // fetchData() already refreshes the data these views render.
+            break;
+        }
+
+        const startedAt = Date.now();
+        await Promise.allSettled(tasks);
+        const elapsed = Date.now() - startedAt;
+        if (elapsed < minHoldMs) {
+          await new Promise((r) => setTimeout(r, minHoldMs - elapsed));
+        }
+      } catch (err) {
+        // Should not reach here — allSettled never rejects — but be
+        // defensive so the spinner is always cleared.
+        console.warn("[refresh-btn] unexpected error:", err);
+      } finally {
+        window.__forceFresh = false;
+        // Brief tail so the spinner doesn't flash off instantly on a
+        // very fast refresh.
         setTimeout(() => {
-          refreshBtn.innerHTML = '<i class="fas fa-sync-alt"></i>';
-        }, 500);
-      });
+          refreshBtn.innerHTML = originalHTML;
+          refreshBtn.dataset.busy = "0";
+        }, 250);
+      }
     });
   }
 

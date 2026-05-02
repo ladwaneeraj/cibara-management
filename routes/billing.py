@@ -13,9 +13,11 @@ from firebase_admin import firestore
 
 from config import (
     db, rooms_ref, bills_ref, logs_ref, totals_ref, counters_ref,
-    metadata_ref, IST, logger, settlements_ref,
+    metadata_ref, IST, logger, settlements_ref, settings_ref,
     _build_active_entry_fast, _find_serial_fast, _batch_fill_serials,
     get_all_rooms, invalidate_rooms_and_totals,
+    get_billing_config, invalidate_billing_config_cache,
+    get_ui_config, invalidate_ui_config_cache,
 )
 from services import payment_service, pdf_service, expense_service
 
@@ -504,6 +506,97 @@ def get_register_stats():
         return jsonify(success=False, message=f"Error: {str(e)}")
 
 
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# BILLING CONFIG (Settings → Bill generation toggle)
+# ══════════════════════════════════════════════════════════════════════════════
+# Two endpoints back the toggle in the Settings modal:
+#   GET  /settings/billing_config  → current config (defaults filled in)
+#   POST /settings/billing_config  → update one or more keys
+# Both inherit the global X-API-Key check applied at the app level. The UI
+# additionally gates the Settings modal behind the manager password before
+# this endpoint is ever called.
+
+@billing_bp.route("/settings/billing_config", methods=["GET"])
+def get_billing_config_endpoint():
+    try:
+        cfg = get_billing_config()
+        return jsonify(success=True, config=cfg)
+    except Exception as e:
+        logger.error(f"get_billing_config_endpoint error: {e}")
+        return jsonify(success=False, message=str(e)), 500
+
+
+@billing_bp.route("/settings/billing_config", methods=["POST"])
+def update_billing_config_endpoint():
+    try:
+        data = request.get_json(silent=True) or {}
+
+        # Whitelist + type-coerce. Adding new keys here is the only path to
+        # changing what the toggle persists — we do NOT blindly write whatever
+        # the client sends.
+        update = {}
+        if "always_generate_bill" in data:
+            update["always_generate_bill"] = bool(data["always_generate_bill"])
+
+        if not update:
+            return jsonify(success=False,
+                           message="No recognised settings keys in body"), 400
+
+        # merge=True so we can add future keys without clobbering existing ones.
+        settings_ref.document('billing_config').set(update, merge=True)
+        invalidate_billing_config_cache()
+
+        # Return the freshly-merged config so the client can update its UI from
+        # one source of truth.
+        cfg = get_billing_config()
+        logger.info(f"billing_config updated: {update}")
+        return jsonify(success=True, config=cfg)
+    except Exception as e:
+        logger.error(f"update_billing_config_endpoint error: {e}")
+        return jsonify(success=False, message=str(e)), 500
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# UI CONFIG (Settings → tab visibility, etc.)
+# ══════════════════════════════════════════════════════════════════════════════
+# Tenant-wide UI flags. Same shape as /settings/billing_config but separated
+# so a UI flip doesn't touch billing logic and vice versa. Real-time sync to
+# other browsers is handled by an onSnapshot listener in google_sync.js.
+
+@billing_bp.route("/settings/ui_config", methods=["GET"])
+def get_ui_config_endpoint():
+    try:
+        cfg = get_ui_config()
+        return jsonify(success=True, config=cfg)
+    except Exception as e:
+        logger.error(f"get_ui_config_endpoint error: {e}")
+        return jsonify(success=False, message=str(e)), 500
+
+
+@billing_bp.route("/settings/ui_config", methods=["POST"])
+def update_ui_config_endpoint():
+    try:
+        data = request.get_json(silent=True) or {}
+
+        # Whitelist + type-coerce. New flags must be added here explicitly.
+        update = {}
+        if "hide_register_tab" in data:
+            update["hide_register_tab"] = bool(data["hide_register_tab"])
+
+        if not update:
+            return jsonify(success=False,
+                           message="No recognised settings keys in body"), 400
+
+        settings_ref.document('ui_config').set(update, merge=True)
+        invalidate_ui_config_cache()
+        cfg = get_ui_config()
+        logger.info(f"ui_config updated: {update}")
+        return jsonify(success=True, config=cfg)
+    except Exception as e:
+        logger.error(f"update_ui_config_endpoint error: {e}")
+        return jsonify(success=False, message=str(e)), 500
 
 
 @billing_bp.route("/debug_bills", methods=["GET"])

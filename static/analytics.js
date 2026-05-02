@@ -81,7 +81,7 @@ async function generateAnalytics(reportData) {
   // KPI cards + insights
   updateSummaryCards(reportData);
 
-  // Charts
+  // Charts that work off the payment-based reportData alone
   generateRevenueExpenseChart(reportData);
   generateDailyRevenueChart(reportData);
   generatePaymentMethodsChart(reportData);
@@ -90,9 +90,12 @@ async function generateAnalytics(reportData) {
   generateExpenseTrendChart(reportData);
   generateTopServicesChart(reportData);
 
-  // Billing strip (separate API call, non-blocking)
+  // Bills payload — used by BOTH the Billing Analytics strip and the
+  // Revenue-by-Room-Type chart (the chart needs `is_ac` per bill to split
+  // Premium / Premium AC accurately). Single network call, both consumers.
   const startDate = document.getElementById("report-start-date")?.value;
   const endDate   = document.getElementById("report-end-date")?.value;
+  let billsPayload = null;
   if (startDate && endDate) {
     try {
       const resp = await apiFetch("/revenue_report", {
@@ -102,12 +105,20 @@ async function generateAnalytics(reportData) {
       });
       if (resp.ok) {
         const bd = await resp.json();
-        if (bd.success) updateBillingStrip(bd.summary);
+        if (bd.success) {
+          billsPayload = bd;
+          updateBillingStrip(bd.summary);
+        }
       }
     } catch (e) {
       console.warn("Billing data unavailable:", e);
     }
   }
+
+  // Revenue by Room Type — runs after the bills fetch so AC attribution
+  // is accurate. If the fetch failed (billsPayload === null) the chart
+  // renders an empty state.
+  generateRoomTypeRevenueChart(billsPayload);
 }
 
 // ── 8-card KPI grid ──────────────────────────────────────────────────────────
@@ -859,6 +870,155 @@ function generateTopServicesChart(data) {
   });
 }
 
+// ── Revenue by Room Type Chart ────────────────────────────────────────────────
+// Bar chart showing total billed revenue per room category for the selected
+// date range. Uses bills (checkout-basis revenue) — not raw payments — so a
+// bill's full total_amount is attributed to the category once at checkout.
+//
+// Categories (in roomPricing.CATEGORY_DISPLAY_ORDER):
+//   Premium Room, Premium AC Room, Regular Room, Deluxe Room,
+//   Single Attach, Single Non-Attach, Double Non-Attach, Party Hall
+//
+// AC attribution: bill.is_ac (snapshotted from guest.isAC at checkout) drives
+// the Premium / Premium AC split. Active stays without a bill yet are not
+// included — they'll appear once the guest checks out (consistent with the
+// "Billing Analytics" strip below this chart).
+//
+// `billsPayload` is the full /revenue_report response. May be null if the
+// fetch failed or the date range is empty — we render an empty state.
+function generateRoomTypeRevenueChart(billsPayload) {
+  const canvas = document.getElementById("room-type-revenue-chart");
+  if (!canvas) return;
+
+  if (canvas.chart) {
+    canvas.chart.destroy();
+    canvas.chart = null;
+  }
+
+  const bills = (billsPayload && Array.isArray(billsPayload.bills))
+    ? billsPayload.bills
+    : null;
+
+  if (!bills || bills.length === 0) {
+    showChartEmpty(canvas, "No checkouts in this period");
+    return;
+  }
+
+  // roomPricing lives in script.js. Defensive guard in case load order
+  // changes — analytics.js is loaded with `defer`, same as script.js,
+  // but file order is not guaranteed across browsers.
+  if (typeof roomPricing === "undefined" ||
+      typeof roomPricing.getRoomCategoryWithAC !== "function") {
+    showChartEmpty(canvas, "Room category helper not loaded");
+    return;
+  }
+
+  // Aggregate total_amount per category. Skip OTA bills — those are
+  // already excluded from "hotel revenue" elsewhere and including them
+  // would double-count revenue MMT bills.
+  // (mirrors the OTA exclusion implicit in revenue_report's hotel_revenue
+  // summary: payment_source == 'ota' is OTA-billed.)
+  const revenueByCategory = {};
+  bills.forEach((b) => {
+    if (b.payment_source === "ota") return;
+    const room   = String(b.room || "");
+    const isAC   = !!b.is_ac;
+    const amount = Number(b.total_amount) || 0;
+    if (!room || amount <= 0) return;
+
+    const cat = roomPricing.getRoomCategoryWithAC(room, isAC);
+    const key = cat.category;
+    if (!revenueByCategory[key]) {
+      revenueByCategory[key] = { label: cat.label, amount: 0, count: 0 };
+    }
+    revenueByCategory[key].amount += amount;
+    revenueByCategory[key].count  += 1;
+  });
+
+  // Hide zero-revenue categories (less clutter on the chart). Sort by
+  // amount descending so the highest-earning category is leftmost.
+  const entries = Object.entries(revenueByCategory)
+    .filter(([_, v]) => v.amount > 0)
+    .sort((a, b) => b[1].amount - a[1].amount);
+
+  if (entries.length === 0) {
+    showChartEmpty(canvas, "No room revenue in this period");
+    return;
+  }
+
+  const labels = entries.map(([_, v]) => v.label);
+  const data   = entries.map(([_, v]) => Math.round(v.amount));
+  const counts = entries.map(([_, v]) => v.count);
+
+  // Distinct accent colour per category — matches the room-type semantics
+  // loosely (premium = blue, ac = teal, deluxe = gold, etc.). Falls back
+  // to neutral grey for any unknown key.
+  const COLOR = {
+    "premium":           "rgba(37, 99, 235, 0.75)",   // blue
+    "premium-ac":        "rgba(8, 145, 178, 0.75)",    // teal
+    "regular":           "rgba(124, 58, 237, 0.75)",   // purple
+    "deluxe":            "rgba(245, 158, 11, 0.75)",   // amber
+    "single-attach":     "rgba(22, 163, 74, 0.75)",    // green
+    "single-non-attach": "rgba(132, 204, 22, 0.75)",   // lime
+    "double-non-attach": "rgba(234, 88, 12, 0.75)",    // orange
+    "party-hall":        "rgba(219, 39, 119, 0.75)",   // pink
+    "other":             "rgba(107, 114, 128, 0.75)",  // grey
+  };
+  const bg = entries.map(([k, _]) => COLOR[k] || COLOR["other"]);
+
+  const ctx = canvas.getContext("2d");
+  canvas.chart = new Chart(ctx, {
+    type: "bar",
+    data: {
+      labels,
+      datasets: [{
+        label: "Revenue",
+        data,
+        backgroundColor: bg,
+        borderWidth: 0,
+        borderRadius: 4,
+      }],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            label: function (ctx) {
+              const amt = (ctx.raw || 0).toLocaleString("en-IN");
+              const n   = counts[ctx.dataIndex];
+              return [
+                `Revenue: ₹${amt}`,
+                `Bills: ${n}`,
+              ];
+            },
+          },
+        },
+      },
+      scales: {
+        x: {
+          ticks: {
+            // Long labels like "Single Non-Attach" can collide on narrow
+            // screens — let Chart.js wrap automatically.
+            autoSkip: false,
+            maxRotation: 30,
+            minRotation: 0,
+          },
+        },
+        y: {
+          beginAtZero: true,
+          ticks: {
+            callback: (v) => "₹" + (v >= 1000 ? (v / 1000).toFixed(0) + "k" : v),
+          },
+        },
+      },
+    },
+  });
+}
+
 // ── Expense Trend Chart (bar + cumulative line) ───────────────────────────────
 function generateExpenseTrendChart(data) {
   const canvas = document.getElementById("expense-trend-chart");
@@ -975,10 +1135,10 @@ function initializeAnalyticsView() {
       ${chartCard("expense-trend-chart","#ef4444","fas fa-receipt","Daily Expense Trend", 280)}
     </div>
 
-    <!-- Row 4: Top Add-ons -->
+    <!-- Row 4: Top Add-ons + Revenue by Room Type -->
     <div class="chart-row chart-row-2">
       ${chartCard("top-services-chart","#f59e0b","fas fa-concierge-bell","Top Add-on Services", 280)}
-      <div class="chart-card chart-card-empty" style="height:280px"></div>
+      ${chartCard("room-type-revenue-chart","#8b5cf6","fas fa-th-large","Revenue by Room Type", 280)}
     </div>
 
     <!-- Billing analytics strip (hidden until /revenue_report loads) -->

@@ -99,6 +99,33 @@ onSnapshot(doc(db, "totals", "current_totals"), (snap) => {
   }
 });
 
+// ─── UI config listener ───────────────────────────────────────────────────
+// Single-doc listener on settings/ui_config. Carries flags like
+// hide_register_tab. The initial state is already injected server-side into
+// window.__initialUIConfig (so first paint has correct visibility); this
+// listener only fires for SUBSEQUENT remote changes — i.e. another device
+// flipping a toggle.
+//
+// hasPendingWrites: this device just wrote — script.js already updated the UI
+// optimistically, so don't double-apply.
+// fromCache: SDK restoring offline state — ignore.
+let uiConfigInitialLoad = true;
+
+onSnapshot(doc(db, "settings", "ui_config"), (snap) => {
+  if (uiConfigInitialLoad) {
+    uiConfigInitialLoad = false;
+    return;
+  }
+  if (snap.metadata.hasPendingWrites || snap.metadata.fromCache) return;
+
+  const cfg = snap.exists() ? snap.data() : {};
+  console.log("⚡ Remote ui_config change", cfg);
+  // Hand off to script.js — it owns DOM mutation + active-tab switching.
+  window.dispatchEvent(
+    new CustomEvent("cibaraUIConfigChanged", { detail: cfg || {} }),
+  );
+});
+
 // ─── Payments listener (today only) ───────────────────────────────────────
 // Filtered to today's date so only ~today's docs are transferred on load.
 // Previously listened to the full collection (~2 000+ docs) — very costly.

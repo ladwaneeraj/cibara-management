@@ -68,7 +68,22 @@ def require_api_key():
 
 @app.route("/")
 def index():
-    return render_template("index.html", api_key=os.environ.get("API_KEY", ""))
+    # Server-render the initial UI config so visibility flags (e.g.
+    # hide_register_tab) are applied on first paint. Without this, the
+    # Register tab would briefly flash before the client-side fetch hides
+    # it. A read failure here falls back to defaults — the page still
+    # renders, just with everything visible.
+    try:
+        from config import get_ui_config
+        ui_cfg = get_ui_config()
+    except Exception as e:
+        logger.warning(f"index: ui_config read failed, using defaults: {e}")
+        ui_cfg = {"hide_register_tab": False}
+    return render_template(
+        "index.html",
+        api_key=os.environ.get("API_KEY", ""),
+        ui_config=ui_cfg,
+    )
 
 @app.route("/uploads/<path:filename>")
 def uploaded_file(filename):

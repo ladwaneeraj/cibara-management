@@ -442,10 +442,15 @@
     wrap.innerHTML = _allBills.map(b => {
       const isSel = b.month === _selectedBillMonth;
       const bal   = b.balance || 0;
+      const paid  = b.paid_total != null ? b.paid_total : (b.paid_amount || 0);
+      const count = (b.payments || []).length;
+      const countBadge = count > 1
+        ? ` <span style="font-size:0.62rem;color:#64748b;font-weight:500">(${count} payments)</span>`
+        : "";
       return `<tr class="${isSel ? "selected-hist" : ""}" style="cursor:pointer" onclick="laundrySelectBillMonth('${b.month}')">
         <td class="col-month">${_fmtMonthShort(b.month)}</td>
         <td>${_inr(b.bill_amount)}</td>
-        <td>${_inr(b.paid_amount)}</td>
+        <td>${_inr(paid)}${countBadge}</td>
         <td class="col-bal ${bal === 0 ? "zero" : ""}">${_inr(bal)}</td>
         <td style="font-size:0.68rem;color:var(--text-muted)">${b.bill_date || "—"}</td>
       </tr>`;
@@ -494,18 +499,186 @@
       set("laundry-bill-date",   "");
       set("laundry-paid-amount", "");
       set("laundry-old-balance", _getPrevBalance(_selectedBillMonth));
+      _renderPaymentHistory(null);
       _updateMonthlyCalc();
       return;
     }
     set("laundry-bill-amount",  bill.bill_amount  || "");
     set("laundry-bill-date",    bill.bill_date    || "");
     set("laundry-old-balance",  bill.old_balance  || 0);
-    set("laundry-paid-amount",  bill.paid_amount  || "");
-    // Restore expense/payment toggles
+    // "Paying Now" is always blank when reopening an existing bill —
+    // it represents the amount paid in THIS transaction, not a running
+    // total. The running total + balance live in the payment history
+    // block below the form.
+    set("laundry-paid-amount", "");
     if (bill.expense_type)   _setExpType(bill.expense_type);
     if (bill.payment_method) _setPayMethod(bill.payment_method);
+    _renderPaymentHistory(bill);
     _updateMonthlyCalc();
   }
+
+  // ── Payment history block (per-bill list of partial payments) ─────────────
+  function _ensurePaymentHistoryContainer() {
+    let host = document.getElementById("laundry-payment-history");
+    if (host) return host;
+
+    if (!document.getElementById("laundry-payment-history-style")) {
+      const s = document.createElement("style");
+      s.id = "laundry-payment-history-style";
+      s.textContent = `
+        #laundry-payment-history {
+          margin: 0.6rem 0 0;
+          background: #ffffff;
+          border: 1px solid #e2e8f0;
+          border-radius: 8px;
+          overflow: hidden;
+          font-family: inherit;
+        }
+        .lph-header {
+          padding: 8px 12px;
+          background: #f8fafc;
+          border-bottom: 1px solid #e2e8f0;
+          font-size: 0.78rem;
+          font-weight: 600;
+          color: #334155;
+          display: flex; justify-content: space-between; align-items: center;
+        }
+        .lph-header .lph-totals { font-weight: 500; color: #64748b; font-size: 0.72rem; }
+        .lph-header .lph-totals strong { color: #0f172a; font-weight: 600; }
+        .lph-list { list-style: none; margin: 0; padding: 0; }
+        .lph-row {
+          display: grid;
+          grid-template-columns: 1fr auto auto auto;
+          gap: 10px; align-items: center;
+          padding: 7px 12px;
+          font-size: 0.78rem; color: #0f172a;
+          border-bottom: 1px solid #f1f5f9;
+        }
+        .lph-row:last-child { border-bottom: none; }
+        .lph-row .lph-when    { color: #475569; font-weight: 500; }
+        .lph-row .lph-method  {
+          font-size: 0.66rem; font-weight: 600; letter-spacing: 0.04em;
+          text-transform: uppercase;
+          padding: 2px 6px; border-radius: 4px;
+          color: #475569; background: #f1f5f9;
+        }
+        .lph-row .lph-method.cash { color: #047857; background: #ecfdf5; }
+        .lph-row .lph-method.online,
+        .lph-row .lph-method.upi  { color: #1d4ed8; background: #eff6ff; }
+        .lph-row .lph-amount { font-weight: 600; color: #0f172a; }
+        .lph-row .lph-del {
+          background: transparent; border: none; cursor: pointer;
+          color: #94a3b8; padding: 2px 6px; border-radius: 4px;
+          font-size: 0.85rem;
+        }
+        .lph-row .lph-del:hover { color: #b91c1c; background: #fef2f2; }
+        .lph-row.legacy .lph-del { display: none; }
+        .lph-empty { padding: 10px 12px; font-size: 0.76rem; color: #94a3b8; text-align: center; }
+`;
+      document.head.appendChild(s);
+    }
+
+    const totals = document.querySelector(".laundry-bill-totals");
+    host = document.createElement("div");
+    host.id = "laundry-payment-history";
+    if (totals && totals.parentNode) {
+      totals.parentNode.insertBefore(host, totals.nextSibling);
+    } else {
+      const scroll = document.querySelector(".laundry-bill-scroll, .modal-body, body");
+      (scroll || document.body).appendChild(host);
+    }
+    return host;
+  }
+
+  function _renderPaymentHistory(bill) {
+    const host = _ensurePaymentHistoryContainer();
+    const payments = (bill && bill.payments) || [];
+    const paidTotal = payments.reduce((s, p) => s + (p.amount || 0), 0);
+    const month     = bill && bill.month;
+
+    if (!bill) {
+      host.innerHTML = "";
+      host.style.display = "none";
+      return;
+    }
+    host.style.display = "";
+
+    if (!payments.length) {
+      host.innerHTML = `
+        <div class="lph-header">
+          <span><i class="fas fa-history"></i> Payment History</span>
+          <span class="lph-totals">No payments yet</span>
+        </div>
+        <div class="lph-empty">Use "Paying Now" above to record the first payment.</div>
+      `;
+      return;
+    }
+
+    const sorted = [...payments].sort((a, b) =>
+      (a.created_at || "").localeCompare(b.created_at || "")
+    );
+
+    const rows = sorted.map(p => {
+      const m = (p.method || "cash").toLowerCase();
+      const when = p.date
+        ? `${_fmtDate(p.date)}${p.time ? " " + p.time : ""}`
+        : "—";
+      const isLegacy = !!p.legacy;
+      const delBtn = isLegacy
+        ? "" // Legacy seeded entries have no real expense_id — hide delete
+        : `<button class="lph-del"
+                   title="Remove this payment (manager password required)"
+                   onclick="laundryDeletePayment('${month}','${p.id}')">
+             <i class="fas fa-times"></i>
+           </button>`;
+      return `<li class="lph-row ${isLegacy ? "legacy" : ""}">
+        <span class="lph-when">${when}</span>
+        <span class="lph-method ${m}">${m}</span>
+        <span class="lph-amount">${_inr(p.amount || 0)}</span>
+        ${delBtn || '<span></span>'}
+      </li>`;
+    }).join("");
+
+    host.innerHTML = `
+      <div class="lph-header">
+        <span><i class="fas fa-history"></i> Payment History
+          <span style="font-weight:500;color:#64748b">(${payments.length})</span>
+        </span>
+        <span class="lph-totals">Paid: <strong>${_inr(paidTotal)}</strong></span>
+      </div>
+      <ul class="lph-list">${rows}</ul>
+    `;
+  }
+
+  // Triggered by the trash icon on a payment-history row.
+  window.laundryDeletePayment = async function (month, paymentId) {
+    if (!month || !paymentId) return;
+    const password = window.prompt(
+      "Manager password to remove this payment:",
+      ""
+    );
+    if (password === null) return;
+    if (!password) {
+      _notify("Password is required", "error");
+      return;
+    }
+    try {
+      const res = await _fetch("/laundry/payment/delete", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ month, payment_id: paymentId, password }),
+      });
+      if (res.success) {
+        _notify(res.message || "Payment removed");
+        _loadAllBills();
+        _loadMonthlyData(month);
+      } else {
+        _notify(res.message || "Failed to remove payment", "error");
+      }
+    } catch (e) {
+      _notify("Network error removing payment", "error");
+    }
+  };
 
   function _getPrevBalance(currentMonth) {
     // Find the bill just before currentMonth
@@ -525,26 +698,31 @@
   }
 
   function _updateMonthlyCalc() {
-    const billAmt  = parseInt(document.getElementById("laundry-bill-amount")?.value  || 0) || 0;
-    const oldBal   = parseInt(document.getElementById("laundry-old-balance")?.value  || 0) || 0;
-    const paidAmt  = parseInt(document.getElementById("laundry-paid-amount")?.value  || 0) || 0;
-    const grand    = billAmt + oldBal;
-    const balance  = grand - paidAmt;
+    const billAmt = parseInt(document.getElementById("laundry-bill-amount")?.value || 0) || 0;
+    const oldBal  = parseInt(document.getElementById("laundry-old-balance")?.value || 0) || 0;
+    const payNow  = parseInt(document.getElementById("laundry-paid-amount")?.value || 0) || 0;
+    const grand   = billAmt + oldBal;
+
+    // Already-paid comes from the saved bill's payments[]. The live form
+    // math shows the balance AFTER this transaction would be saved.
+    const alreadyPaid = (_monthlyData?.bill?.payments || [])
+      .reduce((s, p) => s + (p.amount || 0), 0);
+    const balanceAfter = grand - alreadyPaid - payNow;
 
     const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
     set("laundry-bill-total-display",  _inr(billAmt));
     set("laundry-old-bal-display",     _inr(oldBal));
     set("laundry-grand-total-display", _inr(grand));
-    set("laundry-balance-display",     _inr(Math.abs(balance)) + (balance < 0 ? " (Overpaid)" : ""));
+    set(
+      "laundry-balance-display",
+      _inr(Math.abs(balanceAfter)) + (balanceAfter < 0 ? " (Overpaid)" : "")
+    );
 
-    // Balance tile colour: red when owing, green when settled or overpaid.
     const balValEl = document.getElementById("laundry-balance-display");
-    if (balValEl) {
-      balValEl.style.color = balance > 0 ? "#dc2626" : "#16a34a";
-    }
+    if (balValEl) balValEl.style.color = balanceAfter > 0 ? "#dc2626" : "#16a34a";
 
     const balBox = document.getElementById("laundry-balance-box");
-    if (balBox) balBox.classList.toggle("zero", balance <= 0);
+    if (balBox) balBox.classList.toggle("zero", balanceAfter <= 0);
   }
 
   async function _submitMonthlyBill() {
@@ -553,8 +731,13 @@
     const oldBal  = parseInt(document.getElementById("laundry-old-balance")?.value || 0) || 0;
     const paidAmt = parseInt(document.getElementById("laundry-paid-amount")?.value || 0) || 0;
 
-    if (!month)     { _notify("Select a month", "error");        return; }
-    if (billAmt <= 0) { _notify("Enter bill amount", "error"); return; }
+    if (!month) { _notify("Select a month", "error"); return; }
+    // Allow saving "totals only" with no payment, or a payment against an
+    // already-saved bill (billAmt may carry over from saved data).
+    const hasSavedBill = !!(_monthlyData && _monthlyData.bill);
+    if (billAmt <= 0 && !hasSavedBill) {
+      _notify("Enter bill amount", "error"); return;
+    }
 
     const totals  = _monthlyData?.totals || {};
     const payload = {
@@ -581,7 +764,14 @@
         body: JSON.stringify(payload),
       });
       if (res.success) {
-        _notify(`✓ Bill saved. Balance: ${_inr(res.balance ?? (billAmt + oldBal - paidAmt))}`);
+        const balText = (res.balance != null) ? _inr(res.balance) : "—";
+        const msg = paidAmt > 0
+          ? `✓ Payment of ${_inr(paidAmt)} recorded. Balance: ${balText}`
+          : `✓ Bill saved. Balance: ${balText}`;
+        _notify(msg);
+        // Clear the "Paying Now" input so a stray re-submit doesn't double-post.
+        const pn = document.getElementById("laundry-paid-amount");
+        if (pn) pn.value = "";
         _loadAllBills();
         _loadMonthlyData(month);
       } else {

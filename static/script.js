@@ -396,6 +396,24 @@ function renderRooms() {
           <i class="fas fa-check"></i> Cleaned
         </button>
       `;
+
+      // ── Revert mistake-checkout icon (top-right of the card) ─────────────
+      // Subtle undo symbol. Visible only while inside the server-side 3-hour
+      // window. The server re-validates on submit, so this is just a hint;
+      // device clock skew cannot extend the window.
+      if (typeof isRevertEligible === "function" && isRevertEligible(info)) {
+        const tip = (typeof formatRevertTimeLeft === "function")
+          ? `Revert checkout — ${formatRevertTimeLeft(info)}`
+          : "Revert checkout";
+        roomContent += `
+          <button class="revert-checkout-icon"
+                  onclick="handleRevertCheckoutClick(event, '${roomNumber}')"
+                  title="${tip.replace(/"/g, '&quot;')}"
+                  aria-label="Revert mistake checkout">
+            <i class="fas fa-undo"></i>
+          </button>
+        `;
+      }
     }
     // For occupied rooms, add AC indicator and guest count
     else if (info.status === "occupied" && info.guest) {
@@ -435,9 +453,26 @@ function renderRooms() {
         </div>
       `;
 
+      // Compute the renewal due-time as an epoch (ms). The client-side
+      // ticker reads this off the DOM every 30s and updates the displayed
+      // text — so the timer ticks without any server poll, Firestore
+      // read, or billing impact.
+      const _checkinDt = info.checkin_time ? new Date(info.checkin_time) : null;
+      let _renewalDueMs = null;
+      if (_checkinDt && !isNaN(_checkinDt.getTime())) {
+        const _due = new Date(_checkinDt);
+        _due.setDate(_checkinDt.getDate() + renewalStatus.dayNumber);
+        _renewalDueMs = _due.getTime();
+      }
+
       if (renewalStatus.expired) {
         roomContent += `
-          <div class="renewal-badge" id="renewal-badge-${roomNumber}">Renewal Due</div>
+          <div class="renewal-badge"
+               id="renewal-badge-${roomNumber}"
+               data-room="${roomNumber}"
+               ${_renewalDueMs != null ? `data-renewal-due="${_renewalDueMs}"` : ""}>
+            Renewal Due
+          </div>
         `;
       } else if (renewalStatus.hoursLeft <= 2) {
         const isWarning = renewalStatus.hoursLeft < 2;
@@ -448,9 +483,10 @@ function renderRooms() {
         }
 
         roomContent += `
-          <div class="room-timer ${
-            isWarning ? "warning" : ""
-          }" id="timer-${roomNumber}">
+          <div class="room-timer ${isWarning ? "warning" : ""}"
+               id="timer-${roomNumber}"
+               data-room="${roomNumber}"
+               ${_renewalDueMs != null ? `data-renewal-due="${_renewalDueMs}"` : ""}>
             ${timerText}
           </div>
         `;
@@ -5422,3 +5458,109 @@ document.addEventListener("DOMContentLoaded", function () {
 
   debugLog("Initialization complete");
 });
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Live renewal-timer ticker — pure client-side, no polling, no server calls.
+//   • Each room-timer / renewal-badge element carries data-renewal-due (epoch ms).
+//   • A single setInterval(30s) walks those elements, updates the text, and
+//     flips a timer to "Renewal Due" the moment the deadline passes.
+//   • A short two-tone beep plays via Web Audio API the first time each room
+//     crosses zero in this session — no audio assets, no autoplay friction.
+// ─────────────────────────────────────────────────────────────────────────────
+(function installRenewalTicker() {
+  if (typeof window === "undefined") return;
+  if (window.__renewalTickerInstalled) return;
+  window.__renewalTickerInstalled = true;
+
+  const TICK_MS = 30 * 1000;          // 30 s — finer than 60 s for cleaner zero-crossing
+  const beepedRooms = new Set();      // rooms we've already chimed for this session
+
+  function fmtRemaining(ms) {
+    const totalMins = Math.floor(ms / 60000);
+    const h = Math.floor(totalMins / 60);
+    const m = totalMins % 60;
+    if (h === 0 && m <= 30) return `<strong>⚠️ ${m}m left</strong>`;
+    return `${h}h ${m}m left`;
+  }
+
+  // Two-tone bell using Web Audio. Reuses a single AudioContext across
+  // beeps to avoid leaking contexts. Silently no-ops if the browser blocks
+  // playback (no user gesture yet) — the visual badge still flips.
+  let _audioCtx = null;
+  function getAudioCtx() {
+    if (_audioCtx) return _audioCtx;
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) return null;
+    try { _audioCtx = new Ctx(); } catch (e) { return null; }
+    return _audioCtx;
+  }
+  function playRenewalBeep() {
+    const ctx = getAudioCtx();
+    if (!ctx) return;
+    try {
+      if (ctx.state === "suspended") { ctx.resume().catch(() => {}); }
+      const t0 = ctx.currentTime;
+      function tone(freq, start, dur) {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = "sine";
+        osc.frequency.value = freq;
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        gain.gain.setValueAtTime(0.0001, t0 + start);
+        gain.gain.exponentialRampToValueAtTime(0.20, t0 + start + 0.02);
+        gain.gain.exponentialRampToValueAtTime(0.0001, t0 + start + dur);
+        osc.start(t0 + start);
+        osc.stop(t0 + start + dur + 0.02);
+      }
+      tone(880, 0,    0.20);   // higher chime
+      tone(660, 0.16, 0.24);   // lower chime, slight overlap for a bell-ish blend
+    } catch (e) {
+      // Audio failure is non-fatal — visual update is the source of truth.
+    }
+  }
+
+  function tick() {
+    const now = Date.now();
+    const nodes = document.querySelectorAll("[data-renewal-due]");
+    nodes.forEach((el) => {
+      const due = parseInt(el.getAttribute("data-renewal-due"), 10);
+      if (!due || isNaN(due)) return;
+      const room = el.getAttribute("data-room") || "";
+      const remaining = due - now;
+
+      if (remaining <= 0) {
+        // Visual flip to the red "Renewal Due" badge, idempotent.
+        if (!el.classList.contains("renewal-badge")) {
+          el.className = "renewal-badge";
+          if (room) el.id = `renewal-badge-${room}`;
+          el.innerHTML = "Renewal Due";
+        }
+        // Beep once per room per session.
+        if (room && !beepedRooms.has(room)) {
+          beepedRooms.add(room);
+          playRenewalBeep();
+        }
+      } else {
+        // If this room had a stale beep mark from a previous expiry that
+        // has since been renewed (new due-time in the future), clear it
+        // so the next expiry chimes again.
+        if (room && beepedRooms.has(room)) beepedRooms.delete(room);
+
+        const txt = fmtRemaining(remaining);
+        if (el.innerHTML !== txt) el.innerHTML = txt;
+      }
+    });
+  }
+
+  // Tick immediately so freshly rendered cards reflect the current minute,
+  // then every TICK_MS thereafter.
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", tick);
+  } else {
+    tick();
+  }
+  setInterval(tick, TICK_MS);
+})();
+

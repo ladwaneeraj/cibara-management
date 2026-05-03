@@ -226,6 +226,111 @@ def finalize(stay_id, checkout_fields, *, batch=None):
         return False
 
 
+def revert_to_draft(stay_id, *, reason="", actor="manager", batch=None):
+    """
+    Revert a finalized bill back to `draft` status.
+
+    This is the ONLY supported path for breaking the "no revert to draft"
+    invariant. It exists for the 3-hour mistake-checkout undo flow. Every
+    revert is stamped with audit fields (`reverted_at`, `revert_reason`,
+    `revert_actor`, `revert_count`) so the history is fully reconstructible.
+
+    Refuses to operate when:
+      * bill is not in `completed` or `pending_settlement`
+      * stay_id is missing or doc not found
+
+    The bill_number is preserved on the document under `voided_bill_number`
+    and cleared from `bill_number` so the next checkout mints a fresh number.
+    Numbering gaps are normal accounting practice; the audit trail explains
+    them.
+
+    Returns the pre-revert bill snapshot (dict) on success, or None on
+    failure. Caller is responsible for any side-effect reversal (refunds,
+    settlements, totals, room state) -- this function only flips the bill.
+    """
+    if _bills_ref is None or not stay_id:
+        logger.error("BillsService.revert_to_draft called with no init / no stay_id")
+        return None
+
+    try:
+        snap = _bills_ref.document(stay_id).get()
+        if not snap.exists:
+            logger.warning(f"BillsService.revert_to_draft: stay_id={stay_id} not found")
+            return None
+
+        existing = snap.to_dict()
+        cur_status = existing.get("status")
+        if cur_status not in ("completed", "pending_settlement"):
+            logger.warning(
+                f"BillsService.revert_to_draft refused: stay_id={stay_id} "
+                f"current status={cur_status!r} "
+                f"(must be completed or pending_settlement)"
+            )
+            return None
+
+        now_iso = datetime.now(timezone.utc).isoformat()
+        prev_bill_number = existing.get("bill_number")
+        revert_count = int(existing.get("revert_count", 0)) + 1
+
+        payload = {
+            "status":              "draft",
+            "voided_bill_number":  prev_bill_number,
+            "bill_number":         None,
+            "checkout_time":       None,
+            "total_amount":        None,
+            "finalized_at":        None,
+            "reverted_at":         now_iso,
+            "revert_reason":       (reason or "")[:500],
+            "revert_actor":        actor or "",
+            "revert_count":        revert_count,
+            "updated_at":          now_iso,
+            "pre_revert_snapshot": {
+                "status":         cur_status,
+                "bill_number":    prev_bill_number,
+                "checkout_time":  existing.get("checkout_time"),
+                "total_amount":   existing.get("total_amount"),
+                "finalized_at":   existing.get("finalized_at"),
+                "balance":        existing.get("balance"),
+                "payment_cash":   existing.get("payment_cash"),
+                "payment_online": existing.get("payment_online"),
+                "refunds":        existing.get("refunds"),
+                "settlement_id":  existing.get("settlement_id"),
+            },
+        }
+
+        # Mark any previously-generated PDF as superseded so the bills UI
+        # doesn't keep serving it as the canonical bill for this stay.
+        if existing.get("pdf_url"):
+            payload["pdf_status"] = "superseded_by_revert"
+            payload["pdf_superseded_at"] = now_iso
+
+        try:
+            if batch is not None:
+                batch.update(_bills_ref.document(stay_id), payload)
+            else:
+                _bills_ref.document(stay_id).update(payload)
+        except Exception as e:
+            logger.error(
+                f"BillsService.revert_to_draft({stay_id}) write failed: {e}",
+                exc_info=True,
+            )
+            return None
+
+        logger.info(
+            f"BillsService: reverted stay_id={stay_id} "
+            f"prev_status={cur_status} prev_bill_number={prev_bill_number} "
+            f"revert_count={revert_count} actor={actor!r}"
+        )
+        existing["id"] = stay_id
+        return existing
+    except Exception as e:
+        logger.error(
+            f"BillsService.revert_to_draft({stay_id}) failed: {e}",
+            exc_info=True,
+        )
+        return None
+
+
 def cancel(stay_id, reason="", *, batch=None):
     """Mark a draft (or completed) stay as cancelled. Preserves history."""
     if _bills_ref is None or not stay_id:

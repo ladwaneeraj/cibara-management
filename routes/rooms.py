@@ -500,6 +500,27 @@ def checkout():
                 # stays it's the UUID (the active_bill_id).
                 bill_record["stay_id"] = bill_id
 
+                # ── pre_checkout_snapshot ────────────────────────────────────
+                # Capture the room state being cleared by this checkout so the
+                # 3-hour revert flow can restore it deterministically. Without
+                # this snapshot, revert can only guess at fields like add_ons,
+                # discounts, and renewal_count which are wiped from the room
+                # doc below.
+                bill_record["pre_checkout_snapshot"] = {
+                    "guest":                   room_data.get("guest"),
+                    "checkin_time":            room_data.get("checkin_time"),
+                    "balance":                 room_data.get("balance", 0),
+                    "add_ons":                 room_data.get("add_ons", []),
+                    "discounts":               room_data.get("discounts", []),
+                    "renewal_count":           room_data.get("renewal_count", 0),
+                    "last_renewal_time":       room_data.get("last_renewal_time"),
+                    "last_renewal_date":       room_data.get("last_renewal_date"),
+                    "checkin_time_edit_count": room_data.get("checkin_time_edit_count", 0),
+                    "active_bill_id":          active_bill_id,
+                    # IST wall-clock when this snapshot was taken (for debugging)
+                    "snapshot_at":             datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S"),
+                }
+
                 if active_bill_id:
                     # Finalize the existing draft — merges checkout fields
                     # onto the doc that's been there since check-in. Goes
@@ -527,7 +548,13 @@ def checkout():
                                f"with active_bill_id={active_bill_id}; draft "
                                f"flipped to cancelled to avoid orphan.")
 
-            # Mark room as cleaning
+            # Mark room as cleaning. We also stamp `last_bill_id` and
+            # `last_checkout_at` (UTC iso) so the 3-hour mistake-checkout
+            # revert button on the cleaning card can find the bill it would
+            # undo and run the server-authoritative window check without
+            # extra queries.
+            from datetime import timezone as _tz
+            _last_checkout_at_utc = datetime.now(_tz.utc).isoformat()
             batch.update(rooms_ref.document(room), {
                 "status": "cleaning",
                 "guest": None,
@@ -543,7 +570,11 @@ def checkout():
                 # the (newly finalized) bill doc.
                 "active_bill_id": None,
                 "cleaning_status": "in_progress",
-                "cleaning_start_time": datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S")
+                "cleaning_start_time": datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S"),
+                # Revert-window pointers (cleared by /mark_room_cleaned and
+                # by /revert_checkout itself).
+                "last_bill_id":        bill_id if bill_record else None,
+                "last_checkout_at":    _last_checkout_at_utc,
             })
 
             if totals_update:
@@ -585,6 +616,357 @@ def checkout():
     except Exception as e:
         logger.error(f"Error during checkout: {str(e)}")
         return jsonify(success=False, message=f"Error during checkout: {str(e)}")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# REVERT CHECKOUT — undo a mistake checkout within a 3-hour server-side window
+# ══════════════════════════════════════════════════════════════════════════════
+#
+# Use case: front-desk accidentally checks out the wrong room while the guest
+# is still staying. Within 3 hours of the wrong checkout, a manager can revert
+# the action: the bill is voided (status -> draft, bill_number released), the
+# room is restored to its pre-checkout state from the snapshot we captured at
+# checkout time, settle-later settlements are deleted, refunds issued at
+# checkout are reversed, and daily totals are corrected.
+#
+# Hard refusals (the system explains, the manager fixes manually):
+#   * Window expired (now - finalized_at > 3h, server clock).
+#   * Room has been re-occupied since the wrong checkout.
+#   * Settle-later settlement was already collected (cash already moved).
+#   * Bill not in completed/pending_settlement (already reverted, cancelled, etc.).
+#   * Wrong manager password.
+#
+# Configurable: REVERT_CHECKOUT_WINDOW_HOURS env var (default 3).
+# Local import — `_os` is defined further down in the file (under
+# _check_manager_password) and isn't available at this point in module load.
+
+import os as _os_revert
+REVERT_CHECKOUT_WINDOW_HOURS = float(_os_revert.environ.get("REVERT_CHECKOUT_WINDOW_HOURS", "3"))
+
+
+def _parse_finalized_at(bill: dict):
+    """
+    Return a timezone-aware UTC datetime for when the bill was finalized.
+
+    Prefers `finalized_at` (UTC iso, written by bills_service.finalize for
+    new stays). Falls back to `checkout_time` ("YYYY-MM-DD HH:MM" in IST)
+    for legacy bills that pre-date the bills_service migration.
+
+    Returns None if neither field is parseable — caller MUST refuse revert
+    in that case (we can't enforce the window without a trustworthy timestamp).
+    """
+    from datetime import timezone as _tz
+    fa = bill.get("finalized_at")
+    if fa:
+        try:
+            # iso parser handles offset-aware strings ("...+00:00") and naive
+            return datetime.fromisoformat(fa.replace("Z", "+00:00"))
+        except (ValueError, TypeError):
+            logger.warning(f"_parse_finalized_at: bad finalized_at={fa!r}")
+
+    co = bill.get("checkout_time")
+    if co:
+        try:
+            naive = datetime.strptime(co, "%Y-%m-%d %H:%M")
+            return IST.localize(naive).astimezone(_tz.utc)
+        except (ValueError, TypeError):
+            logger.warning(f"_parse_finalized_at: bad checkout_time={co!r}")
+
+    return None
+
+
+@rooms_bp.route("/revert_checkout", methods=["POST"])
+def revert_checkout():
+    """
+    Undo a mistake checkout within REVERT_CHECKOUT_WINDOW_HOURS.
+
+    Body: { stay_id: str, password: str, reason: str }
+
+    Returns: { success: bool, message: str, ... }
+    """
+    from datetime import timezone as _tz
+    from config import settlements_ref
+
+    try:
+        data = request.json or {}
+        stay_id  = (data.get("stay_id") or "").strip()
+        password =  data.get("password") or ""
+        reason   = (data.get("reason")   or "").strip()
+
+        if not stay_id:
+            return jsonify(success=False, message="stay_id is required"), 400
+
+        # ── 1. Auth ──────────────────────────────────────────────────────────
+        if not _check_manager_password(password):
+            return jsonify(success=False, message="Incorrect password"), 403
+
+        # ── 2. Load bill ─────────────────────────────────────────────────────
+        bill_snap = bills_ref.document(stay_id).get()
+        if not bill_snap.exists:
+            return jsonify(success=False, message="Bill not found"), 404
+        bill = bill_snap.to_dict()
+        bill_status = bill.get("status")
+
+        # Idempotency: a second click after a successful revert should be a no-op.
+        if bill_status == "draft":
+            return jsonify(
+                success=True,
+                already_reverted=True,
+                message="This checkout was already reverted",
+            )
+
+        if bill_status not in ("completed", "pending_settlement"):
+            return jsonify(
+                success=False,
+                message=f"Cannot revert a bill in status '{bill_status}'",
+            ), 400
+
+        # ── 3. Window check (server-authoritative) ───────────────────────────
+        finalized_at_utc = _parse_finalized_at(bill)
+        if finalized_at_utc is None:
+            return jsonify(
+                success=False,
+                message="Cannot determine checkout time — revert refused",
+            ), 400
+
+        now_utc = datetime.now(_tz.utc)
+        age_hours = (now_utc - finalized_at_utc).total_seconds() / 3600.0
+        if age_hours > REVERT_CHECKOUT_WINDOW_HOURS:
+            return jsonify(
+                success=False,
+                message=(
+                    f"Revert window expired — checkout was "
+                    f"{age_hours:.1f} hours ago "
+                    f"(limit: {REVERT_CHECKOUT_WINDOW_HOURS}h)"
+                ),
+            ), 400
+        if age_hours < 0:
+            # Clock skew or bad data — refuse rather than silently allow.
+            return jsonify(
+                success=False,
+                message="Checkout timestamp is in the future — revert refused",
+            ), 400
+
+        # ── 4. Room availability check ───────────────────────────────────────
+        room = bill.get("room")
+        if not room:
+            return jsonify(success=False, message="Bill has no room — revert refused"), 400
+
+        room_snap = rooms_ref.document(str(room)).get()
+        if not room_snap.exists:
+            return jsonify(success=False, message="Room not found"), 404
+        room_doc = room_snap.to_dict()
+        room_status = room_doc.get("status")
+
+        # The room must be in cleaning state (just checked out) or vacant
+        # (already marked cleaned but no new guest yet). If it's occupied
+        # again, a different stay is in progress and we won't clobber it.
+        if room_status == "occupied":
+            return jsonify(
+                success=False,
+                message=f"Room {room} is occupied by a new guest — revert refused. "
+                        f"Check that guest out first if this is wrong.",
+            ), 409
+        if room_status not in ("cleaning", "vacant"):
+            return jsonify(
+                success=False,
+                message=f"Room {room} is in unexpected state '{room_status}' — revert refused",
+            ), 409
+
+        # If the room reference still points at a different active stay,
+        # something is very wrong — refuse.
+        cur_active = room_doc.get("active_bill_id")
+        if cur_active and cur_active != stay_id:
+            return jsonify(
+                success=False,
+                message=f"Room {room} is linked to a different active stay — revert refused",
+            ), 409
+
+        # ── 5. Settlement check ──────────────────────────────────────────────
+        settlement_id = bill.get("settlement_id")
+        settlement_doc = None
+        if settlement_id:
+            settlement_doc = settlements_ref.document(settlement_id).get()
+            if settlement_doc.exists:
+                s_status = (settlement_doc.to_dict() or {}).get("status")
+                if s_status == "paid":
+                    return jsonify(
+                        success=False,
+                        message=(
+                            "The settle-later balance from this checkout has "
+                            "already been collected — money has moved. "
+                            "Revert refused. Handle this as a manual adjustment."
+                        ),
+                    ), 409
+
+        # ── 6. Reverse side effects in a single batch ────────────────────────
+        snapshot = bill.get("pre_checkout_snapshot") or {}
+        guest_snap = snapshot.get("guest")
+
+        if not guest_snap:
+            # Older bills (pre-snapshot deploy) won't have this field.
+            # Try the best fallback we have: rebuild from bill fields.
+            logger.warning(
+                f"revert_checkout: stay_id={stay_id} has no pre_checkout_snapshot; "
+                f"falling back to bill-derived restore (may be lossy)."
+            )
+            guest_snap = {
+                "name":   bill.get("guest_name", ""),
+                "mobile": bill.get("guest_mobile", ""),
+                "price":  bill.get("room_price_per_night", 0),
+                "guests": bill.get("guest_count", 1),
+                # Best-effort defaults — original payment mode is unknown.
+                "payment": "balance",
+                "balance": int(bill.get("balance", 0) or 0),
+                "isAC":   bool(bill.get("is_ac", False)),
+            }
+
+        batch = db.batch()
+        totals_update = {}
+
+        # 6a. Settlement: delete the doc and credit balance back.
+        was_settle_later = (bill_status == "pending_settlement") and bool(settlement_id)
+        if was_settle_later and settlement_doc and settlement_doc.exists:
+            settlement_amount = int((settlement_doc.to_dict() or {}).get("amount", 0))
+            batch.delete(settlements_ref.document(settlement_id))
+            if settlement_amount > 0:
+                totals_update["balance"] = firestore.Increment(settlement_amount)
+
+            # Clear the customer's pending-settlement flag.
+            mobile = guest_snap.get("mobile") if guest_snap else None
+            if mobile:
+                try:
+                    customer_service.clear_pending_settlement(mobile)
+                except Exception as _e:
+                    logger.warning(f"revert_checkout: clear_pending_settlement failed: {_e}")
+
+        # 6b. Refund: reverse the totals.refunds bump and write a reversing
+        # payment entry. The original refund payment row is left in place
+        # (audit trail) — the reversal nets it out.
+        refund_total = int(bill.get("refunds", 0) or 0)
+        refund_reversed = False
+        if refund_total > 0:
+            totals_update["refunds"] = firestore.Increment(-refund_total)
+            refund_reversed = True
+
+        # 6c. Bill: flip to draft via the audited revert function.
+        reverted_bill = bills_service.revert_to_draft(
+            stay_id,
+            reason=reason,
+            actor=f"manager:{request.remote_addr or 'unknown'}",
+            batch=batch,
+        )
+        if reverted_bill is None:
+            # bills_service refused — bail out before committing anything.
+            return jsonify(
+                success=False,
+                message="Bill revert refused by bills_service — see server logs",
+            ), 500
+
+        # 6d. Room: restore from snapshot.
+        restored_balance = int(snapshot.get("balance", guest_snap.get("balance", 0)) or 0)
+        room_restore = {
+            "status":                  "occupied",
+            "guest":                   guest_snap,
+            "checkin_time":            snapshot.get("checkin_time") or bill.get("checkin_time"),
+            "balance":                 restored_balance,
+            "add_ons":                 snapshot.get("add_ons", []),
+            "discounts":               snapshot.get("discounts", []),
+            "renewal_count":           int(snapshot.get("renewal_count", 0) or 0),
+            "last_renewal_time":       snapshot.get("last_renewal_time"),
+            "last_renewal_date":       snapshot.get("last_renewal_date"),
+            "checkin_time_edit_count": int(snapshot.get("checkin_time_edit_count", 0) or 0),
+            # Re-attach the stay-doc pointer so subsequent payments find it.
+            "active_bill_id":          stay_id,
+            # Cancel cleaning state.
+            "cleaning_status":         None,
+            "cleaning_start_time":     None,
+            # Clear revert-window pointers.
+            "last_bill_id":            None,
+            "last_checkout_at":        None,
+        }
+        batch.update(rooms_ref.document(str(room)), room_restore)
+
+        if totals_update:
+            batch.update(totals_ref.document('current_totals'), totals_update)
+
+        try:
+            batch.commit()
+        except Exception as e:
+            logger.error(f"revert_checkout: batch commit failed for stay_id={stay_id}: {e}",
+                         exc_info=True)
+            return jsonify(success=False, message=f"Revert failed: {e}"), 500
+
+        invalidate_rooms_and_totals()
+        _invalidate_get_data_cache()
+
+        # 6e. Reversing payment row (best-effort, after commit so a failure here
+        # doesn't undo the revert itself).
+        if refund_reversed:
+            try:
+                _reversal_payload = {
+                    "room":             str(room),
+                    "name":             guest_snap.get("name", ""),
+                    "amount":           refund_total,
+                    "method":           "cash",  # method-agnostic reversal entry
+                    "type":             "revert_checkout_refund_reversal",
+                    "date":             datetime.now(IST).strftime("%Y-%m-%d"),
+                    "time":             datetime.now(IST).strftime("%H:%M"),
+                    "transaction_type": "revert_checkout_refund_reversal",
+                    "stay_room_key":    f"{room}_{snapshot.get('checkin_time', bill.get('checkin_time', ''))}",
+                    "reverted_stay_id": stay_id,
+                }
+                import threading as _thr
+                _thr.Thread(
+                    target=payment_service.write_payment_with_stay,
+                    args=(stay_id, _reversal_payload),
+                    daemon=True,
+                ).start()
+            except Exception as _e:
+                logger.warning(f"revert_checkout: refund reversal write failed: {_e}")
+
+        # 6f. Audit log (separate collection, best-effort).
+        try:
+            db.collection("revert_audit").document().set({
+                "stay_id":              stay_id,
+                "room":                 str(room),
+                "reason":               reason,
+                "reverted_at":          datetime.now(_tz.utc).isoformat(),
+                "reverted_by_ip":       request.remote_addr or "",
+                "original_checkout_at": bill.get("checkout_time"),
+                "original_finalized_at": bill.get("finalized_at"),
+                "original_bill_number": bill.get("bill_number"),
+                "had_settlement":       was_settle_later,
+                "settlement_amount":    int((settlement_doc.to_dict() or {}).get("amount", 0))
+                                          if (was_settle_later and settlement_doc and settlement_doc.exists)
+                                          else 0,
+                "refund_reversed":      refund_total if refund_reversed else 0,
+                "snapshot_used":        bool(snapshot.get("guest")),
+                "age_hours_at_revert":  round(age_hours, 3),
+            })
+        except Exception as _e:
+            logger.warning(f"revert_checkout: audit log write failed: {_e}")
+
+        logger.info(
+            f"revert_checkout: stay_id={stay_id} room={room} age_hours={age_hours:.2f} "
+            f"settle_later_reversed={was_settle_later} refund_reversed={refund_reversed} "
+            f"snapshot_used={bool(snapshot.get('guest'))}"
+        )
+
+        return jsonify(
+            success=True,
+            message=f"Checkout reverted. Room {room} restored.",
+            stay_id=stay_id,
+            room=str(room),
+            refund_reversed=refund_total if refund_reversed else 0,
+            settlement_reversed=was_settle_later,
+            snapshot_used=bool(snapshot.get("guest")),
+        )
+
+    except Exception as e:
+        logger.error(f"revert_checkout: unhandled error: {e}", exc_info=True)
+        return jsonify(success=False, message=f"Error reverting checkout: {e}"), 500
+
 
 @rooms_bp.route("/add_on", methods=["POST"])
 def add_on():
@@ -1235,7 +1617,12 @@ def mark_room_cleaned():
             "discounts": [],
             "renewal_count": 0,
             "last_renewal_time": None,
-            "last_renewal_date": None
+            "last_renewal_date": None,
+            # Clear revert-window pointers — once the room is cleaned and
+            # ready for the next guest, the previous checkout is no longer
+            # eligible for undo (and we don't want stale fields lingering).
+            "last_bill_id":     None,
+            "last_checkout_at": None,
         })
 
         invalidate_rooms_and_totals()

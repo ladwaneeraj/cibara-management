@@ -62,40 +62,25 @@
 
         console.log(`Balance: ${balance}, Settle Later: ${settleLaterEnabled}`);
 
-        // ── Manager password verification (only when Settle Later is enabled) ──
+        // ── Settle Later authorisation (RBAC) ──────────────────────────────────
+        // The legacy password prompt has been replaced by a role check.
+        // Only users with "settle_later.use" (admin) can checkout with a
+        // pending balance via Settle Later. Non-admins should never see
+        // the toggle (it's hidden via data-perm); this is the safety net.
         if (settleLaterEnabled && balance > 0) {
-          const pwInput   = document.getElementById('checkout-manager-password');
+          const auth = window.CibaraAuth;
+          if (!auth || !auth.userCan || !auth.userCan('settle_later.use')) {
+            showNotification(
+              'Settle Later is restricted to admin users.',
+              'error'
+            );
+            this.resetButton();
+            return;
+          }
           const pwErrorEl = document.getElementById('checkout-password-error');
-          const password  = pwInput ? pwInput.value.trim() : '';
-
-          if (!password) {
-            if (pwErrorEl) { pwErrorEl.textContent = 'Manager password is required to use Settle Later.'; pwErrorEl.style.display = 'block'; }
-            if (pwInput) pwInput.focus();
-            this.resetButton();
-            return;
-          }
-
-          try {
-            const pwRes  = await apiFetch('/verify_manager_password', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ password }),
-            });
-            const pwData = await pwRes.json();
-            if (!pwData.success) {
-              if (pwErrorEl) { pwErrorEl.textContent = 'Incorrect password. Please try again.'; pwErrorEl.style.display = 'block'; }
-              if (pwInput) { pwInput.value = ''; pwInput.focus(); }
-              this.resetButton();
-              return;
-            }
-            if (pwErrorEl) pwErrorEl.style.display = 'none';
-          } catch (pwErr) {
-            showNotification('Could not verify manager password. Please retry.', 'error');
-            this.resetButton();
-            return;
-          }
+          if (pwErrorEl) pwErrorEl.style.display = 'none';
         }
-        // ── End password verification ──────────────────────────────────────────
+        // ── End authorisation ──────────────────────────────────────────────────
 
         // *** ENHANCED BALANCE VALIDATION ***
 

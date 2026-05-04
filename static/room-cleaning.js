@@ -498,11 +498,25 @@ async function markRoomAsCleaned(roomNumber) {
   }
 }
 
-// Complete room cleaning (called after quality check confirmation)
+// Complete room cleaning (called after quality check confirmation).
+//
+// Routing by role (RBAC):
+//   • Housekeeping → POST /mark_room_cleaned
+//       Sets cleaning_status="ready_to_inspect" (the room stays in
+//       status="cleaning" until an admin/manager approves it).
+//   • Admin / Manager → POST /mark_room_ready_for_checkin
+//       Skips the inspection wait and clears the room to vacant in one
+//       step. Works whether the room is currently in_progress or
+//       ready_to_inspect.
 async function completeRoomCleaning(roomNumber) {
   try {
-    // Send request to backend to mark as cleaned
-    const response = await apiFetch("/mark_room_cleaned", {
+    const _auth = window.CibaraAuth;
+    const _canApprove = _auth && _auth.userCan && _auth.userCan("room.inspection.approve");
+    const endpoint = _canApprove
+      ? "/mark_room_ready_for_checkin"
+      : "/mark_room_cleaned";
+
+    const response = await apiFetch(endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -516,12 +530,19 @@ async function completeRoomCleaning(roomNumber) {
 
     const result = await response.json();
     if (result.success) {
-      // Update local room data
+      // Update local room data so the card re-renders with the right
+      // state immediately (the next /get_data fetch will confirm).
       const roomInfo = rooms[roomNumber];
       if (roomInfo) {
-        roomInfo.status = "vacant";
-        roomInfo.cleaning_status = null;
-        roomInfo.cleaning_start_time = null;
+        if (_canApprove) {
+          // Admin/manager approved: room is now vacant
+          roomInfo.status = "vacant";
+          roomInfo.cleaning_status = null;
+          roomInfo.cleaning_start_time = null;
+        } else {
+          // Housekeeping done: stays in cleaning, but flagged for inspection
+          roomInfo.cleaning_status = "ready_to_inspect";
+        }
       }
 
       // Close all modals if they're open
@@ -539,12 +560,17 @@ async function completeRoomCleaning(roomNumber) {
         regularModal.classList.remove("show");
       }
 
-      showNotification(`Room ${roomNumber} is ready for check-in`, "success");
+      showNotification(
+        _canApprove
+          ? `Room ${roomNumber} is ready for check-in`
+          : `Room ${roomNumber} cleaned. Awaiting inspection.`,
+        "success",
+      );
 
       // Refresh the rooms display
       renderRooms();
 
-      console.log(`Room ${roomNumber} marked as cleaned successfully`);
+      console.log(`Room ${roomNumber} ${_canApprove ? "approved ready" : "marked cleaned"} successfully`);
       return true;
     } else {
       showNotification(

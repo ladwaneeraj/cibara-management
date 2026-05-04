@@ -9,8 +9,18 @@ from flask import Blueprint, request, jsonify
 from config import logger
 from services import customer_service
 from services.customer_service import search_by_mobile_prefix
+from services.auth_service import requires_permission
 
 customers_bp = Blueprint('customers', __name__)
+
+
+# NOTE on RBAC:
+# Some customer endpoints are used by the check-in flow (autocomplete by
+# name/mobile, get one customer). Those stay open to anyone authenticated
+# so manager can still complete a check-in. The panel-style endpoints —
+# bulk list, edit, delete, flag, batch-check — are admin-only via the
+# customer.manage permission. The frontend Customer Manager UI is also
+# hidden for non-admins, but the backend gate is the actual boundary.
 
 
 def _format_customer(c: dict) -> dict:
@@ -147,6 +157,7 @@ def upload_customer_document():
 
 
 @customers_bp.route("/delete_customer_document", methods=["POST"])
+@requires_permission("customer.manage")
 def delete_customer_document():
     """
     Remove a specific document URL from a customer's id_doc_urls list.
@@ -206,6 +217,7 @@ def delete_customer_document():
 
 
 @customers_bp.route("/toggle_customer_flag", methods=["POST"])
+@requires_permission("customer.manage")
 def toggle_customer_flag():
     """
     Set or clear the customer flag.
@@ -242,6 +254,7 @@ def toggle_customer_flag():
 
 
 @customers_bp.route("/list_customers", methods=["GET"])
+@requires_permission("customer.manage")
 def list_customers_route():
     """
     Paginated lightweight customer list (no image URLs — only doc_count).
@@ -272,6 +285,7 @@ def list_customers_route():
 
 
 @customers_bp.route("/update_customer", methods=["POST"])
+@requires_permission("customer.manage")
 def update_customer_route():
     """
     Update editable fields on a customer record.
@@ -331,6 +345,7 @@ def add_customer_route():
 
 
 @customers_bp.route("/batch_check_customer_docs", methods=["POST"])
+@requires_permission("customer.manage")
 def batch_check_customer_docs():
     """
     Given a list of mobile numbers, return which ones have at least one

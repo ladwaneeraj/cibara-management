@@ -20,6 +20,9 @@ from config import (
     get_ui_config, invalidate_ui_config_cache,
 )
 from services import payment_service, pdf_service, expense_service
+from services.auth_service import requires_permission
+from services.audit_log import write_log
+from services.role_filters import clamp_date_range
 
 billing_bp = Blueprint('billing', __name__)
 
@@ -43,6 +46,9 @@ def get_register_data():
 
         if not start_date or not end_date:
             return jsonify(success=False, message="Start and end dates are required")
+
+        # ── RBAC: clamp to last 3 days for non-admin users ────────────────────
+        start_date, end_date = clamp_date_range(start_date, end_date)
 
         start_dt = datetime.strptime(start_date, "%Y-%m-%d")
         end_dt = datetime.strptime(end_date, "%Y-%m-%d") + timedelta(days=1)
@@ -390,22 +396,44 @@ def get_bill_by_number(bill_number):
 
 @billing_bp.route("/search_bills", methods=["POST"])
 def search_bills():
-    """Search bills by guest name, mobile, or bill number."""
+    """Search bills by guest name, mobile, or bill number.
+    Non-admin callers are clamped to the last 3 days regardless of search."""
     try:
+        from services.role_filters import visible_window_start, _current_role
         data_json = request.json
         search_term = data_json.get("search_term", "").strip()
 
         if not search_term:
             return jsonify(success=False, message="Search term is required")
 
-        # Search by bill number (exact match)
-        bills_query = bills_ref.where('bill_number', '==', search_term).limit(10).stream()
+        # Manager: only allow searches against the last-3-days window.
+        # Use the role-filter helper so the rule lives in one place.
+        is_admin = (_current_role() == "admin")
+        manager_window_start = None if is_admin else (
+            visible_window_start() + " 00:00"
+        )
+
+        # Search by bill number (exact match) — for non-admin restrict to window
+        if is_admin:
+            bills_query = bills_ref.where('bill_number', '==', search_term).limit(10).stream()
+        else:
+            bills_query = (
+                bills_ref
+                .where('bill_number', '==', search_term)
+                .where('checkin_time', '>=', manager_window_start)
+                .limit(10)
+                .stream()
+            )
         results = [doc.to_dict() for doc in bills_query]
 
         # If no results, search by guest name / mobile — limit to last 90 days so we
         # don't stream the entire historical bills collection on every name search.
+        # Non-admin callers are further clamped to the 3-day window.
         if not results:
-            cutoff = (datetime.now() - timedelta(days=90)).strftime("%Y-%m-%d") + " 00:00"
+            if is_admin:
+                cutoff = (datetime.now() - timedelta(days=90)).strftime("%Y-%m-%d") + " 00:00"
+            else:
+                cutoff = manager_window_start
             all_bills = (
                 bills_ref
                 .where("checkin_time", ">=", cutoff)
@@ -461,6 +489,9 @@ def get_register_stats():
 
         if not start_date or not end_date:
             return jsonify(success=False, message="Date range required")
+
+        # ── RBAC: clamp to last 3 days for non-admin users ────────────────────
+        start_date, end_date = clamp_date_range(start_date, end_date)
 
         # Use the register data endpoint logic to get entries, then compute stats
         # For now, return basic stats from bills
@@ -519,6 +550,7 @@ def get_register_stats():
 # this endpoint is ever called.
 
 @billing_bp.route("/settings/billing_config", methods=["GET"])
+@requires_permission("settings.view")
 def get_billing_config_endpoint():
     try:
         cfg = get_billing_config()
@@ -529,6 +561,7 @@ def get_billing_config_endpoint():
 
 
 @billing_bp.route("/settings/billing_config", methods=["POST"])
+@requires_permission("settings.update")
 def update_billing_config_endpoint():
     try:
         data = request.get_json(silent=True) or {}
@@ -576,6 +609,7 @@ def get_ui_config_endpoint():
 
 
 @billing_bp.route("/settings/ui_config", methods=["POST"])
+@requires_permission("settings.update")
 def update_ui_config_endpoint():
     try:
         data = request.get_json(silent=True) or {}
@@ -807,6 +841,13 @@ def add_bill_payment():
         else:
             msg += " Bill settled."
 
+        write_log(
+            "payment.add_bill",
+            target_collection="bills",
+            target_id=str(bill_id),
+            metadata={"amount": amount, "discount": discount,
+                      "method": payment_mode, "new_balance": new_balance},
+        )
         return jsonify(
             success=True,
             message=msg,
@@ -823,9 +864,9 @@ def add_bill_payment():
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _check_manager_password(provided: str) -> bool:
-    import os as _os
-    expected = _os.environ.get("MANAGER_PASSWORD", "manager@1234")
-    return provided == expected
+    """DEPRECATED stub. Auth has moved to RBAC (@requires_permission)."""
+    logger.warning("billing._check_manager_password called (deprecated) — denying")
+    return False
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -833,20 +874,20 @@ def _check_manager_password(provided: str) -> bool:
 # ══════════════════════════════════════════════════════════════════════════════
 
 @billing_bp.route("/recalculate_bill", methods=["POST"])
+@requires_permission("payment.edit")
 def recalculate_bill():
     """
     Re-fetch all payment records for a stay and update the bill document's
     payment_cash, payment_online, and balance fields.
     Triggered after a payment edit so the bill reflects the corrected amounts.
     Also fires a background PDF regeneration so the new version is stored.
+    Auth: admin (via @requires_permission).
     """
     try:
         data     = request.json or {}
-        password = data.get("password", "")
         bill_id  = (data.get("bill_id") or "").strip()
 
-        if not _check_manager_password(password):
-            return jsonify(success=False, message="Incorrect password"), 403
+        # Auth handled by @requires_permission decorator above.
 
         if not bill_id:
             return jsonify(success=False, message="bill_id is required"), 400
@@ -932,21 +973,21 @@ def recalculate_bill():
 # ══════════════════════════════════════════════════════════════════════════════
 
 @billing_bp.route("/update_bill_service", methods=["POST"])
+@requires_permission("payment.edit")
 def update_bill_service():
     """
     Edit the price of a single service in a completed bill.
     Recalculates services_total, total_amount, balance, then fires a
     background PDF regeneration so the new version lands in bills module.
+    Auth: admin (via @requires_permission).
     """
     try:
         data          = request.json or {}
-        password      = data.get("password", "")
         bill_id       = (data.get("bill_id") or "").strip()
         svc_index_raw = data.get("service_index")
         new_price_raw = data.get("new_price")
 
-        if not _check_manager_password(password):
-            return jsonify(success=False, message="Incorrect password"), 403
+        # Auth handled by @requires_permission decorator above.
 
         if not bill_id or svc_index_raw is None or new_price_raw is None:
             return jsonify(
@@ -1040,6 +1081,9 @@ def update_bill_service():
             f"item={services[svc_index].get('item')} "
             f"price {old_price}→{new_price}"
         )
+        write_log("payment.edit_bill_service", target_collection="bills",
+                  target_id=str(bill_id),
+                  metadata={"service_index": svc_index, "new_price": new_price_raw})
         return jsonify(success=True, message="Service updated and bill PDF queued")
 
     except Exception as e:

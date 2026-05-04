@@ -10,6 +10,8 @@ from config import (
     settlements_ref, ota_settlements_ref  # logs_ref kept for whatsapp_messages only
 )
 from services import payment_service, customer_service, bills_service
+from services.auth_service import requires_permission
+from services.audit_log import write_log
 
 bookings_bp = Blueprint('bookings', __name__)
 
@@ -144,6 +146,7 @@ def create_booking():
             })
 
         logger.info(f"Booking created: {booking_id} for {booking['guest_name']}")
+        write_log("booking.create", target_collection="bookings", target_id=booking_id)
         return jsonify(success=True, booking_id=booking_id, message="Booking created successfully")
         
     except Exception as e:
@@ -209,6 +212,8 @@ def update_booking():
             })
 
         logger.info(f"Booking updated: {booking_id}")
+        write_log("booking.update", target_collection="bookings",
+                  target_id=str(booking.get("id") or booking.get("booking_id") or ""))
         return jsonify(success=True, booking=booking, message="Booking updated successfully")
         
     except Exception as e:
@@ -261,6 +266,8 @@ def cancel_booking():
             })
 
         logger.info(f"Booking cancelled: {booking_id}")
+        write_log("booking.cancel", target_collection="bookings",
+                  target_id=str(request.json.get("booking_id") if request.is_json else ""))
         return jsonify(success=True, message="Booking cancelled successfully")
         
     except Exception as e:

@@ -1405,18 +1405,25 @@ function _relockDatePicker() {
 }
 
 function _openTxnPasswordModal() {
-  const modal = document.getElementById("txn-date-pwd-modal");
-  const input = document.getElementById("txn-pwd-input");
-  const err = document.getElementById("txn-pwd-error");
-  if (modal) modal.classList.add("show");
-  if (err) {
-    err.style.display = "none";
-    err.textContent = "";
+  // Migrated to RBAC: instead of showing the password modal, check the
+  // user's permission directly. Admin → unlock the picker. Anyone else →
+  // toast and bail out. The modal HTML stays in the DOM but is never shown.
+  const auth = window.CibaraAuth;
+  if (auth && auth.userCan && auth.userCan("transaction.history.full")) {
+    _setDatePickerUnlocked();
+    if (window._txnPicker) window._txnPicker.open();
+    return;
   }
-  if (input) {
-    input.value = "";
-    setTimeout(() => input.focus(), 120);
-  }
+  try {
+    if (window.showToast) {
+      window.showToast(
+        "Access denied — only admins can view custom date ranges.",
+        "error",
+      );
+    } else {
+      alert("Access denied — only admins can view custom date ranges.");
+    }
+  } catch (_) { /* ignore */ }
 }
 
 function _closeTxnPasswordModal() {
@@ -1425,78 +1432,24 @@ function _closeTxnPasswordModal() {
 }
 
 async function _submitTxnPassword() {
-  const input = document.getElementById("txn-pwd-input");
-  const err = document.getElementById("txn-pwd-error");
-  const btn = document.getElementById("txn-pwd-submit-btn");
-  const pass = input ? input.value.trim() : "";
-
-  if (!pass) {
-    if (err) {
-      err.textContent = "Please enter the password.";
-      err.style.display = "block";
-    }
-    return;
-  }
-
-  if (btn) {
-    btn.disabled = true;
-    btn.textContent = "Verifying…";
-  }
-  if (err) err.style.display = "none";
-
-  try {
-    const res = await apiFetch("/verify_manager_password", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ password: pass }),
-    });
-
-    if (res.status === 403) {
-      if (err) {
-        err.textContent = "Incorrect password. Try again.";
-        err.style.display = "block";
-      }
-      if (input) {
-        input.value = "";
-        input.focus();
-      }
-      return;
-    }
-
-    const data = await res.json();
-    if (!data.success) {
-      if (err) {
-        err.textContent = data.message || "Incorrect password.";
-        err.style.display = "block";
-      }
-      return;
-    }
-
-    // Password correct — unlock the date picker
-    _closeTxnPasswordModal();
-    _setDatePickerUnlocked();
-    // Open flatpickr immediately after unlock
-    if (window._txnPicker) window._txnPicker.open();
-  } catch (e) {
-    if (err) {
-      err.textContent = "Network error. Please try again.";
-      err.style.display = "block";
-    }
-  } finally {
-    if (btn) {
-      btn.disabled = false;
-      btn.textContent = "Unlock";
-    }
-  }
+  // Legacy function — RBAC made this obsolete. Calls _openTxnPasswordModal
+  // (now a userCan check) so any cached inline onclick still works.
+  _openTxnPasswordModal();
 }
 
 function initTxnDateFilter() {
   const todayStr = new Date().toISOString().split("T")[0];
   const defaultFrom = todayStr; // today only
 
-  // ── flatpickr — initialised but won't open until unlocked ─────────────────
+  // ── RBAC: only admin gets the date-range picker ──────────────────────────
+  // For everyone else the .txn-custom-range container is hidden via
+  // data-roles="admin" (auth.js does the hide). We skip flatpickr init
+  // entirely for non-admin so we don't waste cycles on an invisible widget.
+  const _auth = window.CibaraAuth;
+  const _isAdmin = _auth && _auth.isAdmin && _auth.isAdmin();
+
   const rangeEl = document.getElementById("txn-date-range");
-  if (rangeEl && window.flatpickr) {
+  if (_isAdmin && rangeEl && window.flatpickr) {
     window._txnPicker = flatpickr(rangeEl, {
       mode: "range",
       dateFormat: "Y-m-d",
@@ -1505,16 +1458,7 @@ function initTxnDateFilter() {
       defaultDate: [todayStr, todayStr],
       maxDate: todayStr,
       disableMobile: true,
-      onReady: function (_d, _s, fp) {
-        // Keep the flatpickr-generated altInput also locked initially
-        if (fp.altInput) {
-          fp.altInput.readOnly = true;
-          fp.altInput.style.cursor = "pointer";
-        }
-      },
       onChange: function (selectedDates) {
-        // Guard: only act on manual selections after unlock
-        if (!txnDateUnlocked) return;
         if (selectedDates.length === 2) {
           const from = selectedDates[0].toISOString().split("T")[0];
           const to = selectedDates[1].toISOString().split("T")[0];
@@ -1525,29 +1469,9 @@ function initTxnDateFilter() {
         }
       },
     });
-
-    // Intercept clicks on the altInput — show password modal if locked
-    setTimeout(() => {
-      const altInput = rangeEl._flatpickr && rangeEl._flatpickr.altInput;
-      const clickTarget = altInput || rangeEl;
-      const lockWrap = document.getElementById("txn-date-lock-wrap");
-
-      function handlePickerClick(e) {
-        if (!txnDateUnlocked) {
-          e.preventDefault();
-          e.stopPropagation();
-          if (window._txnPicker) window._txnPicker.close();
-          _openTxnPasswordModal();
-        }
-      }
-
-      clickTarget.addEventListener("click", handlePickerClick, true);
-      if (lockWrap) {
-        lockWrap.addEventListener("click", function (e) {
-          if (!txnDateUnlocked) handlePickerClick(e);
-        });
-      }
-    }, 300);
+    // Auto-unlock for admin — the lock metaphor is gone; they can use the
+    // picker freely, no password gate, no re-lock button.
+    txnDateUnlocked = true;
   }
 
   // ── Quick buttons ─────────────────────────────────────────────────────────

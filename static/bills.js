@@ -615,7 +615,7 @@
       <button class="bl-icon-btn refresh" id="bl-refresh-btn" title="Refresh">
         <i class="fas fa-sync-alt"></i>
       </button>
-      <button class="bl-icon-btn export" id="bl-export-btn" title="Export CA Report (Excel)">
+      <button class="bl-icon-btn export" id="bl-export-btn" data-perm="data.export" title="Export CA Report (Excel)">
         <i class="fas fa-file-excel"></i>
       </button>
     </div>
@@ -661,13 +661,19 @@
 
   <!-- Filter bar -->
   <div class="bl-filter-bar">
-    <div class="bl-date-range-wrap">
+    <!-- Custom date-range picker is admin-only. Manager / housekeeping rely
+         on the quick-range buttons (Today / Last 3 Days). The default for
+         everyone is "Last 3 Days". -->
+    <div class="bl-date-range-wrap" data-roles="admin">
       <i class="fas fa-calendar-alt"></i>
       <input type="text" id="bl-date-range" class="bl-date-range-input" placeholder="Select date range" readonly />
     </div>
-    <button class="bl-quick-btn" data-bq="today">Today</button>
-    <button class="bl-quick-btn bq-active" data-bq="week">Week</button>
-    <button class="bl-quick-btn" data-bq="month">Month</button>
+    <button class="bl-quick-btn" data-bq="today" data-roles="admin">Today</button>
+    <button class="bl-quick-btn bq-active" data-bq="last3" data-roles="admin">Last 3 Days</button>
+    <button class="bl-quick-btn" data-bq="month" data-roles="admin">Month</button>
+    <!-- Manager / housekeeping: only Today + Last 3 Days -->
+    <button class="bl-quick-btn" data-bq="today" data-roles="manager,housekeeping">Today</button>
+    <button class="bl-quick-btn bq-active" data-bq="last3" data-roles="manager,housekeeping">Last 3 Days</button>
     <span class="bl-filter-divider"></span>
     <select id="bl-payment-filter">
       <option value="all">All Payments</option>
@@ -845,11 +851,23 @@
   }
 
   // ── Date defaults + flatpickr init ────────────────────────────────────────────
+  // Default range for everyone is "Last 3 Days" (today + 2 prior).
+  // Admin still has the custom date-range picker for deeper history.
+  // Manager / housekeeping use only the quick buttons (the picker container
+  // is hidden via data-roles="admin").
   function setDefaults() {
     const today = todayStr();
-    const weekStart = nDaysAgoStr(6);
-    state.dateRange.start = weekStart;   // default: last 7 days
+    const last3Start = nDaysAgoStr(2);
+    state.dateRange.start = last3Start;
     state.dateRange.end   = today;
+
+    const _auth = window.CibaraAuth;
+    const _isAdmin = _auth && _auth.isAdmin && _auth.isAdmin();
+
+    // Skip flatpickr init for non-admin: the input element is hidden via
+    // data-roles, but it's still in the DOM. Initialising it would attach
+    // listeners that aren't reachable from the UI — wasted work.
+    if (!_isAdmin) return;
 
     const el = dom("bl-date-range");
     if (!el || !window.flatpickr) return;
@@ -859,7 +877,7 @@
       dateFormat: "Y-m-d", // internal ISO format — avoids maxDate mis-parsing
       altInput: true, // show human-friendly text to user
       altFormat: "d M Y", // display: "17 Mar 2026"
-      defaultDate: [weekStart, today],
+      defaultDate: [last3Start, today],
       maxDate: today,
       disableMobile: true,
       onChange: function (selectedDates) {
@@ -885,8 +903,9 @@
         const today = todayStr();
         let start;
         if (range === "today") start = today;
-        else if (range === "week") start = nDaysAgoStr(6);
+        else if (range === "last3") start = nDaysAgoStr(2);   // today + 2 prior = 3 days
         else if (range === "month") start = nDaysAgoStr(29);
+        // (week intentionally removed — not in the chip set anymore)
         else start = today;
         state.dateRange.start = start;
         state.dateRange.end = today;
@@ -1997,6 +2016,15 @@
         area.innerHTML = buildBillHTML(data.bill);
         _openBillId = id;
         _openBillData = data.bill;
+        // Inline "last action by ..." attribution at the top of the bill
+        // print area. The element is removed when the modal closes (whole
+        // area is rebuilt on each open).
+        if (window.CibaraAttribution) {
+          const attrEl = document.createElement("div");
+          attrEl.style.cssText = "margin: 0 0 10px 0;";
+          area.insertBefore(attrEl, area.firstChild);
+          window.CibaraAttribution.decorate(attrEl, "bills", id, { hideIfNone: true });
+        }
         if (saveBtn) {
           saveBtn.disabled = false;
           saveBtn.innerHTML =
@@ -2875,6 +2903,9 @@
   });
 
   // ── Init ─────────────────────────────────────────────────────────────────
+  // Wait for the auth state before building — the layout decides whether to
+  // show the date-range picker (admin only). If init runs before auth
+  // resolves, _isAdmin is false and the picker never renders.
   function init() {
     injectStyles();
     buildHTML();
@@ -2883,9 +2914,17 @@
     watchTab();
   }
 
+  function bootWhenReady() {
+    if (window.CibaraAuth && typeof window.CibaraAuth.ready === "function") {
+      window.CibaraAuth.ready().then(init);
+    } else {
+      init();
+    }
+  }
+
   if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", init);
+    document.addEventListener("DOMContentLoaded", bootWhenReady);
   } else {
-    init();
+    bootWhenReady();
   }
 })();

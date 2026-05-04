@@ -1,0 +1,126 @@
+rules_version = '2';
+
+// ─────────────────────────────────────────────────────────────────────────
+// Cibara Comforts — Firestore Security Rules
+//
+// Defence-in-depth alongside the Flask backend's @requires_permission
+// decorator. The Flask backend is the primary security boundary because
+// most writes pass through it; these rules prevent a compromised client
+// from writing directly to Firestore using the user's auth token.
+//
+// Roles are read from the `role` custom claim baked into the ID token
+// when the user is created or has their role changed (see
+// services/auth_service.set_user_claims).
+// ─────────────────────────────────────────────────────────────────────────
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ─── Helpers ───────────────────────────────────────────────────────
+    function isSignedIn()      { return request.auth != null; }
+    function role()            { return request.auth.token.role; }
+    function isAdmin()         { return isSignedIn() && role() == 'admin'; }
+    function isManager()       { return isSignedIn() && role() == 'manager'; }
+    function isHousekeeping()  { return isSignedIn() && role() == 'housekeeping'; }
+    function isStaff()         { return isAdmin() || isManager(); }
+    function isAnyAuthed()     { return isAdmin() || isManager() || isHousekeeping(); }
+
+    // ─── Users — admin only ────────────────────────────────────────────
+    match /users/{userId} {
+      allow read:   if isAdmin() || (isSignedIn() && request.auth.token.userId == userId);
+      allow write:  if isAdmin();
+    }
+
+    // ─── Audit logs — append-only ──────────────────────────────────────
+    // Anyone authenticated can create (so client-side code can log too).
+    // Read restricted to admin. Update / delete blocked for everyone.
+    match /audit_logs/{logId} {
+      allow read:   if isAdmin();
+      allow create: if isAnyAuthed();
+      allow update: if false;
+      allow delete: if false;
+    }
+
+    // ─── Rooms ─────────────────────────────────────────────────────────
+    // Admin / manager can read & write any room field.
+    // Housekeeping can read any room, but can ONLY update fields related
+    // to cleaning state, and ONLY on rooms that are tagged for cleaning.
+    match /rooms/{roomId} {
+      allow read:   if isAnyAuthed();
+      allow create: if isStaff();
+      allow delete: if isAdmin();
+      allow update: if isStaff()
+        || (
+          isHousekeeping()
+          && resource.data.cleaning_status == true
+          && request.resource.data.diff(resource.data).affectedKeys()
+               .hasOnly(['cleaning_status', 'cleaning_start_time',
+                         'lastModifiedBy', 'lastModifiedAt'])
+        );
+    }
+
+    // ─── Bookings ──────────────────────────────────────────────────────
+    match /bookings/{bookingId} {
+      allow read:   if isStaff();
+      allow create: if isStaff();
+      allow update: if isStaff();
+      allow delete: if isAdmin();   // cancellations
+    }
+
+    // ─── Bills ─────────────────────────────────────────────────────────
+    match /bills/{billId} {
+      allow read:   if isStaff();
+      allow create: if isStaff();
+      allow update: if isAdmin();   // edit/recalculate is admin-only
+      allow delete: if isAdmin();
+    }
+
+    // ─── Payments — admin-only writes (manager can only read) ──────────
+    match /payments/{paymentId} {
+      allow read:   if isStaff();
+      allow create: if isAdmin();
+      allow update: if isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    // ─── Settlements (settle-later, OTA) — admin-only ──────────────────
+    match /settlements/{id}      { allow read, write: if isAdmin(); }
+    match /ota_settlements/{id}  { allow read, write: if isAdmin(); }
+
+    // ─── Settings (billing_config, ui_config, laundry_prices) ─────────
+    match /settings/{docId} {
+      allow read:  if isAnyAuthed();
+      allow write: if isAdmin();
+    }
+
+    // ─── Expenses — admin only writes; staff can read ─────────────────
+    match /expenses/{id} {
+      allow read:  if isStaff();
+      allow write: if isAdmin();
+    }
+
+    // ─── Laundry (daily logs + bills) ──────────────────────────────────
+    match /laundry_daily/{id} { allow read: if isStaff(); allow write: if isStaff(); }
+    match /laundry_bills/{id} { allow read: if isStaff(); allow write: if isStaff(); }
+
+    // ─── Customers ────────────────────────────────────────────────────
+    match /customers/{id} {
+      allow read:  if isStaff();
+      allow write: if isStaff();
+    }
+
+    // ─── Daily counters / metadata / totals / legacy logs ─────────────
+    // These are written by the backend only; clients never touch them
+    // directly. Lock them down to backend-only (admin token suffices in
+    // the rare case a manual fix is needed via the admin console).
+    match /daily_counters/{id}        { allow read, write: if isAdmin(); }
+    match /transaction_metadata/{id}  { allow read: if isStaff(); allow write: if isAdmin(); }
+    match /totals/{id}                { allow read: if isStaff(); allow write: if isAdmin(); }
+    match /logs/{id}                  { allow read: if isStaff(); allow write: if isAdmin(); }
+
+    // ─── Default deny for anything else ───────────────────────────────
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

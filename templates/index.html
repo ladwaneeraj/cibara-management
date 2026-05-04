@@ -4,8 +4,17 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Cibara Comforts — Lodge Management</title>
-    <!-- PIN lock screen — loads first, blocks app until PIN is verified -->
-    <script src="/static/pin-lock.js"></script>
+    <!--
+      Auth bootstrap — loads before everything else so downstream scripts
+      (script.js, register.js, etc.) can call window.CibaraAuth.userCan(...).
+      If no user is signed in, auth.js redirects to /login.
+    -->
+    <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-auth-compat.js"></script>
+    <script src="/firebase-config.js"></script>
+    <script src="/static/permissions.js"></script>
+    <script src="/static/auth.js"></script>
+    <script src="/static/attribution.js"></script>
     <link
       href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css"
       rel="stylesheet"
@@ -645,27 +654,59 @@
           >
             <i class="fas fa-expand"></i>
           </button>
+          <!-- Profile dropdown trigger — populated by auth.js -->
           <button
-            id="settings-btn"
-            class="header-icon-btn"
-            aria-label="Settings"
-            title="Settings"
-            onclick="openSettingsModal()"
+            id="profile-btn"
+            class="header-icon-btn profile-btn"
+            aria-label="Account menu"
+            aria-haspopup="true"
+            aria-expanded="false"
+            title="Account"
           >
-            <i class="fas fa-cog"></i>
-          </button>
-          <button
-            id="lock-btn"
-            class="header-icon-btn"
-            aria-label="Lock Screen"
-            title="Lock screen"
-            onclick="window.lodgeLock && window.lodgeLock()"
-            style="color: #94a3b8;"
-          >
-            <i class="fas fa-lock"></i>
+            <span id="profile-avatar" class="profile-avatar">?</span>
+            <i class="fas fa-chevron-down profile-caret" aria-hidden="true"></i>
           </button>
         </div>
       </header>
+
+      <!-- Profile dropdown menu — toggled by auth.js when profile button is clicked -->
+      <div
+        id="profile-menu"
+        class="profile-menu"
+        role="menu"
+        aria-labelledby="profile-btn"
+        hidden
+      >
+        <div class="profile-menu-head">
+          <div id="profile-menu-avatar" class="profile-menu-avatar">?</div>
+          <div class="profile-menu-meta">
+            <div id="profile-menu-name" class="profile-menu-name">—</div>
+            <div id="profile-menu-role" class="profile-menu-role">—</div>
+          </div>
+        </div>
+        <div class="profile-menu-divider"></div>
+        <button class="profile-menu-item" id="profile-menu-change-password" role="menuitem" type="button">
+          <i class="fas fa-key profile-menu-icon"></i>
+          <span>Change Password</span>
+        </button>
+        <button class="profile-menu-item" id="profile-menu-settings" data-perm="settings.view" role="menuitem" type="button">
+          <i class="fas fa-cog profile-menu-icon"></i>
+          <span>Settings</span>
+        </button>
+        <button class="profile-menu-item" id="profile-menu-users" data-perm="user.manage" role="menuitem" type="button">
+          <i class="fas fa-users-cog profile-menu-icon"></i>
+          <span>User Management</span>
+        </button>
+        <button class="profile-menu-item" id="profile-menu-logs" data-perm="logs.view" role="menuitem" type="button">
+          <i class="fas fa-clipboard-list profile-menu-icon"></i>
+          <span>Audit Logs</span>
+        </button>
+        <div class="profile-menu-divider"></div>
+        <button class="profile-menu-item profile-menu-item-danger" id="profile-menu-signout" role="menuitem" type="button">
+          <i class="fas fa-sign-out-alt profile-menu-icon"></i>
+          <span>Sign out</span>
+        </button>
+      </div>
 
       <!-- Dashboard -->
       <main class="dashboard">
@@ -684,11 +725,11 @@
 
           <!-- Filters -->
           <div class="filter-container">
-            <button class="filter-btn active" data-filter="all">All</button>
-            <button class="filter-btn" data-filter="vacant">
+            <button class="filter-btn active" data-filter="all" data-hide-roles="housekeeping">All</button>
+            <button class="filter-btn" data-filter="vacant" data-hide-roles="housekeeping">
               Vacant&nbsp;<span id="count-filter-vacant">0</span>
             </button>
-            <button class="filter-btn" data-filter="occupied">
+            <button class="filter-btn" data-filter="occupied" data-hide-roles="housekeeping">
               Occupied&nbsp;<span id="count-filter-occupied">0</span>
             </button>
             <button class="filter-btn" data-filter="cleaning">
@@ -697,6 +738,7 @@
             <button
               class="filter-btn filter-btn-balances"
               data-filter="balances"
+              data-hide-roles="housekeeping"
             >
               <span
                 >Balances&nbsp;<span id="count-filter-balances">0</span></span
@@ -736,7 +778,7 @@
               </button>
               <button class="txn-quick-btn" data-range="3">Last 3 days</button>
             </div>
-            <div class="txn-custom-range">
+            <div class="txn-custom-range" data-roles="admin">
               <i
                 class="fas fa-calendar-alt"
                 style="color: #6c757d; font-size: 0.8rem"
@@ -745,12 +787,12 @@
                 <input
                   type="text"
                   id="txn-date-range"
-                  class="txn-date-range-input txn-date-locked"
-                  placeholder="🔒 Custom range"
+                  class="txn-date-range-input"
+                  placeholder="Pick date range"
                   readonly
                 />
-                <span class="txn-date-lock-icon" id="txn-date-lock-icon"
-                  ><i class="fas fa-lock"></i
+                <span class="txn-date-lock-icon" id="txn-date-lock-icon" style="display:none"
+                  ><i class="fas fa-lock-open" style="color:var(--success);font-size:0.75rem;"></i
                 ></span>
               </div>
               <button
@@ -975,7 +1017,7 @@
                   <option value="highest">Highest Amount</option>
                   <option value="lowest">Lowest Amount</option>
                 </select>
-                <button onclick="exportToExcel()" class="action-btn btn-success btn-sm">
+                <button onclick="exportToExcel()" class="action-btn btn-success btn-sm" data-perm="data.export">
                   <i class="fas fa-file-excel"></i> Export
                 </button>
               </div>
@@ -1038,6 +1080,7 @@
               <button
                 id="mmt-settlements-btn"
                 class="action-btn btn-sm"
+                data-perm="settlement.manage"
                 style="
                   background: rgba(12, 111, 205, 0.12);
                   color: #0c6fcd;
@@ -1231,7 +1274,7 @@
             <div class="register-header">
               <h1><i class="fas fa-book"></i> Daily Register</h1>
               <div class="header-actions">
-                <button class="action-btn btn-primary" id="export-excel-btn">
+                <button class="action-btn btn-primary" id="export-excel-btn" data-perm="data.export">
                   <i class="fas fa-file-excel"></i> Export
                 </button>
                 <button
@@ -1262,7 +1305,7 @@
                     class="search-input search-input-compact"
                     placeholder="Name, Mobile, Room..."
                   />
-                  <button class="btn-customers" id="open-customers-btn" onclick="openCustomerManager()">
+                  <button class="btn-customers" id="open-customers-btn" data-perm="customer.manage" onclick="openCustomerManager()">
                     <i class="fas fa-users"></i> Customers
                   </button>
                 </div>
@@ -1505,19 +1548,19 @@
           <div class="nav-icon"><i class="fas fa-bed"></i></div>
           <div class="nav-label">Rooms</div>
         </div>
-        <div class="nav-item" data-tab="transactions">
+        <div class="nav-item" data-tab="transactions" data-hide-roles="housekeeping">
           <div class="nav-icon"><i class="fas fa-receipt"></i></div>
           <div class="nav-label">Transactions</div>
         </div>
-        <div class="nav-item" data-tab="register" id="nav-item-register"{% if ui_config and ui_config.hide_register_tab %} style="display:none"{% endif %}>
+        <div class="nav-item" data-tab="register" id="nav-item-register" data-hide-roles="housekeeping"{% if ui_config and ui_config.hide_register_tab %} style="display:none"{% endif %}>
           <div class="nav-icon"><i class="fas fa-book"></i></div>
           <div class="nav-label">Register</div>
         </div>
-        <div class="nav-item" data-tab="bills">
+        <div class="nav-item" data-tab="bills" data-hide-roles="housekeeping">
           <div class="nav-icon"><i class="fas fa-file-invoice-dollar"></i></div>
           <div class="nav-label">Bills</div>
         </div>
-        <div class="nav-item" data-tab="bookings">
+        <div class="nav-item" data-tab="bookings" data-hide-roles="housekeeping">
           <div class="nav-icon"><i class="fas fa-calendar-alt"></i></div>
           <div class="nav-label">Bookings</div>
         </div>
@@ -2783,7 +2826,7 @@
     <div id="notification-container"></div>
 
     <!-- Quick Action Floating Button -->
-    <div class="quick-actions-container">
+    <div class="quick-actions-container" data-hide-roles="housekeeping">
       <div
         class="quick-action-btn"
         id="quick-action-toggle"
@@ -4483,7 +4526,8 @@
     <script defer src="/static/booking.js"></script>
     <script defer src="/static/settle-later.js"></script>
     <script defer src="/static/settle-later-fix.js"></script>
-    <script defer src="/static/revenue-protection.js"></script>
+    <!-- revenue-protection.js removed — revenue visibility is now governed by
+         the user's role (admin only). See data-perm="revenue.view" in markup. -->
     <script defer src="/static/transaction-tracking.js"></script>
     <script defer src="/static/room-cleaning.js"></script>
     <!-- Enhanced check-in: document capture + customer flagging -->
@@ -4492,6 +4536,10 @@
     <script defer src="/static/customer-manager.js"></script>
     <!-- Laundry Management -->
     <script defer src="/static/laundry.js"></script>
+    <!-- Role-aware housekeeping bootstrap (no-op for non-housekeeping roles) -->
+    <script defer src="/static/housekeeping-mode.js"></script>
+    <!-- Admin: user management page (admin-only; UI does its own role check) -->
+    <script defer src="/static/admin-users.js"></script>
     <!-- Firebase config served from env vars — must load before google_sync module -->
     <script src="/firebase-config.js"></script>
     <script
@@ -4948,7 +4996,9 @@
           <button class="laundry-tab-btn active" data-tab="send">
             <i class="fas fa-table"></i> Daily Log
           </button>
-          <button class="laundry-tab-btn" data-tab="bill">
+          <!-- Monthly Bill: admin only. Manager / housekeeping see only the
+               Daily Log tab and never the bill / payment workflow. -->
+          <button class="laundry-tab-btn" data-tab="bill" data-roles="admin">
             <i class="fas fa-file-invoice-dollar"></i> Monthly Bill
           </button>
         </div>
@@ -5005,7 +5055,7 @@
         <!-- ══════════════════════════════════════════════════════════════════
              TAB 2 — Monthly Bill (single-column, mobile-friendly)
         ══════════════════════════════════════════════════════════════════ -->
-        <div class="laundry-tab-pane" id="laundry-tab-bill">
+        <div class="laundry-tab-pane" id="laundry-tab-bill" data-roles="admin">
           <div class="laundry-bill-scroll">
 
             <!-- ── Row 1: Month selector (compact inline) ────────── -->

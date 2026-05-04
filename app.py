@@ -10,6 +10,9 @@ from routes.reports import reports_bp
 from routes.customers import customers_bp
 from routes.utils import utils_bp
 from routes.laundry import laundry_bp
+from routes.users import users_bp
+from services.auth_service import load_current_user
+from flask import g
 import os
 import threading
 import json
@@ -27,15 +30,18 @@ Compress(app)
 # ---------------------------------------------------------------------------
 # Startup warnings for missing env vars (non-fatal locally)
 # ---------------------------------------------------------------------------
-for _var in ["API_KEY", "MANAGER_PASSWORD", "LODGE_PIN"]:
+for _var in ["API_KEY"]:
     if not os.environ.get(_var):
         logger.warning(f"⚠️  Env var {_var} not set — running in dev mode for this feature")
 
 # ---------------------------------------------------------------------------
-# API Key auth
+# Auth: anything not in these lists requires either a valid Firebase ID
+# token (preferred — issued via /login) OR the legacy API_KEY header
+# (kept for backwards compat with any external integrations). Per-route
+# role checks are applied via @requires_permission inside each blueprint.
 # ---------------------------------------------------------------------------
 _PUBLIC_PREFIXES = ("/static/", "/uploads/", "/firebase-config.js")
-_PUBLIC_EXACT    = ("/", "/health", "/verify-pin")
+_PUBLIC_EXACT    = ("/", "/login", "/health", "/verify-pin")
 
 @app.before_request
 def _serve_static():
@@ -48,23 +54,58 @@ def _serve_static():
                 return send_file(filepath, mimetype=mime or 'application/octet-stream')
 
 @app.before_request
-def require_api_key():
+def require_auth():
+    """
+    Global gate.
+
+    Order of acceptance:
+      1. Public path → allow.
+      2. Valid Firebase ID token (preferred path — set by the frontend
+         via static/auth.js) → allow and stash user on flask.g.
+      3. Legacy API_KEY header → allow (kept so external integrations
+         and CLI scripts keep working during migration).
+      4. Otherwise → 401.
+
+    Per-route ROLE checks happen inside the blueprints via the
+    @requires_permission decorator. This middleware only enforces
+    authentication, not authorization.
+    """
     path = request.path
     if path in _PUBLIC_EXACT:
         return None
     if any(path.startswith(p) for p in _PUBLIC_PREFIXES):
         return None
-    api_key = os.environ.get("API_KEY", "")
-    if not api_key:
-        logger.warning("API_KEY not set — all routes unprotected (dev mode)")
+
+    # 2. Firebase ID token
+    user = load_current_user()
+    if user:
+        g.current_user = user
         return None
-    provided = request.headers.get("X-API-Key", "") or request.args.get("api_key", "")
-    if provided != api_key:
-        return jsonify(success=False, message="Unauthorized"), 401
+
+    # 3. Legacy API key fallback
+    api_key = os.environ.get("API_KEY", "")
+    if api_key:
+        provided = request.headers.get("X-API-Key", "") or request.args.get("api_key", "")
+        if provided == api_key:
+            return None
+    elif not api_key and request.method == "GET":
+        # Dev mode (no API_KEY set, no token): allow GETs so a fresh
+        # checkout works on localhost. Mutating verbs still require auth.
+        logger.warning("require_auth: dev-mode GET without auth allowed")
+        return None
+
+    return jsonify(success=False, message="Unauthorized"), 401
 
 # ---------------------------------------------------------------------------
 # Core routes
 # ---------------------------------------------------------------------------
+
+@app.route("/login")
+def login_page():
+    """Server-renders the login page. Frontend (static/login.js) drives the
+    actual sign-in via Firebase Auth and redirects to "/" on success."""
+    return render_template("login.html")
+
 
 @app.route("/")
 def index():
@@ -99,42 +140,63 @@ def health():
         return jsonify(status="unhealthy", error=str(e)), 503
 
 # ---------------------------------------------------------------------------
-# Firebase config — keys served from env vars, never hardcoded in git
-# Falls back to empty strings locally (google_sync.js keeps its own hardcoded
-# fallback for local dev so realtime sync still works without env vars)
+# Firebase WEB config — public values, served as JS so the frontend can boot.
+#
+# Firebase web API keys are intentionally public; they identify the project
+# and let the SDK find Auth + Firestore. The actual security boundary is
+# Firestore Security Rules + the Auth provider configuration in the
+# Firebase console — NOT this key. So shipping a hardcoded fallback for
+# local dev is safe and standard.
+#
+# Order of resolution (env vars win so prod can swap projects without code
+# changes; fallback keeps local dev working out of the box):
+#   1. environment variable
+#   2. hardcoded fallback for the cibara-software-61512 project
 # ---------------------------------------------------------------------------
+_FIREBASE_WEB_FALLBACK = {
+    "apiKey":            "AIzaSyAj_K8Bq8IA0mYH94pu03s3DeDxc2pyCF4",
+    "authDomain":        "cibara-software-61512.firebaseapp.com",
+    "projectId":         "cibara-software-61512",
+    "storageBucket":     "cibara-software-61512.firebasestorage.app",
+    "messagingSenderId": "117552649945",
+    "appId":             "1:117552649945:web:5d4983739b1a8c077e50c8",
+    "measurementId":     "G-5VY26JYPN0",
+}
+
 @app.route("/firebase-config.js")
 def firebase_config_js():
+    def pick(env_key, fallback_key):
+        return os.environ.get(env_key) or _FIREBASE_WEB_FALLBACK[fallback_key]
+
     config = {
-        "apiKey":            os.environ.get("FIREBASE_WEB_API_KEY", ""),
-        "authDomain":        os.environ.get("FIREBASE_AUTH_DOMAIN", ""),
-        "projectId":         os.environ.get("FIREBASE_PROJECT_ID", ""),
-        "storageBucket":     os.environ.get("FIREBASE_STORAGE_BUCKET", ""),
-        "messagingSenderId": os.environ.get("FIREBASE_MESSAGING_SENDER_ID", ""),
-        "appId":             os.environ.get("FIREBASE_APP_ID", ""),
-        "measurementId":     os.environ.get("FIREBASE_MEASUREMENT_ID", ""),
+        "apiKey":            pick("FIREBASE_WEB_API_KEY",         "apiKey"),
+        "authDomain":        pick("FIREBASE_AUTH_DOMAIN",         "authDomain"),
+        "projectId":         pick("FIREBASE_PROJECT_ID",          "projectId"),
+        "storageBucket":     pick("FIREBASE_STORAGE_BUCKET",      "storageBucket"),
+        "messagingSenderId": pick("FIREBASE_MESSAGING_SENDER_ID", "messagingSenderId"),
+        "appId":             pick("FIREBASE_APP_ID",              "appId"),
+        "measurementId":     pick("FIREBASE_MEASUREMENT_ID",      "measurementId"),
     }
-    js = "// Firebase config from server env vars\nwindow.FIREBASE_CONFIG = " + json.dumps(config) + ";\n"
+    js = "// Firebase web config (env vars override fallback)\nwindow.FIREBASE_CONFIG = " + json.dumps(config) + ";\n"
     return Response(js, mimetype="application/javascript", headers={"Cache-Control": "no-store"})
 
 # ---------------------------------------------------------------------------
-# PIN verification
-# If LODGE_PIN env var not set → dev mode, grants access automatically
+# DEPRECATED: PIN verification.
+# Kept as a 410 stub so any cached client that still POSTs here gets a
+# clear signal to reload, instead of silently succeeding.
+# Authentication has moved to /login (Firebase ID tokens).
 # ---------------------------------------------------------------------------
-@app.route("/verify-pin", methods=["POST"])
-def verify_pin():
-    expected = str(os.environ.get("LODGE_PIN", "")).strip()
-    if not expected:
-        # Dev mode: no PIN configured → let them in
-        return jsonify(success=True, dev=True)
-    data = request.get_json(silent=True) or {}
-    submitted = str(data.get("pin", "")).strip()
-    if not submitted:
-        return jsonify(success=False, message="PIN required"), 400
-    if submitted == expected:
-        return jsonify(success=True)
-    logger.warning(f"Failed PIN attempt from {request.remote_addr}")
-    return jsonify(success=False, message="Incorrect PIN"), 401
+@app.route("/verify-pin", methods=["POST", "GET"])
+def verify_pin_deprecated():
+    return (
+        jsonify(
+            success=False,
+            deprecated=True,
+            message="PIN auth has been replaced by user login. Please reload.",
+            redirect="/login",
+        ),
+        410,
+    )
 
 # ---------------------------------------------------------------------------
 # Blueprints
@@ -147,6 +209,7 @@ app.register_blueprint(reports_bp,     url_prefix="")
 app.register_blueprint(customers_bp,   url_prefix="")
 app.register_blueprint(utils_bp,       url_prefix="")
 app.register_blueprint(laundry_bp,    url_prefix="")
+app.register_blueprint(users_bp,      url_prefix="")
 
 # ---------------------------------------------------------------------------
 # Error handlers

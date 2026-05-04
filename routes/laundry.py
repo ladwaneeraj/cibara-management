@@ -41,6 +41,7 @@ import logging
 from google.cloud.firestore_v1.base_query import FieldFilter
 
 from config import db, IST
+from services.auth_service import requires_permission, requires_role
 
 logger = logging.getLogger(__name__)
 
@@ -59,9 +60,9 @@ DEFAULT_PRICES = {k: 100 for k in ITEM_KEYS}
 
 
 def _check_manager_password(provided: str) -> bool:
-    """Same env-var contract as routes.rooms._check_manager_password."""
-    expected = _os.environ.get("MANAGER_PASSWORD", "manager@1234")
-    return provided == expected
+    """DEPRECATED stub. Auth has moved to RBAC (@requires_permission)."""
+    logger.warning("laundry._check_manager_password called (deprecated) — denying")
+    return False
 
 
 def _month_label(month_str):
@@ -239,6 +240,7 @@ def get_laundry_settings():
 
 
 @laundry_bp.route("/laundry/settings", methods=["POST"])
+@requires_permission("laundry.price.edit")
 def save_laundry_settings():
     try:
         data = request.json or {}
@@ -418,6 +420,7 @@ def receive_laundry(doc_id):
 # ---------------------------------------------------------------------------
 
 @laundry_bp.route("/laundry/monthly/<month>", methods=["GET"])
+@requires_role("admin")
 def get_monthly_laundry(month):
     """
     month: YYYY-MM
@@ -469,6 +472,7 @@ def get_monthly_laundry(month):
 # ---------------------------------------------------------------------------
 
 @laundry_bp.route("/laundry/monthly", methods=["POST"])
+@requires_role("admin")
 def save_monthly_bill():
     """
     Save / update the monthly laundry bill totals and APPEND a partial
@@ -595,6 +599,7 @@ def save_monthly_bill():
 # ---------------------------------------------------------------------------
 
 @laundry_bp.route("/laundry/payment/delete", methods=["POST"])
+@requires_permission("payment.edit")
 def delete_laundry_payment():
     """
     Delete one expense row that belongs to a laundry bill, then refresh
@@ -604,18 +609,17 @@ def delete_laundry_payment():
     -- it is the same value as the `id` field on each entry in the
     payments[] list returned by /laundry/monthly).
 
-    Body: { month, payment_id, password }
+    Body: { month, payment_id }
+    Auth: admin (via @requires_permission).
     """
     try:
         data = request.json or {}
         month      = data.get("month")
         expense_id = data.get("payment_id")
-        password   = data.get("password", "")
 
         if not month or not expense_id:
             return jsonify(success=False, message="month and payment_id required"), 400
-        if not _check_manager_password(password):
-            return jsonify(success=False, message="Incorrect password"), 403
+        # Auth handled by @requires_permission decorator
 
         # Look up the expense doc so we can reverse the totals correctly.
         exp_doc = db.collection("expenses").document(expense_id).get()
@@ -692,6 +696,7 @@ def delete_laundry_payment():
 # ---------------------------------------------------------------------------
 
 @laundry_bp.route("/laundry/all_bills", methods=["GET"])
+@requires_role("admin")
 def get_all_bills():
     """All monthly bill records, sorted by month desc, with payments[] normalised."""
     try:

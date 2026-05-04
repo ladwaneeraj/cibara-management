@@ -23,6 +23,8 @@ from config import (
     _batch_fill_serials
 )
 from services import payment_service, customer_service, expense_service, bills_service
+from services.auth_service import requires_permission, login_required
+from services.audit_log import write_log
 from routes.billing import auto_generate_bill_pdf
 
 rooms_bp = Blueprint('rooms', __name__)
@@ -207,6 +209,13 @@ def checkin():
         }, amount_paid=amount_paid, sync=True)
 
         logger.info(f"Check-in successful for room {room}, guest: {guest['name']}, serial: {serial_number}")
+        write_log(
+            "room.checkin",
+            target_collection="rooms",
+            target_id=str(room),
+            after={"guest": guest["name"], "price": price, "amount_paid": amount_paid,
+                   "payment_method": payment, "serial_number": serial_number},
+        )
         return jsonify(
             success=True,
             message=f"Check-in successful for {guest['name']} (#{serial_number})",
@@ -321,6 +330,13 @@ def checkout():
                 payment_service.write_payment(_mid_stay_payload)
 
             logger.info(f"Payment of ₹{amount} recorded for room {room}")
+            write_log(
+                "payment.add" if not is_renewal_payment else "room.renew_payment",
+                target_collection="rooms",
+                target_id=str(room),
+                metadata={"amount": amount, "method": payment_mode,
+                          "guest": room_data["guest"]["name"]},
+            )
             return jsonify(success=True, message=message)
 
         # Handle refund processing
@@ -359,6 +375,13 @@ def checkout():
                 payment_service.write_payment(_manual_refund_payload)
 
             logger.info(f"Manual refund of ₹{amount} processed for room {room}")
+            write_log(
+                "payment.refund",
+                target_collection="rooms",
+                target_id=str(room),
+                metadata={"amount": amount, "method": refund_method,
+                          "guest": guest_name, "type": "manual_refund"},
+            )
             return jsonify(success=True, message=f"Refund of ₹{amount} processed successfully")
 
         # Handle final checkout
@@ -591,6 +614,19 @@ def checkout():
 
             logger.info(f"Room {room} checked out. Guest: {guest_name}")
 
+            write_log(
+                "room.checkout",
+                target_collection="rooms",
+                target_id=str(room),
+                metadata={
+                    "guest": guest_name,
+                    "balance_at_checkout": balance,
+                    "refund_processed": bool(refund_processed),
+                    "settle_later": bool(data_json.get("settle_later", False)),
+                    "bill_id": bill_id if bool(bill_record) else None,
+                },
+            )
+
             # ── Auto-generate PDF in background (non-blocking) ───────────────
             # Runs server-side so the PDF is saved to Firebase Storage regardless
             # of which page the staff is on when they do the checkout.
@@ -676,11 +712,13 @@ def _parse_finalized_at(bill: dict):
 
 
 @rooms_bp.route("/revert_checkout", methods=["POST"])
+@requires_permission("booking.revert")
 def revert_checkout():
     """
     Undo a mistake checkout within REVERT_CHECKOUT_WINDOW_HOURS.
 
-    Body: { stay_id: str, password: str, reason: str }
+    Body: { stay_id: str, reason: str }
+    Auth: admin role required (enforced by @requires_permission).
 
     Returns: { success: bool, message: str, ... }
     """
@@ -690,15 +728,13 @@ def revert_checkout():
     try:
         data = request.json or {}
         stay_id  = (data.get("stay_id") or "").strip()
-        password =  data.get("password") or ""
         reason   = (data.get("reason")   or "").strip()
 
         if not stay_id:
             return jsonify(success=False, message="stay_id is required"), 400
 
-        # ── 1. Auth ──────────────────────────────────────────────────────────
-        if not _check_manager_password(password):
-            return jsonify(success=False, message="Incorrect password"), 403
+        # ── 1. Auth handled by @requires_permission decorator above ──────────
+        # (The legacy `password` field on the body is now ignored.)
 
         # ── 2. Load bill ─────────────────────────────────────────────────────
         bill_snap = bills_ref.document(stay_id).get()
@@ -953,6 +989,18 @@ def revert_checkout():
             f"snapshot_used={bool(snapshot.get('guest'))}"
         )
 
+        write_log(
+            "booking.revert",
+            target_collection="rooms",
+            target_id=str(room),
+            metadata={
+                "stay_id": stay_id,
+                "reason": reason,
+                "had_settlement": was_settle_later,
+                "refund_reversed": refund_total if refund_reversed else 0,
+                "age_hours_at_revert": round(age_hours, 3),
+            },
+        )
         return jsonify(
             success=True,
             message=f"Checkout reverted. Room {room} restored.",
@@ -1093,8 +1141,12 @@ def add_on():
         logger.info(f"Add-on '{item}' added to room {room}, price: ₹{price}, payment: {payment_method}")
 
         if payment_method == "balance":
+            write_log("room.addon", target_collection="rooms", target_id=str(room),
+                      metadata={"item": item, "price": price, "method": "balance"})
             return jsonify(success=True, message=f"Added {item} (₹{price}) to room {room} balance")
         else:
+            write_log("room.addon", target_collection="rooms", target_id=str(room),
+                      metadata={"item": item, "price": price, "method": payment_method})
             return jsonify(success=True, message=f"Added {item} (₹{price}) to room {room}, paid by {payment_method}")
     except Exception as e:
         logger.error(f"Error adding add-on: {str(e)}")
@@ -1168,6 +1220,8 @@ def renew_rent():
             payment_service.write_payment(_renewal_payload)
 
         logger.info(f"Rent renewed for Room {room}, Day {renewal_count + 1}")
+        write_log("room.renew", target_collection="rooms", target_id=str(room),
+                  metadata={"guest": guest.get("name"), "renewal_count": renewal_count, "amount": price})
         return jsonify(success=True, message=f"Rent renewed for Room {room}")
     except Exception as e:
         logger.error(f"Error renewing rent: {str(e)}")
@@ -1188,6 +1242,26 @@ def update_checkin_time():
 
         if room_data["status"] != "occupied":
             return jsonify(success=False, message="Room not occupied.")
+
+        # ── RBAC: manager gets ONE edit per stay; admin unrestricted. ────────
+        # The frontend hides the button after the first edit, but we re-check
+        # here so a manager can't bypass via dev tools or a stale bundle.
+        from flask import g as _g
+        _user = getattr(_g, "current_user", None) or {}
+        _role = _user.get("role")
+        _edit_count = int(room_data.get("checkin_time_edit_count") or 0)
+        if _role == "manager" and _edit_count >= 1:
+            return (
+                jsonify(
+                    success=False,
+                    message="Check-in time has already been edited once. "
+                            "Ask an admin if it needs to change again.",
+                ),
+                403,
+            )
+        if _role and _role not in ("admin", "manager"):
+            # Housekeeping (or any future role without the room.update perm)
+            return jsonify(success=False, message="Forbidden"), 403
 
         new_checkin_dt = datetime.strptime(new_checkin_time, "%Y-%m-%d %H:%M")
         old_checkin_time = room_data.get("checkin_time", "")
@@ -1305,6 +1379,8 @@ def update_checkin_time():
             msg += f" Serial reassigned to #{new_serial} for {new_date}."
 
         logger.info(f"Check-in time updated for room {room}: {new_checkin_time}")
+        write_log("room.checkin_time_update", target_collection="rooms", target_id=str(room),
+                  metadata={"new_checkin_time": new_checkin_time, "serial": new_serial})
         return jsonify(success=True, message=msg, serial_number=new_serial)
     except Exception as e:
         logger.error(f"Error updating check-in time: {str(e)}")
@@ -1345,6 +1421,7 @@ def add_room():
         return jsonify(success=False, message=f"Error adding new room: {str(e)}")
 
 @rooms_bp.route("/apply_discount", methods=["POST"])
+@requires_permission("discount.apply")
 def apply_discount():
     try:
         data_json = request.json
@@ -1416,6 +1493,8 @@ def apply_discount():
 
         logger.info(f"Discount of ₹{amount} applied to room {room}, reason: {reason}")
 
+        write_log("discount.apply", target_collection="rooms", target_id=str(room),
+                  metadata={"amount": amount, "reason": reason})
         return jsonify(success=True, message=f"Discount of ₹{amount} applied successfully.")
     except Exception as e:
         logger.error(f"Error applying discount: {str(e)}")
@@ -1579,6 +1658,17 @@ def transfer_room():
 
         logger.info(f"Guest {guest_name} transferred from Room {old_room} to Room {new_room}")
 
+        write_log(
+            "room.transfer",
+            target_collection="rooms",
+            target_id=str(new_room),
+            metadata={
+                "from_room": str(old_room),
+                "to_room": str(new_room),
+                "guest": guest_name,
+                "balance_adjustment": balance_adjustment,
+            },
+        )
         return jsonify(
             success=True,
             message=f"Guest transferred successfully from Room {old_room} to Room {new_room}.",
@@ -1589,8 +1679,28 @@ def transfer_room():
         logger.error(f"Error transferring room: {str(e)}", exc_info=True)
         return jsonify(success=False, message=f"Error transferring room: {str(e)}")
 
+# ─── Two-stage cleaning workflow ────────────────────────────────────────────
+# Stage 1: housekeeping marks the room as "cleaned" (cleaning_status moves
+#          from "in_progress" → "ready_to_inspect"). The room stays in
+#          status="cleaning" — it is NOT yet bookable.
+#
+# Stage 2: admin / manager inspects and marks "ready for check-in"
+#          (cleaning_status → null, status → "vacant"). All guest-related
+#          fields are cleared at this point.
+#
+# Admin / manager can also call stage 2 directly on a room that's still in
+# "in_progress" — useful when a guest checks out and the front desk staff
+# wants to skip the housekeeping verification step.
+
 @rooms_bp.route("/mark_room_cleaned", methods=["POST"])
+@requires_permission("room.cleaning.complete")
 def mark_room_cleaned():
+    """Stage 1 — mark the room as cleaned and awaiting inspection.
+
+    Allowed roles: housekeeping, manager, admin (anyone with
+    room.cleaning.complete). The room stays in status="cleaning" until
+    an admin / manager approves it via /mark_room_ready_for_checkin.
+    """
     try:
         data_json = request.json
         room = data_json["room"]
@@ -1601,15 +1711,84 @@ def mark_room_cleaned():
 
         room_data = room_doc.to_dict()
 
-        # Verify room is in cleaning status before marking as cleaned
+        # Must be in cleaning status. If it's already ready_to_inspect we
+        # treat it as a no-op (idempotent — rapid double-tap won't error).
         if room_data.get("status") != "cleaning":
             return jsonify(success=False, message="This room is not in cleaning status")
 
-        # Mark room as vacant and clear cleaning status
+        if room_data.get("cleaning_status") == "ready_to_inspect":
+            return jsonify(
+                success=True,
+                message=f"Room {room} is already awaiting inspection",
+                cleaning_status="ready_to_inspect",
+            )
+
+        rooms_ref.document(room).update({
+            # status stays "cleaning" — the room is NOT bookable yet.
+            "cleaning_status": "ready_to_inspect",
+            "cleaning_done_at": datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S"),
+        })
+
+        invalidate_rooms_and_totals()
+
+        logger.info(f"Room {room} marked as cleaned (awaiting inspection)")
+        write_log(
+            "room.cleaning.complete",
+            target_collection="rooms",
+            target_id=str(room),
+            metadata={"new_state": "ready_to_inspect"},
+        )
+        return jsonify(
+            success=True,
+            message=f"Room {room} cleaned. Awaiting inspection.",
+            cleaning_status="ready_to_inspect",
+        )
+
+    except Exception as e:
+        logger.error(f"Error marking room as cleaned: {str(e)}")
+        return jsonify(success=False, message=f"Error marking room as cleaned: {str(e)}")
+
+
+@rooms_bp.route("/mark_room_ready_for_checkin", methods=["POST"])
+@requires_permission("room.inspection.approve")
+def mark_room_ready_for_checkin():
+    """Stage 2 — inspector approves the room and clears it for the next guest.
+
+    Allowed roles: admin, manager (room.inspection.approve).
+    Allowed to be called from EITHER state ("in_progress" or
+    "ready_to_inspect") so admin / manager can skip stage 1 if needed.
+
+    Optional body fields (captured in audit log metadata):
+        checklist          : dict of {item_key: bool}  — QC items ticked
+        checklist_skipped  : bool                       — inspector chose to skip
+        notes              : str                        — free-form notes
+    """
+    try:
+        data_json = request.json or {}
+        room = data_json["room"]
+        qc_checklist = data_json.get("checklist") or {}
+        qc_skipped = bool(data_json.get("checklist_skipped"))
+        qc_notes = (data_json.get("notes") or "").strip()
+
+        room_doc = rooms_ref.document(room).get()
+        if not room_doc.exists:
+            return jsonify(success=False, message="Room not found")
+
+        room_data = room_doc.to_dict()
+        prev_state = room_data.get("cleaning_status")
+
+        if room_data.get("status") != "cleaning":
+            return jsonify(success=False, message="This room is not in cleaning status")
+
+        # Vacate + clear all guest-related fields. Same shape as the old
+        # mark_room_cleaned final write, with the cleaning workflow fields
+        # also cleared.
         rooms_ref.document(room).update({
             "status": "vacant",
             "cleaning_status": None,
             "cleaning_start_time": None,
+            "cleaning_done_at": None,
+            "inspected_at": datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S"),
             "guest": None,
             "checkin_time": None,
             "balance": 0,
@@ -1618,21 +1797,42 @@ def mark_room_cleaned():
             "renewal_count": 0,
             "last_renewal_time": None,
             "last_renewal_date": None,
-            # Clear revert-window pointers — once the room is cleaned and
-            # ready for the next guest, the previous checkout is no longer
-            # eligible for undo (and we don't want stale fields lingering).
+            # Clear revert-window pointers — once the room is approved
+            # and ready for the next guest, the previous checkout is no
+            # longer eligible for undo.
             "last_bill_id":     None,
             "last_checkout_at": None,
         })
 
         invalidate_rooms_and_totals()
 
-        logger.info(f"Room {room} marked as cleaned")
-        return jsonify(success=True, message=f"Room {room} marked as vacant")
+        skipped_inspection = (prev_state == "in_progress")
+        logger.info(
+            f"Room {room} approved ready for check-in "
+            f"(previous_state={prev_state}, skipped_inspection={skipped_inspection})"
+        )
+        write_log(
+            "room.inspection.approve",
+            target_collection="rooms",
+            target_id=str(room),
+            metadata={
+                "previous_state": prev_state,
+                "skipped_housekeeping": skipped_inspection,
+                # Quality-check details captured for the audit trail.
+                # checklist is a flat {item_key: bool} dict.
+                "checklist": qc_checklist if isinstance(qc_checklist, dict) else {},
+                "checklist_skipped": qc_skipped,
+                "notes": qc_notes,
+            },
+        )
+        return jsonify(
+            success=True,
+            message=f"Room {room} is ready for the next check-in",
+        )
 
     except Exception as e:
-        logger.error(f"Error marking room as cleaned: {str(e)}")
-        return jsonify(success=False, message=f"Error marking room as cleaned: {str(e)}")
+        logger.error(f"Error approving room: {str(e)}")
+        return jsonify(success=False, message=f"Error approving room: {str(e)}")
 
 @rooms_bp.route("/get_rooms_only")
 def get_rooms_only():
@@ -1939,33 +2139,40 @@ def cleanup_old_data_route():
         return jsonify(success=False, message=f"Error cleaning up data: {str(e)}")
 
 
-# ── Manager password helper ───────────────────────────────────────────────────
-import os as _os
-
-def _check_manager_password(provided: str) -> bool:
-    """
-    Verify the manager password against the MANAGER_PASSWORD env var.
-    Falls back to a default only in development (env var not set).
-    Never expose the result in logs.
-    """
-    expected = _os.environ.get("MANAGER_PASSWORD", "manager@1234")
-    return provided == expected
+# ── DEPRECATED: manager password helper ───────────────────────────────────────
+# Kept only for the few routes still being migrated. New code MUST use
+# @requires_permission("...") from services.auth_service. This stub will be
+# deleted once all callers are converted (see the audit log in the PR).
+def _check_manager_password(provided: str) -> bool:  # pragma: no cover
+    """DEPRECATED — always returns False. Auth has moved to RBAC.
+    Any route still calling this is a bug; convert it to @requires_permission."""
+    logger.warning("_check_manager_password called (deprecated) — denying")
+    return False
 
 
-# ── Transaction logs for an arbitrary date range (manager-only) ───────────────
+# ── Transaction logs for an arbitrary date range ──────────────────────────────
+# Admin: any date range. Manager / housekeeping: clamped to last 3 days
+# (enforced server-side via clamp_date_range — frontend cannot widen it).
 @rooms_bp.route("/get_transactions_range", methods=["POST"])
 def get_transactions_range():
     """
-    Return transaction logs for any date range.
+    Return transaction logs for a date range.
     Body: { from_date: "YYYY-MM-DD", to_date: "YYYY-MM-DD" }
     Returns logs in the same shape as get_data's logs object.
+
+    Auth: any authenticated user. Admin gets the requested range; others
+    are silently clamped to the last 3 days.
     """
+    from services.role_filters import clamp_date_range
     try:
         data = request.json or {}
         from_date = data.get("from_date")
         to_date   = data.get("to_date")
         if not from_date or not to_date:
             return jsonify(success=False, message="from_date and to_date required"), 400
+
+        # ── RBAC: clamp to last 3 days for non-admin users ────────────────────
+        from_date, to_date = clamp_date_range(from_date, to_date)
 
         # end_date is exclusive in the query, so add 1 day
         from datetime import datetime as _dt, timedelta as _td
@@ -1995,18 +2202,20 @@ def get_transactions_range():
         return jsonify(success=False, message=str(e)), 500
 
 
-# ── Simple password verification endpoint ─────────────────────────────────────
+# ── DEPRECATED password-verify endpoint ───────────────────────────────────────
+# Returns 410 Gone so any cached frontend that still POSTs here gets a clear
+# signal to reload. Auth flows now use Firebase ID tokens (see /login).
 @rooms_bp.route("/verify_manager_password", methods=["POST"])
 def verify_manager_password():
-    """Lightweight endpoint to verify the manager password client-side flows."""
-    try:
-        data = request.json or {}
-        password = data.get("password", "")
-        if _check_manager_password(password):
-            return jsonify(success=True)
-        return jsonify(success=False, message="Incorrect password"), 403
-    except Exception as e:
-        return jsonify(success=False, message=str(e)), 500
+    return (
+        jsonify(
+            success=False,
+            deprecated=True,
+            message="Manager password auth has been replaced by user login.",
+            redirect="/login",
+        ),
+        410,
+    )
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -2014,12 +2223,12 @@ def verify_manager_password():
 # ══════════════════════════════════════════════════════════════════════════════
 
 @rooms_bp.route("/get_stay_payments", methods=["POST"])
+@requires_permission("payment.edit")
 def get_stay_payments():
     """
     Return all payment documents for a specific stay.
 
     Body: {
-        password: str,
         stay_id: str,        -- canonical foreign key (UUID4 for new stays,
                                 {room}_{ts} for legacy bills, may also be
                                 an active_bill_id from the room doc).
@@ -2042,15 +2251,12 @@ def get_stay_payments():
     """
     try:
         data = request.json or {}
-        password     = data.get("password", "")
         stay_id      = (data.get("stay_id") or "").strip()
         room         = str(data.get("room", "")).strip()
         guest_name   = data.get("guest_name", "").strip()
         checkin_time = data.get("checkin_time", "").strip()
 
-        # ── Auth ──────────────────────────────────────────────────────────────
-        if not _check_manager_password(password):
-            return jsonify(success=False, message="Incorrect password"), 403
+        # ── Auth: enforced by @requires_permission("payment.edit") ───────────
 
         # Either stay_id alone or the legacy (room, guest_name, checkin_time)
         # tuple is sufficient. The endpoint accepts both and combines results.
@@ -2155,12 +2361,12 @@ def get_stay_payments():
 
 
 @rooms_bp.route("/update_stay_payment", methods=["POST"])
+@requires_permission("payment.edit")
 def update_stay_payment():
     """
     Edit the method, date, and/or amount of a single payment record.
 
     Body: {
-        password: str,
         payment_id: str,        -- Firestore document ID in payments collection
         method: "cash"|"online",
         date: "YYYY-MM-DD",
@@ -2180,16 +2386,13 @@ def update_stay_payment():
     """
     try:
         data = request.json or {}
-        password   = data.get("password", "")
         payment_id = data.get("payment_id", "").strip()
         new_method = data.get("method", "").strip().lower()
         new_date   = data.get("date", "").strip()
         new_time   = data.get("time", "").strip()
         new_amount_raw = data.get("amount")   # None means "not provided"
 
-        # ── Auth ──────────────────────────────────────────────────────────────
-        if not _check_manager_password(password):
-            return jsonify(success=False, message="Incorrect password"), 403
+        # ── Auth: enforced by @requires_permission("payment.edit") ───────────
 
         # ── Validate ──────────────────────────────────────────────────────────
         if not payment_id:
@@ -2306,6 +2509,9 @@ def update_stay_payment():
 
         logger.info(f"update_stay_payment: id={payment_id} "
                     f"changes={update_fields} old_method={old_method} old_amount={old_amount}")
+        write_log("payment.edit", target_collection="payments", target_id=payment_id,
+                  metadata={"new_method": new_method or None, "new_date": new_date or None,
+                            "new_amount": new_amount_raw})
         return jsonify(success=True, message="Payment updated successfully")
 
     except Exception as e:
@@ -2318,14 +2524,15 @@ def update_stay_payment():
 # ─────────────────────────────────────────────────────────────────────────────
 
 @rooms_bp.route("/delete_stay_payment", methods=["POST"])
+@requires_permission("payment.edit")
 def delete_stay_payment():
     """
     Permanently delete a single payment record.
 
     Body: {
-        password: str,
         payment_id: str   -- Firestore document ID in payments collection
     }
+    Auth: admin role required (via @requires_permission).
 
     Side effects:
       - Removes the doc from the `payments` collection.
@@ -2335,11 +2542,9 @@ def delete_stay_payment():
     """
     try:
         data = request.json or {}
-        password   = data.get("password", "")
         payment_id = data.get("payment_id", "").strip()
 
-        if not _check_manager_password(password):
-            return jsonify(success=False, message="Incorrect password"), 403
+        # Auth handled by @requires_permission decorator
 
         if not payment_id:
             return jsonify(success=False, message="payment_id is required"), 400
@@ -2386,6 +2591,7 @@ def delete_stay_payment():
         logger.info(
             f"delete_stay_payment: id={payment_id} method={old_method} amount={old_amount}"
         )
+        write_log("payment.delete", target_collection="payments", target_id=payment_id)
         return jsonify(success=True, message="Transaction deleted")
 
     except Exception as e:

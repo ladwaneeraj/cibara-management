@@ -42,6 +42,16 @@
   display: flex; flex-wrap: wrap;
   align-items: center; gap: 0.4rem;
 }
+/* Manager / housekeeping single-row layout: everything fits on one line.
+   Search input flexes to fill the remaining space. */
+.reg-filter-row-single {
+  display: flex; flex-wrap: wrap;
+  align-items: center; gap: 0.4rem;
+}
+.reg-filter-row-single .reg-search-input { flex: 1; min-width: 140px; }
+@media (min-width: 720px) {
+  .reg-filter-row-single { flex-wrap: nowrap; }
+}
 .reg-date-range-wrap {
   display: flex; align-items: center; gap: 0.3rem;
   background: #fff; border: 1px solid #d8d8d8; border-radius: 6px;
@@ -1005,29 +1015,41 @@
   function buildHTML() {
     const tab = dom("register-tab");
     if (!tab) return;
-    tab.innerHTML = `
-<div class="register-container">
-  <div class="register-header">
-    <h1><i class="fas fa-book"></i> Daily Register</h1>
-    <div class="register-toolbar">
-      <button class="reg-customers-btn reg-customers-header-btn" onclick="openCustomerManager()" title="Customers">
-        <i class="fas fa-users"></i><span class="reg-customers-label"> Customers</span>
-      </button>
-      <button class="reg-icon-btn refresh" id="reg-refresh-btn" title="Refresh">
-        <i class="fas fa-sync-alt"></i>
-      </button>
-    </div>
-  </div>
 
-  <div class="reg-filter-bar">
+    // ── RBAC-aware layout ───────────────────────────────────────────────────
+    // Admin: full date range (Today / Week / Month) and the original two-row
+    //        filter layout.
+    // Manager (and anyone non-admin): only Today + Last 3 Days quick buttons,
+    //        and all filters collapsed into a single row.
+    const _auth = window.CibaraAuth;
+    const _isAdmin = _auth && _auth.isAdmin && _auth.isAdmin();
+
+    // Quick range buttons. Same set for admin (Today / Last 3 Days / Month)
+    // as the Bills tab — kept identical so the two tabs feel uniform.
+    // Manager / housekeeping see only Today + Last 3 Days (server clamps
+    // anything wider to 3 days anyway).
+    const dateButtons = _isAdmin
+      ? `<button class="reg-quick-btn" data-rq="today">Today</button>
+         <button class="reg-quick-btn rq-active" data-rq="last3">Last 3 Days</button>
+         <button class="reg-quick-btn" data-rq="month">Month</button>`
+      : `<button class="reg-quick-btn" data-rq="today">Today</button>
+         <button class="reg-quick-btn rq-active" data-rq="last3">Last 3 Days</button>`;
+
+    // Custom date-range picker is admin-only. Manager/housekeeping rely on
+    // the quick-range buttons (today / last 3 days). This keeps the toolbar
+    // clean and aligns with the 3-day server-side cap.
+    const datePickerMarkup = _isAdmin
+      ? `<div class="reg-date-range-wrap" id="reg-date-range-wrap">
+           <i class="fas fa-calendar-alt"></i>
+           <input type="text" id="reg-date-range" class="reg-date-range-input" placeholder="Select date range" readonly />
+         </div>`
+      : "";
+
+    const filterMarkup = _isAdmin
+      ? `
     <div class="reg-filter-row reg-filter-row-1">
-      <div class="reg-date-range-wrap" id="reg-date-range-wrap">
-        <i class="fas fa-calendar-alt"></i>
-        <input type="text" id="reg-date-range" class="reg-date-range-input" placeholder="Select date range" readonly />
-      </div>
-      <button class="reg-quick-btn" data-rq="today">Today</button>
-      <button class="reg-quick-btn rq-active" data-rq="week">Week</button>
-      <button class="reg-quick-btn" data-rq="month">Month</button>
+      ${datePickerMarkup}
+      ${dateButtons}
     </div>
     <div class="reg-filter-row reg-filter-row-2">
       <select id="reg-status-filter">
@@ -1043,7 +1065,41 @@
         <option value="pending">Pending Balance</option>
       </select>
       <input type="text" class="reg-search-input" id="reg-search" placeholder="Name / Room / Mobile…" />
+    </div>`
+      : `
+    <div class="reg-filter-row reg-filter-row-single">
+      ${dateButtons}
+      <select id="reg-status-filter">
+        <option value="all">All Status</option>
+        <option value="active">Active</option>
+        <option value="completed">Checked Out</option>
+      </select>
+      <select id="reg-payment-filter">
+        <option value="all">All Payments</option>
+        <option value="cash">Cash</option>
+        <option value="online">Online</option>
+        <option value="split">Split</option>
+        <option value="pending">Pending</option>
+      </select>
+      <input type="text" class="reg-search-input" id="reg-search" placeholder="Name / Room / Mobile…" />
+    </div>`;
+
+    tab.innerHTML = `
+<div class="register-container">
+  <div class="register-header">
+    <h1><i class="fas fa-book"></i> Daily Register</h1>
+    <div class="register-toolbar">
+      <button class="reg-customers-btn reg-customers-header-btn" data-perm="customer.manage" onclick="openCustomerManager()" title="Customers">
+        <i class="fas fa-users"></i><span class="reg-customers-label"> Customers</span>
+      </button>
+      <button class="reg-icon-btn refresh" id="reg-refresh-btn" title="Refresh">
+        <i class="fas fa-sync-alt"></i>
+      </button>
     </div>
+  </div>
+
+  <div class="reg-filter-bar">
+    ${filterMarkup}
   </div>
 
   <div class="register-table-container">
@@ -1169,21 +1225,25 @@
   }
 
   // ── Date defaults + flatpickr init ────────────────────────────────────────────
+  // Default for everyone is now "Last 3 Days" (today + 2 prior).
+  // The custom date-range picker is admin-only — manager/housekeeping see
+  // only the quick-range buttons. The picker container is removed from the
+  // DOM by buildHTML() for non-admin, so flatpickr init is skipped.
   function setDefaults() {
     const today = todayStr();
-    const weekStart = nDaysAgoStr(6);
-    state.dateRange.start = weekStart;   // default: last 7 days
+    const last3Start = nDaysAgoStr(2);
+    state.dateRange.start = last3Start;
     state.dateRange.end   = today;
 
     const el = dom("reg-date-range");
-    if (!el || !window.flatpickr) return;
+    if (!el || !window.flatpickr) return;   // non-admin: picker not in DOM
 
     state._datePicker = flatpickr(el, {
       mode: "range",
       dateFormat: "Y-m-d",   // internal ISO format — avoids maxDate mis-parsing
       altInput: true,         // show human-friendly text to user
       altFormat: "d M Y",     // display: "17 Mar 2026"
-      defaultDate: [weekStart, today],
+      defaultDate: [last3Start, today],
       maxDate: today,
       disableMobile: true,
       onChange: function (selectedDates) {
@@ -1207,8 +1267,9 @@
         const today = todayStr();
         let start;
         if (range === "today")  start = today;
-        else if (range === "week")  start = nDaysAgoStr(6);
+        else if (range === "last3") start = nDaysAgoStr(2);  // today + 2 prior = 3 days
         else if (range === "month") start = nDaysAgoStr(29);
+        // (week intentionally removed — not in the chip set anymore)
         else start = today;
         state.dateRange.start = start;
         state.dateRange.end   = today;
@@ -1570,6 +1631,7 @@
       <td><span class="status-badge ${stCls}">${e.status}</span></td>
       <td style="white-space:nowrap;">
         <button class="reg-pay-btn"
+            data-perm="payment.edit"
             data-room="${e.room}"
             data-guest="${encodeURIComponent(e.guest_name || '')}"
             data-checkin="${e.checkin_time || ''}"
@@ -1806,24 +1868,21 @@
     if (type === "error") console.error(msg); else console.log(msg);
   }
 
-  // ── Password prompt ───────────────────────────────────────────────────────────
+  // ── Edit-payment access (RBAC) ────────────────────────────────────────────
+  // Was: ask for the manager password via a custom rpm-overlay modal.
+  // Now: check the current user's role. Admin → load payments straight away.
+  // Non-admin → toast and abort.
   function _openPasswordPrompt(entry) {
     pmState.entry = entry;
-
-    // If password already verified this session, skip prompt and load directly
-    if (pmState.password) {
-      _loadAndShowPayments();
+    const auth = window.CibaraAuth;
+    if (!auth || !auth.userCan || !auth.userCan("payment.edit")) {
+      _notify("Access denied — only admins can edit payments.", "error");
       return;
     }
-
-    const overlay = dom("rpm-overlay");
-    const pwd     = dom("rpm-password");
-    const err     = dom("rpm-err");
-    if (!overlay) return;
-    if (err)  { err.style.display = "none"; err.textContent = ""; }
-    if (pwd)  { pwd.value = ""; }
-    overlay.classList.add("show");
-    setTimeout(() => { if (pwd) pwd.focus(); }, 80);
+    // Mark as authorised so downstream code that branches on pmState.password
+    // (e.g. retries on 403) doesn't loop.
+    pmState.password = "_rbac_";
+    _loadAndShowPayments();
   }
 
   // Shared fetch logic — called after password is confirmed (via prompt or cache)
@@ -1944,7 +2003,20 @@
       meta.innerHTML =
         `<strong>Guest:</strong> ${e.guest_name || "-"} &nbsp;|&nbsp; ` +
         `<strong>Room:</strong> ${e.room || "-"} &nbsp;|&nbsp; ` +
-        `<strong>Check-in:</strong> ${e.checkin_time || "-"}`;
+        `<strong>Check-in:</strong> ${e.checkin_time || "-"}` +
+        ' <span id="rp-attr" style="display:inline-block;margin-left:8px;"></span>';
+
+      // Show "last action by ..." attribution. We key the lookup on the
+      // bill / stay id when available; fall back to the room number.
+      const attrEl = document.getElementById("rp-attr");
+      if (attrEl && window.CibaraAttribution) {
+        const billId = e.id || e.stay_id || e.bill_id;
+        if (billId) {
+          window.CibaraAttribution.decorate(attrEl, "bills", billId, { hideIfNone: true });
+        } else if (e.room) {
+          window.CibaraAttribution.decorate(attrEl, "rooms", String(e.room), { hideIfNone: true });
+        }
+      }
     }
 
     pmState.editId     = null;
@@ -2369,6 +2441,10 @@
   };
 
   // ── Init ──────────────────────────────────────────────────────────────────────
+  // Wait for the auth state to resolve before building the UI — the layout
+  // is role-aware (admin sees the date-range picker; manager doesn't), and
+  // if init runs before auth resolves, _isAdmin is false and the admin
+  // controls never render.
   function init() {
     injectStyles();
     buildHTML();
@@ -2377,9 +2453,18 @@
     watchTab();
   }
 
+  function bootWhenReady() {
+    if (window.CibaraAuth && typeof window.CibaraAuth.ready === "function") {
+      window.CibaraAuth.ready().then(init);
+    } else {
+      // No auth layer available (login page or older bundle) → init now
+      init();
+    }
+  }
+
   if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", init);
+    document.addEventListener("DOMContentLoaded", bootWhenReady);
   } else {
-    init();
+    bootWhenReady();
   }
 })();

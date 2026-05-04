@@ -384,29 +384,76 @@ function renderRooms() {
       <div class="room-content">
     `;
 
-    // For cleaning rooms, show cleaning button
-    // For cleaning rooms, show cleaning button
+    // For cleaning rooms, show ONE role-aware action button:
+    //   • Housekeeping:
+    //       - state "in_progress"     → button "Cleaned"  (→ ready_to_inspect)
+    //       - state "ready_to_inspect" → no button (their job is done; waiting on inspector)
+    //   • Admin / Manager:
+    //       - either state → button "Ready for Check-in"  (→ vacant)
+    //         (this skips housekeeping verification when called from in_progress)
     if (info.status === "cleaning") {
       const cleaningTime = getCleaningTime(roomNumber);
+      const isReadyToInspect = info.cleaning_status === "ready_to_inspect";
+
+      const _auth = window.CibaraAuth;
+      const _canApprove = _auth && _auth.userCan && _auth.userCan("room.inspection.approve");
+      const _canMarkClean = _auth && _auth.userCan && _auth.userCan("room.cleaning.complete");
+
+      // Header / badge — tells the staff what state the room is in.
+      const headerLabel = isReadyToInspect
+        ? `<div class="guest-name" style="color: #2563eb; font-weight: bold;">✅ Ready to Inspect</div>`
+        : `<div class="guest-name" style="color: #f39c12; font-weight: bold;">🧹 Cleaning</div>`;
+
       roomContent += `
         <div class="room-number">${roomNumber}</div>
-        <div class="guest-name" style="color: #f39c12; font-weight: bold;">🧹 Cleaning</div>
+        ${headerLabel}
         <div style="font-size: 12px; color: #666; margin-top: 4px;">${cleaningTime}</div>
-        <button class="cleaned-btn" onclick="handleCleanedClick(event, '${roomNumber}')">
-          <i class="fas fa-check"></i> Cleaned
-        </button>
       `;
+
+      // Single action button — chosen by role precedence:
+      //   admin/manager (can approve) > housekeeping (can mark cleaned only)
+      // Always at most ONE button on a card.
+      if (_canApprove) {
+        // Admin / Manager. Same single button regardless of cleaning_status.
+        // It always sends the room to "vacant" via /mark_room_ready_for_checkin.
+        // Short label + nowrap so it stays on one line inside the narrow card.
+        roomContent += `
+          <button class="cleaned-btn" data-perm="room.inspection.approve"
+                  onclick="handleReadyClick(event, '${roomNumber}')"
+                  title="Mark room ready for next check-in"
+                  style="background:#2563eb;color:#fff;box-shadow:0 2px 6px rgba(37,99,235,0.4);white-space:nowrap;">
+            <i class="fas fa-check"></i> Ready
+          </button>
+        `;
+      } else if (_canMarkClean && !isReadyToInspect) {
+        // Housekeeping, room still needs cleaning. After click it becomes
+        // "ready_to_inspect" — the button disappears from their view because
+        // there's nothing left for them to do on this room.
+        roomContent += `
+          <button class="cleaned-btn" data-perm="room.cleaning.complete" onclick="handleCleanedClick(event, '${roomNumber}')">
+            <i class="fas fa-check"></i> Cleaned
+          </button>
+        `;
+      }
+      // Housekeeping + state="ready_to_inspect" intentionally has no button.
 
       // ── Revert mistake-checkout icon (top-right of the card) ─────────────
       // Subtle undo symbol. Visible only while inside the server-side 3-hour
       // window. The server re-validates on submit, so this is just a hint;
       // device clock skew cannot extend the window.
-      if (typeof isRevertEligible === "function" && isRevertEligible(info)) {
+      // RBAC: only admin (booking.revert) ever sees this icon.
+      const _canRevert = window.CibaraAuth
+        && window.CibaraAuth.userCan
+        && window.CibaraAuth.userCan("booking.revert");
+      if (_canRevert
+          && typeof isRevertEligible === "function"
+          && isRevertEligible(info)) {
         const tip = (typeof formatRevertTimeLeft === "function")
           ? `Revert checkout — ${formatRevertTimeLeft(info)}`
           : "Revert checkout";
         roomContent += `
           <button class="revert-checkout-icon"
+                  data-perm="booking.revert"
                   onclick="handleRevertCheckoutClick(event, '${roomNumber}')"
                   title="${tip.replace(/"/g, '&quot;')}"
                   aria-label="Revert mistake checkout">
@@ -617,10 +664,239 @@ function renderRooms() {
   }
 }
 
-// Handle cleaned button click
+// Handle cleaned button click (housekeeping → ready_to_inspect)
 function handleCleanedClick(event, roomNumber) {
   event.stopPropagation();
   markRoomAsCleaned(roomNumber);
+}
+
+// Handle "Ready" — admin/manager only. Reuses the SAME existing quality
+// check modal that housekeeping sees (premium / standard / regular,
+// chosen by room-cleaning.js based on room number). The completion path
+// in completeRoomCleaning() detects the user's role and routes to
+// /mark_room_ready_for_checkin (admin/manager) instead of the
+// housekeeping /mark_room_cleaned endpoint.
+function handleReadyClick(event, roomNumber) {
+  event.stopPropagation();
+  if (typeof markRoomAsCleaned === "function") {
+    markRoomAsCleaned(String(roomNumber));
+  } else {
+    console.warn("markRoomAsCleaned not loaded — cannot open QC modal");
+  }
+}
+
+// DEPRECATED — replaced by the existing room-cleaning.js QC modals which
+// admin/manager and housekeeping now share. Kept as a stub so any cached
+// inline call doesn't NPE.
+function _openQualityCheckModal_DEAD(roomNumber) {
+  _injectQualityCheckStyles();
+
+  // Resolve current cleaning state for the header pill.
+  let stateLabel = "Cleaning";
+  let stateColor = "#f39c12";
+  try {
+    const r = (window.rooms || {})[roomNumber] || {};
+    if (r.cleaning_status === "ready_to_inspect") {
+      stateLabel = "Ready to Inspect";
+      stateColor = "#2563eb";
+    }
+  } catch (_) { /* keep defaults */ }
+
+  const old = document.getElementById("qc-modal");
+  if (old) old.remove();
+
+  const overlay = document.createElement("div");
+  overlay.id = "qc-modal";
+  overlay.className = "qc-modal-overlay";
+  overlay.innerHTML = `
+    <div class="qc-modal-card" role="dialog" aria-modal="true" aria-labelledby="qc-title">
+      <div class="qc-modal-header">
+        <div class="qc-modal-title-wrap">
+          <h3 id="qc-title">Quality Check — Room ${escapeHtmlInline(roomNumber)}</h3>
+          <span class="qc-state-pill" style="background:${stateColor}1a;color:${stateColor};">${stateLabel}</span>
+        </div>
+        <button type="button" class="qc-close-btn" id="qc-close-btn" aria-label="Close">&times;</button>
+      </div>
+      <div class="qc-modal-body">
+        <p class="qc-help">Confirm the room is ready for the next guest.</p>
+        <label class="qc-notes-wrap">
+          <span class="qc-notes-label">Notes (optional)</span>
+          <textarea id="qc-notes" rows="2" placeholder="Anything to flag?"></textarea>
+        </label>
+        <div class="qc-actions">
+          <div class="qc-actions-buttons">
+            <button type="button" class="qc-btn qc-btn-ghost" id="qc-cancel">Cancel</button>
+            <button type="button" class="qc-btn qc-btn-primary" id="qc-confirm">
+              <i class="fas fa-check"></i> Mark Ready for Check-in
+            </button>
+          </div>
+        </div>
+        <div id="qc-error" class="qc-error" hidden></div>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+
+  const confirmBtn = overlay.querySelector("#qc-confirm");
+  const cancelBtn = overlay.querySelector("#qc-cancel");
+  const closeBtn = overlay.querySelector("#qc-close-btn");
+  const notesEl = overlay.querySelector("#qc-notes");
+  const errEl = overlay.querySelector("#qc-error");
+
+  function close() {
+    document.removeEventListener("keydown", onKey);
+    overlay.remove();
+  }
+  function onKey(ev) { if (ev.key === "Escape") close(); }
+  document.addEventListener("keydown", onKey);
+  overlay.addEventListener("click", function (ev) { if (ev.target === overlay) close(); });
+  closeBtn.addEventListener("click", close);
+  cancelBtn.addEventListener("click", close);
+
+  confirmBtn.addEventListener("click", async function () {
+    confirmBtn.disabled = true;
+    confirmBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Marking…';
+    errEl.hidden = true;
+
+    try {
+      const res = await apiFetch("/mark_room_ready_for_checkin", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          room: roomNumber,
+          notes: (notesEl.value || "").trim(),
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        confirmBtn.disabled = false;
+        confirmBtn.innerHTML = '<i class="fas fa-check"></i> Mark Ready for Check-in';
+        errEl.textContent = data.message || "Could not mark room ready.";
+        errEl.hidden = false;
+        return;
+      }
+      close();
+      if (typeof loadAllData === "function") loadAllData();
+      else if (typeof refreshRooms === "function") refreshRooms();
+    } catch (err) {
+      confirmBtn.disabled = false;
+      confirmBtn.innerHTML = '<i class="fas fa-check"></i> Mark Ready for Check-in';
+      errEl.textContent = "Network error. Please retry.";
+      errEl.hidden = false;
+    }
+  });
+
+  setTimeout(function () { confirmBtn.focus(); }, 100);
+}
+
+function escapeHtmlInline(s) {
+  return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+    return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+  });
+}
+
+function _injectQualityCheckStyles() {
+  if (document.getElementById("qc-modal-style")) return;
+  const s = document.createElement("style");
+  s.id = "qc-modal-style";
+  s.textContent = `
+    .qc-modal-overlay {
+      position: fixed; inset: 0; z-index: 99999;
+      display: grid; place-items: center;
+      background: rgba(8, 12, 30, 0.55);
+      backdrop-filter: blur(4px);
+      padding: 16px;
+      animation: qc-fade .15s ease-out;
+      font-family: 'Inter', system-ui, -apple-system, sans-serif;
+    }
+    @keyframes qc-fade { from { opacity: 0; } to { opacity: 1; } }
+    .qc-modal-card {
+      width: 100%; max-width: 440px;
+      background: #fff; color: #1e293b;
+      border-radius: 14px;
+      box-shadow: 0 30px 60px -20px rgba(0,0,0,0.4);
+      overflow: hidden;
+      animation: qc-slide .2s ease-out;
+    }
+    @keyframes qc-slide { from { transform: translateY(-6px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+    .qc-modal-header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 14px 18px; border-bottom: 1px solid #eef2f7;
+    }
+    .qc-modal-title-wrap { display: flex; align-items: center; gap: 10px; }
+    .qc-modal-title-wrap h3 {
+      margin: 0; font-size: 1rem; font-weight: 700; letter-spacing: -.01em;
+    }
+    .qc-state-pill {
+      padding: 3px 8px; border-radius: 999px;
+      font-size: .7rem; font-weight: 700;
+      text-transform: uppercase; letter-spacing: .03em;
+    }
+    .qc-close-btn {
+      background: transparent; border: 0; cursor: pointer; color: #64748b;
+      padding: 4px 8px; border-radius: 6px; font-size: 22px; line-height: 1;
+    }
+    .qc-close-btn:hover { background: #f1f5f9; color: #1e293b; }
+    .qc-modal-body { padding: 16px 18px 18px; }
+    .qc-help {
+      margin: 0 0 12px; font-size: .85rem; color: #475569;
+    }
+    .qc-notes-wrap {
+      display: flex; flex-direction: column; gap: 4px;
+      margin: 6px 0 14px;
+    }
+    .qc-notes-label {
+      font: 500 .68rem 'Inter', sans-serif;
+      color: #64748b; text-transform: uppercase; letter-spacing: .04em;
+    }
+    .qc-notes-wrap textarea {
+      padding: 8px 10px; border: 1px solid #e2e8f0; border-radius: 8px;
+      font: 400 .85rem 'Inter', sans-serif; color: #1e293b;
+      outline: none; resize: vertical; min-height: 50px;
+      transition: border-color .12s, box-shadow .12s;
+    }
+    .qc-notes-wrap textarea:focus {
+      border-color: #6366f1; box-shadow: 0 0 0 3px rgba(99,102,241,.12);
+    }
+    .qc-actions {
+      display: flex; flex-direction: column; gap: 10px;
+      border-top: 1px dashed #e2e8f0;
+      padding-top: 12px;
+    }
+    .qc-actions-buttons {
+      display: flex; gap: 8px; justify-content: flex-end;
+    }
+    .qc-btn {
+      padding: 9px 14px; border-radius: 8px; cursor: pointer;
+      font: 600 .85rem 'Inter', sans-serif;
+      display: inline-flex; align-items: center; gap: 6px;
+      border: 1px solid transparent;
+      transition: all .12s;
+    }
+    .qc-btn-ghost {
+      background: #fff; color: #475569; border-color: #e2e8f0;
+    }
+    .qc-btn-ghost:hover { background: #f8fafc; border-color: #cbd5e1; }
+    .qc-btn-primary {
+      background: linear-gradient(135deg, #2563eb 0%, #3b82f6 100%);
+      color: #fff;
+      box-shadow: 0 4px 12px -4px rgba(37,99,235,.5);
+    }
+    .qc-btn-primary:hover:not(:disabled) {
+      filter: brightness(1.06);
+      box-shadow: 0 6px 14px -4px rgba(37,99,235,.6);
+    }
+    .qc-btn-primary:disabled {
+      background: #cbd5e1; box-shadow: none; cursor: not-allowed;
+    }
+    .qc-error {
+      margin-top: 10px;
+      padding: 8px 10px; border-radius: 6px;
+      background: #fef2f2; border: 1px solid #fecaca;
+      color: #b91c1c; font-size: .82rem;
+    }
+  `;
+  document.head.appendChild(s);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1482,6 +1758,27 @@ function updateCheckoutModal(roomNumber) {
   const checkoutCheckinTime = document.getElementById("checkout-checkin-time");
   if (checkoutCheckinTime) {
     checkoutCheckinTime.textContent = roomInfo.checkin_time || "N/A";
+  }
+
+  // ── Edit-checkin-time visibility (RBAC) ─────────────────────────────────
+  // Manager gets ONE edit per stay. Admin always sees the button (no cap).
+  // Housekeeping never sees it (the button is on the checkout modal which
+  // their UI doesn't reach, but we hide it defensively anyway).
+  const editCheckinBtn = document.getElementById("edit-checkin-time");
+  if (editCheckinBtn) {
+    const _auth = window.CibaraAuth;
+    const role = _auth && _auth.currentUser ? (_auth.currentUser() || {}).role : null;
+    const editCount = parseInt(roomInfo.checkin_time_edit_count || 0, 10) || 0;
+    let canEdit = false;
+    if (role === "admin") {
+      canEdit = true;
+    } else if (role === "manager") {
+      canEdit = editCount < 1;   // first edit only
+    }
+    editCheckinBtn.style.display = canEdit ? "" : "none";
+    editCheckinBtn.title = canEdit
+      ? "Edit check-in time"
+      : "You've already edited this once. Ask an admin if you need to change it again.";
   }
 
   const checkoutRoomPrice = document.getElementById("checkout-room-price");
@@ -3644,79 +3941,87 @@ function displayDailyStatistics() {
   }
 }
 
-// ── Manager Access Modal — shared gate for Reports & Discount ─────────────────
-let reportPasswordVerified = false;   // stays true once unlocked per session
-let _mgrAccessCallback = null;        // called on successful password entry
+// ── Manager Access Modal — REPLACED BY ROLE-BASED ACCESS ─────────────────────
+// The legacy "ask for the manager password" modal has been replaced by RBAC.
+// openMgrAccessModal(...) is kept as a compatibility shim so we don't have to
+// touch every call site at once: it now consults the user's role via
+// window.CibaraAuth.userCan(...) and either runs the callback immediately
+// (admin / authorised user) or shows a toast saying access is denied.
+//
+// Each call site passes a `permKey` as the 5th arg when migrated. Until then
+// we infer the permission from the title (best-effort fallback) so the app
+// still functions during the migration window.
+let reportPasswordVerified = true;     // legacy flag — always true; gating is by role now
+let _mgrAccessCallback = null;         // unused; kept so other files don't NPE
+
+const _LEGACY_TITLE_TO_PERM = {
+  "Reports Access":     "analytics.view",
+  "Settings Access":    "settings.view",
+  "Discount Access":    "discount.apply",
+  "Discount Approval":  "discount.apply",
+  "Revert Checkout":    "booking.revert",
+  "Edit Payment":       "payment.edit",
+  "Edit Bill":          "payment.edit",
+  "Laundry Prices":     "laundry.price.edit",
+  "Settle Later":       "settle_later.use",
+  "Transactions":       "transaction.history.full",
+};
+
+function _resolvePerm(title, explicitPerm) {
+  if (explicitPerm) return explicitPerm;
+  // Best-effort match — falls back to admin-only "*" via "user.manage"
+  // (a perm that only admin has) so non-admins are denied by default.
+  return _LEGACY_TITLE_TO_PERM[title] || "user.manage";
+}
+
+function _accessDeniedToast(actionLabel) {
+  // Lightweight inline toast — avoids a hard dependency on toast.js
+  try {
+    if (window.showToast) {
+      window.showToast(
+        `Access denied${actionLabel ? " — " + actionLabel : ""}. ` +
+        `Your role is not permitted to perform this action.`,
+        "error",
+      );
+      return;
+    }
+  } catch (_) { /* fall through */ }
+  alert(`Access denied. You do not have permission to perform this action.`);
+}
 
 /**
- * Open the manager access modal.
- * @param {string} title   - Modal heading
- * @param {string} sub     - Sub-text below heading
- * @param {string} icon    - FontAwesome class for the icon (e.g. "fa-chart-bar")
- * @param {Function} onSuccess - Called with no arguments when password is correct
+ * Compatibility shim. Old call:
+ *    openMgrAccessModal(title, sub, icon, onSuccess)
+ * New (preferred) call:
+ *    openMgrAccessModal(title, sub, icon, onSuccess, permKey)
+ *
+ * Behaviour: if userCan(perm), run onSuccess() immediately; otherwise show
+ * an "access denied" toast.
  */
-function openMgrAccessModal(title, sub, icon, onSuccess) {
-  const modal   = document.getElementById("mgr-access-modal");
-  const titleEl = document.getElementById("mgr-access-title");
-  const subEl   = document.getElementById("mgr-access-sub");
-  const iconEl  = document.getElementById("mgr-access-icon");
-  const pwdEl   = document.getElementById("mgr-access-pwd");
-  const errEl   = document.getElementById("mgr-access-error");
-  if (!modal) return;
+function openMgrAccessModal(title, sub, icon, onSuccess, permKey) {
+  const auth = window.CibaraAuth;
+  const perm = _resolvePerm(title, permKey);
 
-  if (titleEl) titleEl.textContent = title;
-  if (subEl)   subEl.textContent   = sub;
-  if (iconEl)  iconEl.innerHTML    = `<i class="fas ${icon}"></i>`;
-  if (pwdEl)   { pwdEl.value = ""; }
-  if (errEl)   { errEl.textContent = ""; errEl.style.display = "none"; }
-
-  _mgrAccessCallback = onSuccess;
-  modal.classList.add("show");
-  setTimeout(() => pwdEl && pwdEl.focus(), 120);
-}
-
-function closeMgrAccessModal() {
-  const modal = document.getElementById("mgr-access-modal");
-  if (modal) modal.classList.remove("show");
-  _mgrAccessCallback = null;
-}
-
-async function submitMgrAccessPassword() {
-  const pwdEl    = document.getElementById("mgr-access-pwd");
-  const errEl    = document.getElementById("mgr-access-error");
-  const submitBtn = document.getElementById("mgr-access-submit");
-  const pass = pwdEl ? pwdEl.value.trim() : "";
-
-  if (!pass) {
-    if (errEl) { errEl.textContent = "Please enter the password."; errEl.style.display = "block"; }
+  if (!auth || !auth.currentUser()) {
+    // Not signed in yet — bounce to login. Should be rare because auth.js
+    // already redirects unauthenticated users.
+    window.location.replace("/login");
     return;
   }
 
-  if (submitBtn) { submitBtn.disabled = true; submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin" style="margin-right:5px"></i>Verifying…'; }
-  if (errEl) errEl.style.display = "none";
-
-  try {
-    const res = await apiFetch("/verify_manager_password", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ password: pass }),
-    });
-    const data = await res.json();
-
-    if (data.success) {
-      const cb = _mgrAccessCallback;   // save BEFORE closeMgrAccessModal nulls it
-      closeMgrAccessModal();
-      if (typeof cb === "function") cb();
-    } else {
-      if (errEl) { errEl.textContent = "Incorrect password. Try again."; errEl.style.display = "block"; }
-      if (pwdEl) { pwdEl.value = ""; pwdEl.focus(); }
-    }
-  } catch (e) {
-    if (errEl) { errEl.textContent = "Error verifying password. Try again."; errEl.style.display = "block"; }
-  } finally {
-    if (submitBtn) { submitBtn.disabled = false; submitBtn.innerHTML = '<i class="fas fa-unlock" style="margin-right:5px"></i>Unlock'; }
+  if (auth.userCan(perm)) {
+    if (typeof onSuccess === "function") onSuccess();
+    return;
   }
+
+  _accessDeniedToast(title);
 }
+
+// Old modal close / submit handlers — neutered. Buttons that called them
+// are deleted from the DOM by the role-gating pass; these keep any inline
+// onclick="submitMgrAccessPassword()" from throwing if it slips through.
+function closeMgrAccessModal() { /* no-op */ }
+function submitMgrAccessPassword() { /* no-op */ }
 
 // ── Settings Modal ─────────────────────────────────────────────────────────────
 // All button wiring is done via inline onclick in HTML — these are pure logic functions.
@@ -4137,15 +4442,27 @@ function addDiscountToCheckoutModal() {
   );
   if (!balanceRow) return;
 
+  // RBAC: only render the "Add Discount" + button for users with the
+  // discount.apply permission (admin only). For everyone else, render
+  // a plain Discount row with no add control so the layout stays
+  // consistent. The data-perm attribute is also a defensive hide for
+  // any future code path that bypasses this check.
+  const _canDiscount = window.CibaraAuth
+    && window.CibaraAuth.userCan
+    && window.CibaraAuth.userCan("discount.apply");
+
   const discountRow = document.createElement("div");
   discountRow.className = "detail-row";
-  discountRow.innerHTML = `
+  discountRow.innerHTML = _canDiscount ? `
     <div class="detail-label">
       Discount
-      <button id="add-discount-btn" style="background: none; border: none; color: var(--primary); cursor: pointer; margin-left: 5px;">
+      <button id="add-discount-btn" data-perm="discount.apply" style="background: none; border: none; color: var(--primary); cursor: pointer; margin-left: 5px;">
         <i class="fas fa-plus-circle"></i>
       </button>
     </div>
+    <div class="detail-value" id="checkout-discount">₹0</div>
+  ` : `
+    <div class="detail-label">Discount</div>
     <div class="detail-value" id="checkout-discount">₹0</div>
   `;
 

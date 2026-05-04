@@ -345,7 +345,12 @@ def add_customer_route():
 
 
 @customers_bp.route("/batch_check_customer_docs", methods=["POST"])
-@requires_permission("customer.manage")
+# Open to any authenticated user. This is a lightweight existence check —
+# returns just the list of mobile numbers that have at least one ID
+# document on file. Manager / admin both need it for the Register tab to
+# reveal the per-row "View ID document" icon. The actual document URLs
+# come from /get_customer/<mobile>, which is also open to all roles
+# (used during the check-in autocomplete flow).
 def batch_check_customer_docs():
     """
     Given a list of mobile numbers, return which ones have at least one

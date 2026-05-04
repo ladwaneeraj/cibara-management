@@ -2441,12 +2441,19 @@
   };
 
   // ── Init ──────────────────────────────────────────────────────────────────────
-  // Wait for the auth state to resolve before building the UI — the layout
-  // is role-aware (admin sees the date-range picker; manager doesn't), and
-  // if init runs before auth resolves, _isAdmin is false and the admin
-  // controls never render.
-  function init() {
+  // Two-phase boot:
+  //   Phase 1 (immediate, on DOMContentLoaded):
+  //     injectStyles() — must happen NOW so the .bill-modal `display:none`
+  //     rule is in place. Without it, the bill modal element renders
+  //     inline (visible) on the page during initial load.
+  //   Phase 2 (after CibaraAuth.ready()):
+  //     buildHTML / setDefaults / wireEvents / watchTab — these depend on
+  //     the user's role to decide layout (date picker visibility etc.).
+  function bootStyles() {
     injectStyles();
+  }
+
+  function bootRoleAware() {
     buildHTML();
     setDefaults();
     wireEvents();
@@ -2454,11 +2461,11 @@
   }
 
   function bootWhenReady() {
+    bootStyles();
     if (window.CibaraAuth && typeof window.CibaraAuth.ready === "function") {
-      window.CibaraAuth.ready().then(init);
+      window.CibaraAuth.ready().then(bootRoleAware);
     } else {
-      // No auth layer available (login page or older bundle) → init now
-      init();
+      bootRoleAware();
     }
   }
 

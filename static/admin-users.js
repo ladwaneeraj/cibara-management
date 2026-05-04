@@ -571,9 +571,23 @@
     _initialised: false,
   };
 
+  // Local-date YYYY-MM-DD. We deliberately AVOID toISOString() because it
+  // converts to UTC — for an IST browser, after 18:30 UTC (midnight IST)
+  // toISOString returns the previous day, so "today" silently became
+  // yesterday's date in the audit-log filter. Use local date components.
   function _todayStr() {
-    const d = new Date(); d.setHours(0,0,0,0);
-    return d.toISOString().split("T")[0];
+    const d = new Date();
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    return y + "-" + m + "-" + day;
+  }
+  function _localYmd(d) {
+    if (!(d instanceof Date)) return "";
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    return y + "-" + m + "-" + day;
   }
   function _ensureDefaultRange() {
     if (_logsState._initialised) return;
@@ -766,13 +780,12 @@
       defaultDate: from && to ? [from, to] : [],
       onChange: function (selectedDates) {
         if (selectedDates.length === 2) {
-          const ymd = function (d) { return d.toISOString().split("T")[0]; };
-          rangeEl.setAttribute("data-from", ymd(selectedDates[0]));
-          rangeEl.setAttribute("data-to", ymd(selectedDates[1]));
+          // Use LOCAL date components — toISOString shifts to UTC and
+          // produces yesterday's date for IST users after 18:30 UTC.
+          rangeEl.setAttribute("data-from", _localYmd(selectedDates[0]));
+          rangeEl.setAttribute("data-to", _localYmd(selectedDates[1]));
           _readFilterControls(pane);
           _runLogsQuery(pane);
-          // Refresh chips so the active highlight tracks the new range.
-          _refreshChipState(pane);
         } else if (selectedDates.length === 0) {
           rangeEl.setAttribute("data-from", "");
           rangeEl.setAttribute("data-to", "");

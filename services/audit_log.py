@@ -22,7 +22,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Optional
 
-from flask import g, request
+from flask import g, request, has_request_context
 from firebase_admin import firestore
 
 from config import db, logger, IST
@@ -36,11 +36,25 @@ def _ist_now_iso() -> str:
 
 
 def _client_ip() -> Optional[str]:
-    # Trust X-Forwarded-For when behind a proxy (gunicorn / nginx)
-    fwd = request.headers.get("X-Forwarded-For", "")
-    if fwd:
-        return fwd.split(",")[0].strip()
-    return request.remote_addr
+    """Best-effort IP lookup. Returns None outside a request context."""
+    if not has_request_context():
+        return None
+    try:
+        fwd = request.headers.get("X-Forwarded-For", "")
+        if fwd:
+            return fwd.split(",")[0].strip()
+        return request.remote_addr
+    except Exception:
+        return None
+
+
+def _user_agent() -> Optional[str]:
+    if not has_request_context():
+        return None
+    try:
+        return request.headers.get("User-Agent")
+    except Exception:
+        return None
 
 
 def write_log(
@@ -65,7 +79,16 @@ def write_log(
     metadata : free-form context (reason, amount, notes, …).
     """
     try:
-        user = getattr(g, "current_user", None) or {}
+        # `g.current_user` is only valid inside a request context. Reading it
+        # outside (e.g. from a background thread that imports this module)
+        # would raise; gracefully fall back to "system".
+        user = {}
+        if has_request_context():
+            try:
+                user = getattr(g, "current_user", None) or {}
+            except Exception:
+                user = {}
+
         entry = {
             "timestamp": _ist_now_iso(),
             "server_ts": firestore.SERVER_TIMESTAMP,
@@ -78,8 +101,8 @@ def write_log(
             "before": before,
             "after": after,
             "metadata": metadata or {},
-            "ipAddress": _client_ip() if request else None,
-            "userAgent": (request.headers.get("User-Agent") if request else None),
+            "ipAddress": _client_ip(),
+            "userAgent": _user_agent(),
         }
         db.collection(AUDIT_COLLECTION).add(entry)
     except Exception as e:
@@ -88,12 +111,21 @@ def write_log(
 
 
 # ─── Helpers for the ubiquitous "who touched this doc" pattern ────────────
+def _safe_user() -> dict:
+    if not has_request_context():
+        return {}
+    try:
+        return getattr(g, "current_user", None) or {}
+    except Exception:
+        return {}
+
+
 def attribution_create() -> dict:
     """
     Returns  {createdBy, createdAt, lastModifiedBy, lastModifiedAt}  to
-    merge into a new document. Pulls user from flask.g.
+    merge into a new document. Pulls user from flask.g (safely).
     """
-    user = getattr(g, "current_user", None) or {}
+    user = _safe_user()
     uid = user.get("userId") or "system"
     now = _ist_now_iso()
     return {
@@ -106,7 +138,7 @@ def attribution_create() -> dict:
 
 def attribution_update() -> dict:
     """Returns just the lastModified fields for an update."""
-    user = getattr(g, "current_user", None) or {}
+    user = _safe_user()
     return {
         "lastModifiedBy": user.get("userId") or "system",
         "lastModifiedAt": _ist_now_iso(),

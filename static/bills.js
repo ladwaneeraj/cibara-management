@@ -2903,11 +2903,15 @@
   });
 
   // ── Init ─────────────────────────────────────────────────────────────────
-  // Wait for the auth state before building — the layout decides whether to
-  // show the date-range picker (admin only). If init runs before auth
-  // resolves, _isAdmin is false and the picker never renders.
-  function init() {
+  // Two-phase boot. Phase 1 injects styles immediately so any modal markup
+  // in this module is hidden by default (otherwise the bill modal flashes
+  // visible on first load). Phase 2 waits for the auth layer to resolve
+  // before building the role-aware layout.
+  function bootStyles() {
     injectStyles();
+  }
+
+  function bootRoleAware() {
     buildHTML();
     setDefaults();
     wireEvents();
@@ -2915,10 +2919,11 @@
   }
 
   function bootWhenReady() {
+    bootStyles();
     if (window.CibaraAuth && typeof window.CibaraAuth.ready === "function") {
-      window.CibaraAuth.ready().then(init);
+      window.CibaraAuth.ready().then(bootRoleAware);
     } else {
-      init();
+      bootRoleAware();
     }
   }
 

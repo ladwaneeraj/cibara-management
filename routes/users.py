@@ -417,13 +417,20 @@ def list_audit_logs():
     #
     # We over-fetch (limit * 5, capped at 1000) so post-filter trimming
     # still has enough results to satisfy the requested `limit`.
-    PYTHON_FILTER_OVERFETCH = max(limit * 5, 200)
-    OVERFETCH_CAP = 1000
+    # No Firestore-side ordering means we can't be selective server-side.
+    # Pull a broader window and trim/sort in Python. For a small hotel
+    # this is a few hundred docs at most — well within Firestore's free tier.
+    PYTHON_FILTER_OVERFETCH = max(limit * 10, 500)
+    OVERFETCH_CAP = 2000
 
     def _build_query(coll_name: str):
+        # Robust strategy: pull entries without ANY Firestore-side ordering.
+        # Some audit entries written by older code paths might be missing
+        # the `timestamp` field — Firestore's order_by silently excludes
+        # those, which looked like an empty result set in the UI.
+        # We sort in Python after the stream instead.
         q = db.collection(coll_name)
-        # Pick the most selective equality filter for Firestore-side
-        # narrowing. Order: targetId > userId > action > targetCollection.
+        # One optional equality filter for cheap narrowing on huge collections.
         if target_id_filter:
             q = q.where("targetId", "==", target_id_filter)
         elif user_id_filter:
@@ -432,7 +439,6 @@ def list_audit_logs():
             q = q.where("action", "==", action_filter)
         elif coll_filter:
             q = q.where("targetCollection", "==", coll_filter)
-        q = q.order_by("server_ts", direction="DESCENDING")
         return q.limit(min(PYTHON_FILTER_OVERFETCH, OVERFETCH_CAP))
 
     # Date range is "YYYY-MM-DD HH:MM:SS" lexicographic compare against
@@ -469,8 +475,10 @@ def list_audit_logs():
 
     def _stream(coll_name: str):
         out = []
+        scanned = 0
         try:
             for doc in _build_query(coll_name).stream():
+                scanned += 1
                 d = doc.to_dict() or {}
                 d["id"] = doc.id
                 d.pop("server_ts", None)
@@ -479,11 +487,20 @@ def list_audit_logs():
                 if include_archive and coll_name == ARCHIVE_COLLECTION:
                     d["archived"] = True
                 out.append(d)
-                if len(out) >= limit:
-                    break
         except Exception as inner:
-            logger.warning(f"list_audit_logs: stream of {coll_name} failed: {inner}")
-        return out
+            logger.error(
+                f"list_audit_logs: stream of {coll_name} failed: {inner!r}",
+                exc_info=True,
+            )
+        logger.info(
+            f"list_audit_logs: scanned={scanned} matched={len(out)} from {coll_name}"
+        )
+        # Sort newest-first by timestamp string. Entries without a timestamp
+        # land at the bottom (treated as "" which sorts before any real ts).
+        out.sort(key=lambda e: e.get("timestamp") or "", reverse=True)
+        # Trim to requested limit AFTER sorting, so we always show the most
+        # recent matches even when scanning more than `limit` underlying docs.
+        return out[:limit]
 
     try:
         entries = _stream(AUDIT_COLLECTION)

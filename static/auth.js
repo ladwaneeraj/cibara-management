@@ -162,26 +162,74 @@
     }
   }
 
+  // Force-refresh the Firebase ID token. Used both on the recurring
+  // pre-expiry timer and as a one-shot retry when an API call returns 401.
+  // Returns the fresh token, or null on failure.
+  function _refreshToken() {
+    if (!_firebaseAuth || !_firebaseAuth.currentUser) return Promise.resolve(null);
+    return _firebaseAuth.currentUser.getIdToken(true)
+      .then(function (t) { _idToken = t; return t; })
+      .catch(function () { return null; });
+  }
+
   function _wrapFetch() {
     const originalFetch = window.fetch.bind(window);
-    window.fetch = function (input, init) {
+
+    // Build the request with our current token attached.
+    function _attach(init, url) {
       init = init || {};
-      const url = typeof input === "string" ? input : (input && input.url);
       if (_idToken && url && _shouldAttachToken(url)) {
-        const headers = new Headers(
-          (init.headers) || (input && input.headers) || {}
-        );
-        if (!headers.has("Authorization")) {
-          headers.set("Authorization", "Bearer " + _idToken);
-        }
+        const headers = new Headers(init.headers || {});
+        headers.set("Authorization", "Bearer " + _idToken);
         init.headers = headers;
       }
-      return originalFetch(input, init).then(function (resp) {
-        // Auto-handle 401s — token expired / revoked → bounce to login
-        if (resp.status === 401 && _shouldAttachToken(url)) {
-          logout("Your session ended. Please sign in again.");
-        }
-        return resp;
+      return init;
+    }
+
+    window.fetch = function (input, init) {
+      const url = typeof input === "string" ? input : (input && input.url);
+      const sameOrigin = _shouldAttachToken(url);
+
+      // Non-same-origin or no token: just pass through.
+      if (!sameOrigin) return originalFetch(input, init);
+
+      const attachedInit = _attach(Object.assign({}, init || {}), url);
+
+      return originalFetch(input, attachedInit).then(function (resp) {
+        if (resp.status !== 401) return resp;
+
+        // 401: try to refresh ONCE and retry before giving up. Common
+        // causes:
+        //   - cached token expired between sign-in and now (Firebase
+        //     rolled it 1h ago and our scheduled refresh hadn't run yet)
+        //   - backend revocation-check RPC blipped (transient)
+        //   - admin force-logged-out the user (refresh will fail → bounce)
+        return _refreshToken().then(function (newToken) {
+          if (!newToken) {
+            // Refresh failed — account likely disabled / revoked.
+            console.warn("Cibara: token refresh failed after 401, signing out");
+            logout("Your session ended. Please sign in again.");
+            return resp;
+          }
+          // Brief delay so the new token's IAT is comfortably after any
+          // server-side revocation-cache timestamp (avoids a spurious
+          // second 401 right after a force-logout window).
+          return new Promise(function (resolve) { setTimeout(resolve, 250); })
+            .then(function () {
+              const retryInit = _attach(Object.assign({}, init || {}), url);
+              return originalFetch(input, retryInit).then(function (retryResp) {
+                if (retryResp.status === 401) {
+                  console.warn(
+                    "Cibara: still 401 after refresh+retry. Token may be " +
+                    "missing custom claims. Check server logs for " +
+                    "'load_current_user: token valid but missing claims'."
+                  );
+                  logout("Your session ended. Please sign in again.");
+                }
+                return retryResp;
+              });
+            });
+        });
       });
     };
   }
@@ -616,15 +664,39 @@
             return;
           }
 
-          // Schedule a token refresh ~5 min before expiry so calls don't 401
-          const expMs = (claims.exp || 0) * 1000;
-          if (expMs > 0) {
-            const refreshIn = Math.max(60_000, expMs - Date.now() - 5 * 60_000);
+          // ── Recurring token refresh ──────────────────────────────────────
+          // Firebase ID tokens expire every hour. Schedule a refresh ~5 min
+          // before each expiry; the refresh handler re-schedules itself
+          // after success so the user stays signed in indefinitely (until
+          // the 24-hour idle timer kicks in or admin force-logout).
+          //
+          // The previous version scheduled ONE refresh and then stopped —
+          // the second hour's token expired silently and the next API
+          // call returned 401, bouncing the user to login.
+          function _scheduleRefresh(expSec) {
+            const expMs = (expSec || 0) * 1000;
+            if (!expMs) return;
+            // Refresh 5 minutes before expiry. Floor at 30s so a clock
+            // skew on the client doesn't cause a refresh storm.
+            const refreshIn = Math.max(30_000, expMs - Date.now() - 5 * 60_000);
             setTimeout(function () {
-              fbUser.getIdToken(true).then(function (t) { _idToken = t; })
-                .catch(function () { /* will retry next API call */ });
+              if (!_firebaseAuth || !_firebaseAuth.currentUser) return;
+              _firebaseAuth.currentUser.getIdTokenResult(true)
+                .then(function (newTokenResult) {
+                  _idToken = newTokenResult.token;
+                  // Re-schedule using the new token's exp claim.
+                  _scheduleRefresh(newTokenResult.claims && newTokenResult.claims.exp);
+                })
+                .catch(function (e) {
+                  // Refresh failed — likely network blip. Try again in 60s.
+                  console.warn("Cibara: token refresh failed, retrying in 60s:", e);
+                  setTimeout(function () {
+                    _scheduleRefresh((Date.now() / 1000) + 60);
+                  }, 60_000);
+                });
             }, refreshIn);
           }
+          _scheduleRefresh(claims.exp);
 
           _startIdleTimer();
           _markReady();

@@ -404,6 +404,9 @@ function renderRooms() {
         ? `<div class="guest-name" style="color: #2563eb; font-weight: bold;">✅ Ready to Inspect</div>`
         : `<div class="guest-name" style="color: #f39c12; font-weight: bold;">🧹 Cleaning</div>`;
 
+      // Attribution is shown via the chip+popover in the top-left corner
+      // (added below by CibaraRoomAttribution.decorate). Keeps the card
+      // compact and works the same on mobile and desktop.
       roomContent += `
         <div class="room-number">${roomNumber}</div>
         ${headerLabel}
@@ -499,6 +502,9 @@ function renderRooms() {
           <div>${info.checkin_time ? info.checkin_time.split(" ")[1] : ""}</div>
         </div>
       `;
+
+      // Attribution shown via the chip+popover in the top-left corner —
+      // see CibaraRoomAttribution.decorate() call below.
 
       // Compute the renewal due-time as an epoch (ms). The client-side
       // ticker reads this off the DOM every 30s and updates the displayed
@@ -650,8 +656,23 @@ function renderRooms() {
       clearTimeout(longPressTimer);
     });
 
+    // ── Attribution chip (top-left) ─────────────────────────────────────
+    // Adds a small initial-circle if this room has any attribution data
+    // (cleanedBy, lastCheckinBy, inspectedBy, etc.). Click / tap / hover
+    // shows a small popover with the full per-stay history. Mobile and
+    // desktop use the same component — no hover-only interaction.
+    if (window.CibaraRoomAttribution) {
+      try {
+        window.CibaraRoomAttribution.decorate(roomCard, info);
+      } catch (_e) { /* never break rendering */ }
+    }
+
     roomsGrid.appendChild(roomCard);
   });
+  // Note: open popovers self-close via a MutationObserver inside
+  // room-attribution.js when their anchoring chip is removed. We don't
+  // close eagerly here — that would dismiss a popover the user just
+  // opened during a Firestore snapshot tick.
 
   if (roomCount === 0) {
     const emptyState = document.createElement("div");
@@ -1780,6 +1801,23 @@ function updateCheckoutModal(roomNumber) {
       ? "Edit check-in time"
       : "You've already edited this once. Ask an admin if you need to change it again.";
   }
+
+  // ── History icon next to Guest Name ─────────────────────────────────────
+  // Clicking opens the same room-history popover we use on room cards.
+  // Idempotent — re-binds on each modal open.
+  const histBtn = document.getElementById("checkout-history-btn");
+  if (histBtn && window.CibaraRoomAttribution) {
+    histBtn.onclick = function (ev) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      window.CibaraRoomAttribution.openForButton(histBtn, roomInfo);
+    };
+  }
+
+  // (Attribution footer near the check-in time was removed — the same
+  // info is now reachable via the History icon in the modal header.)
+  const _existingFooter = document.getElementById("checkout-attribution");
+  if (_existingFooter) _existingFooter.remove();
 
   const checkoutRoomPrice = document.getElementById("checkout-room-price");
   if (checkoutRoomPrice) {

@@ -570,6 +570,35 @@ def log_password_change():
     return jsonify(success=True)
 
 
+# ─── User directory ────────────────────────────────────────────────────────
+# Lightweight {userId: name, role, isActive} listing accessible to ALL roles.
+# Used by the frontend attribution helpers to resolve userIds to display
+# names on room cards, modals, register rows, etc. No PII beyond name + role
+# (which staff already see on each other in the chip / dropdown).
+#
+# Distinct from /api/users which:
+#   - is admin-only,
+#   - returns full profile docs (timestamps, authUid, lastLoginAt, ...),
+#   - is used by the admin console for management.
+@users_bp.route("/api/user-directory", methods=["GET"])
+@requires_role("admin", "manager", "housekeeping")
+def user_directory():
+    try:
+        out = {}
+        for doc in db.collection(USERS_COLLECTION).stream():
+            d = doc.to_dict() or {}
+            uid = doc.id
+            out[uid] = {
+                "name": d.get("name") or uid,
+                "role": d.get("role") or "",
+                "isActive": d.get("isActive", True),
+            }
+        return jsonify(success=True, users=out)
+    except Exception as e:
+        logger.error(f"user_directory failed: {e}")
+        return jsonify(success=False, message="Failed to load user directory"), 500
+
+
 # ─── "Who am I" — used by the frontend after login ────────────────────────
 @users_bp.route("/api/auth/me", methods=["GET"])
 @requires_role("admin", "manager", "housekeeping")

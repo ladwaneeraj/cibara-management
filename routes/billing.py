@@ -21,7 +21,7 @@ from config import (
 )
 from services import payment_service, pdf_service, expense_service
 from services.auth_service import requires_permission
-from services.audit_log import write_log
+from services.audit_log import write_log, attribution_update, _safe_user
 from services.role_filters import clamp_date_range
 
 billing_bp = Blueprint('billing', __name__)
@@ -171,6 +171,20 @@ def get_register_data():
                 "serial_number": serial,
                 # Include add_ons so the payment modal can display services
                 "services": room_data_item.get("add_ons", []),
+                "guest_count": guest.get("guests", 1),
+                # Attribution from the live room doc — populates the
+                # register-tab history popover for active stays.
+                "cleanedBy":              room_data_item.get("cleanedBy"),
+                "cleanedAt":              room_data_item.get("cleanedAt"),
+                "inspectedBy":            room_data_item.get("inspectedBy"),
+                "inspectedAt":            room_data_item.get("inspectedAt"),
+                "bookedBy":               room_data_item.get("bookedBy"),
+                "bookedAt":               room_data_item.get("bookedAt"),
+                "lastCheckinBy":          room_data_item.get("lastCheckinBy"),
+                "lastCheckinAt":          room_data_item.get("lastCheckinAt"),
+                "lastCheckinTimeEditBy":  room_data_item.get("lastCheckinTimeEditBy"),
+                "lastCheckinTimeEditAt":  room_data_item.get("lastCheckinTimeEditAt"),
+                # Active stays don't have a checkout actor yet
             }
             register_entries.append(entry)
             active_count += 1
@@ -276,6 +290,21 @@ def get_register_data():
                     "discounts": bill_data.get("discounts", 0),
                     "services": bill_data.get("services", []),
                     "guest_count": bill_data.get("guest_count", 1),
+                    # Attribution snapshot — surfaces in the register
+                    # tab's history popover (cleaned → inspected → booked
+                    # → checked in → time edit → checked out).
+                    "cleanedBy":              bill_data.get("cleanedBy"),
+                    "cleanedAt":              bill_data.get("cleanedAt"),
+                    "inspectedBy":            bill_data.get("inspectedBy"),
+                    "inspectedAt":            bill_data.get("inspectedAt"),
+                    "bookedBy":               bill_data.get("bookedBy"),
+                    "bookedAt":               bill_data.get("bookedAt"),
+                    "lastCheckinBy":          bill_data.get("lastCheckinBy"),
+                    "lastCheckinAt":          bill_data.get("lastCheckinAt"),
+                    "lastCheckinTimeEditBy":  bill_data.get("lastCheckinTimeEditBy"),
+                    "lastCheckinTimeEditAt":  bill_data.get("lastCheckinTimeEditAt"),
+                    "lastCheckoutBy":         bill_data.get("lastCheckoutBy"),
+                    "lastCheckoutAt":         bill_data.get("lastCheckoutAt"),
                 }
                 register_entries.append(entry)
                 completed_count += 1
@@ -757,6 +786,11 @@ def add_bill_payment():
         if not bill_data.get("stay_id"):
             bill_update["stay_id"] = bill_id
 
+        # Stamp attribution + lastEditedBy alias for the UI
+        _bp_attr = attribution_update()
+        bill_update.update(_bp_attr)
+        bill_update["lastEditedBy"] = _bp_attr.get("lastModifiedBy")
+        bill_update["lastEditedAt"] = _bp_attr.get("lastModifiedAt")
         bills_ref.document(bill_id).update(bill_update)
         logger.info(f"Bill {bill_id} payment ₹{amount} ({payment_mode}), "
                     f"balance now ₹{new_balance}")
@@ -931,10 +965,14 @@ def recalculate_bill():
         total_amount = bill_data.get("total_amount", 0)
         new_balance  = total_amount - payment_cash - payment_online + total_refunds
 
+        _rb_attr = attribution_update()
         bills_ref.document(bill_id).update({
             "payment_cash":   payment_cash,
             "payment_online": payment_online,
             "balance":        new_balance,
+            "lastEditedBy":   _rb_attr.get("lastModifiedBy"),
+            "lastEditedAt":   _rb_attr.get("lastModifiedAt"),
+            **_rb_attr,
         })
 
         # Background PDF regeneration
@@ -1052,12 +1090,16 @@ def update_bill_service():
         else:
             new_gst_amount = bill_data.get("gst_amount", 0)  # unchanged if exempt
 
+        _ub_attr = attribution_update()
         bills_ref.document(bill_id).update({
             "services":       services,
             "services_total": services_total,
             "total_amount":   total_amount,
             "balance":        new_balance,
             "gst_amount":     new_gst_amount,
+            "lastEditedBy":   _ub_attr.get("lastModifiedBy"),
+            "lastEditedAt":   _ub_attr.get("lastModifiedAt"),
+            **_ub_attr,
         })
 
         updated_bill = dict(bill_data)

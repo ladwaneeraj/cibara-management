@@ -814,6 +814,33 @@ function showBookingDetails(bookingId) {
   document.getElementById("details-guests").textContent = `${booking.guest_count || 1} guest${(booking.guest_count || 1) !== 1 ? "s" : ""}`;
   document.getElementById("details-notes").textContent = booking.notes || "—";
 
+  // ── Attribution: "Booked by ..." inline near the booking date ───────────
+  // Idempotent — re-uses the same span on re-opens.
+  if (window.CibaraUsers) {
+    const dateEl = document.getElementById("details-booking-date");
+    if (dateEl) {
+      let attrEl = document.getElementById("details-booked-by");
+      if (!attrEl) {
+        attrEl = document.createElement("span");
+        attrEl.id = "details-booked-by";
+        attrEl.style.cssText =
+          "margin-left:8px;font-size:11px;color:#6b7280;";
+        dateEl.parentElement && dateEl.parentElement.appendChild(attrEl);
+      }
+      const who = booking.bookedBy || booking.createdBy;
+      if (who) {
+        attrEl.innerHTML = "by <strong style=\"color:#1e293b\">" +
+          (function (s) { return String(s).replace(/[&<>"']/g, function (c) {
+            return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+          }); })(window.CibaraUsers.nameOf(who)) +
+          "</strong>";
+        attrEl.style.display = "";
+      } else {
+        attrEl.style.display = "none";
+      }
+    }
+  }
+
   // Status badge
   const statusEl = document.getElementById("details-status");
   if (statusEl) {

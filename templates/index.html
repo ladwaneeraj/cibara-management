@@ -14,7 +14,9 @@
     <script src="/firebase-config.js"></script>
     <script src="/static/permissions.js"></script>
     <script src="/static/auth.js"></script>
+    <script src="/static/user-directory.js"></script>
     <script src="/static/attribution.js"></script>
+    <script src="/static/room-attribution.js"></script>
     <link
       href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css"
       rel="stylesheet"
@@ -2578,6 +2580,10 @@
         <div class="modal-header">
           <h2>Checkout - Room <span id="checkout-room-number"></span></h2>
           <div style="display: flex; align-items: center; gap: 0.4rem">
+            <button id="checkout-history-btn" type="button" title="Room history" aria-label="Room history"
+              style="background:rgba(99,102,241,0.1);border:1px solid rgba(99,102,241,0.3);border-radius:8px;color:#6366f1;cursor:pointer;width:36px;height:36px;display:inline-grid;place-items:center;font-size:.95rem;">
+              <i class="fas fa-history"></i>
+            </button>
             <button id="checkout-doc-view-btn" type="button" class="doc-cam-btn" title="View ID documents on file" aria-label="View ID documents" style="display: none"><i class="fas fa-id-card"></i></button>
             <button id="checkout-upload-id-btn" type="button" class="doc-cam-btn" title="Upload ID document (up to 3 images)" aria-label="Upload ID document"><i class="fas fa-upload"></i></button>
             <input type="file" id="checkout-doc-file-input" accept="image/*" multiple style="display: none" />
@@ -2890,7 +2896,11 @@
               <strong>₹<span id="confirm-checkout-balance">0</span></strong>
             </p>
 
-            <div class="form-group" style="margin-top: 1rem">
+            <!-- Settle Later: admin only. Manager / housekeeping never see
+                 this control — they cannot finalise a checkout with a
+                 pending balance. The password input below is gone too;
+                 admin doesn't need to re-prove identity. -->
+            <div class="form-group" style="margin-top: 1rem" data-roles="admin">
               <label
                 style="
                   display: inline-flex;
@@ -2917,25 +2927,14 @@
                   placeholder="Add notes about when/how payment will be made"
                   rows="2"
                 ></textarea>
-
-                <!-- Manager password — required to unlock Settle Later -->
-                <div style="margin-top: 0.6rem;">
-                  <label style="display: block; font-weight: 600; color: #4a5568; font-size: 0.82rem; margin-bottom: 0.3rem;">
-                    🔐 Manager Password to allow Settle Later
-                  </label>
-                  <input
-                    type="password"
-                    id="checkout-manager-password"
-                    class="form-control"
-                    placeholder="Enter manager password"
-                    autocomplete="off"
-                    style="font-size: 0.88rem;"
-                  />
-                  <div
-                    id="checkout-password-error"
-                    style="display: none; color: #c53030; font-size: 0.78rem; margin-top: 0.25rem;"
-                  ></div>
-                </div>
+                <!-- Hidden error placeholder kept so settle-later-fix.js
+                     can write to it without null-checks. The container is
+                     hidden anyway because the password field no longer
+                     exists for admin. -->
+                <div
+                  id="checkout-password-error"
+                  style="display: none;"
+                ></div>
               </div>
             </div>
           </div>

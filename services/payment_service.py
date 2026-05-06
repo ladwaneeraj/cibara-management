@@ -202,6 +202,22 @@ def write_payment_with_stay(stay_id: str, payment_data: dict, *,
     return True
 
 
+def _safe_userid_from_request() -> str:
+    """
+    Best-effort lookup of the current authenticated user's userId for
+    attribution stamping. Returns "system" outside a request context
+    (background threads, retries, etc.). Never raises.
+    """
+    try:
+        from flask import g, has_request_context
+        if not has_request_context():
+            return "system"
+        u = getattr(g, "current_user", None) or {}
+        return u.get("userId") or "system"
+    except Exception:
+        return "system"
+
+
 def _normalise(data: dict) -> dict:
     """
     Ensure consistent field names and add created_at + idempotency_key.
@@ -209,6 +225,11 @@ def _normalise(data: dict) -> dict:
     """
     doc = dict(data)  # shallow copy
     doc.setdefault("created_at", datetime.now(timezone.utc).isoformat())
+    # Attribution — who recorded this payment. Resolved from flask.g
+    # at the moment write_payment is called; falls back to "system"
+    # for background-thread / non-request contexts.
+    if "createdBy" not in doc:
+        doc["createdBy"] = _safe_userid_from_request()
     # Guarantee room is a string
     if "room" in doc:
         doc["room"] = str(doc["room"])

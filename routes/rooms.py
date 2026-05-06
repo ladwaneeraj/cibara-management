@@ -24,7 +24,7 @@ from config import (
 )
 from services import payment_service, customer_service, expense_service, bills_service
 from services.auth_service import requires_permission, login_required
-from services.audit_log import write_log
+from services.audit_log import write_log, attribution_create, attribution_update, _safe_user
 from routes.billing import auto_generate_bill_pdf
 
 rooms_bp = Blueprint('rooms', __name__)
@@ -111,6 +111,13 @@ def checkin():
                 raise ValueError(f"Room {room} does not exist")
             if snap.to_dict().get("status") != "vacant":
                 raise ValueError(f"Room {room} is already occupied")
+            # ── Attribution ─────────────────────────────────────────────────
+            # The room doc is shared across stays, so we use _create
+            # attribution at checkin (same semantics as "this stay began
+            # under this user"). lastCheckinBy is the business-friendly
+            # field the UI displays on the register row.
+            _attr = attribution_create()
+            _checkin_user = (_safe_user() or {}).get("userId") or "system"
             txn.update(r_ref, {
                 "status": "occupied",
                 "guest": guest,
@@ -124,6 +131,33 @@ def checkin():
                 # Pointer to the draft stay doc so /checkout can finalize
                 # the existing record instead of creating a new bill.
                 "active_bill_id": stay_id,
+                # Per-stay attribution. These accumulate through the stay
+                # so the room-history popover can show the full chain:
+                #   cleanedBy → inspectedBy → bookedBy → lastCheckinBy
+                #   → lastCheckinTimeEditBy → lastCheckoutBy
+                # cleanedBy / inspectedBy were set during the previous
+                # cleaning cycle (which prepped this room for THIS stay)
+                # — keep them. They'll be overwritten naturally when
+                # housekeeping cleans for the NEXT stay.
+                "lastCheckinBy": _checkin_user,
+                "lastCheckinAt": _attr.get("createdAt"),
+                # Walk-in (no booking) → bookedBy is cleared.
+                "bookedBy": None,
+                "bookedAt": None,
+                # Time-edit field is per-stay; clear so we don't carry over
+                # the previous stay's edit attribution.
+                "lastCheckinTimeEditBy": None,
+                "lastCheckinTimeEditAt": None,
+                # Clear the PREVIOUS stay's checkout so during this active
+                # stay the popover doesn't list a stale "Checked out by".
+                # This field repopulates when the current stay checks out.
+                "lastCheckoutBy": None,
+                "lastCheckoutAt": None,
+                # Universal attribution
+                "createdBy": _attr.get("createdBy"),
+                "createdAt": _attr.get("createdAt"),
+                "lastModifiedBy": _attr.get("lastModifiedBy"),
+                "lastModifiedAt": _attr.get("lastModifiedAt"),
             })
             # Create the draft stay/bill doc inside the same transaction.
             # If this fails, the whole claim rolls back — guarantees we
@@ -523,6 +557,14 @@ def checkout():
                 # stays it's the UUID (the active_bill_id).
                 bill_record["stay_id"] = bill_id
 
+                # Stamp checkout attribution onto the bill (config.create_bill_record
+                # captured the pre-checkout fields; we add the checkout actor here
+                # because we have flask.g context).
+                _bill_co_user = (_safe_user() or {}).get("userId") or "system"
+                _bill_co_now = datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S")
+                bill_record["lastCheckoutBy"] = _bill_co_user
+                bill_record["lastCheckoutAt"] = _bill_co_now
+
                 # ── pre_checkout_snapshot ────────────────────────────────────
                 # Capture the room state being cleared by this checkout so the
                 # 3-hour revert flow can restore it deterministically. Without
@@ -578,6 +620,8 @@ def checkout():
             # extra queries.
             from datetime import timezone as _tz
             _last_checkout_at_utc = datetime.now(_tz.utc).isoformat()
+            _co_user = (_safe_user() or {}).get("userId") or "system"
+            _co_now = datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S")
             batch.update(rooms_ref.document(room), {
                 "status": "cleaning",
                 "guest": None,
@@ -593,11 +637,27 @@ def checkout():
                 # the (newly finalized) bill doc.
                 "active_bill_id": None,
                 "cleaning_status": "in_progress",
-                "cleaning_start_time": datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S"),
+                "cleaning_start_time": _co_now,
                 # Revert-window pointers (cleared by /mark_room_cleaned and
                 # by /revert_checkout itself).
                 "last_bill_id":        bill_id if bill_record else None,
                 "last_checkout_at":    _last_checkout_at_utc,
+                # Attribution — who did this checkout. The lastCheckinBy
+                # / bookedBy / lastCheckinTimeEditBy fields are cleared
+                # because the popover on a vacant / cleaning room should
+                # only show the post-stay trail (checked-out-by →
+                # cleaned-by → approved-by). The full pre-stay chain is
+                # preserved on the bill doc for the register-tab popover.
+                "lastCheckoutBy":         _co_user,
+                "lastCheckoutAt":         _co_now,
+                "lastCheckinBy":          None,
+                "lastCheckinAt":          None,
+                "bookedBy":               None,
+                "bookedAt":               None,
+                "lastCheckinTimeEditBy":  None,
+                "lastCheckinTimeEditAt":  None,
+                "lastModifiedBy":         _co_user,
+                "lastModifiedAt":         _co_now,
             })
 
             if totals_update:
@@ -1348,10 +1408,17 @@ def update_checkin_time():
         # Build update payload — only reset renewal cycle if the DATE changed.
         # A time-only correction (same calendar day) should NOT wipe out
         # the renewal count; the guest is still on the same day cycle.
+        _ed_user = (_safe_user() or {}).get("userId") or "system"
+        _ed_now = datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S")
         update_payload = {
             "checkin_time": new_checkin_time,
             "last_renewal_time": None,
             "checkin_time_edit_count": (room_data.get("checkin_time_edit_count") or 0) + 1,
+            # Attribution — surfaced in the room-history popover.
+            "lastCheckinTimeEditBy": _ed_user,
+            "lastCheckinTimeEditAt": _ed_now,
+            "lastModifiedBy": _ed_user,
+            "lastModifiedAt": _ed_now,
         }
         if date_changed:
             update_payload["renewal_count"] = 0
@@ -1723,10 +1790,17 @@ def mark_room_cleaned():
                 cleaning_status="ready_to_inspect",
             )
 
+        _hk_user = (_safe_user() or {}).get("userId") or "system"
+        _hk_now = datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S")
         rooms_ref.document(room).update({
             # status stays "cleaning" — the room is NOT bookable yet.
             "cleaning_status": "ready_to_inspect",
-            "cleaning_done_at": datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S"),
+            "cleaning_done_at": _hk_now,
+            # Attribution — who marked it cleaned
+            "cleanedBy":         _hk_user,
+            "cleanedAt":         _hk_now,
+            "lastModifiedBy":    _hk_user,
+            "lastModifiedAt":    _hk_now,
         })
 
         invalidate_rooms_and_totals()
@@ -1783,12 +1857,14 @@ def mark_room_ready_for_checkin():
         # Vacate + clear all guest-related fields. Same shape as the old
         # mark_room_cleaned final write, with the cleaning workflow fields
         # also cleared.
+        _insp_user = (_safe_user() or {}).get("userId") or "system"
+        _insp_now = datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S")
         rooms_ref.document(room).update({
             "status": "vacant",
             "cleaning_status": None,
             "cleaning_start_time": None,
             "cleaning_done_at": None,
-            "inspected_at": datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S"),
+            "inspected_at": _insp_now,
             "guest": None,
             "checkin_time": None,
             "balance": 0,
@@ -1802,6 +1878,11 @@ def mark_room_ready_for_checkin():
             # longer eligible for undo.
             "last_bill_id":     None,
             "last_checkout_at": None,
+            # Attribution — who approved the room ready for the next guest
+            "inspectedBy":       _insp_user,
+            "inspectedAt":       _insp_now,
+            "lastModifiedBy":    _insp_user,
+            "lastModifiedAt":    _insp_now,
         })
 
         invalidate_rooms_and_totals()
@@ -2302,13 +2383,15 @@ def get_stay_payments():
                 return
             seen_ids.add(doc.id)
             payments.append({
-                "id":     doc.id,
-                "amount": d.get("amount", 0),
-                "method": d.get("method", ""),
-                "type":   d.get("type", ""),
-                "date":   d.get("date", ""),
-                "time":   d.get("time", ""),
-                "note":   d.get("note", ""),
+                "id":        doc.id,
+                "amount":    d.get("amount", 0),
+                "method":    d.get("method", ""),
+                "type":      d.get("type", ""),
+                "date":      d.get("date", ""),
+                "time":      d.get("time", ""),
+                "note":      d.get("note", ""),
+                # Attribution — surfaces "added by" in the payment list UI
+                "createdBy": d.get("createdBy", None),
             })
 
         # Q0 — canonical lookup. Single-field equality, no composite index.

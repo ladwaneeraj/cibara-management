@@ -11,7 +11,7 @@ from config import (
 )
 from services import payment_service, customer_service, bills_service
 from services.auth_service import requires_permission
-from services.audit_log import write_log
+from services.audit_log import write_log, attribution_create, attribution_update, _safe_user
 
 bookings_bp = Blueprint('bookings', __name__)
 
@@ -118,6 +118,11 @@ def create_booking():
                 "settlement_amount": None,
             })
 
+        # ── Attribution — universal + business-friendly bookedBy ─────────────
+        _book_user = (_safe_user() or {}).get("userId") or "system"
+        booking.update(attribution_create())
+        booking["bookedBy"] = _book_user
+
         batch = db.batch()
         paid_amount = paid_amount_val
         if paid_amount > 0:
@@ -194,7 +199,10 @@ def update_booking():
         if "total_amount" in booking_data:
             booking["total_amount"] = int(booking_data["total_amount"])
             booking["balance"] = booking["total_amount"] - booking["paid_amount"]
-            
+
+        # Attribution stamp on every booking edit
+        booking.update(attribution_update())
+
         batch.set(bookings_ref.document(booking_id), booking)
         batch.commit()
         invalidate_rooms_and_totals()
@@ -249,7 +257,9 @@ def cancel_booking():
         booking["status"] = "cancelled"
         booking["cancellation_date"] = datetime.now(IST).strftime("%Y-%m-%d")
         booking["cancellation_reason"] = booking_data.get("reason", "")
-        
+        booking["cancelledBy"] = (_safe_user() or {}).get("userId") or "system"
+        booking.update(attribution_update())
+
         batch.set(bookings_ref.document(booking_id), booking)
         batch.commit()
         invalidate_rooms_and_totals()
@@ -363,6 +373,13 @@ def convert_booking_to_checkin():
             batch=batch,
         )
 
+        # Attribution stamps so the room-history popover shows the full
+        # trail (booked by → checked in by). bookedBy is propagated from
+        # the booking doc; the front desk may differ from the original
+        # booker. Stale cleaning fields are cleared — a new stay starts.
+        _conv_attr = attribution_create()
+        _conv_user = (_safe_user() or {}).get("userId") or "system"
+        _booked_by = booking.get("bookedBy") or booking.get("createdBy") or _conv_user
         batch.update(rooms_ref.document(room_number), {
             "status": "occupied",
             "guest": guest,
@@ -374,6 +391,25 @@ def convert_booking_to_checkin():
             # Pointer to the draft so /checkout finalizes it instead of
             # creating a second bill record.
             "active_bill_id": stay_id,
+            # Attribution. cleanedBy / inspectedBy from the previous
+            # cleaning cycle prepped this room for THIS stay — keep them
+            # so the popover shows the full history chain. They're
+            # overwritten naturally on the next cleaning/inspection.
+            "bookedBy":      _booked_by,
+            "bookedAt":      booking.get("createdAt") or _conv_attr.get("createdAt"),
+            "lastCheckinBy": _conv_user,
+            "lastCheckinAt": _conv_attr.get("createdAt"),
+            # Per-stay fields — cleared so we don't carry the previous
+            # stay's time-edit / checkout attribution into this one.
+            "lastCheckinTimeEditBy": None,
+            "lastCheckinTimeEditAt": None,
+            "lastCheckoutBy": None,
+            "lastCheckoutAt": None,
+            # Universal attribution
+            "createdBy":      _conv_attr.get("createdBy"),
+            "createdAt":      _conv_attr.get("createdAt"),
+            "lastModifiedBy": _conv_attr.get("lastModifiedBy"),
+            "lastModifiedAt": _conv_attr.get("lastModifiedAt"),
         })
 
         if balance_after_payment > 0:

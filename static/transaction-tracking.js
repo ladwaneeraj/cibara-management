@@ -494,6 +494,21 @@ class TransactionLogManager {
       titleContent = `Room ${log.room} - ${log.name}`;
     }
 
+    // "Collected by" chip — staff member who recorded this payment.
+    // Resolved from log.createdBy via the user directory; hidden for
+    // legacy entries that don't have the field populated yet.
+    let byChip = "";
+    if (log.createdBy && window.CibaraUsers) {
+      const _by = window.CibaraUsers.nameOf(log.createdBy);
+      const _safe = String(_by).replace(/[<&>"']/g, function (c) {
+        return { "<": "&lt;", "&": "&amp;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+      });
+      byChip =
+        ' <span class="txn-added-by" title="Collected by ' + _safe +
+        '"><i class="fas fa-user"></i> ' + _safe + '</span>';
+    }
+    titleContent += byChip;
+
     // Background colour per payment type (keep colours light/subtle)
     let rowBg = "";
     const isPayLater = log.payment_method === "pay_later" || (log.amount === 0 && log.is_fresh_checkin);
@@ -810,10 +825,26 @@ class TransactionLogManager {
         paymentType = "Online Payment";
       }
 
+      // "Added by" — small chip showing who recorded the payment.
+      // Resolved via the user directory; falls back to the userId, and
+      // hides entirely when createdBy is missing (legacy entries).
+      let byHtml = "";
+      if (payment.createdBy && window.CibaraUsers) {
+        const _byName = window.CibaraUsers.nameOf(payment.createdBy);
+        byHtml =
+          ' <span class="txn-added-by" title="Recorded by ' +
+          String(_byName).replace(/"/g, "&quot;") +
+          '"><i class="fas fa-user"></i> ' +
+          String(_byName).replace(/[<&>]/g, function (c) {
+            return { "<": "&lt;", "&": "&amp;", ">": "&gt;" }[c];
+          }) +
+          "</span>";
+      }
+
       logsHtml += `
         <div class="log-item">
           <div class="log-details">
-            <div class="log-title">${paymentType}${badgeHtml}</div>
+            <div class="log-title">${paymentType}${badgeHtml}${byHtml}</div>
             <div class="log-subtitle">${payment.time || "N/A"} on ${payment.date || "N/A"}</div>
           </div>
           <div class="log-amount" ${colorStyle}>${amountText}</div>
@@ -826,6 +857,16 @@ class TransactionLogManager {
 }
 
 const transactionTrackingStyles = `
+    /* "Added by" chip on each transaction row */
+    .txn-added-by {
+        display: inline-flex; align-items: center; gap: 3px;
+        padding: 1px 7px; border-radius: 999px;
+        background: #eef2ff; color: #4338ca;
+        font: 600 .68rem 'Inter', system-ui, sans-serif;
+        margin-left: 6px; vertical-align: middle;
+    }
+    .txn-added-by i { font-size: .62rem; opacity: .75; }
+
     .transaction-tag {
         display: inline-block;
         padding: 2px 6px;
@@ -1587,8 +1628,20 @@ window.renderEnhancedLogs = function () {
 })();
 
 document.addEventListener("DOMContentLoaded", function () {
-  setTimeout(() => {
+  // Wait for the auth state to resolve before init — initTxnDateFilter
+  // checks CibaraAuth.isAdmin() to decide whether to wire the date-range
+  // picker. If init runs before auth resolves, _isAdmin is false and the
+  // picker stays inert for admin too.
+  function _go() {
     initTxnDateFilter();
     console.log("Transaction date filter ready");
-  }, 1000);
+  }
+  if (window.CibaraAuth && typeof window.CibaraAuth.ready === "function") {
+    window.CibaraAuth.ready().then(function () {
+      // Small delay to let other DOM-ready handlers finish first.
+      setTimeout(_go, 50);
+    });
+  } else {
+    setTimeout(_go, 1000);
+  }
 });

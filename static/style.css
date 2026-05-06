@@ -2890,6 +2890,19 @@ input:checked + .toggle-slider:before {
 }
 
 /* Cleaned Button - Mobile Optimized */
+/* Attribution micro-line on room cards: "Cleaned by Jeevan" etc. */
+.room-attribution {
+  font-size: 10.5px;
+  color: #6b7280;
+  margin-top: 4px;
+  line-height: 1.3;
+  text-align: center;
+}
+.room-attribution strong {
+  color: #1e293b;
+  font-weight: 600;
+}
+
 .cleaned-btn {
   position: relative;
   margin-top: 6px;

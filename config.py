@@ -887,6 +887,23 @@ def create_bill_record(room, room_data, checkout_time, batch=None,
             # Each entry: {room, date_from, date_to, nights, rate, total}
             # Single-room stays have exactly one entry.
             "room_segments": clean_segments,
+            # ── Attribution snapshot — captures the FULL stay lifecycle ───────
+            # Copied off the room doc at checkout so the register-tab history
+            # popover can reconstruct the chain even after the room is reset.
+            # The room doc clears these on checkout to keep the vacant-card
+            # popover focused on post-stay info; the bill keeps them for audit.
+            "cleanedBy":              room_data.get("cleanedBy"),
+            "cleanedAt":              room_data.get("cleanedAt") or room_data.get("cleaning_done_at"),
+            "inspectedBy":            room_data.get("inspectedBy"),
+            "inspectedAt":            room_data.get("inspectedAt") or room_data.get("inspected_at"),
+            "bookedBy":               room_data.get("bookedBy"),
+            "bookedAt":               room_data.get("bookedAt"),
+            "lastCheckinBy":          room_data.get("lastCheckinBy"),
+            "lastCheckinAt":          room_data.get("lastCheckinAt") or room_data.get("checkin_time"),
+            "lastCheckinTimeEditBy":  room_data.get("lastCheckinTimeEditBy"),
+            "lastCheckinTimeEditAt":  room_data.get("lastCheckinTimeEditAt"),
+            # checkout attribution is added by routes.rooms.checkout itself
+            # (it has flask.g context for the user who initiated the checkout).
         }
 
         return bill_record

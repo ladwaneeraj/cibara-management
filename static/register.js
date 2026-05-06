@@ -558,6 +558,13 @@
 }
 .rp-table td { padding: .45rem .5rem; border-bottom: 1px solid #f0f0f0; vertical-align: middle; }
 .rp-table tbody tr:hover { background: #f7f9fc; }
+.rp-by {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: .73rem; color: #475569;
+  white-space: nowrap;
+}
+.rp-by i { font-size: .65rem; opacity: .6; }
+.rp-by-unknown { color: #94a3b8; font-size: .8rem; }
 .rp-edit-btn {
   padding: .16rem .42rem; border: 1px solid var(--primary,#3f51b5);
   background: #fff; color: var(--primary,#3f51b5);
@@ -658,6 +665,45 @@
 .rp-spinner { text-align: center; padding: 1.5rem; color: #888; font-size: .82rem; }
 
 /* ── Document view button ── */
+/* Inline guest-count pill next to the guest name */
+.reg-guests-pill {
+  display: inline-flex; align-items: center; gap: 3px;
+  margin-left: 4px;
+  padding: 1px 7px; border-radius: 999px;
+  background: #ede9fe; color: #6d28d9;
+  font: 600 .68rem 'Inter', sans-serif;
+  vertical-align: middle;
+}
+.reg-guests-pill i { font-size: .62rem; opacity: .85; }
+
+/* History icon next to the ₹ button in each register row */
+.reg-history-btn {
+  display: inline-grid; place-items: center;
+  width: 26px; height: 26px;
+  margin-left: 4px;
+  border: 1px solid #e2e8f0; border-radius: 6px;
+  background: #fff; color: #6366f1;
+  cursor: pointer;
+  transition: background .12s, border-color .12s, color .12s;
+  vertical-align: middle;
+}
+.reg-history-btn:hover {
+  background: #eef2ff; border-color: #c7d2fe; color: #4338ca;
+}
+.reg-history-btn i { font-size: .72rem; }
+
+/* "Checked in by" attribution chip on each register row */
+.reg-attr-badge {
+  display: inline-flex; align-items: center; gap: 3px;
+  padding: 2px 7px; border-radius: 999px;
+  background: #eef2ff; color: #4338ca;
+  font: 600 .68rem 'Inter', sans-serif;
+  vertical-align: middle;
+  white-space: nowrap;
+  margin-right: 4px;
+}
+.reg-attr-badge i { font-size: .65rem; opacity: .8; }
+
 .reg-doc-btn {
   padding: .18rem .42rem; border: 1px solid #adb5bd;
   background: #fff; color: #555; border-radius: 4px;
@@ -735,6 +781,11 @@
   function todayStr() {
     const d = new Date();
     return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  }
+  function escapeAttr(s) {
+    return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
   }
   function nDaysAgoStr(n) {
     const d = new Date();
@@ -1338,6 +1389,24 @@
           return;
         }
 
+        // History button — opens the room-history popover. Payment
+        // attribution lives in the dedicated payment list (₹ button),
+        // so this popover deliberately shows ONLY room-action history
+        // (cleaned / inspected / booked / checked-in / time edits).
+        const histBtn = e.target.closest(".reg-history-btn");
+        if (histBtn) {
+          e.stopPropagation();
+          const room = histBtn.dataset.room;
+          const entryId = histBtn.dataset.entryId;
+          const fullEntry = state.filteredEntries.find(
+            en => (en.id && en.id === entryId) || en.room === room
+          ) || { room };
+          if (window.CibaraRoomAttribution) {
+            window.CibaraRoomAttribution.openForButton(histBtn, fullEntry);
+          }
+          return;
+        }
+
         const docBtn = e.target.closest(".reg-doc-btn");
         if (docBtn) {
           e.stopPropagation();
@@ -1615,10 +1684,17 @@
     const billNoCell = isRealBill
       ? `<button class="reg-bill-link" data-id="${e.id}" title="View Bill">${billNo}</button>`
       : `<span style="font-size:.73rem;white-space:nowrap;">${billNo}</span>`;
+    const guestCount = e.guest_count || (e.guest && e.guest.guests) || 1;
+    // Inline 👤N badge — replaces the standalone Guests column. Hides
+    // when the count is 0/missing so a single-guest stay still renders
+    // cleanly. Title attribute gives the long form on hover.
+    const guestsBadge = guestCount > 0
+      ? ` <span class="reg-guests-pill" title="${guestCount} guest${guestCount === 1 ? "" : "s"}"><i class="fas fa-user"></i> ${guestCount}</span>`
+      : "";
     return `<tr class="date-group-row" data-date-group="${dk}" data-entry-id="${e.id || ''}">
       <td>${serial}</td>
       <td>${billNoCell}</td>
-      <td><strong>${e.guest_name || "-"}</strong></td>
+      <td><strong>${e.guest_name || "-"}</strong>${guestsBadge}</td>
       <td style="font-size:.78rem;">${e.guest_mobile || "-"}</td>
       <td><strong>${e.room || "-"}</strong></td>
       <td style="font-size:.76rem;white-space:nowrap;">${fmtDT(e.checkin_time)}</td>
@@ -1630,12 +1706,25 @@
       <td>${paymentHTML(e)}</td>
       <td><span class="status-badge ${stCls}">${e.status}</span></td>
       <td style="white-space:nowrap;">
+        ${(e.lastCheckinBy && window.CibaraUsers)
+          ? `<span class="reg-attr-badge" title="Checked in by ${
+              escapeAttr(window.CibaraUsers.nameOf(e.lastCheckinBy))
+            }"><i class="fas fa-user-shield"></i> ${
+              escapeAttr(window.CibaraUsers.nameOf(e.lastCheckinBy))
+            }</span> `
+          : ''}
         <button class="reg-pay-btn"
             data-perm="payment.edit"
             data-room="${e.room}"
             data-guest="${encodeURIComponent(e.guest_name || '')}"
             data-checkin="${e.checkin_time || ''}"
-            title="View / edit payments">₹</button>${e.guest_mobile
+            title="View / edit payments">₹</button>
+        <button class="reg-history-btn"
+            data-room="${e.room}"
+            data-entry-id="${e.id || ''}"
+            title="Room history">
+          <i class="fas fa-history"></i>
+        </button>${e.guest_mobile
           ? `<button class="reg-doc-btn"
                 data-mobile="${e.guest_mobile}"
                 data-guest="${encodeURIComponent(e.guest_name || '')}"
@@ -2082,7 +2171,7 @@
       if (isEditing) {
         rows += `
         <tr class="rp-edit-row" data-pid="${p.id}">
-          <td colspan="5">
+          <td colspan="6">
             <div class="rp-edit-form">
               <label style="font-size:.75rem;font-weight:600;color:#555;white-space:nowrap;">Date:</label>
               <input type="date" id="rp-edit-date-${p.id}" value="${p.date || ''}" />
@@ -2103,12 +2192,19 @@
           </td>
         </tr>`;
       } else {
+        const _by = (p.createdBy && window.CibaraUsers)
+          ? window.CibaraUsers.nameOf(p.createdBy)
+          : null;
+        const _byCell = _by
+          ? '<span class="rp-by"><i class="fas fa-user"></i> ' + escapeAttr(_by) + '</span>'
+          : '<span class="rp-by rp-by-unknown">—</span>';
         rows += `
         <tr data-pid="${p.id}">
           <td>${_fmtPmDate(p.date)}${p.time ? ' <span style="color:#999;font-size:.7rem;">' + p.time + '</span>' : ''}</td>
           <td><span class="${_methodCls(p.method)}">${_methodLbl(p.method)}</span></td>
           <td><strong>₹${(p.amount || 0).toLocaleString("en-IN")}</strong></td>
           <td style="color:#666;font-size:.73rem;">${_typeLabel(p.type)}</td>
+          <td>${_byCell}</td>
           <td style="white-space:nowrap">
             <button class="rp-edit-btn"   onclick="_rpStartEdit('${p.id}')">Edit</button>
             <button class="rp-delete-btn" onclick="_rpDelete('${p.id}')">Delete</button>
@@ -2121,7 +2217,7 @@
       <table class="rp-table">
         <thead>
           <tr>
-            <th>Date</th><th>Mode</th><th>Amount</th><th>Type</th><th></th>
+            <th>Date</th><th>Mode</th><th>Amount</th><th>Type</th><th>By</th><th></th>
           </tr>
         </thead>
         <tbody>${rows}</tbody>

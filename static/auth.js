@@ -75,6 +75,16 @@
     resolvers.forEach(function (r) {
       try { r(currentUser()); } catch (_) { /* ignore */ }
     });
+    // Some UI (e.g. the room grid's role-gated "Ready" button) renders
+    // conditionally on userCan(...). Those renderers may have run before
+    // the token claims resolved and produced an incomplete view. Fire a
+    // one-shot signal so listeners can re-render now that the role is
+    // known. This is what previously required a manual page refresh.
+    try {
+      window.dispatchEvent(new CustomEvent("cibaraAuthReady", {
+        detail: currentUser()
+      }));
+    } catch (_) { /* older runtimes without CustomEvent */ }
   }
 
   function _redirectToLogin() {

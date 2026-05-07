@@ -1,29 +1,20 @@
 /* ─────────────────────────────────────────────────────────────────────────
- * Room-card attribution chip + popover.
+ * Room-attribution popover.
  *
- * Renders a small info chip in the top-left of any room card whose doc
- * has at least one attribution field (lastCheckinBy, cleanedBy,
- * inspectedBy, lastCheckoutBy). On hover (desktop) or tap (mobile)
- * shows a small popover with the full per-stay history.
+ * Originally rendered an info chip on every room card. The chip was
+ * removed; this module now exposes only the popover, anchored against
+ * an arbitrary button via openForButton(buttonEl, roomInfo). The
+ * Register tab's history icon is the sole consumer.
  *
  * Public API
  * ──────────
- *   CibaraRoomAttribution.decorate(roomCardEl, roomInfo)
- *     Adds the chip + handlers if appropriate. Idempotent — calling
- *     twice on the same card replaces the chip.
+ *   CibaraRoomAttribution.openForButton(buttonEl, roomInfo)
+ *     Opens the popover anchored to buttonEl with rows derived from
+ *     roomInfo's attribution fields.
  *
  *   CibaraRoomAttribution.closeAll()
- *     Closes any open popover. Called on outside click / Escape.
- *
- * Mobile considerations
- * ─────────────────────
- *   - Chip is 24×24 px with 10 px invisible padding → comfortably above
- *     the 44 px tap-target minimum.
- *   - Popover uses position:fixed and flips above/below based on
- *     viewport edge.
- *   - Tap outside or Escape closes. No tiny X to hunt for.
- *   - Hover-only popovers are explicitly avoided — every interaction
- *     also works with click/tap.
+ *     Closes any open popover. Called on outside click / Escape /
+ *     explicit close button.
  * ──────────────────────────────────────────────────────────────────── */
 
 (function (global) {
@@ -35,38 +26,6 @@
     const s = document.createElement("style");
     s.id = "rm-attr-style";
     s.textContent = `
-      .rm-attr-chip {
-        position: absolute;
-        top: 6px; left: 6px;
-        z-index: 5;
-        display: grid; place-items: center;
-        width: 22px; height: 22px;
-        border-radius: 50%;
-        background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
-        color: #fff;
-        font: 700 10.5px/1 'Inter', system-ui, sans-serif;
-        cursor: pointer;
-        border: 2px solid #fff;
-        box-shadow: 0 1px 4px rgba(0,0,0,.18);
-        transition: transform .12s, box-shadow .12s;
-        /* Invisible padding for tap target */
-        padding: 0;
-      }
-      .rm-attr-chip::before {
-        content: "";
-        position: absolute;
-        inset: -8px;   /* expands hit area to ~38px */
-      }
-      .rm-attr-chip:hover,
-      .rm-attr-chip:focus-visible {
-        transform: scale(1.08);
-        box-shadow: 0 2px 8px rgba(99,102,241,.45);
-        outline: none;
-      }
-      .rm-attr-chip[aria-expanded="true"] {
-        background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%);
-      }
-
       /* Popover */
       .rm-attr-popover {
         position: fixed;
@@ -87,14 +46,39 @@
         from { opacity: 0; transform: translateY(-4px); }
         to   { opacity: 1; transform: translateY(0); }
       }
+      .rm-attr-popover-header {
+        display: flex; align-items: center; justify-content: space-between;
+        gap: 8px;
+        margin: 0 0 10px;
+        padding-bottom: 8px;
+        border-bottom: 1px solid #eef2f7;
+      }
       .rm-attr-popover-title {
         font: 700 .68rem 'Inter', sans-serif;
         color: #64748b;
         text-transform: uppercase;
         letter-spacing: .05em;
-        margin: 0 0 10px;
-        padding-bottom: 8px;
-        border-bottom: 1px solid #eef2f7;
+        margin: 0;
+      }
+      .rm-attr-popover-close {
+        flex-shrink: 0;
+        width: 22px; height: 22px;
+        display: inline-grid; place-items: center;
+        background: transparent;
+        border: 1px solid transparent;
+        border-radius: 6px;
+        color: #94a3b8;
+        cursor: pointer;
+        font-size: .9rem; line-height: 1;
+        padding: 0;
+        transition: background .12s, color .12s, border-color .12s;
+      }
+      .rm-attr-popover-close:hover,
+      .rm-attr-popover-close:focus-visible {
+        background: #f1f5f9;
+        border-color: #e2e8f0;
+        color: #475569;
+        outline: none;
       }
       .rm-attr-row {
         display: flex; justify-content: space-between; align-items: baseline;
@@ -124,35 +108,27 @@
       .rm-attr-empty {
         color: #94a3b8; font-style: italic; font-size: .8rem;
       }
-
-      /* Hover-only enhancement on desktop. The click handler still works
-         for everyone — this just gives mouse users a faster path. */
-      @media (hover: hover) and (pointer: fine) {
-        .rm-attr-chip:hover + .rm-attr-popover-anchor .rm-attr-popover-hover {
-          display: block;
-        }
-      }
     `;
     document.head.appendChild(s);
   }
 
   // ── State: only one popover open at a time ─────────────────────────────
   let _openPopover = null;
-  let _openChip = null;          // anchor we positioned against
+  let _openAnchor = null;        // button we positioned against
   let _outsideHandler = null;
   let _escHandler = null;
   let _reflowHandler = null;     // keeps a reference so we can detach
-  let _anchorObserver = null;    // closes when the chip is removed from DOM
+  let _anchorObserver = null;    // closes when the anchor is removed from DOM
 
   function closeAll() {
     if (_openPopover) {
       try { _openPopover.remove(); } catch (_) { /* already gone */ }
       _openPopover = null;
     }
-    _openChip = null;
-    document.querySelectorAll(".rm-attr-chip[aria-expanded='true']").forEach(function (b) {
-      b.setAttribute("aria-expanded", "false");
-    });
+    if (_openAnchor) {
+      try { _openAnchor.setAttribute("aria-expanded", "false"); } catch (_) { /* ignore */ }
+    }
+    _openAnchor = null;
     if (_outsideHandler) {
       document.removeEventListener("click", _outsideHandler, true);
       _outsideHandler = null;
@@ -208,94 +184,68 @@
     return userId;
   }
 
-  // Pick the initial to show on the chip — most-relevant action's user.
-  function _chipInitial(roomInfo) {
-    const candidates = [
-      roomInfo.cleanedBy,
-      roomInfo.inspectedBy,
-      roomInfo.lastCheckinBy,
-      roomInfo.lastCheckoutBy,
-      roomInfo.lastModifiedBy,
-    ];
-    for (let i = 0; i < candidates.length; i++) {
-      if (candidates[i]) {
-        const nm = _resolveName(candidates[i]);
-        return (nm.charAt(0) || "?").toUpperCase();
-      }
+  // Action key → user-facing label. Backend returns events sorted
+  // ascending (oldest first); we render in that order.
+  const _ACTION_LABEL = {
+    "room.checkout":             "Checked out by",
+    "room.cleaning.complete":    "Cleaned by",
+    "room.inspection.approve":   "Approved by",
+    "room.checkin":              "Checked in by",
+    "room.checkin_time_update":  "Check-in time edited by",
+    "room.transfer":             "Transferred by",
+  };
+
+  // Convert an audit-log entry into the row shape the popover renderer
+  // consumes. `room.transfer` rows get an extra "from X → to Y" label
+  // pulled from the audit metadata so the chain is legible.
+  function _entryToRow(e) {
+    const userLabel =
+      (e.userName && String(e.userName).trim()) ||
+      _resolveName(e.userId) ||
+      "—";
+    let label = _ACTION_LABEL[e.action] || e.action || "Action";
+    if (e.action === "room.transfer" && e.metadata) {
+      const from = e.metadata.from_room;
+      const to   = e.metadata.to_room;
+      if (from && to) label = `Transferred ${from} → ${to} by`;
     }
-    return "i";  // generic info marker
+    return {
+      label: label,
+      name:  userLabel,
+      when:  _relativeTime(e.timestamp),
+    };
   }
 
-  function _hasAnyAttribution(roomInfo) {
-    return !!(
-      roomInfo.cleanedBy ||
-      roomInfo.inspectedBy ||
-      roomInfo.bookedBy ||
-      roomInfo.lastCheckinBy ||
-      roomInfo.lastCheckinTimeEditBy ||
-      roomInfo.lastCheckoutBy ||
-      roomInfo.lastModifiedBy ||
-      roomInfo.createdBy
-    );
-  }
-
-  // Build the rows to render based on room state. Skip rows whose user
-  // field is null (e.g. cleanedBy is cleared once a room is approved
-  // ready). Rows are ordered by lifecycle position so the trail reads
-  // top-to-bottom: cleaned → inspected → booked → checked in →
-  // (any time edits) → checked out.
+  // Async fetch — pulls the canonical history from the audit log scoped
+  // to a (room, time-window) tuple. Works for both active and completed
+  // stays because it doesn't rely on a bills-doc lookup; the bill row
+  // already carries everything we need.
   //
-  // Payments are intentionally NOT in this popover — they live in the
-  // payment-history modal (₹ button) which already shows "added by".
-  function _buildRows(roomInfo) {
-    const rows = [];
+  // Returns [] on any error so the popover renders an "empty state"
+  // rather than getting stuck on Loading.
+  async function _fetchStayHistory(stayInfo) {
+    const room = stayInfo && stayInfo.room;
+    const checkin = stayInfo && (stayInfo.checkin_time || stayInfo.checkin);
+    if (!room || !checkin) return [];
 
-    if (roomInfo.cleanedBy) {
-      rows.push({
-        label: "Cleaned by",
-        name: _resolveName(roomInfo.cleanedBy),
-        when: _relativeTime(roomInfo.cleanedAt || roomInfo.cleaning_done_at),
-      });
+    const params = new URLSearchParams();
+    params.set("room", String(room));
+    params.set("checkin", String(checkin));
+    if (stayInfo.checkout_time) params.set("checkout", String(stayInfo.checkout_time));
+    if (stayInfo.status)        params.set("status",   String(stayInfo.status));
+
+    try {
+      const res = await fetch(
+        "/api/audit-logs/stay-history?" + params.toString(),
+        { credentials: "same-origin" }
+      );
+      if (!res.ok) return [];
+      const body = await res.json();
+      if (!body || !body.success || !Array.isArray(body.entries)) return [];
+      return body.entries;
+    } catch (_e) {
+      return [];
     }
-    if (roomInfo.inspectedBy) {
-      rows.push({
-        label: "Approved by",
-        name: _resolveName(roomInfo.inspectedBy),
-        when: _relativeTime(roomInfo.inspectedAt || roomInfo.inspected_at),
-      });
-    }
-    if (roomInfo.bookedBy) {
-      rows.push({
-        label: "Booked by",
-        name: _resolveName(roomInfo.bookedBy),
-        when: _relativeTime(roomInfo.bookedAt),
-      });
-    }
-    if (roomInfo.lastCheckinBy) {
-      rows.push({
-        label: "Checked in by",
-        name: _resolveName(roomInfo.lastCheckinBy),
-        when: _relativeTime(roomInfo.lastCheckinAt || roomInfo.checkin_time),
-      });
-    }
-    if (roomInfo.lastCheckinTimeEditBy) {
-      rows.push({
-        label: "Check-in time edited by",
-        name: _resolveName(roomInfo.lastCheckinTimeEditBy),
-        when: _relativeTime(roomInfo.lastCheckinTimeEditAt),
-      });
-    }
-    if (roomInfo.lastCheckoutBy) {
-      // The /checkin route clears this so during an active stay we
-      // don't show the previous guest's checkout. It populates again
-      // after the current stay's checkout, giving the full chain.
-      rows.push({
-        label: "Checked out by",
-        name: _resolveName(roomInfo.lastCheckoutBy),
-        when: _relativeTime(roomInfo.lastCheckoutAt),
-      });
-    }
-    return rows;
   }
 
   // ── Popover positioning — flips above/below based on viewport edge ────
@@ -334,89 +284,95 @@
     popover.style.visibility = "";
   }
 
-  // ── Public: decorate a room card ──────────────────────────────────────
-  function decorate(cardEl, roomInfo) {
-    if (!cardEl || !roomInfo) return;
-    // The room-card chip is for the cleaning / vacant phases — i.e. while
-    // the room is being prepared for the next guest. Once the room is
-    // occupied, history (if needed) is reachable via the checkout modal.
-    if (roomInfo.status === "occupied") return;
-    if (!_hasAnyAttribution(roomInfo)) return;
-
-    _injectStyles();
-
-    // Make sure the card is the positioning context for the chip.
-    const computed = getComputedStyle(cardEl).position;
-    if (computed === "static") cardEl.style.position = "relative";
-
-    // Replace any existing chip (idempotent re-render).
-    const old = cardEl.querySelector(":scope > .rm-attr-chip");
-    if (old) old.remove();
-
-    const chip = document.createElement("button");
-    chip.type = "button";
-    chip.className = "rm-attr-chip";
-    chip.setAttribute("aria-haspopup", "true");
-    chip.setAttribute("aria-expanded", "false");
-    chip.setAttribute("aria-label", "Show room history");
-    chip.title = "Show who handled this room";
-    chip.textContent = _chipInitial(roomInfo);
-
-    chip.addEventListener("click", function (ev) {
-      ev.preventDefault();
-      ev.stopPropagation();
-      _toggle(chip, roomInfo);
-    });
-
-    cardEl.appendChild(chip);
+  // Render the body of the popover from a row list. Header (title + close
+  // button) is left intact — only the rows below it are replaced. Used
+  // both for the initial Loading state and once the fetch resolves.
+  function _renderBody(popover, rows) {
+    const body = popover.querySelector(".rm-attr-popover-body");
+    if (!body) return;
+    if (!rows || rows.length === 0) {
+      body.innerHTML = '<div class="rm-attr-empty">No history yet.</div>';
+      return;
+    }
+    const out = rows.map(function (r) {
+      const when = r.when
+        ? '<span class="rm-attr-time">' + _escapeHtml(r.when) + '</span>'
+        : "";
+      return (
+        '<div class="rm-attr-row">' +
+          '<div>' +
+            '<span class="rm-attr-label">' + _escapeHtml(r.label) + '</span><br>' +
+            '<span class="rm-attr-name">' + _escapeHtml(r.name) + '</span>' +
+          '</div>' +
+          when +
+        '</div>'
+      );
+    }).join("");
+    body.innerHTML = out;
   }
 
-  function _toggle(chip, roomInfo) {
-    const wasOpen = chip.getAttribute("aria-expanded") === "true";
-    closeAll();
-    if (wasOpen) return;
-    _openFor(chip, roomInfo);
-  }
-
-  function _openFor(chip, roomInfo) {
-    const rows = _buildRows(roomInfo);
+  function _openFor(anchor, roomInfo) {
     const popover = document.createElement("div");
     popover.className = "rm-attr-popover";
     popover.setAttribute("role", "dialog");
 
-    const html = [
-      '<div class="rm-attr-popover-title">Room history</div>',
-    ];
-    if (rows.length === 0) {
-      html.push('<div class="rm-attr-empty">No history yet.</div>');
-    } else {
-      rows.forEach(function (r) {
-        const extra = r.extra ? '<span class="rm-attr-extra"> · ' + _escapeHtml(r.extra) + '</span>' : '';
-        html.push(
-          '<div class="rm-attr-row">' +
-            '<div>' +
-              '<span class="rm-attr-label">' + _escapeHtml(r.label) + extra + '</span><br>' +
-              '<span class="rm-attr-name">' + _escapeHtml(r.name) + '</span>' +
-            '</div>' +
-            (r.when ? '<span class="rm-attr-time">' + _escapeHtml(r.when) + '</span>' : '') +
-          '</div>'
-        );
+    // Static shell — header + body container. The body content is filled
+    // in below: first with a Loading state, then replaced when the audit
+    // log fetch resolves.
+    popover.innerHTML =
+      '<div class="rm-attr-popover-header">' +
+        '<div class="rm-attr-popover-title">Room history</div>' +
+        '<button type="button" class="rm-attr-popover-close" ' +
+                'aria-label="Close" title="Close">&times;</button>' +
+      '</div>' +
+      '<div class="rm-attr-popover-body">' +
+        '<div class="rm-attr-empty">Loading…</div>' +
+      '</div>';
+
+    // Wire the explicit close button so users have a clear dismiss path
+    // in addition to outside-click / Escape.
+    const closeBtn = popover.querySelector(".rm-attr-popover-close");
+    if (closeBtn) {
+      closeBtn.addEventListener("click", function (ev) {
+        ev.stopPropagation();
+        closeAll();
       });
     }
-    popover.innerHTML = html.join("");
 
-    const anchorRect = chip.getBoundingClientRect();
+    // Place the popover up front so positioning is computed from a real
+    // (loading-state) rect — the body's final height is similar enough.
+    const anchorRect = anchor.getBoundingClientRect();
     _positionPopover(popover, anchorRect);
 
-    chip.setAttribute("aria-expanded", "true");
+    anchor.setAttribute("aria-expanded", "true");
     _openPopover = popover;
-    _openChip = chip;
+    _openAnchor = anchor;
+
+    // Scope the audit-log query to this stay using room + checkin time
+    // (the only fields we strictly need). Works uniformly for active
+    // and completed stays — no dependence on a bill_id that may be
+    // synthetic ("active_<room>_<ts>") for active rows.
+    if (roomInfo && roomInfo.room && (roomInfo.checkin_time || roomInfo.checkin)) {
+      _fetchStayHistory(roomInfo).then(function (entries) {
+        // Bail if the user closed the popover while the fetch was in flight.
+        if (_openPopover !== popover) return;
+        const rows = (entries || []).map(_entryToRow);
+        _renderBody(popover, rows);
+        // Reposition — content height changed, may have flipped the
+        // optimal placement above/below.
+        _positionPopover(popover, anchor.getBoundingClientRect());
+      });
+    } else {
+      // Missing the minimum inputs (room + checkin time). Render empty
+      // state immediately rather than spinning forever.
+      _renderBody(popover, []);
+    }
 
     // Outside click closes. Use capture so clicks on inner elements that
     // call stopPropagation still bubble to us.
     _outsideHandler = function (ev) {
       if (popover.contains(ev.target)) return;
-      if (chip.contains(ev.target)) return;
+      if (anchor.contains(ev.target)) return;
       closeAll();
     };
     setTimeout(function () {
@@ -434,25 +390,25 @@
     // Reposition on scroll / resize (throttled).
     let _t = null;
     _reflowHandler = function () {
-      if (!_openPopover || !_openChip || !_openChip.isConnected) return;
+      if (!_openPopover || !_openAnchor || !_openAnchor.isConnected) return;
       clearTimeout(_t);
       _t = setTimeout(function () {
-        if (!_openPopover || !_openChip || !_openChip.isConnected) return;
-        _positionPopover(popover, _openChip.getBoundingClientRect());
+        if (!_openPopover || !_openAnchor || !_openAnchor.isConnected) return;
+        _positionPopover(popover, _openAnchor.getBoundingClientRect());
       }, 16);
     };
     window.addEventListener("scroll", _reflowHandler, true);
     window.addEventListener("resize", _reflowHandler);
 
-    // Auto-close when the anchor chip is removed from the DOM. The rooms
-    // grid re-renders periodically (Firestore onSnapshot, manual refresh)
-    // — the old chip is destroyed but the popover would otherwise stay
-    // floating where the chip used to be, looking "stuck". Watching the
-    // ancestor catches this in one tick.
-    const ancestor = chip.parentElement && chip.parentElement.parentElement;
+    // Auto-close when the anchor is removed from the DOM. The register
+    // table re-renders periodically (Firestore onSnapshot, manual
+    // refresh) — the old anchor button is destroyed but the popover
+    // would otherwise stay floating where it used to be, looking
+    // "stuck". Watching the ancestor catches this in one tick.
+    const ancestor = anchor.parentElement && anchor.parentElement.parentElement;
     if (ancestor && typeof MutationObserver !== "undefined") {
       _anchorObserver = new MutationObserver(function () {
-        if (!chip.isConnected) {
+        if (!anchor.isConnected) {
           closeAll();
         }
       });
@@ -460,25 +416,24 @@
     }
   }
 
-  // Allow any element (e.g. a button in the register table) to act as the
-  // anchor for the same popover. Used by the register tab's reg-history-btn.
+  // Open the popover anchored to an arbitrary button (e.g. the register
+  // tab's reg-history-btn). This is now the only way the popover is
+  // shown — the room-card chip was retired.
+  //
+  // We always open immediately into a Loading state and let the async
+  // audit-log fetch fill in the rows. Pre-checking snapshot fields on
+  // the bill row was unreliable: rows for completed stays often miss
+  // post-checkout cleaning/inspection events because the bill doc is
+  // not updated again after finalization. The audit log is the source
+  // of truth — query it directly via the bill_id foreign key.
   function openForButton(buttonEl, roomInfo) {
     if (!buttonEl || !roomInfo) return;
-    if (!_hasAnyAttribution(roomInfo)) {
-      // Show a minimal "no history" popover so users get feedback.
-      _injectStyles();
-      const dummy = { lastModifiedBy: null };
-      Object.assign(dummy, roomInfo);
-      _openFor(buttonEl, dummy);
-      return;
-    }
     _injectStyles();
     closeAll();
     _openFor(buttonEl, roomInfo);
   }
 
   global.CibaraRoomAttribution = Object.freeze({
-    decorate: decorate,
     closeAll: closeAll,
     openForButton: openForButton,
   });

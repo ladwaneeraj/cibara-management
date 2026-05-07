@@ -714,21 +714,19 @@ class TransactionLogManager {
       return;
     }
 
-    // Cache miss: show spinner and fetch
+    // Cache miss: show spinner. The fetch may already be in flight from
+    // a prefetch fired right before showCheckoutModal; _startPayFetch
+    // de-dupes so we share the same network round-trip instead of
+    // racing it.
     paymentLogsContainer.innerHTML = `<div class="loading-indicator"><span class="loader"></span></div>`;
 
-    apiFetch("/get_history", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        room: roomNumber,
-        name: roomInfo.guest.name,
-        checkin_time: roomInfo.checkin_time || null,
-      }),
-    })
-      .then((res) => res.json())
+    _startPayFetch(roomNumber)
       .then((data) => {
-        if (data.success) _payCache[cacheKey] = { data, ts: Date.now() };
+        if (!data) {
+          paymentLogsContainer.innerHTML =
+            '<div class="log-item">No payments recorded</div>';
+          return;
+        }
         this._renderPaymentData(paymentLogsContainer, data);
       })
       .catch((err) => {
@@ -1104,7 +1102,13 @@ window.renderEnhancedLogs = function () {
 // ── Payment history cache ─────────────────────────────────────────────────────
 // Key: "${room}:${checkin_time}"   Value: { data, ts }
 // TTL: 5 minutes. Invalidated on any write via invalidatePayHistoryCache().
+//
+// Also tracks an in-flight Promise per key so that
+//   prefetchPaymentLogs(123) + updatePaymentLogs(123)
+// fired back-to-back share a single network round-trip instead of
+// each starting their own. Previously they raced and we paid twice.
 const _payCache = {};
+const _payInflight = new Map();
 const _PAY_CACHE_TTL = 5 * 60 * 1000;
 
 function _payCacheKey(roomNumber) {
@@ -1115,29 +1119,60 @@ function _payCacheKey(roomNumber) {
 
 window.invalidatePayHistoryCache = function (roomNumber) {
   delete _payCache[_payCacheKey(roomNumber)];
+  _payInflight.delete(_payCacheKey(roomNumber));
 };
 
-// Prefetch in background so data is ready when modal opens.
-window.prefetchPaymentLogs = function (roomNumber) {
+// Internal — start (or reuse) a fetch. Returns the Promise so callers
+// can await the result without forcing a second request.
+function _startPayFetch(roomNumber) {
   const key = _payCacheKey(roomNumber);
-  if (_payCache[key] && Date.now() - _payCache[key].ts < _PAY_CACHE_TTL) return;
+
+  const cached = _payCache[key];
+  if (cached && Date.now() - cached.ts < _PAY_CACHE_TTL) {
+    return Promise.resolve(cached.data);
+  }
+  const inflight = _payInflight.get(key);
+  if (inflight) return inflight;
+
   const roomInfo = typeof rooms !== "undefined" ? rooms[roomNumber] : null;
-  if (!roomInfo || !roomInfo.guest) return;
-  apiFetch("/get_history", {
+  if (!roomInfo || !roomInfo.guest) {
+    return Promise.resolve(null);
+  }
+
+  const p = apiFetch("/get_history", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       room: roomNumber,
       name: roomInfo.guest.name,
       checkin_time: roomInfo.checkin_time || null,
+      // Canonical foreign key — sends the stay's bill_id directly so
+      // the backend can hit the Q0 single-field query without first
+      // fetching the room doc to read active_bill_id.
+      stay_id: roomInfo.active_bill_id || null,
     }),
   })
     .then((r) => r.json())
     .then((data) => {
-      if (data.success) _payCache[key] = { data, ts: Date.now() };
+      if (data && data.success) _payCache[key] = { data, ts: Date.now() };
+      return data;
     })
-    .catch(() => {});
+    .finally(() => {
+      _payInflight.delete(key);
+    });
+
+  _payInflight.set(key, p);
+  return p;
+}
+
+// Prefetch in background so data is ready when modal opens.
+window.prefetchPaymentLogs = function (roomNumber) {
+  // Fire and forget; the cache + in-flight map do the rest.
+  _startPayFetch(roomNumber).catch(() => {});
 };
+
+// Exposed so updatePaymentLogs can share the same promise pool.
+window._getPaymentLogsPromise = _startPayFetch;
 
 window.updatePaymentLogs = function (roomNumber) {
   if (transactionLogManager) {

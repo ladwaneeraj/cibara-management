@@ -552,6 +552,198 @@ def latest_audit_for_doc(collection: str, doc_id: str):
         return jsonify(success=False, message="Failed to look up audit entry"), 500
 
 
+# ─── Per-stay history ─────────────────────────────────────────────────────
+# Returns the audit trail for a single stay, scoped to the room and the
+# stay's time window. The audit log is the source of truth — querying it
+# directly avoids every "no history yet" edge case caused by stale
+# snapshot fields on the bill row (cleaning / inspection events that
+# happen after checkout never make it back onto the bill doc).
+#
+# Inputs (query params):
+#   room          required. Room number, matches audit_logs.targetId.
+#   checkin       required. "YYYY-MM-DD HH:MM:SS" — lower bound of window.
+#   checkout      optional. Upper bound; if absent, window runs to "now".
+#   status        optional. "completed" extends the upper bound by 24h
+#                 to capture post-stay housekeeping / inspection events.
+#
+# Why query params and not a bill_id path: active stays in the register
+# carry a synthetic id ("active_<room>_<ts>") that doesn't resolve to a
+# bills doc, and legacy stays may lack stay_id entirely. Reading the
+# inputs the caller already has on hand makes the endpoint work for
+# every row, regardless of stay phase.
+#
+# Allowed roles: anyone with register.view (admin + manager). The
+# popover is reachable from the Register tab — same gate.
+_STAY_RELEVANT_ACTIONS = frozenset({
+    "room.checkin",
+    "room.checkin_time_update",
+    "room.checkout",
+    "room.cleaning.complete",
+    "room.inspection.approve",
+    # Transfers carry attribution metadata.from_room → metadata.to_room so
+    # the popover can show "Transferred from 210 to 217 by …". Including
+    # them is also how stay_history discovers the previous room and
+    # gathers events stamped against the old room id.
+    "room.transfer",
+})
+
+
+def _normalise_ts(ts: str) -> str:
+    """Pad short timestamps so string-compare is correct.
+
+    Some bill rows store check-in as "YYYY-MM-DD HH:MM" (no seconds).
+    Audit-log entries always have seconds. Right-pad with ":00" so range
+    comparison doesn't accidentally include/exclude the boundary minute.
+    """
+    ts = (ts or "").strip()
+    if not ts:
+        return ts
+    # 16 chars = "YYYY-MM-DD HH:MM"
+    if len(ts) == 16 and ts[10] == " " and ts[13] == ":":
+        return ts + ":00"
+    return ts
+
+
+@users_bp.route("/api/audit-logs/stay-history", methods=["GET"])
+@requires_permission("register.view")
+def stay_history():
+    room = (request.args.get("room") or "").strip()
+    checkin_time = _normalise_ts(request.args.get("checkin") or "")
+    checkout_time = _normalise_ts(request.args.get("checkout") or "")
+    status = (request.args.get("status") or "").strip().lower()
+
+    if not room or not checkin_time:
+        return jsonify(
+            success=False,
+            message="room and checkin query parameters are required",
+        ), 400
+
+    try:
+        from datetime import datetime as _dt
+        now_str = _dt.now(IST).strftime("%Y-%m-%d %H:%M:%S")
+
+        # ─── Local helper: query relevant events for one room in a window ──
+        # Single Firestore equality on targetId. A room's audit volume is
+        # bounded over its lifetime, so a 500-doc cap with a Python-side
+        # window filter is cheap and avoids new composite indices.
+        def _query_room_events(target_room, lower_ts, upper_ts):
+            q = (
+                db.collection(AUDIT_COLLECTION)
+                .where("targetCollection", "==", "rooms")
+                .where("targetId", "==", target_room)
+                .limit(500)
+            )
+            out = []
+            for doc in q.stream():
+                d = doc.to_dict() or {}
+                ts = d.get("timestamp") or ""
+                action = d.get("action") or ""
+                if action not in _STAY_RELEVANT_ACTIONS:
+                    continue
+                if not ts or ts < lower_ts or ts > upper_ts:
+                    continue
+                out.append({
+                    "action":    action,
+                    "userId":    d.get("userId"),
+                    "userName":  d.get("userName"),
+                    "userRole":  d.get("userRole"),
+                    "timestamp": ts,
+                    # metadata is needed to follow the transfer chain
+                    # (from_room / to_room) and to label the row.
+                    "metadata":  d.get("metadata") or {},
+                    "_room":     target_room,
+                })
+            return out
+
+        # ─── Walk transfer chain backwards ──────────────────────────────
+        # Transfers stamp ONE audit entry against the destination room
+        # (target_id = new_room) carrying metadata.from_room. To gather
+        # events that happened on prior rooms during this stay, follow
+        # the chain back via from_room until either:
+        #   - we hit a room with no transfer-in inside this stay's window
+        #     (the original check-in room), or
+        #   - we exceed a safety cap (defensive — protects against
+        #     audit-log corruption forming a cycle).
+        #
+        # For each room we keep an upper-bound = the timestamp the stay
+        # transferred OUT of that room (i.e. the transfer-in time on the
+        # next room in the chain). For the current room the upper bound
+        # is "now". The lower bound is always the stay's checkin time.
+        all_events = []
+        room_upper = now_str        # upper bound for the current room
+        cur_room = room
+        seen_rooms = set()
+        TRANSFER_CHAIN_CAP = 5      # arbitrary; transfers are rare
+
+        for _hop in range(TRANSFER_CHAIN_CAP):
+            if cur_room in seen_rooms:
+                break  # cycle guard
+            seen_rooms.add(cur_room)
+
+            room_events = _query_room_events(cur_room, checkin_time, room_upper)
+
+            # Look for a transfer INTO this room (target_id == cur_room and
+            # action == room.transfer). The earliest such event in the
+            # window is this stay's transfer-in. Events on cur_room before
+            # that timestamp belong to whoever was here before us — drop
+            # them. Events at or after belong to us.
+            transfer_in = None
+            for e in sorted(room_events, key=lambda x: x["timestamp"]):
+                if e["action"] == "room.transfer":
+                    transfer_in = e
+                    break
+
+            if transfer_in:
+                # Trim earlier events on cur_room (prior occupants).
+                room_events = [e for e in room_events
+                               if e["timestamp"] >= transfer_in["timestamp"]]
+                all_events.extend(room_events)
+
+                from_room = (transfer_in.get("metadata") or {}).get("from_room")
+                if not from_room:
+                    break
+                # Recurse: query the previous room with upper = transfer-in ts.
+                cur_room = str(from_room)
+                room_upper = transfer_in["timestamp"]
+            else:
+                # No transfer into this room — this is the stay's origin.
+                all_events.extend(room_events)
+                break
+
+        # ─── Sort ascending and scope to this stay on the origin room ──
+        # On the ORIGIN room (the one the guest checked into), other
+        # stays may have happened later — guard against that by stopping
+        # at the second room.checkin if we see one.
+        all_events.sort(key=lambda e: e["timestamp"])
+
+        entries = []
+        seen_first_checkin = False
+        for e in all_events:
+            if e["action"] == "room.checkin":
+                if not seen_first_checkin:
+                    seen_first_checkin = True
+                    entries.append(e)
+                else:
+                    # A later room.checkin means a new stay began on the
+                    # origin room. Anything after this is not ours.
+                    break
+            else:
+                entries.append(e)
+
+        # Drop the internal `_room` helper field and return only the
+        # public shape. metadata stays so the frontend can label
+        # transfer rows with from_room / to_room.
+        for e in entries:
+            e.pop("_room", None)
+
+        return jsonify(success=True, entries=entries)
+    except Exception as e:
+        logger.warning(
+            f"stay_history(room={room!r}, checkin={checkin_time!r}) failed: {e}"
+        )
+        return jsonify(success=False, message="Failed to load stay history"), 500
+
+
 # ─── Self-service password change — audit endpoint ────────────────────────
 # The actual password update happens client-side via Firebase Auth
 # (reauthenticate + updatePassword). The frontend POSTs here after success

@@ -2097,10 +2097,31 @@ def get_history():
                     except ValueError:
                         pass
 
+        # Resolve the canonical stay_id (active_bill_id on the room doc)
+        # so query_payments_for_stay can fire its Q0 single-field equality
+        # query — the fast path that returns the full set in one query.
+        #
+        # Order of preference:
+        #   1. Body field — frontend already has it from rooms[roomNumber]
+        #      and sending it eliminates a Firestore room-doc fetch.
+        #   2. Already-fetched room_doc — re-use if we read it above.
+        #   3. New room-doc fetch — only as a last resort.
+        stay_id = (data_json.get("stay_id") or "").strip() or None
+        if not stay_id:
+            try:
+                if "room_doc" in locals() and room_doc and room_doc.exists:
+                    stay_id = (room_doc.to_dict() or {}).get("active_bill_id")
+                else:
+                    _rd = rooms_ref.document(str(room)).get()
+                    if _rd.exists:
+                        stay_id = (_rd.to_dict() or {}).get("active_bill_id")
+            except Exception as _e:
+                logger.warning(f"get_history: stay_id lookup failed: {_e}")
+
         # Fast path: payments collection
         if checkin_dt:
             payments = payment_service.query_payments_for_stay(
-                room, guest_name, checkin_dt
+                room, guest_name, checkin_dt, stay_id=stay_id
             )
         else:
             # No checkin time — query last 30 days for this room+guest
@@ -2394,7 +2415,13 @@ def get_stay_payments():
                 "createdBy": d.get("createdBy", None),
             })
 
-        # Q0 — canonical lookup. Single-field equality, no composite index.
+        # ─── Q0 fast path — canonical foreign key ────────────────────────
+        # When stay_id is present, Q0 alone returns the full set via a
+        # single-field equality query (~200–400ms). Q1/Q2 are legacy
+        # safety nets — they only add value for stays that predate
+        # stay_id stamping. If Q0 finds anything, return immediately;
+        # the fallbacks would only contribute duplicates the dedup step
+        # would drop anyway, while doubling the round-trips.
         q0_count = 0
         if stay_id:
             try:
@@ -2405,29 +2432,48 @@ def get_stay_payments():
             except Exception as e:
                 logger.warning(f"get_stay_payments Q0 failed: {e}")
 
-        # Q1 — legacy heuristic. Runs only if we have the full tuple.
-        if checkin_dt and room and guest_name:
-            checkin_date_str = checkin_dt.strftime("%Y-%m-%d")
+            if q0_count:
+                payments.sort(key=lambda p: (p.get("date", ""), p.get("time", "")))
+                logger.info(
+                    f"get_stay_payments(fast): stay_id={stay_id} → {len(payments)} (Q0={q0_count})"
+                )
+                return jsonify(success=True, payments=payments)
+
+        # ─── Slow path: no stay_id, or Q0 returned nothing. Run the
+        # legacy heuristics in parallel.
+        def _q1():
+            if not (checkin_dt and room and guest_name):
+                return []
             try:
-                q1 = (
+                cd = checkin_dt.strftime("%Y-%m-%d")
+                q = (
                     _payments_col
                     .where(filter=FieldFilter("room", "==", room))
-                    .where(filter=FieldFilter("date", ">=", checkin_date_str))
+                    .where(filter=FieldFilter("date", ">=", cd))
                 )
-                for doc in q1.stream():
-                    if doc.to_dict().get("name") == guest_name:
-                        _add_doc(doc)
+                return [d for d in q.stream() if d.to_dict().get("name") == guest_name]
             except Exception as e:
                 logger.warning(f"get_stay_payments Q1 failed: {e}")
+                return []
 
-            # Q2 — stay_room_key fallback for unconverted booking advances.
+        def _q2():
+            if not (checkin_dt and room):
+                return []
             try:
                 stay_key = f"{room}_{checkin_dt.strftime('%Y-%m-%d %H:%M')}"
-                q2 = _payments_col.where(filter=FieldFilter("stay_room_key", "==", stay_key))
-                for doc in q2.stream():
-                    _add_doc(doc)
+                q = _payments_col.where(filter=FieldFilter("stay_room_key", "==", stay_key))
+                return list(q.stream())
             except Exception as e:
                 logger.warning(f"get_stay_payments Q2 failed: {e}")
+                return []
+
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            f1, f2 = pool.submit(_q1), pool.submit(_q2)
+            for doc in f1.result():
+                _add_doc(doc)
+            for doc in f2.result():
+                _add_doc(doc)
 
         payments.sort(key=lambda p: (p.get("date", ""), p.get("time", "")))
 

@@ -404,9 +404,6 @@ function renderRooms() {
         ? `<div class="guest-name" style="color: #2563eb; font-weight: bold;">✅ Ready to Inspect</div>`
         : `<div class="guest-name" style="color: #f39c12; font-weight: bold;">🧹 Cleaning</div>`;
 
-      // Attribution is shown via the chip+popover in the top-left corner
-      // (added below by CibaraRoomAttribution.decorate). Keeps the card
-      // compact and works the same on mobile and desktop.
       roomContent += `
         <div class="room-number">${roomNumber}</div>
         ${headerLabel}
@@ -419,12 +416,12 @@ function renderRooms() {
       if (_canApprove) {
         // Admin / Manager. Same single button regardless of cleaning_status.
         // It always sends the room to "vacant" via /mark_room_ready_for_checkin.
-        // Short label + nowrap so it stays on one line inside the narrow card.
+        // Reuses .cleaned-btn styling so admin/manager and housekeeping
+        // see the same visual treatment — only the label and handler differ.
         roomContent += `
           <button class="cleaned-btn" data-perm="room.inspection.approve"
                   onclick="handleReadyClick(event, '${roomNumber}')"
-                  title="Mark room ready for next check-in"
-                  style="background:#2563eb;color:#fff;box-shadow:0 2px 6px rgba(37,99,235,0.4);white-space:nowrap;">
+                  title="Mark room ready for next check-in">
             <i class="fas fa-check"></i> Ready
           </button>
         `;
@@ -502,9 +499,6 @@ function renderRooms() {
           <div>${info.checkin_time ? info.checkin_time.split(" ")[1] : ""}</div>
         </div>
       `;
-
-      // Attribution shown via the chip+popover in the top-left corner —
-      // see CibaraRoomAttribution.decorate() call below.
 
       // Compute the renewal due-time as an epoch (ms). The client-side
       // ticker reads this off the DOM every 30s and updates the displayed
@@ -656,23 +650,11 @@ function renderRooms() {
       clearTimeout(longPressTimer);
     });
 
-    // ── Attribution chip (top-left) ─────────────────────────────────────
-    // Adds a small initial-circle if this room has any attribution data
-    // (cleanedBy, lastCheckinBy, inspectedBy, etc.). Click / tap / hover
-    // shows a small popover with the full per-stay history. Mobile and
-    // desktop use the same component — no hover-only interaction.
-    if (window.CibaraRoomAttribution) {
-      try {
-        window.CibaraRoomAttribution.decorate(roomCard, info);
-      } catch (_e) { /* never break rendering */ }
-    }
+    // (Attribution chip on the room card was removed. Per-row history
+    // remains accessible from the Register tab via the history icon.)
 
     roomsGrid.appendChild(roomCard);
   });
-  // Note: open popovers self-close via a MutationObserver inside
-  // room-attribution.js when their anchoring chip is removed. We don't
-  // close eagerly here — that would dismiss a popover the user just
-  // opened during a Firestore snapshot tick.
 
   if (roomCount === 0) {
     const emptyState = document.createElement("div");
@@ -1802,20 +1784,8 @@ function updateCheckoutModal(roomNumber) {
       : "You've already edited this once. Ask an admin if you need to change it again.";
   }
 
-  // ── History icon next to Guest Name ─────────────────────────────────────
-  // Clicking opens the same room-history popover we use on room cards.
-  // Idempotent — re-binds on each modal open.
-  const histBtn = document.getElementById("checkout-history-btn");
-  if (histBtn && window.CibaraRoomAttribution) {
-    histBtn.onclick = function (ev) {
-      ev.preventDefault();
-      ev.stopPropagation();
-      window.CibaraRoomAttribution.openForButton(histBtn, roomInfo);
-    };
-  }
-
-  // (Attribution footer near the check-in time was removed — the same
-  // info is now reachable via the History icon in the modal header.)
+  // (The checkout-modal History icon was removed. Per-stay attribution
+  // is reachable from the Register tab via the row-level history icon.)
   const _existingFooter = document.getElementById("checkout-attribution");
   if (_existingFooter) _existingFooter.remove();
 
@@ -5033,6 +5003,19 @@ document.addEventListener("DOMContentLoaded", function () {
   if (!checkinModal) debugLog("WARNING: checkinModal element missing");
   if (!checkoutModal) debugLog("WARNING: checkoutModal element missing");
   if (!serviceForm) debugLog("WARNING: serviceForm element missing");
+
+  // Re-render rooms once auth resolves. The "Ready" button (and other
+  // role-gated controls) only renders when CibaraAuth.userCan(...) is
+  // truthy. If the room grid renders before the Firebase token claims
+  // are loaded, _user is null and userCan() returns false, so the button
+  // is omitted entirely. After auth becomes ready, fire a single
+  // re-render so the button appears without forcing a page refresh.
+  let _authRerenderDone = false;
+  window.addEventListener("cibaraAuthReady", function () {
+    if (_authRerenderDone) return;
+    _authRerenderDone = true;
+    if (typeof renderRooms === "function") renderRooms();
+  });
 
   // Initialize camera functionality
   initCamera();

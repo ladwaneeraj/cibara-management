@@ -450,14 +450,27 @@
   .reg-customers-header-btn { padding: 0; width: 32px; justify-content: center; }
 }
 
+/* ── Action column wrapper — keeps icons flush right and evenly spaced ── */
+.reg-row-actions {
+  display: flex; align-items: center;
+  gap: 4px; justify-content: flex-end;
+  flex-wrap: nowrap;
+}
+/* When the attribution badge is present it sits on the left while the
+   action buttons remain right-aligned regardless of badge width. */
+.reg-row-actions .reg-attr-badge { margin-right: auto; }
+
 /* ── Payments button (per register row) ── */
 .reg-pay-btn {
-  padding: .18rem .42rem; border: 1px solid #adb5bd;
-  background: #fff; color: #555; border-radius: 4px;
-  cursor: pointer; font-size: .7rem; font-weight: 600;
-  transition: all .15s; white-space: nowrap;
+  display: inline-grid; place-items: center;
+  width: 26px; height: 26px;
+  padding: 0; border: 1px solid #e2e8f0;
+  background: #fff; color: #64748b; border-radius: 6px;
+  cursor: pointer; font-size: .78rem; font-weight: 600;
+  transition: background .12s, border-color .12s, color .12s;
+  white-space: nowrap; vertical-align: middle;
 }
-.reg-pay-btn:hover { background: #6c757d; color: #fff; border-color: #6c757d; }
+.reg-pay-btn:hover { background: #f1f5f9; color: #334155; border-color: #cbd5e1; }
 
 /* ── Bill number link (clickable in register table) ── */
 .reg-bill-link {
@@ -665,30 +678,38 @@
 .rp-spinner { text-align: center; padding: 1.5rem; color: #888; font-size: .82rem; }
 
 /* ── Document view button ── */
-/* Inline guest-count pill next to the guest name */
-.reg-guests-pill {
-  display: inline-flex; align-items: center; gap: 3px;
-  margin-left: 4px;
-  padding: 1px 7px; border-radius: 999px;
-  background: #ede9fe; color: #6d28d9;
-  font: 600 .68rem 'Inter', sans-serif;
-  vertical-align: middle;
+/* Persons column — dedicated narrow column for the guest count.
+   Keeping it separate means the Guest Name column doesn't reflow
+   as the pill is appended/removed. */
+.reg-th-persons,
+.reg-td-persons {
+  text-align: center;
+  white-space: nowrap;
+  width: 1%;          /* shrink to content; stays narrow */
 }
-.reg-guests-pill i { font-size: .62rem; opacity: .85; }
+.reg-guests-pill {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 2px 8px; border-radius: 999px;
+  background: #f1f5f9; color: #64748b;
+  font: 600 .7rem 'Inter', sans-serif;
+  vertical-align: middle;
+  white-space: nowrap;
+  line-height: 1;
+}
+.reg-guests-pill i { font-size: .62rem; opacity: .7; }
 
 /* History icon next to the ₹ button in each register row */
 .reg-history-btn {
   display: inline-grid; place-items: center;
   width: 26px; height: 26px;
-  margin-left: 4px;
   border: 1px solid #e2e8f0; border-radius: 6px;
-  background: #fff; color: #6366f1;
+  background: #fff; color: #94a3b8;
   cursor: pointer;
   transition: background .12s, border-color .12s, color .12s;
   vertical-align: middle;
 }
 .reg-history-btn:hover {
-  background: #eef2ff; border-color: #c7d2fe; color: #4338ca;
+  background: #f1f5f9; border-color: #cbd5e1; color: #475569;
 }
 .reg-history-btn i { font-size: .72rem; }
 
@@ -705,12 +726,25 @@
 .reg-attr-badge i { font-size: .65rem; opacity: .8; }
 
 .reg-doc-btn {
-  padding: .18rem .42rem; border: 1px solid #adb5bd;
-  background: #fff; color: #555; border-radius: 4px;
-  cursor: pointer; font-size: .7rem; font-weight: 600;
-  transition: all .15s; white-space: nowrap; margin-left: .25rem;
+  display: inline-grid; place-items: center;
+  width: 26px; height: 26px;
+  padding: 0; border: 1px solid #e2e8f0;
+  background: #fff; color: #94a3b8; border-radius: 6px;
+  cursor: pointer; font-size: .78rem; font-weight: 600;
+  transition: background .12s, border-color .12s, color .12s;
+  white-space: nowrap; vertical-align: middle;
 }
-.reg-doc-btn:hover { background: #495057; color: #fff; border-color: #495057; }
+.reg-doc-btn:hover { background: #f1f5f9; color: #475569; border-color: #cbd5e1; }
+
+/* Invisible placeholder rendered when a row has no document. Reserves
+   the same footprint as .reg-doc-btn so the ₹ and history icons stay
+   in the same horizontal position across rows. */
+.reg-doc-slot {
+  display: inline-block;
+  width: 26px; height: 26px;
+  vertical-align: middle;
+  flex-shrink: 0;
+}
 
 /* ── ID Documents modal ── */
 .rdoc-overlay {
@@ -1157,14 +1191,25 @@
     <table class="register-table">
       <thead>
         <tr>
-          <th>#</th><th>Bill No</th><th>Guest</th><th>Contact</th>
-          <th>Room</th><th>Check-in</th><th>Check-out</th><th>Days</th>
-          <th>Rate</th><th>Services</th><th>Total</th>
-          <th>Payment</th><th>Status</th><th></th>
+          <th>#</th>
+          <th>Bill No</th>
+          <th>Guest</th>
+          <th class="reg-th-persons">Persons</th>
+          <th>Contact</th>
+          <th>Room</th>
+          <th>Check-in</th>
+          <th>Check-out</th>
+          <th>Days</th>
+          <th>Rate</th>
+          <th>Services</th>
+          <th>Total</th>
+          <th>Payment</th>
+          <th>Status</th>
+          <th></th>
         </tr>
       </thead>
       <tbody id="reg-table-body">
-        <tr><td colspan="14">
+        <tr><td colspan="15">
           <div class="reg-state">
             <i class="fas fa-book-open"></i>
             <p>Open this tab to load register entries</p>
@@ -1660,7 +1705,7 @@
         const entries = byDate[dk];
         const label = dk !== "unknown" ? fmtDate(dk) : "Unknown Date";
         html += `<tr class="date-group-header" data-group="${dk}">
-        <td colspan="14"><i class="fas fa-chevron-down"></i>${label}&nbsp;<span style="font-weight:400;opacity:.65;">(${entries.length})</span></td>
+        <td colspan="15"><i class="fas fa-chevron-down"></i>${label}&nbsp;<span style="font-weight:400;opacity:.65;">(${entries.length})</span></td>
       </tr>`;
         entries.forEach((e) => {
           html += rowHTML(e, dk);
@@ -1685,16 +1730,17 @@
       ? `<button class="reg-bill-link" data-id="${e.id}" title="View Bill">${billNo}</button>`
       : `<span style="font-size:.73rem;white-space:nowrap;">${billNo}</span>`;
     const guestCount = e.guest_count || (e.guest && e.guest.guests) || 1;
-    // Inline 👤N badge — replaces the standalone Guests column. Hides
-    // when the count is 0/missing so a single-guest stay still renders
-    // cleanly. Title attribute gives the long form on hover.
-    const guestsBadge = guestCount > 0
-      ? ` <span class="reg-guests-pill" title="${guestCount} guest${guestCount === 1 ? "" : "s"}"><i class="fas fa-user"></i> ${guestCount}</span>`
-      : "";
+    // Persons count is a dedicated column (header: "Persons"). Keeping
+    // it separate means the Guest Name column doesn't reflow as a pill
+    // is appended/removed. Title attribute gives the long form on hover.
+    const personsCell = guestCount > 0
+      ? `<span class="reg-guests-pill" title="${guestCount} guest${guestCount === 1 ? "" : "s"}"><i class="fas fa-user"></i> ${guestCount}</span>`
+      : `<span style="color:#cbd5e1;">—</span>`;
     return `<tr class="date-group-row" data-date-group="${dk}" data-entry-id="${e.id || ''}">
       <td>${serial}</td>
       <td>${billNoCell}</td>
-      <td><strong>${e.guest_name || "-"}</strong>${guestsBadge}</td>
+      <td><strong>${e.guest_name || "-"}</strong></td>
+      <td class="reg-td-persons">${personsCell}</td>
       <td style="font-size:.78rem;">${e.guest_mobile || "-"}</td>
       <td><strong>${e.room || "-"}</strong></td>
       <td style="font-size:.76rem;white-space:nowrap;">${fmtDT(e.checkin_time)}</td>
@@ -1706,31 +1752,34 @@
       <td>${paymentHTML(e)}</td>
       <td><span class="status-badge ${stCls}">${e.status}</span></td>
       <td style="white-space:nowrap;">
-        ${(e.lastCheckinBy && window.CibaraUsers)
-          ? `<span class="reg-attr-badge" title="Checked in by ${
-              escapeAttr(window.CibaraUsers.nameOf(e.lastCheckinBy))
-            }"><i class="fas fa-user-shield"></i> ${
-              escapeAttr(window.CibaraUsers.nameOf(e.lastCheckinBy))
-            }</span> `
-          : ''}
-        <button class="reg-pay-btn"
-            data-perm="payment.edit"
-            data-room="${e.room}"
-            data-guest="${encodeURIComponent(e.guest_name || '')}"
-            data-checkin="${e.checkin_time || ''}"
-            title="View / edit payments">₹</button>
-        <button class="reg-history-btn"
-            data-room="${e.room}"
-            data-entry-id="${e.id || ''}"
-            title="Room history">
-          <i class="fas fa-history"></i>
-        </button>${e.guest_mobile
-          ? `<button class="reg-doc-btn"
-                data-mobile="${e.guest_mobile}"
-                data-guest="${encodeURIComponent(e.guest_name || '')}"
-                title="View ID documents"
-                style="display:none;"><i class="fas fa-id-card"></i></button>`
-          : ''}</td>
+        <div class="reg-row-actions">
+          ${(e.lastCheckinBy && window.CibaraUsers)
+            ? `<span class="reg-attr-badge" title="Checked in by ${
+                escapeAttr(window.CibaraUsers.nameOf(e.lastCheckinBy))
+              }"><i class="fas fa-user-shield"></i> ${
+                escapeAttr(window.CibaraUsers.nameOf(e.lastCheckinBy))
+              }</span>`
+            : ''}
+          <button class="reg-pay-btn"
+              data-perm="payment.edit"
+              data-room="${e.room}"
+              data-guest="${encodeURIComponent(e.guest_name || '')}"
+              data-checkin="${e.checkin_time || ''}"
+              title="View / edit payments">₹</button>
+          <button class="reg-history-btn"
+              data-room="${e.room}"
+              data-entry-id="${e.id || ''}"
+              title="Room history">
+            <i class="fas fa-history"></i>
+          </button>${e.guest_mobile
+            ? `<button class="reg-doc-btn"
+                  data-mobile="${e.guest_mobile}"
+                  data-guest="${encodeURIComponent(e.guest_name || '')}"
+                  title="View ID documents"
+                  style="visibility:hidden;"><i class="fas fa-id-card"></i></button>`
+            : `<span class="reg-doc-slot" aria-hidden="true"></span>`}
+        </div>
+      </td>
     </tr>`;
   }
 
@@ -1760,17 +1809,17 @@
   function showLoading() {
     const t = dom("reg-table-body");
     if (t)
-      t.innerHTML = `<tr><td colspan="14"><div class="reg-state"><div class="reg-loader"></div><p>Loading…</p></div></td></tr>`;
+      t.innerHTML = `<tr><td colspan="15"><div class="reg-state"><div class="reg-loader"></div><p>Loading…</p></div></td></tr>`;
   }
   function showEmpty() {
     const t = dom("reg-table-body");
     if (t)
-      t.innerHTML = `<tr><td colspan="14"><div class="reg-state"><i class="fas fa-inbox"></i><p>No entries found for this period</p></div></td></tr>`;
+      t.innerHTML = `<tr><td colspan="15"><div class="reg-state"><i class="fas fa-inbox"></i><p>No entries found for this period</p></div></td></tr>`;
   }
   function showError(msg) {
     const t = dom("reg-table-body");
     if (t)
-      t.innerHTML = `<tr><td colspan="14"><div class="reg-state" style="color:#dc3545"><i class="fas fa-exclamation-circle"></i><p>${msg}</p></div></td></tr>`;
+      t.innerHTML = `<tr><td colspan="15"><div class="reg-state" style="color:#dc3545"><i class="fas fa-exclamation-circle"></i><p>${msg}</p></div></td></tr>`;
   }
 
   // ── Tab activation watch ──────────────────────────────────────────────────────
@@ -1861,11 +1910,14 @@
       if (!data.success) return;
 
       const withDocs = new Set(data.mobiles_with_docs || []);
-      // Reveal the hidden doc buttons for mobiles that have documents
+      // Reveal the hidden doc buttons for mobiles that have documents.
+      // Use visibility (not display) so the button's footprint is always
+      // reserved — keeps the ₹ and history icons in the same column
+      // position regardless of whether a doc exists for that row.
       document.querySelectorAll(".reg-doc-btn").forEach(btn => {
-        if (withDocs.has(btn.dataset.mobile)) {
-          btn.style.display = "inline-block";
-        }
+        btn.style.visibility = withDocs.has(btn.dataset.mobile)
+          ? "visible"
+          : "hidden";
       });
     } catch (_) {
       // Silent fail — buttons stay hidden, not a blocking issue
@@ -1957,6 +2009,26 @@
     if (type === "error") console.error(msg); else console.log(msg);
   }
 
+  // ── Stay-payments cache ──────────────────────────────────────────────────
+  // Key: stay_id when present, else "{room}|{checkin_time}".
+  // Value: { payments, ts }. TTL ~3 min — short enough that an edit on
+  // another device shows up quickly, long enough that re-opening the
+  // same row stays instant.
+  // Also tracks an in-flight Promise so a second open while the first
+  // fetch is still pending reuses it instead of starting a parallel call.
+  const _stayPmtCache = new Map();
+  const _stayPmtInflight = new Map();
+  const _STAY_PMT_TTL_MS = 3 * 60 * 1000;
+
+  function _stayPmtCacheKey(entry) {
+    return entry.stay_id || `${entry.room || ""}|${entry.checkin_time || ""}`;
+  }
+
+  function _invalidateStayPmtCache(entry) {
+    if (!entry) return;
+    _stayPmtCache.delete(_stayPmtCacheKey(entry));
+  }
+
   // ── Edit-payment access (RBAC) ────────────────────────────────────────────
   // Was: ask for the manager password via a custom rpm-overlay modal.
   // Now: check the current user's role. Admin → load payments straight away.
@@ -1974,46 +2046,98 @@
     _loadAndShowPayments();
   }
 
-  // Shared fetch logic — called after password is confirmed (via prompt or cache)
-  async function _loadAndShowPayments() {
-    const btn = dom("rpm-submit");
-    const err = dom("rpm-err");
+  // Fetch payment records for the active stay. Returns a Promise that
+  // resolves to the payments array. De-dupes concurrent calls via
+  // _stayPmtInflight so a prefetch + an immediate open share one network
+  // round-trip.
+  function _fetchStayPayments(entry) {
+    const key = _stayPmtCacheKey(entry);
 
-    try {
-      const res = await apiFetch("/get_stay_payments", {
-        method:  "POST",
-        headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify({
-          password:     pmState.password,
-          // Canonical foreign key (Phase-6). Backend falls back to the
-          // legacy heuristic when stay_id is absent (legacy active stays).
-          stay_id:      pmState.entry.stay_id || "",
-          room:         pmState.entry.room,
-          guest_name:   pmState.entry.guest_name,
-          checkin_time: pmState.entry.checkin_time,
-        }),
+    const cached = _stayPmtCache.get(key);
+    if (cached && Date.now() - cached.ts < _STAY_PMT_TTL_MS) {
+      return Promise.resolve(cached.payments);
+    }
+
+    const inflight = _stayPmtInflight.get(key);
+    if (inflight) return inflight;
+
+    const promise = apiFetch("/get_stay_payments", {
+      method:  "POST",
+      headers: { "Content-Type": "application/json" },
+      body:    JSON.stringify({
+        password:     pmState.password,
+        // Canonical foreign key (Phase-6). Backend falls back to the
+        // legacy heuristic when stay_id is absent (legacy active stays).
+        stay_id:      entry.stay_id || "",
+        room:         entry.room,
+        guest_name:   entry.guest_name,
+        checkin_time: entry.checkin_time,
+      }),
+    })
+      .then(async (res) => {
+        if (res.status === 403) {
+          const e = new Error("forbidden");
+          e.code = 403;
+          throw e;
+        }
+        const data = await res.json();
+        if (!data.success) {
+          throw new Error(data.message || "Failed to load payments.");
+        }
+        const payments = data.payments || [];
+        _stayPmtCache.set(key, { payments, ts: Date.now() });
+        return payments;
+      })
+      .finally(() => {
+        _stayPmtInflight.delete(key);
       });
 
-      if (res.status === 403) {
+    _stayPmtInflight.set(key, promise);
+    return promise;
+  }
+
+  // Open the modal IMMEDIATELY in a loading state, fetch in the background,
+  // then populate. Previously this awaited the network round-trip before
+  // showing anything, so the ₹ button felt unresponsive on first click.
+  // If the cache has a fresh hit the modal renders the data on the very
+  // same tick — no perceptible delay.
+  async function _loadAndShowPayments() {
+    const entry = pmState.entry;
+    if (!entry) return;
+
+    const key = _stayPmtCacheKey(entry);
+    const cached = _stayPmtCache.get(key);
+    const isFreshCache = cached && Date.now() - cached.ts < _STAY_PMT_TTL_MS;
+
+    if (isFreshCache) {
+      // Cache hit — show the modal already populated. No spinner.
+      pmState.payments = cached.payments;
+      _showPaymentsModal();
+    } else {
+      // Cache miss — show the modal with a Loading state right away,
+      // then swap content in once the fetch resolves.
+      pmState.payments = [];
+      _showPaymentsModal({ loading: true });
+    }
+
+    try {
+      const payments = await _fetchStayPayments(entry);
+      // Bail if the user closed the modal or switched to another stay
+      // while the fetch was in flight.
+      if (pmState.entry !== entry) return;
+      pmState.payments = payments;
+      // Re-render only the inner content; the modal is already on screen.
+      _renderPaymentsTable(dom("rp-content"));
+      _renderServicesSection(dom("rp-services-section"));
+    } catch (err) {
+      if (err && err.code === 403) {
         // Stored password rejected (e.g. changed server-side) — clear and re-prompt
         pmState.password = null;
-        _openPasswordPrompt(pmState.entry);
+        _closePaymentsModal();
+        _openPasswordPrompt(entry);
         return;
       }
-
-      const data = await res.json();
-      if (!data.success) {
-        _notify(data.message || "Failed to load payments.", "error");
-        return;
-      }
-
-      pmState.payments = data.payments || [];
-      _showPaymentsModal();
-
-    } catch (e) {
-      _notify("Network error loading payments.", "error");
-    } finally {
-      if (btn) { btn.disabled = false; btn.textContent = "Open Payments"; }
+      _notify(err && err.message ? err.message : "Network error loading payments.", "error");
     }
   }
 
@@ -2081,11 +2205,15 @@
   }
 
   // ── Payments modal ────────────────────────────────────────────────────────────
-  function _showPaymentsModal() {
+  // opts.loading=true → shows a spinner instead of the (empty) table. Used
+  // when the data fetch is still in flight so the modal can appear
+  // immediately on click instead of after the network round-trip.
+  function _showPaymentsModal(opts) {
     const overlay = dom("rp-overlay");
     const meta    = dom("rp-meta");
     const content = dom("rp-content");
     if (!overlay) return;
+    const loading = !!(opts && opts.loading);
 
     const e = pmState.entry;
     if (meta) {
@@ -2110,9 +2238,20 @@
 
     pmState.editId     = null;
     pmState.editSvcIdx = null;
-    _renderPaymentsTable(content);
-    // Render services section (filters out water services)
-    _renderServicesSection(dom("rp-services-section"));
+    if (loading) {
+      // Show the modal shell with a spinner. The data is still being
+      // fetched; _loadAndShowPayments will call _renderPaymentsTable
+      // when it resolves.
+      if (content) {
+        content.innerHTML = '<div class="rp-spinner">Loading payments…</div>';
+      }
+      const svcs = dom("rp-services-section");
+      if (svcs) svcs.innerHTML = "";
+    } else {
+      _renderPaymentsTable(content);
+      // Render services section (filters out water services)
+      _renderServicesSection(dom("rp-services-section"));
+    }
     overlay.classList.add("show");
   }
 
@@ -2302,6 +2441,7 @@
       }
 
       pmState.editId = null;
+      _invalidateStayPmtCache(pmState.entry);
       _renderPaymentsTable(dom("rp-content"));
       _notify("Payment updated.", "success");
 
@@ -2380,6 +2520,7 @@
           _closeDeleteModal();
           // Remove from local state and re-render instantly
           pmState.payments = (pmState.payments || []).filter(x => x.id !== payId);
+          _invalidateStayPmtCache(pmState.entry);
           _renderPaymentsTable(dom("rp-content"));
           _notify("Transaction deleted.", "success");
           // Bust register cache

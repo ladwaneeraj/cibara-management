@@ -259,90 +259,161 @@ def _normalise(data: dict) -> dict:
 # READ — targeted Firestore queries replacing get_all_logs() full downloads
 # ---------------------------------------------------------------------------
 
-def query_payments_for_stay(room, guest_name, checkin_dt):
+def query_payments_for_stay(room, guest_name, checkin_dt, stay_id=None):
     """
     Return all payment docs for a specific room stay.
 
-    Two queries merged and deduplicated:
-      Q1. room == X AND name == Y AND date >= checkin_date  (normal payments)
-      Q2. stay_room_key == "{room}_{checkin_datetime}"      (booking advances paid
-          before checkin; linked at conversion time via stay_room_key backfill)
+    Strategy — four queries merged and deduplicated, run in PARALLEL:
+      Q0. stay_id == X                                       (canonical foreign key,
+          single-field equality, fastest. Skipped if stay_id is None.)
+      Q1. room == X AND name == Y AND date >= checkin_date   (normal payments)
+      Q2. stay_room_key == "{room}_{checkin_datetime}"       (booking advances
+          paid pre-checkin; linked at conversion via stay_room_key)
+      Q3. room == X AND type == "booking_advance"            (legacy fallback for
+          unlinked booking advances; Python-filtered by guest+date)
 
-    Q2 uses a single-field equality filter — no composite index required.
+    The four queries each take 0.5–1.5s against Firestore; running them
+    sequentially was the 5s bottleneck on /get_history. ThreadPoolExecutor
+    issues them concurrently — wall-clock collapses to roughly the slowest
+    single query.
 
     Falls back to empty list on any error.
     """
     if _payments_ref is None:
         return []
 
-    results = []
-    seen_ids = set()
     checkin_date_str = checkin_dt.strftime("%Y-%m-%d")
     checkin_dt_str   = checkin_dt.strftime("%Y-%m-%d %H:%M")
     room_str = str(room)
 
-    # Q1: Normal payments from checkin date onwards
-    try:
-        q1 = (
-            _payments_ref
-            .where(filter=fa_firestore.FieldFilter("room", "==", room_str))
-            .where(filter=fa_firestore.FieldFilter("name", "==", guest_name))
-            .where(filter=fa_firestore.FieldFilter("date", ">=", checkin_date_str))
-        )
-        for doc in q1.stream():
-            seen_ids.add(doc.id)
-            results.append(doc.to_dict())
-    except Exception as e:
-        logger.error(f"PaymentService query_payments_for_stay q1 failed: {e}")
+    # ─── Query callables (each returns list of (doc_id, doc_dict)) ────────
+    def _run_q0():
+        if not stay_id:
+            return []
+        try:
+            q = _payments_ref.where(
+                filter=fa_firestore.FieldFilter("stay_id", "==", stay_id)
+            )
+            return [(d.id, d.to_dict()) for d in q.stream()]
+        except Exception as e:
+            logger.warning(f"PaymentService query_payments_for_stay Q0 failed: {e}")
+            return []
 
-    # Q2: Booking advances linked to this stay via stay_room_key.
-    # Single-field equality — no composite index needed.
-    # The convert_booking_to_checkin route backfills stay_room_key on all
-    # booking_advance / booking_payment docs for the booking.
-    try:
-        stay_key = f"{room_str}_{checkin_dt_str}"
-        q2 = _payments_ref.where(
-            filter=fa_firestore.FieldFilter("stay_room_key", "==", stay_key)
-        )
-        for doc in q2.stream():
-            if doc.id not in seen_ids:
-                seen_ids.add(doc.id)
-                results.append(doc.to_dict())
-    except Exception as e:
-        logger.warning(f"PaymentService booking-advance Q2 failed: {e}")
+    def _run_q1():
+        try:
+            q = (
+                _payments_ref
+                .where(filter=fa_firestore.FieldFilter("room", "==", room_str))
+                .where(filter=fa_firestore.FieldFilter("name", "==", guest_name))
+                .where(filter=fa_firestore.FieldFilter("date", ">=", checkin_date_str))
+            )
+            return [(d.id, d.to_dict()) for d in q.stream()]
+        except Exception as e:
+            logger.error(f"PaymentService query_payments_for_stay Q1 failed: {e}")
+            return []
 
-    # Q3: Fallback — catch booking advance payments that were NOT linked via
-    # stay_room_key (e.g. backfill failed at convert_booking_to_checkin).
-    # Queries by room + type to avoid needing a composite index; filters by
-    # guest name and date in Python.  Only picks up payments dated BEFORE the
-    # checkin date so we don't accidentally include next-stay advances.
-    try:
-        q3 = (
-            _payments_ref
-            .where(filter=fa_firestore.FieldFilter("room", "==", room_str))
-            .where(filter=fa_firestore.FieldFilter("type",  "==", "booking_advance"))
-        )
-        for doc in q3.stream():
-            if doc.id in seen_ids:
-                continue
-            pdata = doc.to_dict()
-            # Must match guest name and be dated strictly before checkin
-            if (pdata.get("name") == guest_name
-                    and pdata.get("date", "9999-99-99") < checkin_date_str):
-                seen_ids.add(doc.id)
-                results.append(pdata)
-                # Also backfill stay_room_key now so Q2 will find it next time
-                try:
-                    doc.reference.update({
-                        "stay_room_key":    f"{room_str}_{checkin_dt_str}",
-                        "stay_checkin_date": checkin_date_str,
-                    })
-                except Exception:
-                    pass
-    except Exception as e:
-        logger.warning(f"PaymentService booking-advance Q3 failed: {e}")
+    def _run_q2():
+        try:
+            stay_key = f"{room_str}_{checkin_dt_str}"
+            q = _payments_ref.where(
+                filter=fa_firestore.FieldFilter("stay_room_key", "==", stay_key)
+            )
+            return [(d.id, d.to_dict()) for d in q.stream()]
+        except Exception as e:
+            logger.warning(f"PaymentService query_payments_for_stay Q2 failed: {e}")
+            return []
+
+    def _run_q3():
+        # Legacy fallback for booking advances NOT linked via stay_room_key.
+        # We Python-filter by guest_name + date < checkin_date so older stays'
+        # advances don't leak in.
+        try:
+            q = (
+                _payments_ref
+                .where(filter=fa_firestore.FieldFilter("room", "==", room_str))
+                .where(filter=fa_firestore.FieldFilter("type",  "==", "booking_advance"))
+            )
+            out = []
+            backfill_targets = []
+            for doc in q.stream():
+                pdata = doc.to_dict()
+                if (pdata.get("name") == guest_name
+                        and pdata.get("date", "9999-99-99") < checkin_date_str):
+                    out.append((doc.id, pdata))
+                    # Don't run the backfill .update() inline — that's a
+                    # write per stale row and extends the request. Capture
+                    # the refs so we can fire-and-forget them after the
+                    # response is dispatched.
+                    backfill_targets.append(doc.reference)
+            # Backfill stay_room_key in a daemon thread so future Q2 calls
+            # find these advances directly. Failure is silent — Q3 keeps
+            # working as the safety net.
+            if backfill_targets:
+                _bg_backfill_stay_room_key(
+                    backfill_targets, room_str, checkin_dt_str, checkin_date_str
+                )
+            return out
+        except Exception as e:
+            logger.warning(f"PaymentService query_payments_for_stay Q3 failed: {e}")
+            return []
+
+    # ─── Fast path: stay_id Q0 short-circuit ──────────────────────────────
+    # When the caller has the canonical foreign key (the case for every
+    # stay created post Phase-2), Q0 alone returns the full set in a
+    # single-field equality query — typically 200–400ms. Q1/Q2/Q3 are
+    # legacy safety nets only — they exist to catch payments written
+    # before stay_id stamping, or booking advances paid pre-checkin and
+    # never linked. If Q0 returns ANY row, those fallbacks would only
+    # add duplicates that the dedup step already drops; running them
+    # adds round-trips for no signal. Skip and return.
+    if stay_id:
+        q0_hits = _run_q0()
+        if q0_hits:
+            seen_ids = set()
+            results = []
+            for doc_id, doc_dict in q0_hits:
+                if doc_id in seen_ids:
+                    continue
+                seen_ids.add(doc_id)
+                results.append(doc_dict)
+            return _dedup_payments(results)
+
+    # ─── Slow path: legacy/incomplete data — run Q1/Q2/Q3 in parallel ──
+    # Either no stay_id was provided, or the stay predates Phase-2 and
+    # has no payments stamped with stay_id yet. We need the legacy
+    # heuristics. Parallelize so wall-clock = slowest single query.
+    from concurrent.futures import ThreadPoolExecutor
+    seen_ids = set()
+    results = []
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        futures = [pool.submit(fn) for fn in (_run_q1, _run_q2, _run_q3)]
+        for fut in futures:
+            for doc_id, doc_dict in fut.result():
+                if doc_id in seen_ids:
+                    continue
+                seen_ids.add(doc_id)
+                results.append(doc_dict)
 
     return _dedup_payments(results)
+
+
+def _bg_backfill_stay_room_key(refs, room_str, checkin_dt_str, checkin_date_str):
+    """Fire-and-forget backfill for legacy booking-advance docs.
+
+    Q3 runs only when a pre-checkin advance hasn't yet been stamped with
+    stay_room_key. Once we've identified those docs we stamp them so Q2
+    finds them next time and Q3 is no longer needed for this stay.
+    """
+    def _do():
+        for ref in refs:
+            try:
+                ref.update({
+                    "stay_room_key":     f"{room_str}_{checkin_dt_str}",
+                    "stay_checkin_date": checkin_date_str,
+                })
+            except Exception:
+                pass
+    threading.Thread(target=_do, daemon=True).start()
 
 
 def _dedup_payments(payments: list) -> list:

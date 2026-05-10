@@ -44,6 +44,19 @@ def get_register_data():
         start_date = data_json.get("start_date")
         end_date = data_json.get("end_date")
 
+        # `mode` selects which timestamp the date range filters on.
+        #   "checkin"  (default) — used by the Register tab. Includes active
+        #                          (still-checked-in) rooms whose checkin_time
+        #                          falls in range.
+        #   "checkout"           — used by the Bills tab. A bill belongs to the
+        #                          GST month it was actually invoiced (i.e. the
+        #                          checkout date), NOT the day the guest walked
+        #                          in. Active rooms are excluded since they have
+        #                          no checkout_time yet.
+        mode = (data_json.get("mode") or "checkin").lower()
+        if mode not in ("checkin", "checkout"):
+            mode = "checkin"
+
         if not start_date or not end_date:
             return jsonify(success=False, message="Start and end dates are required")
 
@@ -56,7 +69,7 @@ def get_register_data():
         range_start_str = start_dt.strftime("%Y-%m-%d %H:%M")
         range_end_str = end_dt.strftime("%Y-%m-%d %H:%M")
 
-        logger.info(f"=== REGISTER: {start_date} to {end_date} ===")
+        logger.info(f"=== REGISTER ({mode}): {start_date} to {end_date} ===")
 
         import time as _t
         from concurrent.futures import ThreadPoolExecutor
@@ -98,8 +111,15 @@ def get_register_data():
         metadata_needed = []
 
         # ── 1. Active rooms — use pre-fetched payments (NO per-room queries) ──
+        # Skipped entirely in checkout mode: an active stay has no checkout_time
+        # yet, so it can't belong to any "billed in this period" cohort. The
+        # Register tab (checkin mode) still includes them.
         active_count = 0
-        for room_number, room_data_item in rooms_data.items():
+        if mode == "checkout":
+            rooms_iterable = []
+        else:
+            rooms_iterable = rooms_data.items()
+        for room_number, room_data_item in rooms_iterable:
             if room_data_item.get("status") != "occupied":
                 continue
 
@@ -199,10 +219,15 @@ def get_register_data():
         skipped_count = 0
 
         try:
+            # In checkout mode the date range filters on `checkout_time` so a
+            # bill belongs to the GST month it was actually invoiced. In checkin
+            # mode (legacy / Register tab) we keep the original behaviour and
+            # filter on `checkin_time`.
+            _range_field = "checkout_time" if mode == "checkout" else "checkin_time"
             bills_query = (
                 bills_ref
-                .where(filter=FieldFilter("checkin_time", ">=", range_start_str))
-                .where(filter=FieldFilter("checkin_time", "<", range_end_str))
+                .where(filter=FieldFilter(_range_field, ">=", range_start_str))
+                .where(filter=FieldFilter(_range_field, "<", range_end_str))
             )
 
             for bill_doc in bills_query.stream():

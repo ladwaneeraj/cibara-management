@@ -411,7 +411,10 @@
     filters: { search: "", source: "all", payment: "all" },
     lastLoadedRange: null,
     _reqId: 0,            // incremented on every fetch; detects stale responses
-    sort: { key: null, dir: "asc" },
+    // Default: sorted flat list by bill number, latest first. Bill numbers
+    // are minted sequentially at checkout (CC/YYYY/MM/XXXXX), so descending
+    // bill_no is also chronologically newest-first across months.
+    sort: { key: "bill_no", dir: "desc" },
     // Pay modal state
     payModal: {
       billId: null,
@@ -694,8 +697,11 @@
   <!-- View toggle -->
   <div class="bl-view-toggle">
     <span style="font-size:.72rem;color:#888;margin-right:.35rem;font-weight:600;">View:</span>
-    <button id="bl-view-date" class="bl-view-btn bl-view-active">&#128197; Check-in Date</button>
-    <button id="bl-view-billno" class="bl-view-btn">&#8645; Bill No</button>
+    <!-- Default active view is Bill No (desc) so the latest invoice sits at
+         the top. The "Date" group header reflects checkout date because the
+         tab cohorts by checkout (GST-month semantics). -->
+    <button id="bl-view-date" class="bl-view-btn">&#128197; Checkout Date</button>
+    <button id="bl-view-billno" class="bl-view-btn bl-view-active">&#8645; Bill No &#9660;</button>
   </div>
 
   <!-- Table -->
@@ -1178,13 +1184,14 @@
       renderTable();
     });
 
-    // "Bill No" → cycle asc → desc → asc on repeated clicks
+    // "Bill No" → first activation lands on desc (latest first, matches the
+    // page default). Subsequent clicks toggle desc ↔ asc.
     btnBillNo.addEventListener("click", () => {
       if (state.sort.key === "bill_no") {
         state.sort.dir = state.sort.dir === "asc" ? "desc" : "asc";
       } else {
         state.sort.key = "bill_no";
-        state.sort.dir = "asc";
+        state.sort.dir = "desc";
       }
       _updateSortArrows();
       renderTable();
@@ -1232,7 +1239,10 @@
       const res = await apiFetch("/get_register_data", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ start_date: start, end_date: end }),
+        // mode:"checkout" — Bills tab cohorts by checkout date (GST-month
+        // semantics), not by check-in date. Backend defaults to "checkin"
+        // for the Register tab which uses the same endpoint.
+        body: JSON.stringify({ start_date: start, end_date: end, mode: "checkout" }),
       });
       if (myReqId !== state._reqId) return; // a newer request superseded this one
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -1263,7 +1273,8 @@
       const res = await apiFetch("/get_register_data", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ start_date: start, end_date: end }),
+        // Same mode:"checkout" semantics as loadData — see comment there.
+        body: JSON.stringify({ start_date: start, end_date: end, mode: "checkout" }),
       });
       if (!res.ok) return;
       const data = await res.json();
@@ -1315,7 +1326,11 @@
       const tr = tbody.querySelector(`tr[data-entry-id="${newEntry.id}"]`);
       if (!tr) return;
 
-      const dk = (newEntry.checkin_time || "").split(" ")[0] || "unknown";
+      // Bills tab cohorts by checkout date — group key derives from
+      // checkout_time, with checkin_time as a safety fallback for legacy
+      // rows missing the checkout stamp.
+      const _dkSrc = newEntry.checkout_time || newEntry.checkin_time || "";
+      const dk = _dkSrc.split(" ")[0] || "unknown";
       const tmp = document.createElement("tbody");
       tmp.innerHTML = rowHTML(newEntry, dk, i + 1);
       const newRow = tmp.querySelector("tr");
@@ -1817,17 +1832,23 @@
       });
       let html = "";
       sorted.forEach((e, i) => {
-        const dk = (e.checkin_time || "").split(" ")[0] || "unknown";
+        // Same checkout-first key derivation as the date-grouped view, so
+        // group attributes stay consistent across toggles.
+        const _dkSrc = e.checkout_time || e.checkin_time || "";
+        const dk = _dkSrc.split(" ")[0] || "unknown";
         html += rowHTML(e, dk, i + 1);
       });
       tbody.innerHTML = html;
       return;
     }
 
-    // Default: date-grouped view (dates descending)
+    // Date-grouped view (dates descending). Bills tab cohorts by checkout
+    // date, so group keys are derived from checkout_time. checkin_time is a
+    // safety fallback for legacy rows missing checkout_time.
     const byDate = {};
     state.filteredEntries.forEach((e) => {
-      const dk = (e.checkin_time || "").split(" ")[0] || "unknown";
+      const _dkSrc = e.checkout_time || e.checkin_time || "";
+      const dk = _dkSrc.split(" ")[0] || "unknown";
       if (!byDate[dk]) byDate[dk] = [];
       byDate[dk].push(e);
     });

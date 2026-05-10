@@ -5046,8 +5046,21 @@ document.addEventListener("DOMContentLoaded", function () {
   // Setup checkout confirmation
   setTimeout(setupCheckoutConfirmation, 500);
 
-  // Initialize discount functionality
-  setTimeout(initializeDiscountFeature, 1000);
+  // Initialize discount functionality.
+  // Must wait for CibaraAuth to resolve the user role — otherwise
+  // addDiscountToCheckoutModal() runs while _user is still null, userCan()
+  // returns false, and the "+ Add Discount" button is silently dropped for
+  // admin users. Previously gated only on a 1s setTimeout, which lost the
+  // race on slower auth-token loads (the symptom: discount option
+  // disappears for admin in the checkout modal).
+  if (window.CibaraAuth && typeof window.CibaraAuth.ready === "function") {
+    window.CibaraAuth.ready().then(initializeDiscountFeature);
+  } else {
+    // Fallback if auth shim isn't loaded for some reason — keep the old
+    // delayed init so the feature degrades to its prior behaviour rather
+    // than disappearing entirely.
+    setTimeout(initializeDiscountFeature, 1000);
+  }
 
   // Initialize bookings if available
   if (typeof initBookings === "function") {

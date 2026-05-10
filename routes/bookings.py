@@ -337,7 +337,36 @@ def convert_booking_to_checkin():
         if remaining_payment > 0:
             totals_update[payment_method] = firestore.Increment(remaining_payment)
 
-        room_price = int(booking_data.get("room_price", booking["total_amount"]))
+        # Resolve PER-NIGHT room price. The booking doc stores `total_amount`
+        # for the whole stay (e.g. ₹1,800 for 2 nights @ ₹900) and, when the
+        # frontend supplied it, a separate `rate_per_night`. The previous
+        # default — `booking["total_amount"]` — pushed the multi-night total
+        # in as the per-night rate, inflating room charges and pushing some
+        # stays into the wrong GST slab. Resolution order:
+        #   1. explicit `room_price` in the request (frontend override)
+        #   2. `booking.rate_per_night` if stored at booking time
+        #   3. total_amount / nights between check_in_date and check_out_date
+        #   4. final fallback: total_amount (one-night stay or unknown dates)
+        _override_price = booking_data.get("room_price")
+        if _override_price is not None:
+            room_price = int(_override_price)
+        else:
+            _stored_rate = booking.get("rate_per_night")
+            if _stored_rate and int(_stored_rate) > 0:
+                room_price = int(_stored_rate)
+            else:
+                _nights = 1
+                try:
+                    _ci = datetime.strptime(booking["check_in_date"], "%Y-%m-%d")
+                    _co = datetime.strptime(booking["check_out_date"], "%Y-%m-%d")
+                    _nights = max((_co - _ci).days, 1)
+                except Exception as _e:
+                    logger.warning(
+                        f"convert_booking_to_checkin: nights calc fell back to 1 "
+                        f"(booking_id={booking_id}, err={_e})"
+                    )
+                _total = int(booking.get("total_amount") or 0)
+                room_price = int(round(_total / _nights)) if _nights else _total
         is_ac = False
 
         # Rooms 200-206 support AC; use stored booking flag or frontend override

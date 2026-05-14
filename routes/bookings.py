@@ -7,7 +7,8 @@ from config import (
     db, bookings_ref, logs_ref, totals_ref, IST, logger,
     invalidate_rooms_and_totals,
     rooms_ref, get_next_serial_number, store_transaction_metadata, send_whatsapp_message,
-    settlements_ref, ota_settlements_ref  # logs_ref kept for whatsapp_messages only
+    settlements_ref, ota_settlements_ref,  # logs_ref kept for whatsapp_messages only
+    create_cancellation_charge_bill,
 )
 from services import payment_service, customer_service, bills_service
 from services.auth_service import requires_permission
@@ -39,6 +40,110 @@ def get_bookings():
     except Exception as e:
         logger.error(f"Error getting bookings: {str(e)}")
         return jsonify(success=False, message=f"Error getting bookings: {str(e)}")
+
+@bookings_bp.route("/get_upcoming_bookings", methods=["GET"])
+def get_upcoming_bookings():
+    """
+    Return a compact map of {room: <booking>} for bookings whose check-in
+    is within the next 24 hours (or already overdue) and which are not
+    cancelled / checked-out. Used by the room-grid to drive the small
+    arrival-indicator dot on each room card.
+
+    Contract (consumed by static/script.js around line 573):
+        upcoming[<room>] = {
+            booking_id, guest_name, name, check_in_date, check_in_time,
+            check_out_date, status, paid_amount, total_amount,
+            hours_until,     # float; negative when the booking is overdue
+        }
+
+    Single object per room (not an array). When multiple upcoming
+    bookings exist for the same room we return the CLOSEST one — the
+    indicator is meant to flag "what's about to arrive", so the nearest
+    future check-in (or the most overdue, if all are past) is the
+    relevant one. Bookings >24h out are filtered out server-side so the
+    dot doesn't show indefinitely for far-future reservations (the bug
+    where every room with any future booking showed a blue dot).
+
+    Response: {success: true, upcoming: {"205": {...}, "207": {...}}}
+    """
+    try:
+        now_dt = datetime.now(IST)
+        today = now_dt.strftime("%Y-%m-%d")
+        # Look up to yesterday so overdue check-ins (yesterday's date,
+        # not yet checked in) still surface as a red/pulsing dot.
+        yesterday = (now_dt - timedelta(days=1)).strftime("%Y-%m-%d")
+
+        upcoming = {}
+        q = bookings_ref.where("check_in_date", ">=", yesterday)
+        for snap in q.stream():
+            b = snap.to_dict() or {}
+            status = (b.get("status") or "").lower()
+            if status in ("cancelled", "checked_out"):
+                continue
+            room = str(b.get("room") or "")
+            if not room:
+                continue
+
+            # Compute hours_until from check_in_date + check_in_time.
+            # Time is optional in the schema; default to noon if missing
+            # so we don't accidentally treat "today" as midnight.
+            cd = (b.get("check_in_date") or "").strip()
+            ct = (b.get("check_in_time") or "").strip()
+            if not cd:
+                continue
+            try:
+                if ct:
+                    # check_in_time may arrive as "HH:MM" or "HH:MM:SS";
+                    # accept both. Anything else falls through to noon.
+                    try:
+                        ci_dt_naive = datetime.strptime(f"{cd} {ct}", "%Y-%m-%d %H:%M")
+                    except ValueError:
+                        ci_dt_naive = datetime.strptime(f"{cd} {ct}", "%Y-%m-%d %H:%M:%S")
+                else:
+                    ci_dt_naive = datetime.strptime(f"{cd} 12:00", "%Y-%m-%d %H:%M")
+            except ValueError:
+                # Malformed date — skip; better no dot than a wrong one.
+                continue
+            # IST is a pytz timezone. Use .localize(), NOT .replace(tzinfo=...)
+            # — pytz's tzinfo can return LMT (+05:53:28) when applied via
+            # replace, which drifts hours_until by ~23 minutes. Matches the
+            # convention used everywhere else in this codebase.
+            ci_dt = IST.localize(ci_dt_naive)
+
+            hours_until = (ci_dt - now_dt).total_seconds() / 3600.0
+
+            # 24-hour window. Allow modestly negative values (overdue
+            # check-ins) up to -24h so the red dot still appears for
+            # missed arrivals from the last day; older overdue bookings
+            # are likely abandoned and shouldn't clutter the grid.
+            if hours_until > 24 or hours_until < -24:
+                continue
+
+            row = {
+                "booking_id":     snap.id,
+                "guest_name":     b.get("guest_name", ""),
+                "name":           b.get("guest_name", ""),   # frontend reads either
+                "check_in_date":  cd,
+                "check_in_time":  ct,
+                "check_out_date": b.get("check_out_date", ""),
+                "status":         status,
+                "paid_amount":    b.get("paid_amount", 0),
+                "total_amount":   b.get("total_amount", 0),
+                "hours_until":    round(hours_until, 2),
+            }
+
+            # Keep only the closest upcoming booking per room. "Closest"
+            # = smallest absolute hours_until — that surfaces overdue
+            # arrivals over future ones when both exist.
+            existing = upcoming.get(room)
+            if existing is None or abs(row["hours_until"]) < abs(existing["hours_until"]):
+                upcoming[room] = row
+
+        return jsonify(success=True, upcoming=upcoming, count=len(upcoming))
+    except Exception as e:
+        logger.error(f"get_upcoming_bookings error: {e}", exc_info=True)
+        return jsonify(success=False, message=str(e)), 500
+
 
 @bookings_bp.route("/create_booking", methods=["POST"])
 def create_booking():
@@ -230,40 +335,73 @@ def update_booking():
 
 @bookings_bp.route("/cancel_booking", methods=["POST"])
 def cancel_booking():
+    """
+    Cancel an advance booking.
+
+    Accepts (in JSON body):
+      booking_id        : str   — the booking to cancel
+      refund_amount     : int   — amount being refunded to the guest (>= 0)
+      refund_method     : str   — "cash" | "online" (only used when refund > 0)
+      reason            : str   — free-text cancellation reason
+      retain_as_charge  : bool  — when true, the (paid_amount - refund_amount)
+                                  difference is treated as a cancellation
+                                  forfeiture and a separate Tax Invoice is
+                                  minted at SAC 999794 / 18% per Schedule II.
+                                  When false (default — backwards compatible)
+                                  the retained amount stays on the books as
+                                  accommodation revenue, which is the legacy
+                                  behaviour.
+
+    Returns the new bill_number in the response when retain_as_charge=True
+    so the UI can show / print it.
+    """
     try:
         booking_data = request.json
         booking_id = booking_data.get("booking_id")
-        
+
         booking_doc = bookings_ref.document(booking_id).get()
         if not booking_doc.exists:
             return jsonify(success=False, message="Invalid booking ID")
-        
+
         booking = booking_doc.to_dict()
         batch = db.batch()
-        
+
         refund_amount = int(booking_data.get("refund_amount", 0))
-        # Fix 5: reject negative refund
         if refund_amount < 0:
             return jsonify(success=False, message="Refund amount cannot be negative")
+
+        paid_amount = int(booking.get("paid_amount", 0) or 0)
+        if refund_amount > paid_amount:
+            return jsonify(
+                success=False,
+                message=f"Refund amount Rs.{refund_amount} exceeds paid amount Rs.{paid_amount}",
+            )
+
+        retain_as_charge = bool(booking_data.get("retain_as_charge", False))
+        retained_amount  = paid_amount - refund_amount
+
         if refund_amount > 0:
             refund_method = booking_data.get("refund_method", "cash")
-            # Fix 6: whitelist refund method
             if refund_method not in VALID_PAYMENT_METHODS:
                 return jsonify(success=False, message=f"Invalid refund method: {refund_method}")
-            batch.update(totals_ref.document('current_totals'), {"refunds": firestore.Increment(refund_amount)})
+            batch.update(totals_ref.document('current_totals'),
+                         {"refunds": firestore.Increment(refund_amount)})
             booking["paid_amount"] -= refund_amount
             booking["balance"] = booking["total_amount"] - booking["paid_amount"]
-        
+
         booking["status"] = "cancelled"
         booking["cancellation_date"] = datetime.now(IST).strftime("%Y-%m-%d")
         booking["cancellation_reason"] = booking_data.get("reason", "")
         booking["cancelledBy"] = (_safe_user() or {}).get("userId") or "system"
+        booking["retain_as_charge"] = retain_as_charge
+        booking["retained_amount"]  = retained_amount if retain_as_charge else 0
         booking.update(attribution_update())
 
         batch.set(bookings_ref.document(booking_id), booking)
         batch.commit()
         invalidate_rooms_and_totals()
 
+        # Refund payment row.
         if refund_amount > 0:
             payment_service.write_payment({
                 "room": booking["room"], "name": booking["guest_name"],
@@ -272,16 +410,80 @@ def cancel_booking():
                 "type": "booking_cancel_refund",
                 "date": datetime.now(IST).strftime("%Y-%m-%d"),
                 "time": datetime.now(IST).strftime("%H:%M"),
-                "booking_id": booking_id, "transaction_type": "booking_cancel_refund",
+                "booking_id": booking_id,
+                "transaction_type": "booking_cancel_refund",
             })
 
-        logger.info(f"Booking cancelled: {booking_id}")
-        write_log("booking.cancel", target_collection="bookings",
-                  target_id=str(request.json.get("booking_id") if request.is_json else ""))
-        return jsonify(success=True, message="Booking cancelled successfully")
-        
+        # Cancellation-forfeiture invoice (SAC 999794 / 18%).
+        cancel_charge_bill = None
+        if retain_as_charge and retained_amount > 0:
+            try:
+                cancel_charge_bill = create_cancellation_charge_bill(
+                    booking_id=booking_id,
+                    booking_data=booking,
+                    retained_amount=retained_amount,
+                    cancel_dt=datetime.now(IST),
+                    actor=(_safe_user() or {}).get("userId"),
+                )
+                if cancel_charge_bill:
+                    write_log(
+                        "booking.cancel.charge",
+                        target_collection="bills",
+                        target_id=str(cancel_charge_bill.get("stay_id") or ""),
+                        metadata={
+                            "booking_id": booking_id,
+                            "retained_amount": retained_amount,
+                            "bill_number": cancel_charge_bill.get("bill_number"),
+                            "sac": "999794",
+                            "gst_rate": 18,
+                        },
+                    )
+                    # Auto-generate the PDF in a background thread so the
+                    # cancellation invoice is immediately downloadable from
+                    # the Bills tab without the operator having to open
+                    # and re-save it. Best-effort; failure is logged but
+                    # does not block the cancellation.
+                    try:
+                        from routes.billing import auto_generate_bill_pdf as _autopdf
+                        import threading as _thr
+                        _thr.Thread(
+                            target=_autopdf,
+                            args=(cancel_charge_bill.get("stay_id"), cancel_charge_bill),
+                            daemon=True,
+                        ).start()
+                    except Exception as _pe:
+                        logger.warning(f"cancel_booking: cancel-charge PDF auto-gen skipped: {_pe}")
+            except Exception as _ce:
+                logger.error(f"cancel_booking: forfeiture bill failed: {_ce}",
+                             exc_info=True)
+
+        logger.info(
+            f"Booking cancelled: {booking_id} refund=Rs.{refund_amount} "
+            f"retain_as_charge={retain_as_charge} "
+            f"retained=Rs.{retained_amount if retain_as_charge else 0} "
+            f"charge_bill={(cancel_charge_bill or {}).get('bill_number')}"
+        )
+        write_log(
+            "booking.cancel",
+            target_collection="bookings",
+            target_id=str(booking_id or ""),
+            metadata={
+                "refund_amount": refund_amount,
+                "retain_as_charge": retain_as_charge,
+                "retained_amount": retained_amount if retain_as_charge else 0,
+                "charge_bill_number": (cancel_charge_bill or {}).get("bill_number"),
+            },
+        )
+        return jsonify(
+            success=True,
+            message="Booking cancelled successfully",
+            charge_bill_number=(cancel_charge_bill or {}).get("bill_number"),
+            charge_bill_id=(cancel_charge_bill or {}).get("stay_id"),
+            retained_amount=retained_amount if retain_as_charge else 0,
+        )
+
     except Exception as e:
-        logger.error(f"Error cancelling booking: {str(e)}")
+        logger.error(f"Error cancelling booking: {str(e)}", exc_info=True)
         return jsonify(success=False, message=f"Error cancelling booking: {str(e)}")
 
 @bookings_bp.route("/convert_booking_to_checkin", methods=["POST"])
@@ -454,6 +656,53 @@ def convert_booking_to_checkin():
         batch.set(bookings_ref.document(booking_id), booking)
         if totals_update:
             batch.update(totals_ref.document('current_totals'), totals_update)
+
+        # ── B2: stamp stay_id onto prior booking advances atomically with the
+        # conversion. Previously this happened AFTER batch.commit(), so a
+        # Firestore blip could leave the advances orphaned w.r.t. the new
+        # stay. Now the per-advance update is added to the same batch and
+        # commits with everything else.
+        #
+        # Failure mode: if the query ITSELF raises (Firestore error before we
+        # get a stream), we log + audit + flag advance_relink_pending=True
+        # on the bill so a follow-up retry job can pick it up. We do NOT
+        # block the conversion on this — check-in is a high-pressure path
+        # and a relink that can be retried later is worth more than a hard
+        # failure here.
+        stay_key = f"{room_number}_{checkin_datetime_str}"
+        relink_pending = False
+        relink_count = 0
+        try:
+            from google.cloud.firestore_v1.base_query import FieldFilter as _FF
+            _payments_coll = db.collection("payments")
+            for pdoc in _payments_coll.where(
+                filter=_FF("booking_id", "==", booking_id)
+            ).stream():
+                pdata = pdoc.to_dict() or {}
+                if pdata.get("type") in ("booking_advance", "booking_payment"):
+                    batch.update(pdoc.reference, {
+                        "stay_id":           stay_id,
+                        "stay_room_key":     stay_key,
+                        "stay_checkin_date": current_date,
+                    })
+                    relink_count += 1
+        except Exception as _re:
+            relink_pending = True
+            logger.warning(
+                f"convert_booking_to_checkin: advance relink query failed for "
+                f"booking_id={booking_id} ({_re}); flagging "
+                f"advance_relink_pending on bill stay_id={stay_id}."
+            )
+
+        # If we flagged the bill for a retry, add the flag to the same batch
+        # so it's visible immediately after commit.
+        if relink_pending:
+            from config import bills_ref as _bills_ref
+            batch.update(_bills_ref.document(stay_id), {
+                "advance_relink_pending": True,
+                "advance_relink_booking_id": booking_id,
+            })
+
         batch.commit()
 
         # Fix 4: store_transaction_metadata AFTER batch commit
@@ -461,7 +710,21 @@ def convert_booking_to_checkin():
 
         invalidate_rooms_and_totals()
 
-        stay_key = f"{room_number}_{checkin_datetime_str}"
+        # Audit-log the relink outcome — visibility either way.
+        try:
+            write_log(
+                "booking.advance_relink",
+                target_collection="payments",
+                target_id=str(stay_id),
+                metadata={
+                    "booking_id":   booking_id,
+                    "stay_id":      stay_id,
+                    "relinked":     relink_count,
+                    "pending":      relink_pending,
+                },
+            )
+        except Exception:
+            pass
         if remaining_payment > 0:
             payment_service.write_payment_with_stay(stay_id, {
                 "room": room_number, "name": booking["guest_name"],
@@ -497,28 +760,7 @@ def convert_booking_to_checkin():
                 "transaction_type": "booking_conversion",
             })
 
-        # --- Link prior booking advance payments to this stay ---
-        # Stamp `stay_id` onto every advance so the canonical lookup
-        # (Phase-6: where stay_id == X) resolves them. Keep stay_room_key
-        # as a fallback for any code still using the legacy heuristic.
-        try:
-            from google.cloud.firestore_v1.base_query import FieldFilter as _FF
-            payments_ref = db.collection("payments")
-            prior_q = (
-                payments_ref
-                .where(filter=_FF("booking_id", "==", booking_id))
-            )
-            for pdoc in prior_q.stream():
-                pdata = pdoc.to_dict()
-                if pdata.get("type") in ("booking_advance", "booking_payment"):
-                    pdoc.reference.update({
-                        "stay_id":            stay_id,
-                        "stay_room_key":      stay_key,
-                        "stay_checkin_date":  current_date,
-                    })
-                    logger.info(f"Linked booking advance {pdoc.id} to stay_id={stay_id}")
-        except Exception as e:
-            logger.warning(f"Failed to link booking advances to stay: {e}")
+        # (advance relink is now handled inside the batch above — B2)
 
         # Fix 7: sync=True so errors surface in logs rather than dying silently
         customer_service.upsert_customer({

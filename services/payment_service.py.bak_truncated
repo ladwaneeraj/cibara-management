@@ -265,27 +265,6 @@ def write_payment_with_stay(stay_id: str, payment_data: dict, *,
 
     doc = _normalise(payment_data)
     doc["stay_id"] = stay_id
-    # Recompute the idempotency_key now that stay_id is on the doc, so
-    # the key is scoped to this stay. Without this, two stays with
-    # otherwise-identical payment payloads could share a key.
-    doc["idempotency_key"] = _compute_idempotency_key(doc)
-
-    # Idempotent-write check. If a payment with this exact key was
-    # written to this stay within the last 5 seconds, treat the current
-    # call as a retry and skip the write. This is the write-side
-    # defence that prevents duplicate payment docs from being created
-    # by network retries or double-clicks. The corresponding read-side
-    # tolerance lives in _dedup_payments (which preserves live-vs-live
-    # collisions; this check is what stops them happening in the first
-    # place).
-    _existing_id = _check_idempotent_hit(stay_id, doc["idempotency_key"])
-    if _existing_id:
-        logger.info(
-            "write_payment_with_stay: idempotent hit on stay_id=%s "
-            "key=%s -> existing doc %s; skipping duplicate write",
-            stay_id, doc["idempotency_key"], _existing_id,
-        )
-        return True
 
     if batch is not None:
         try:
@@ -323,103 +302,10 @@ def _safe_userid_from_request() -> str:
         return "system"
 
 
-def _compute_idempotency_key(doc: dict) -> str:
-    """
-    Build a stable 16-char hash that uniquely identifies a logical payment
-    event. Broader than the original formula on purpose — it includes the
-    foreign keys (stay_id / booking_id / settlement_id), transaction_type,
-    and note so that two payments that look identical on
-    (room, amount, method, time) but differ on (e.g.) "Day 2 rent renewal"
-    vs "Day 3 rent renewal" do NOT collide. The HH:MM `time` field stays
-    in the key so retries within the same minute still hash the same.
-
-    The key is used two ways:
-      1. Stamped onto every payment doc for forensic dedup-by-key reads.
-      2. Queried by `_check_idempotent_hit` before write to prevent
-         network-retry / double-click duplicates from entering the
-         collection in the first place.
-    """
-    key_src = "|".join([
-        str(doc.get("stay_id", "")),
-        str(doc.get("booking_id", "")),
-        str(doc.get("settlement_id", "")),
-        str(doc.get("room", "")),
-        str(doc.get("name", "")),
-        str(doc.get("amount", 0)),
-        str(doc.get("method", "")),
-        str(doc.get("type", "")),
-        str(doc.get("transaction_type", "")),
-        str(doc.get("date", "")),
-        str(doc.get("time", "")),
-        str(doc.get("note", "")),
-    ])
-    return hashlib.md5(key_src.encode()).hexdigest()[:16]
-
-
-def _check_idempotent_hit(stay_id: str, idem_key: str,
-                          window_seconds: int = 5) -> str | None:
-    """
-    Return the Firestore doc ID of an existing payment with this
-    idempotency_key on this stay_id, IF one was written within the last
-    `window_seconds`. Otherwise return None.
-
-    The window is intentionally short (default 5s) — long enough to catch
-    network retries and double-clicks (which are typically sub-second to
-    a couple of seconds apart) while still letting two genuinely-distinct
-    same-fingerprint payments seconds apart both succeed. The SANDEP-class
-    case (12s apart) sits OUTSIDE the window by design — both will write.
-
-    Uses only equality filters on (stay_id, idempotency_key) so no
-    Firestore composite index is required; created_at is filtered in
-    Python. The compound (stay_id + idem_key) match set is tiny in
-    practice (≤ a handful), so the in-memory filter is cheap.
-
-    Fails open: if the lookup itself errors, returns None and lets the
-    write proceed — losing a payment is worse than writing a duplicate.
-    """
-    if _payments_ref is None or not stay_id or not idem_key:
-        return None
-    try:
-        cutoff = datetime.now(timezone.utc) - timedelta(seconds=window_seconds)
-        q = (
-            _payments_ref
-            .where(filter=fa_firestore.FieldFilter("stay_id", "==", stay_id))
-            .where(filter=fa_firestore.FieldFilter(
-                "idempotency_key", "==", idem_key))
-            .limit(10)
-        )
-        for snap in q.stream():
-            d = snap.to_dict() or {}
-            ca = d.get("created_at")
-            if not ca:
-                continue
-            try:
-                ca_dt = datetime.fromisoformat(ca)
-            except (ValueError, TypeError):
-                continue
-            if ca_dt.tzinfo is None:
-                ca_dt = ca_dt.replace(tzinfo=timezone.utc)
-            if ca_dt >= cutoff:
-                return snap.id
-        return None
-    except Exception as e:
-        # Fail open — the dedup check must never lose a payment.
-        logger.warning(
-            f"_check_idempotent_hit({stay_id}, {idem_key}) failed: {e}; "
-            f"proceeding with write"
-        )
-        return None
-
-
 def _normalise(data: dict) -> dict:
     """
     Ensure consistent field names and add created_at + idempotency_key.
     Copies data so the caller's dict is not mutated.
-
-    Note: callers that add fields to the doc AFTER this returns (notably
-    `write_payment_with_stay`, which stamps `stay_id` post-normalise)
-    should recompute the idempotency_key via `_compute_idempotency_key`
-    so the key reflects the final doc shape.
     """
     doc = dict(data)  # shallow copy
     doc.setdefault("created_at", datetime.now(timezone.utc).isoformat())
@@ -437,11 +323,19 @@ def _normalise(data: dict) -> dict:
             doc["amount"] = int(doc["amount"])
         except (ValueError, TypeError):
             doc["amount"] = 0
-    # Stable idempotency key for duplicate detection. Broadened in the
-    # SANDEP fix to include FK fields + transaction_type + note so that
-    # logically-distinct payments don't share keys.
+    # Fix 16: stable idempotency key for duplicate detection/auditing
+    # Key is a short hash of the fields that uniquely identify a payment event
     if "idempotency_key" not in doc:
-        doc["idempotency_key"] = _compute_idempotency_key(doc)
+        key_src = "|".join([
+            str(doc.get("room", "")),
+            str(doc.get("name", "")),
+            str(doc.get("amount", 0)),
+            str(doc.get("method", "")),
+            str(doc.get("type", "")),
+            str(doc.get("date", "")),
+            str(doc.get("time", "")),
+        ])
+        doc["idempotency_key"] = hashlib.md5(key_src.encode()).hexdigest()[:16]
     return doc
 
 
@@ -814,7 +708,7 @@ def update_payments_room(old_room, new_room, guest_name, checkin_dt):
             docs = query_payments_for_stay(str(old_room), guest_name, checkin_dt)
             if not docs:
                 return
-            # Re-query to get document references for the batch update.
+            # Re-query to get document references
             checkin_date_str = checkin_dt.strftime("%Y-%m-%d")
             query = (
                 _payments_ref
@@ -836,10 +730,8 @@ def update_payments_room(old_room, new_room, guest_name, checkin_dt):
                     batch = _db.batch()
             if count % 400 != 0:
                 batch.commit()
-            logger.info(
-                f"PaymentService: updated {count} payment docs "
-                f"room {old_room} -> {new_room}"
-            )
+            logger.info(f"PaymentService: updated {count} payment docs "
+                        f"room {old_room} -> {new_room}")
         except Exception as e:
             logger.error(f"PaymentService update_payments_room failed: {e}")
 
@@ -856,49 +748,4 @@ def check_duplicate(room, name, amount, date, time_str, txn_type):
     try:
         query = (
             _payments_ref
-            .where(filter=fa_firestore.FieldFilter("room", "==", str(room)))
-            .where(filter=fa_firestore.FieldFilter("name", "==", name))
-            .where(filter=fa_firestore.FieldFilter("amount", "==", int(amount)))
-            .where(filter=fa_firestore.FieldFilter("date", "==", date))
-            .where(filter=fa_firestore.FieldFilter("time", "==", time_str))
-            .limit(1)
-        )
-        return len(list(query.stream())) > 0
-    except Exception as e:
-        logger.error(f"PaymentService check_duplicate failed: {e}")
-        return False
-
-
-def query_payments_by_stay_id(stay_id: str):
-    """
-    Fetch every payment row tagged with this stay_id (the canonical foreign
-    key linking payments -> bill/stay).
-
-    Use this for active-stay payment aggregation: it is a single equality
-    query on the canonical FK, complete regardless of date corrections, and
-    cheaper than the multi-query `query_payments_for_stay` helper (which
-    exists for legacy stays that pre-date the stay_id migration).
-
-    Notably this path DOES NOT run `_dedup_payments` -- every payment doc
-    is returned by its own Firestore ID, so two genuinely-distinct payments
-    sharing the same HH:MM fingerprint (e.g. two real UPI hits in the same
-    minute) both appear in the result.
-
-    Returns a list of payment dicts (potentially empty). Each dict carries
-    the Firestore doc ID under the key "id" for downstream identification.
-    """
-    if _payments_ref is None or not stay_id:
-        return []
-    try:
-        q = _payments_ref.where(
-            filter=fa_firestore.FieldFilter("stay_id", "==", stay_id)
-        )
-        out = []
-        for snap in q.stream():
-            d = snap.to_dict() or {}
-            d["id"] = snap.id
-            out.append(d)
-        return out
-    except Exception as e:
-        logger.error(f"query_payments_by_stay_id({stay_id}) failed: {e}")
-        return []
+            .wher

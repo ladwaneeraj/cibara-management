@@ -2204,6 +2204,15 @@ function initServiceButtons() {
         // Update total price
         updateServiceTotalPrice();
 
+        // Populate the "Apply to night" dropdown based on the current
+        // stay's check-in time. The 24h boundary anchors to check-in so
+        // a guest who checked in at 3:41 PM today is on Day 1 until 3:41
+        // PM tomorrow. The dropdown shows past + current days so the
+        // operator can retroactively bill (e.g. AC was used Day 1 but
+        // forgot to record it until Day 2). Only shown when the stay has
+        // progressed past Day 1; for fresh stays the field is hidden and
+        // the backend silently defaults to Day 1.
+        populateApplyDayDropdown();
         // Show service form
         serviceForm.classList.remove("hidden");
       } else {
@@ -2269,6 +2278,103 @@ function initServiceButtons() {
   }
 }
 
+// Populate the "Apply to night" dropdown in the Add Service form.
+// Uses the currently-open checkout room's checkin_time to compute the
+// current stay-day (1-based, 24h windows from check-in). The dropdown
+// is hidden on Day 1 — there's only one option, so we silently default.
+// On Day 2+, the operator can pick today (default) or any earlier day
+// to retroactively bill a service to that night.
+function populateApplyDayDropdown() {
+  try {
+    const sel = document.getElementById("service-apply-day");
+    const row = document.getElementById("svc-apply-day-row");
+    if (!sel || !row) return;
+
+    const roomNumberEl = document.getElementById("checkout-room-number");
+    const roomNumber = roomNumberEl ? roomNumberEl.textContent : null;
+    if (!roomNumber || !rooms[roomNumber]) {
+      row.style.display = "none";
+      return;
+    }
+    const checkinStr = rooms[roomNumber].checkin_time;
+    if (!checkinStr) {
+      row.style.display = "none";
+      return;
+    }
+
+    // Parse "YYYY-MM-DD HH:MM" as IST. The server is on IST and the
+    // operator's browser typically is too; we treat the string as local
+    // for the elapsed-hours math, which is correct as long as both ends
+    // share the timezone.
+    const parts = checkinStr.split(" ");
+    if (parts.length !== 2) {
+      row.style.display = "none";
+      return;
+    }
+    const [d, t] = parts;
+    const [y, m, dd] = d.split("-").map((n) => parseInt(n, 10));
+    const [hh, mm] = t.split(":").map((n) => parseInt(n, 10));
+    const checkinDt = new Date(y, (m || 1) - 1, dd || 1, hh || 0, mm || 0);
+    if (isNaN(checkinDt.getTime())) {
+      row.style.display = "none";
+      return;
+    }
+
+    const elapsedHours = (Date.now() - checkinDt.getTime()) / (1000 * 3600);
+    const currentDay = Math.max(1, Math.floor(elapsedHours / 24) + 1);
+
+    // Single-day stay: hide the dropdown entirely. Backend defaults to Day 1.
+    if (currentDay <= 1) {
+      sel.innerHTML = "";
+      row.style.display = "none";
+      return;
+    }
+
+    // Build options for Day 1..currentDay. Mark the current day with "(today)".
+    //
+    // The label now includes the calendar date that the 24h "Day i"
+    // window starts on (checkinDt + (i-1) days). Operators sometimes
+    // shift the check-in date after recording a service, which makes a
+    // bare "Day 3" label ambiguous; the date next to it removes the
+    // doubt. Format: "Day 3 — 13 May (today)".
+    //
+    // We compute the date by adding (i-1) full days to the check-in
+    // datetime. Using a fresh Date() for each iteration so DST/edge
+    // cases don't accumulate (Asia/Kolkata has no DST so this is
+    // strictly safety; still good practice).
+    const DAY_MS = 24 * 60 * 60 * 1000;
+    const _fmtDate = (d) => {
+      try {
+        return d.toLocaleDateString("en-IN", { day: "2-digit", month: "short" });
+      } catch (_) {
+        // Fallback for engines without Intl support — "YYYY-MM-DD".
+        const yy = d.getFullYear();
+        const mm = String(d.getMonth() + 1).padStart(2, "0");
+        const dd = String(d.getDate()).padStart(2, "0");
+        return `${yy}-${mm}-${dd}`;
+      }
+    };
+
+    let html = "";
+    for (let i = 1; i <= currentDay; i++) {
+      const dayDate = new Date(checkinDt.getTime() + (i - 1) * DAY_MS);
+      const dateStr = _fmtDate(dayDate);
+      const suffix  = i === currentDay ? " (today)" : "";
+      const label   = `Day ${i} — ${dateStr}${suffix}`;
+      const selected = i === currentDay ? " selected" : "";
+      html += `<option value="${i}"${selected}>${label}</option>`;
+    }
+    sel.innerHTML = html;
+    row.style.display = "";
+  } catch (e) {
+    // On any error, hide the dropdown and let the backend pick the default day.
+    try {
+      const row = document.getElementById("svc-apply-day-row");
+      if (row) row.style.display = "none";
+    } catch (_) {}
+  }
+}
+
 // Add service/add-on to room
 async function addService() {
   try {
@@ -2321,18 +2427,37 @@ async function addService() {
     const serviceWithQuantity =
       quantity > 1 ? `${service} × ${quantity}` : service;
 
+    // ── Daily folio: which stay-day does this service apply to ──────────
+    // For accommodation charges (AC, Extra Bed) the slab is determined
+    // per night, so picking the right day matters for GST. The dropdown
+    // is populated by `populateApplyDayDropdown()` whenever the service
+    // form opens; if the dropdown isn't visible (single-day stay), we
+    // omit applied_on_day and the backend defaults to "today".
+    let appliedOnDay = null;
+    try {
+      const _daySel = document.getElementById("service-apply-day");
+      if (_daySel && _daySel.value) {
+        appliedOnDay = parseInt(_daySel.value, 10) || null;
+      }
+    } catch (_) {
+      appliedOnDay = null;
+    }
+
+    const _addOnBody = {
+      room: roomNumber,
+      item: serviceWithQuantity,
+      price: totalPrice,
+      unit_price: price,
+      quantity: quantity,
+      payment_method: servicePaymentMethod,
+      accommodation_charge: isAccommodationCharge,
+    };
+    if (appliedOnDay !== null) _addOnBody.applied_on_day = appliedOnDay;
+
     const response = await apiFetch("/add_on", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        room: roomNumber,
-        item: serviceWithQuantity,
-        price: totalPrice,
-        unit_price: price,
-        quantity: quantity,
-        payment_method: servicePaymentMethod,
-        accommodation_charge: isAccommodationCharge,
-      }),
+      body: JSON.stringify(_addOnBody),
     });
 
     if (!response.ok) {
@@ -2356,6 +2481,7 @@ async function addService() {
           payment_method: servicePaymentMethod,
           transaction_type: "service",
           accommodation_charge: isAccommodationCharge,
+          applied_on_day: appliedOnDay || 1,
         });
         // Balance increases only when service is billed to room (not paid now)
         if (servicePaymentMethod === "balance") {

@@ -228,25 +228,36 @@ def finalize(stay_id, checkout_fields, *, batch=None):
 
 def revert_to_draft(stay_id, *, reason="", actor="manager", batch=None):
     """
-    Revert a finalized bill back to `draft` status.
-
-    This is the ONLY supported path for breaking the "no revert to draft"
-    invariant. It exists for the 3-hour mistake-checkout undo flow. Every
-    revert is stamped with audit fields (`reverted_at`, `revert_reason`,
-    `revert_actor`, `revert_count`) so the history is fully reconstructible.
+    Revert a finalised bill (3-hour mistake-undo flow) by:
+      1. Issuing a full-amount Section 34 Credit Note against the original
+         bill (reason="checkout_mistake").
+      2. Marking the original bill as `superseded_by_revert` — keeping its
+         status as 'completed'/'pending_settlement' so it stays visible
+         in the Bills tab with a "REVERTED" badge. The original
+         bill_number is preserved so the CC sequence is gap-free
+         (Rule 46(b)).
+      3. Creating a brand-new DRAFT bill (fresh stay_id) for the same
+         room+guest so the next checkout mints a new CC number — the
+         original number is NEVER reused.
 
     Refuses to operate when:
       * bill is not in `completed` or `pending_settlement`
       * stay_id is missing or doc not found
 
-    The bill_number is preserved on the document under `voided_bill_number`
-    and cleared from `bill_number` so the next checkout mints a fresh number.
-    Numbering gaps are normal accounting practice; the audit trail explains
-    them.
+    Returns a dict with keys:
+      "old_stay_id"   : the original (now superseded) stay's doc ID
+      "new_stay_id"   : the fresh draft stay's doc ID — caller must wire
+                        this onto room.active_bill_id
+      "credit_note"   : the CN dict (from create_credit_note) or None
+      "old_bill"      : the original bill's pre-revert snapshot
 
-    Returns the pre-revert bill snapshot (dict) on success, or None on
-    failure. Caller is responsible for any side-effect reversal (refunds,
-    settlements, totals, room state) -- this function only flips the bill.
+    Returns None on failure. Caller is responsible for side-effect reversal
+    (refunds, settlements, totals, room state).
+
+    DEPRECATED FIELDS:
+      Pre-migration this function set `voided_bill_number` on the bill and
+      cleared `bill_number`. That field is no longer written; existing
+      historical values are left in place for the backfill script.
     """
     if _bills_ref is None or not stay_id:
         logger.error("BillsService.revert_to_draft called with no init / no stay_id")
@@ -267,48 +278,128 @@ def revert_to_draft(stay_id, *, reason="", actor="manager", batch=None):
                 f"(must be completed or pending_settlement)"
             )
             return None
+        # Guard against repeat revert — a bill already superseded by a
+        # prior revert STILL has status=completed. Without this check, a
+        # second revert call would mint a second CN against the same
+        # bill_number and double-reverse the output tax. The fresh draft
+        # created by the first revert is what the operator should target
+        # instead.
+        if existing.get("superseded_by_revert"):
+            logger.warning(
+                f"BillsService.revert_to_draft refused: stay_id={stay_id} "
+                f"already superseded by a prior revert "
+                f"(CN={existing.get('revert_credit_note_number')!r}). "
+                f"Operate on the successor draft instead."
+            )
+            return None
 
         now_iso = datetime.now(timezone.utc).isoformat()
         prev_bill_number = existing.get("bill_number")
         revert_count = int(existing.get("revert_count", 0)) + 1
 
-        payload = {
-            "status":              "draft",
-            "voided_bill_number":  prev_bill_number,
-            "bill_number":         None,
-            "checkout_time":       None,
-            "total_amount":        None,
-            "finalized_at":        None,
-            "reverted_at":         now_iso,
-            "revert_reason":       (reason or "")[:500],
-            "revert_actor":        actor or "",
-            "revert_count":        revert_count,
-            "updated_at":          now_iso,
-            "pre_revert_snapshot": {
-                "status":         cur_status,
-                "bill_number":    prev_bill_number,
-                "checkout_time":  existing.get("checkout_time"),
-                "total_amount":   existing.get("total_amount"),
-                "finalized_at":   existing.get("finalized_at"),
-                "balance":        existing.get("balance"),
-                "payment_cash":   existing.get("payment_cash"),
-                "payment_online": existing.get("payment_online"),
-                "refunds":        existing.get("refunds"),
-                "settlement_id":  existing.get("settlement_id"),
-            },
+        # ── Issue a full-amount credit note (Section 34) ────────────────────
+        # We do this BEFORE flipping the bill status so the CN can read
+        # the still-finalised bill cleanly. Credit-note creation is its
+        # own atomic transaction (counter + doc); a failure here is
+        # logged but does NOT block the revert — the operator can issue
+        # the CN manually if needed.
+        cn_amount = int(existing.get("total_amount") or 0)
+        cn_doc = None
+        if prev_bill_number and cn_amount > 0:
+            try:
+                from datetime import datetime as _dt
+                # Local import to avoid the (services → config → services)
+                # circular-import issue that would otherwise trip at
+                # bills_service module load time.
+                from config import (
+                    create_credit_note as _ccn,
+                    compute_credit_components as _ccc,
+                    IST as _IST,
+                )
+                tax, cgst, sgst = _ccc({"gst_rate": existing.get("gst_rate", 0)},
+                                       cn_amount)
+                # Idempotency key: revert_count uniquifies repeated reverts
+                # (a bill can in theory be revert-checkout-revert several
+                # times — though our 3-hour window makes this rare).
+                _idem = f"revert:{stay_id}:{revert_count}"
+                cn_doc = _ccn(
+                    bill_id=stay_id,
+                    bill_data=existing,
+                    cn_date=_dt.now(_IST),
+                    reason="checkout_mistake",
+                    reason_text=(reason or "Checkout reverted within 3-hour window"),
+                    credit_taxable=tax,
+                    credit_cgst=cgst,
+                    credit_sgst=sgst,
+                    credit_total=cn_amount,
+                    actor=actor,
+                    idempotency_key=_idem,
+                )
+            except Exception as _ce:
+                logger.error(
+                    f"BillsService.revert_to_draft: CN issuance failed for "
+                    f"stay_id={stay_id} bill_no={prev_bill_number} — "
+                    f"{_ce}. Reverting anyway; operator must issue CN manually."
+                )
+
+        # ── Mark the original bill as superseded (NOT flipped to draft) ─────
+        # Status stays as it was so the Bills tab keeps showing the row.
+        # bill_number is preserved — Rule 46(b) gap-free invariant.
+        # The reverted_at / revert_reason / revert_count fields drive the
+        # "REVERTED" badge in the UI.
+        original_payload = {
+            "superseded_by_revert": True,
+            "reverted_at":          now_iso,
+            "revert_reason":        (reason or "")[:500],
+            "revert_actor":         actor or "",
+            "revert_count":         revert_count,
+            "updated_at":           now_iso,
+        }
+        if cn_doc:
+            original_payload["revert_credit_note_id"]     = cn_doc.get("cn_id")
+            original_payload["revert_credit_note_number"] = cn_doc.get("cn_number")
+        if existing.get("pdf_url"):
+            original_payload["pdf_status"] = "superseded_by_revert"
+            original_payload["pdf_superseded_at"] = now_iso
+
+        # ── Create a fresh draft for the room+guest so the next checkout
+        # mints a brand-new CC number. Same shape as create_draft() — kept
+        # inline so we can copy a couple of audit fields off the original.
+        new_stay_id = uuid.uuid4().hex
+        guest_snap = (existing.get("pre_checkout_snapshot") or {}).get("guest") or {}
+        new_draft = {
+            "stay_id":         new_stay_id,
+            "status":          "draft",
+            "room":            str(existing.get("room") or ""),
+            "guest_name":      existing.get("guest_name") or guest_snap.get("name", ""),
+            "guest_mobile":    existing.get("guest_mobile") or guest_snap.get("mobile", ""),
+            "guest_count":     int(existing.get("guest_count") or guest_snap.get("guests", 1) or 1),
+            "room_price_per_night": int(existing.get("room_price_per_night") or
+                                        guest_snap.get("price", 0) or 0),
+            "is_ac":           bool(existing.get("is_ac") or guest_snap.get("isAC", False)),
+            "checkin_time":    existing.get("checkin_time"),
+            "checkout_time":   None,
+            "bill_number":     None,
+            "total_amount":    None,
+            "balance":         int(existing.get("balance", 0) or 0),
+            "payment_cash":    0,
+            "payment_online":  0,
+            "services":        [],
+            "services_total":  0,
+            "discounts":       [],
+            "refunds":         [],
+            "created_at":      datetime.now(timezone.utc).isoformat(),
+            "source":          "revert_checkout",
+            "predecessor_stay_id":   stay_id,
+            "predecessor_bill_number": prev_bill_number,
         }
 
-        # Mark any previously-generated PDF as superseded so the bills UI
-        # doesn't keep serving it as the canonical bill for this stay.
-        if existing.get("pdf_url"):
-            payload["pdf_status"] = "superseded_by_revert"
-            payload["pdf_superseded_at"] = now_iso
-
         try:
-            if batch is not None:
-                batch.update(_bills_ref.document(stay_id), payload)
-            else:
-                _bills_ref.document(stay_id).update(payload)
+            local_batch = batch if batch is not None else _db.batch()
+            local_batch.update(_bills_ref.document(stay_id), original_payload)
+            local_batch.set(_bills_ref.document(new_stay_id), new_draft)
+            if batch is None:
+                local_batch.commit()
         except Exception as e:
             logger.error(
                 f"BillsService.revert_to_draft({stay_id}) write failed: {e}",
@@ -319,10 +410,17 @@ def revert_to_draft(stay_id, *, reason="", actor="manager", batch=None):
         logger.info(
             f"BillsService: reverted stay_id={stay_id} "
             f"prev_status={cur_status} prev_bill_number={prev_bill_number} "
-            f"revert_count={revert_count} actor={actor!r}"
+            f"revert_count={revert_count} actor={actor!r} "
+            f"new_stay_id={new_stay_id} "
+            f"cn={cn_doc.get('cn_number') if cn_doc else 'none'}"
         )
         existing["id"] = stay_id
-        return existing
+        return {
+            "old_stay_id":  stay_id,
+            "new_stay_id":  new_stay_id,
+            "credit_note":  cn_doc,
+            "old_bill":     existing,
+        }
     except Exception as e:
         logger.error(
             f"BillsService.revert_to_draft({stay_id}) failed: {e}",
@@ -331,16 +429,75 @@ def revert_to_draft(stay_id, *, reason="", actor="manager", batch=None):
         return None
 
 
-def cancel(stay_id, reason="", *, batch=None):
-    """Mark a draft (or completed) stay as cancelled. Preserves history."""
+def cancel(stay_id, reason="", *, actor=None, batch=None):
+    """
+    Mark a draft (or completed) stay as cancelled. Preserves history.
+
+    POST-MIGRATION (Goal 2): if the bill has been finalised (i.e. has a
+    bill_number) the cancellation also issues a Section 34 Credit Note
+    for the full amount, reason="cancellation". A draft cancel (no bill
+    number yet) does NOT issue a CN — there's nothing to reverse for GST.
+    """
     if _bills_ref is None or not stay_id:
         return False
+    try:
+        snap = _bills_ref.document(stay_id).get()
+        if not snap.exists:
+            logger.warning(f"BillsService.cancel: stay_id={stay_id} not found")
+            return False
+        existing = snap.to_dict()
+    except Exception as e:
+        logger.error(f"BillsService.cancel({stay_id}) read failed: {e}")
+        return False
+
     payload = {
         "status":       "cancelled",
         "cancel_reason": reason or "",
         "cancelled_at": datetime.now(timezone.utc).isoformat(),
         "updated_at":   datetime.now(timezone.utc).isoformat(),
     }
+
+    cur_status = existing.get("status")
+    bill_no    = existing.get("bill_number")
+    cn_amount  = int(existing.get("total_amount") or 0)
+    cn_doc     = None
+    if (
+        cur_status in ("completed", "pending_settlement")
+        and bill_no
+        and cn_amount > 0
+    ):
+        try:
+            from datetime import datetime as _dt
+            from config import (
+                create_credit_note as _ccn,
+                compute_credit_components as _ccc,
+                IST as _IST,
+            )
+            tax, cgst, sgst = _ccc({"gst_rate": existing.get("gst_rate", 0)},
+                                   cn_amount)
+            _idem = f"cancel:{stay_id}"
+            cn_doc = _ccn(
+                bill_id=stay_id,
+                bill_data=existing,
+                cn_date=_dt.now(_IST),
+                reason="cancellation",
+                reason_text=(reason or "Stay cancelled after invoicing"),
+                credit_taxable=tax,
+                credit_cgst=cgst,
+                credit_sgst=sgst,
+                credit_total=cn_amount,
+                actor=actor,
+                idempotency_key=_idem,
+            )
+            if cn_doc:
+                payload["cancel_credit_note_id"]     = cn_doc.get("cn_id")
+                payload["cancel_credit_note_number"] = cn_doc.get("cn_number")
+        except Exception as _ce:
+            logger.error(
+                f"BillsService.cancel: CN issuance failed for stay_id="
+                f"{stay_id} bill_no={bill_no} — {_ce}. Cancelling anyway."
+            )
+
     try:
         if batch is not None:
             batch.update(_bills_ref.document(stay_id), payload)
@@ -375,9 +532,6 @@ def get(stay_id):
 def get_active_for_room(room):
     """
     Return the single draft (active) bill for a room, or None.
-
-    Used during Phase 2-4 transition: when a payment write needs the
-    active stay_id, this is the lookup.
     """
     if _bills_ref is None:
         return None

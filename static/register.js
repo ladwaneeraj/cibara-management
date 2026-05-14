@@ -324,25 +324,87 @@
   color: #999; text-align: center;
 }
 
+
+/* Inline HSN/SAC sub-line under each line-item description (Rule 46(g)) */
+.b-sac {
+  font-size: .7rem; color: #888; font-style: italic;
+  display: inline-block; margin-top: 1px;
+}
+
+
+/* Per-day section header */
+.b-day-header td {
+  background: #e8eef5; font-weight: 700;
+  font-size: .85rem; color: #1a1a1a;
+  padding: .32rem .5rem; border-color: #b8c6d8;
+  letter-spacing: .02em;
+}
+
+/* Per-day total row */
+.b-day-total td {
+  background: #fafafa; font-weight: 700;
+  font-size: .82rem; color: #1a1a1a;
+  border-top: 1px dashed #b0b0b0;
+  padding: .28rem .5rem;
+}
+
+/* Tax Summary by HSN/SAC — appears between line items and Payment Details */
+.b-tax-summary {
+  width: 100%; border-collapse: collapse;
+  font-size: .78rem; margin: .35rem 0 .55rem 0;
+}
+.b-tax-summary th {
+  background: #efefef; font-weight: 700;
+  padding: .32rem .5rem; border: 1px solid #bbb;
+}
+.b-tax-summary td { padding: .28rem .5rem; border: 1px solid #ddd; }
+.b-tax-summary .b-tax-sum-total td {
+  font-weight: 800; background: #fafafa;
+  border-top: 1.5px solid #555;
+}
+
 /* ── PRINT: force single A4 page ── */
 @media print {
-  @page { size: A4 portrait; margin: 15mm 15mm; }
+  @page { size: A4 portrait; margin: 10mm 12mm; }
 
-  html, body { height: auto !important; overflow: visible !important; }
+  html, body {
+    height: auto !important;
+    min-height: 0 !important;
+    max-height: none !important;
+    overflow: visible !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    display: block !important;
+  }
 
-  /* Clone-based print (bills module) — body gets .bl-printing class.
-     Hide every direct child of body EXCEPT the injected #bl-print-clone. */
-  body.bl-printing > *:not(#bl-print-clone) { display: none !important; }
+  /* The app-container has min-height:100vh + flex layout for the live UI.
+     In print mode it contributes phantom height (a full page) which makes
+     the browser emit a blank page 2. Force its height to 0 so it can't
+     affect layout, in addition to hiding it. */
+  body.bl-printing .app-container,
+  body.bl-printing > *:not(#bl-print-clone) {
+    display: none !important;
+    height: 0 !important;
+    min-height: 0 !important;
+    max-height: 0 !important;
+    overflow: hidden !important;
+    visibility: hidden !important;
+  }
 
   #bl-print-clone {
     display: block !important;
+    margin: 0 !important;
     padding: 0 !important;
     width: 100%;
+    min-height: 0 !important;
+    height: auto !important;
     font-family: Arial, Helvetica, sans-serif !important;
-    font-size: 10pt !important;
-    line-height: 1.4 !important;
+    font-size: 9pt !important;
+    line-height: 1.3 !important;
     color: #000 !important;
   }
+  body.bl-printing,
+  body.bl-printing html { margin: 0 !important; padding: 0 !important; }
 
   /* Fallback: rooms-module bill modal */
   body:not(.bl-printing) * { visibility: hidden !important; }
@@ -375,10 +437,12 @@
   #reg-bill-print-area,
   #bill-print-area {
     padding: 0 !important;
-    font-size: 10pt !important;
-    line-height: 1.4 !important;
+    font-size: 9pt !important;
+    line-height: 1.3 !important;
     width: 100% !important;
   }
+  /* (removed page-break-inside on .b-bill-wrap — was causing phantom blank page) */
+  .b-bill-wrap { margin: 0 !important; padding: 0 !important; }
 
   /* Header block */
   .b-header-block {
@@ -416,16 +480,52 @@
     -webkit-print-color-adjust: exact !important;
     print-color-adjust: exact !important;
   }
-  .b-pay-section { margin-top: 2mm !important; }
-  .b-pay-section .b-tbl td { padding: .6mm .8mm !important; }
-  .b-sig        { margin-top: 4mm !important; padding: 0 !important; }
-  .b-sig-line   { margin-top: 3.5mm !important; width: 32mm !important;
-                  font-size: 6.5pt !important; }
-  .b-footer     { margin-top: 2mm !important; padding-top: 1.5mm !important;
-                  font-size: 6pt !important; }
+  .b-pay-section { margin-top: 1.2mm !important; }
+  .b-pay-section .b-tbl td { padding: .55mm .8mm !important; }
+  .b-sig        { margin-top: 2mm !important; padding: 0 !important; }
+  .b-sig td     { padding-top: 1mm !important; }
+  .b-sig-line   { margin-top: 2mm !important; width: 30mm !important;
+                  font-size: 6pt !important; padding-top: 1mm !important; }
+  .b-footer     { margin: 1mm 0 0 0 !important; padding: 1mm 0 0 0 !important;
+                  font-size: 5.5pt !important;
+                  page-break-after: avoid !important;
+                  break-after: avoid !important; }
+
+
+
+  /* Trim any trailing margin on the last element of the bill so it can't
+     push by 1-2px and force a new page. */
+  #bl-print-clone .b-bill-wrap > *:last-child,
+  #bl-print-clone .b-footer { margin-bottom: 0 !important; padding-bottom: 0 !important; }
+
+  /* Per-day section header / per-day total — compress for print */
+  .b-day-header td {
+    font-size: 6.8pt !important; padding: .8mm .8mm !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+  .b-day-total td {
+    font-size: 6.8pt !important; padding: .6mm .8mm !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+  /* Inline HSN/SAC sub-line under each line item */
+  .b-sac { font-size: 5.5pt !important; line-height: 1 !important;
+           margin-top: 0 !important; }
+  /* Tax Summary table — same density as the main line-items table */
+  .b-tax-summary { font-size: 6.8pt !important; margin: 1mm 0 !important; }
+  .b-tax-summary th { font-size: 6pt !important; padding: .6mm .8mm !important;
+                      -webkit-print-color-adjust: exact !important;
+                      print-color-adjust: exact !important; }
+  .b-tax-summary td { padding: .55mm .8mm !important; }
+  .b-tax-summary .b-tax-sum-total td {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
 
   /* Prevent page breaks inside bill sections */
-  .b-tbl, .b-info-outer, .b-pay-section, .b-sig, .b-footer {
+  .b-tbl, .b-info-outer, .b-pay-section, .b-sig, .b-footer,
+  .b-tax-summary {
     page-break-inside: avoid !important;
     break-inside: avoid !important;
   }
@@ -890,6 +990,44 @@
   }
 
   // ── Bill HTML builder (mirrors bills.js buildBillHTML) ────────────────────────
+  // ── Service tax inference — mirrors billing.py:infer_service_tax ─────────
+  // Returns { hsnOrSac, gstRate, taxCategory } for any non-accommodation
+  // service. Resolution: explicit fields on the record win, else name-based
+  // heuristics, else exempt. Used for the inline HSN/SAC label and for tax
+  // summary aggregation.
+  function inferServiceTax(svc) {
+    if (svc && svc.hsn_or_sac) {
+      return {
+        hsnOrSac: String(svc.hsn_or_sac),
+        gstRate:  parseInt(svc.gst_rate || 0, 10),
+        taxCategory: svc.tax_category || "goods",
+      };
+    }
+    const name = String((svc && svc.item) || "").toLowerCase();
+    const has = (...keys) => keys.some(k => name.includes(k));
+    if (has("water", "bisleri", "aquafina", "kinley", "bailley"))
+      return { hsnOrSac: "2201",   gstRate: 5,  taxCategory: "goods" };
+    if (has("cold drink", "soft drink", "coke", "pepsi", "soda",
+            "thums up", "sprite", "fanta", "limca", "maaza", "frooti"))
+      return { hsnOrSac: "2202",   gstRate: 12, taxCategory: "goods" };
+    if (has("tea", "coffee"))
+      return { hsnOrSac: "996331", gstRate: 5,  taxCategory: "service" };
+    if (has("snack", "biscuit", "namkeen", "chip", "wafer", "lays", "kurkure"))
+      return { hsnOrSac: "1905",   gstRate: 5,  taxCategory: "goods" };
+    if (has("laundry", "ironing", "wash", "dry clean"))
+      return { hsnOrSac: "999721", gstRate: 18, taxCategory: "service" };
+    if (has("taxi", "transport", "pickup", "drop", "auto", "cab"))
+      return { hsnOrSac: "996412", gstRate: 5,  taxCategory: "service" };
+    return { hsnOrSac: "", gstRate: 0, taxCategory: "exempt" };
+  }
+
+  function serviceTaxLabel(svc) {
+    const { hsnOrSac, gstRate, taxCategory } = inferServiceTax(svc);
+    if (!hsnOrSac) return "Non-taxable";
+    const prefix = taxCategory === "goods" ? "HSN" : "SAC";
+    return gstRate > 0 ? `${prefix}: ${hsnOrSac} - ${gstRate}%` : `${prefix}: ${hsnOrSac}`;
+  }
+
   function buildBillHTML(b) {
     const days = b.days_stayed || calcDays(b.checkin_time, b.checkout_time);
     const rate = b.room_price_per_night || b.room_rent || 0;
@@ -936,11 +1074,11 @@
     const displayBillNo = b.bill_number || "N/A";
     const billDate = fmtBillDT(b.checkout_time);
     const accomAddonRows = accomAddons.map(s =>
-      `<tr><td>${s.item}</td><td class="b-tr">${s.quantity||1}</td>
+      `<tr><td>${s.item}<br><span class="b-sac">SAC: 996311</span></td><td class="b-tr">${s.quantity||1}</td>
        <td class="b-tr">${fix2(s.unit_price||s.price||0)}</td>
        <td class="b-tr">${fix2(s.price||0)}</td></tr>`).join("");
     const otherSvcRows = otherSvcs.map(s =>
-      `<tr><td>${s.item}</td><td class="b-tr">${s.quantity||1}</td>
+      `<tr><td>${s.item}<br><span class="b-sac">${serviceTaxLabel(s)}</span></td><td class="b-tr">${s.quantity||1}</td>
        <td class="b-tr">${fix2(s.unit_price||s.price||0)}</td>
        <td class="b-tr">${fix2(s.price||0)}</td></tr>`).join("");
     const gstRows = `
@@ -955,7 +1093,73 @@
       return r > 0 ? totalIncl / (1 + r / 100) : totalIncl;
     }
 
-    // ── Room Rent rows: pre-GST taxable values ───────────────────────────────
+    // ── Daily folio: per-day section rendering (matches PDF) ──────────────────
+    // When the bill carries a daily_folio array, render one section per day
+    // with gross line amounts and a Day Total. Tax breakdown lives in the
+    // Tax Summary table below. If no folio, fall through to legacy logic.
+    const folio = Array.isArray(b.daily_folio) ? b.daily_folio : [];
+    const DAY_NAMES = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
+    const MONTH_NAMES = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+    function fmtDayDate(s) {
+      if (!s) return "";
+      try {
+        const ymd = s.replace("T", " ").split(" ")[0];
+        const [y, m, d] = ymd.split("-").map(n => parseInt(n, 10));
+        const dt = new Date(y, m - 1, d);
+        return `${d} ${MONTH_NAMES[m - 1]} ${y} (${DAY_NAMES[(dt.getDay() + 6) % 7]})`;
+      } catch (e) { return (s || "").slice(0, 10); }
+    }
+    let folioRows = "";
+    if (folio.length > 0) {
+      for (const e of folio) {
+        const di       = e.day_index || 1;
+        const diRoom   = e.room || b.room || "";
+        const diBase   = Number(e.base_rate || 0);
+        const diAddons = Array.isArray(e.addons) ? e.addons : [];
+        const diTotal  = Number(e.day_total || 0);
+        const diDisc   = Number(e.discount_allocated || 0);
+        const dateDisp = fmtDayDate(e.day_start || "");
+
+        folioRows += `<tr class="b-day-header"><td colspan="4" style="text-align:center;">
+          Day ${di} &nbsp;&mdash;&nbsp; ${dateDisp} &nbsp;&middot;&nbsp; Rm ${diRoom}
+        </td></tr>`;
+
+        folioRows += `<tr>
+          <td>Room Rent<br><span class="b-sac">SAC: 996311</span></td>
+          <td class="b-tr">1</td>
+          <td class="b-tr">${fix2(diBase)}</td>
+          <td class="b-tr">${fix2(diBase)}</td>
+        </tr>`;
+
+        for (const a of diAddons) {
+          const aGross = Number(a.price || 0);
+          const aUnit  = Number(a.unit_price || a.price || 0);
+          const aQty   = Number(a.quantity || 1);
+          folioRows += `<tr>
+            <td>${a.item || "Service"}<br><span class="b-sac">SAC: 996311</span></td>
+            <td class="b-tr">${aQty}</td>
+            <td class="b-tr">${fix2(aUnit)}</td>
+            <td class="b-tr">${fix2(aGross)}</td>
+          </tr>`;
+        }
+
+        if (diDisc > 0) {
+          folioRows += `<tr>
+            <td colspan="3" style="text-align:right;color:#2e7d32;font-weight:600;">
+              Less: Discount allocated to Day ${di}
+            </td>
+            <td class="b-tr" style="color:#2e7d32;font-weight:700;">- ${fix2(diDisc)}</td>
+          </tr>`;
+        }
+
+        folioRows += `<tr class="b-day-total">
+          <td colspan="3" class="b-tr">Day ${di} Total (incl. GST)</td>
+          <td class="b-tr">${fix2(diTotal)}</td>
+        </tr>`;
+      }
+    }
+
+        // ── Room Rent rows: pre-GST taxable values ───────────────────────────────
     const roomSegments   = b.room_segments || [];
     const currentRoomNo  = b.current_room || b.room || "";
     const currentRoomDays  = b.current_room_days;
@@ -979,7 +1183,7 @@
         if ((seg.days || 0) > 0) {
           const st = segTaxable(seg.total || 0, seg.price || 0);
           const sr = seg.days ? st / seg.days : 0;
-          roomRentRows += `<tr><td>Room Rent – Rm ${seg.from_room || ""}</td>
+          roomRentRows += `<tr><td>Room Rent – Rm ${seg.from_room || ""}<br><span class="b-sac">SAC: 996311</span></td>
             <td class="b-tr">${seg.days}</td>
             <td class="b-tr">${fix2(sr)}</td>
             <td class="b-tr">${fix2(st)}</td></tr>`;
@@ -988,13 +1192,13 @@
       if ((currentRoomDays || 0) > 0) {
         const ct = segTaxable(currentRoomTotal || 0, currentRoomPrice || 0);
         const cr = currentRoomDays ? ct / currentRoomDays : 0;
-        roomRentRows += `<tr><td>Room Rent – Rm ${currentRoomNo}</td>
+        roomRentRows += `<tr><td>Room Rent – Rm ${currentRoomNo}<br><span class="b-sac">SAC: 996311</span></td>
           <td class="b-tr">${currentRoomDays}</td>
           <td class="b-tr">${fix2(cr)}</td>
           <td class="b-tr">${fix2(ct)}</td></tr>`;
       }
     } else {
-      roomRentRows = `<tr><td>Room Rent</td>
+      roomRentRows = `<tr><td>Room Rent<br><span class="b-sac">SAC: 996311</span></td>
         <td class="b-tr">${days}</td>
         <td class="b-tr">${fix2(accomBase / (days || 1))}</td>
         <td class="b-tr">${fix2(accomBase)}</td></tr>`;
@@ -1003,6 +1207,77 @@
       ? `<tr class="b-gst-row"><td>Taxable Base (excl. GST)</td>
          <td class="b-tr">—</td><td class="b-tr">—</td>
          <td class="b-tr">${fix2(accomBase)}</td></tr>`
+      : "";
+
+    // ── Tax Summary by HSN/SAC ────────────────────────────────────────────────
+    // Aggregates per (HSN/SAC, rate). Register tab uses the simple model:
+    // one accommodation row at gstRatePct (or "Exempt" when 0).
+    const _taxSumRows = [];
+    let _totTaxable = accomBase, _totCgst = cgst, _totSgst = sgst, _totIgst = 0;
+    if (accomBase > 0 || (cgst + sgst) > 0) {
+      const rateDisp = gstRatePct > 0 ? `${gstRatePct}%` : "Exempt";
+      _taxSumRows.push(`<tr>
+        <td>996311</td><td>Accommodation</td>
+        <td class="b-tr">${rateDisp}</td>
+        <td class="b-tr">${fix2(accomBase)}</td>
+        <td class="b-tr">${fix2(cgst)}</td>
+        <td class="b-tr">${fix2(sgst)}</td>
+        <td class="b-tr">0.00</td>
+        <td class="b-tr">${fix2(cgst + sgst)}</td>
+      </tr>`);
+    }
+
+    // Non-accommodation services (water, laundry, cold drinks, etc.) —
+    // grouped by (HSN/SAC, rate) via the inference helper.
+    const _byOther = {};
+    for (const s of otherSvcs) {
+      const { hsnOrSac, gstRate } = inferServiceTax(s);
+      if (!hsnOrSac || gstRate <= 0) continue;
+      const gross = Number(s.price || 0);
+      const taxable = gross / (1 + gstRate / 100);
+      const taxInc = gross - taxable;
+      const half = Math.round((taxInc / 2) * 100) / 100;
+      const key = `${hsnOrSac}|${gstRate}`;
+      if (!_byOther[key]) _byOther[key] = { hsn: hsnOrSac, rate: gstRate, desc: s.item || "Service", taxable: 0, cgst: 0, sgst: 0 };
+      _byOther[key].taxable += taxable;
+      _byOther[key].cgst    += half;
+      _byOther[key].sgst    += (taxInc - half);
+    }
+    for (const k of Object.keys(_byOther)) {
+      const o = _byOther[k];
+      _totTaxable += o.taxable;
+      _totCgst    += o.cgst;
+      _totSgst    += o.sgst;
+      _taxSumRows.push(`<tr>
+        <td>${o.hsn}</td><td>${o.desc}</td>
+        <td class="b-tr">${o.rate}%</td>
+        <td class="b-tr">${fix2(o.taxable)}</td>
+        <td class="b-tr">${fix2(o.cgst)}</td>
+        <td class="b-tr">${fix2(o.sgst)}</td>
+        <td class="b-tr">0.00</td>
+        <td class="b-tr">${fix2(o.cgst + o.sgst)}</td>
+      </tr>`);
+    }
+    const taxSummaryTable = _taxSumRows.length > 0
+      ? `<table class="b-tax-summary">
+          <thead><tr>
+            <th>HSN/SAC</th><th>Description</th>
+            <th class="b-tr">Rate</th>
+            <th class="b-tr">Taxable</th>
+            <th class="b-tr">CGST</th><th class="b-tr">SGST</th>
+            <th class="b-tr">IGST</th><th class="b-tr">Total Tax</th>
+          </tr></thead><tbody>
+            ${_taxSumRows.join("")}
+            <tr class="b-tax-sum-total">
+              <td colspan="3" class="b-tr">Total</td>
+              <td class="b-tr">${fix2(_totTaxable)}</td>
+              <td class="b-tr">${fix2(_totCgst)}</td>
+              <td class="b-tr">${fix2(_totSgst)}</td>
+              <td class="b-tr">0.00</td>
+              <td class="b-tr">${fix2(_totCgst + _totSgst)}</td>
+            </tr>
+          </tbody>
+        </table>`
       : "";
     const refundRows = refunds > 0 ? (() => {
       const rc = refundCash > 0 ? `<tr><td>Refund Given (Cash)</td><td class="b-tr" style="color:#c00;">− ₹ ${fix2(refundCash)}</td></tr>` : "";
@@ -1033,6 +1308,7 @@
       <div class="b-row"><span class="b-lbl">Days Stayed:</span> ${days}</div>
       <div class="b-row"><span class="b-lbl">Bill Date:</span> ${billDate}</div>
       <div class="b-row"><span class="b-lbl">Place of Supply:</span> Karnataka (KA – 29)</div>
+      <div class="b-row"><span class="b-lbl">Reverse Charge:</span> No</div>
     </td>
   </tr></table>
   <table class="b-tbl">
@@ -1042,14 +1318,15 @@
     </tr></thead>
     <tbody>
       <tr class="b-sec"><td colspan="4">Accommodation Charges (SAC: 9963)</td></tr>
-      ${roomRentRows}
-      ${accomAddonRows}${taxableBaseRow}${gstRows}${accomSubtotalRow}${otherSvcSection}${discountRow}
+      ${folio.length > 0 ? folioRows : (roomRentRows + accomAddonRows + taxableBaseRow + gstRows)}
+      ${folio.length > 0 ? `<tr class="b-subtotal"><td colspan="3" class="b-tr">Accommodation Total (all days, incl. GST)</td><td class="b-tr">${fix2(folio.reduce((s, e) => s + Number(e.day_total || 0), 0))}</td></tr>` : accomSubtotalRow}${otherSvcSection}${discountRow}
       <tr class="b-grand">
         <td colspan="3" class="b-tr">GRAND TOTAL</td>
         <td class="b-tr">₹ ${fix2(grandTotal)}</td>
       </tr>
     </tbody>
   </table>
+  ${taxSummaryTable}
   <div class="b-pay-section">
     <div class="b-pay-title">Payment Details</div>
     <table class="b-tbl"><tbody>
@@ -1073,16 +1350,25 @@
   }
 
   // ── Bill viewer functions ─────────────────────────────────────────────────────
+  // Track the currently-open bill so the action buttons (Save & Share,
+  // Recalculate, Print) inside reg-bill-overlay have something to act on.
+  let _regOpenBillId   = null;
+  let _regOpenBillData = null;
+
   async function openRegBill(id) {
     const overlay = dom("reg-bill-overlay");
     const area    = dom("reg-bill-print-area");
     if (!overlay || !area) return;
+    _regOpenBillId   = null;
+    _regOpenBillData = null;
     area.innerHTML = `<div class="reg-state"><div class="reg-loader"></div><p>Loading…</p></div>`;
     overlay.classList.add("show");
     try {
       const res  = await apiFetch(`/generate_bill/${id}`);
       const data = await res.json();
       if (data.success) {
+        _regOpenBillId   = id;
+        _regOpenBillData = data.bill;
         area.innerHTML = buildBillHTML(data.bill);
       } else {
         area.innerHTML = `<div class="reg-state" style="color:#c00;"><i class="fas fa-times-circle"></i><p>${data.message || "Failed to load bill"}</p></div>`;
@@ -1094,7 +1380,15 @@
   function _closeRegBill() {
     const overlay = dom("reg-bill-overlay");
     if (overlay) overlay.classList.remove("show");
+    _regOpenBillId   = null;
+    _regOpenBillData = null;
   }
+
+  // Exposed for the Bills tab — clicking View Bill there delegates to
+  // this same modal so the bill renders identically everywhere. Doing
+  // NOT touch the modal markup or buildBillHTML here: user wants the
+  // register modal to be the single source of truth for bill rendering.
+  window.openRegBill = openRegBill;
 
   // ── Build tab HTML ────────────────────────────────────────────────────────────
   function buildHTML() {
@@ -1305,7 +1599,25 @@
       <div class="reg-state"><div class="reg-loader"></div><p>Loading…</p></div>
     </div>
     <div class="bill-actions">
-      <button onclick="window.print()" style="background:#6c757d;color:#fff;border:none;padding:.35rem .8rem;border-radius:6px;cursor:pointer;font-size:.82rem;">
+      <button class="action-btn btn-secondary" id="reg-bill-close-btn">Close</button>
+      <!-- Save & Share: generates PDF (or reuses stored pdf_url) and
+           opens the existing WhatsApp send modal. Reuses bills.js's
+           flow via window.cibaraSaveAndShareBill so there is one
+           code path. -->
+      <button class="bl-bill-save-btn" id="reg-bill-save"
+              title="Save PDF and share on WhatsApp">
+        <i class="fab fa-whatsapp"></i> Save &amp; Share
+      </button>
+      <!-- Recalculate: admin-only. Hits /recalculate_bill which
+           re-reads payments from Firestore and writes fresh totals
+           onto the bill doc, then re-opens the bill so the new
+           numbers render. -->
+      <button class="action-btn btn-secondary" id="reg-bill-recalc"
+              data-roles="admin"
+              title="Re-read payments and refresh the bill totals">
+        <i class="fas fa-sync-alt"></i> Recalculate
+      </button>
+      <button class="action-btn btn-primary" id="reg-bill-print-btn">
         <i class="fas fa-print"></i> Print
       </button>
     </div>
@@ -1488,6 +1800,111 @@
     // Bill viewer modal close
     const regBillClose = dom("reg-bill-close");
     if (regBillClose) regBillClose.addEventListener("click", _closeRegBill);
+
+    const regBillCloseBtn = dom("reg-bill-close-btn");
+    if (regBillCloseBtn) regBillCloseBtn.addEventListener("click", _closeRegBill);
+
+    // ── Save & Share ──────────────────────────────────────────────────
+    // Delegates to bills.js's combined helper. Disables the button while
+    // the PDF round-trip is in flight so users don't double-fire.
+    const regBillSave = dom("reg-bill-save");
+    if (regBillSave) {
+      regBillSave.addEventListener("click", async function () {
+        if (!_regOpenBillId || !_regOpenBillData) return;
+        if (typeof window.cibaraSaveAndShareBill !== "function") {
+          alert("Save & Share unavailable — open the Bills tab once to initialise this feature.");
+          return;
+        }
+        const _orig = regBillSave.innerHTML;
+        regBillSave.disabled = true;
+        regBillSave.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Saving PDF…';
+        try {
+          const ok = await window.cibaraSaveAndShareBill(_regOpenBillId, _regOpenBillData);
+          if (ok) {
+            // WhatsApp modal is now open; close the bill modal so the
+            // user sees the send dialog without overlap.
+            _closeRegBill();
+          }
+        } finally {
+          regBillSave.disabled = false;
+          regBillSave.innerHTML = _orig;
+        }
+      });
+    }
+
+    // ── Recalculate (admin-only) ──────────────────────────────────────
+    // POSTs /recalculate_bill, then re-opens the bill modal so the
+    // refreshed totals render. Admin gating is enforced server-side by
+    // @requires_permission("payment.edit") and client-side by
+    // data-roles="admin" on the button + this click-time check.
+    const regBillRecalc = dom("reg-bill-recalc");
+    if (regBillRecalc) {
+      regBillRecalc.addEventListener("click", async function () {
+        if (!_regOpenBillId) return;
+        const _auth = window.CibaraAuth;
+        if (!(_auth && _auth.isAdmin && _auth.isAdmin())) {
+          alert("Only admin users can recalculate bills.");
+          return;
+        }
+        const _orig = regBillRecalc.innerHTML;
+        regBillRecalc.disabled = true;
+        regBillRecalc.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Recalculating…';
+        try {
+          const res = await apiFetch("/recalculate_bill", {
+            method:  "POST",
+            headers: { "Content-Type": "application/json" },
+            body:    JSON.stringify({ bill_id: _regOpenBillId }),
+          });
+          const data = await res.json().catch(() => ({}));
+          if (res.ok && data && data.success) {
+            alert(
+              "Bill recalculated.\n" +
+              "Cash: \u20B9" + (data.payment_cash ?? 0) + "\n" +
+              "Online: \u20B9" + (data.payment_online ?? 0) + "\n" +
+              "Balance: \u20B9" + (data.balance ?? 0)
+            );
+            await openRegBill(_regOpenBillId);
+          } else {
+            const msg = (data && data.message) || ("Recalculate failed (HTTP " + res.status + ").");
+            alert("Error: " + msg);
+          }
+        } catch (err) {
+          console.error("[Register] recalculate failed:", err);
+          alert("Network error during recalculate.");
+        } finally {
+          regBillRecalc.disabled = false;
+          regBillRecalc.innerHTML = _orig;
+        }
+      });
+    }
+
+    // ── Print (one-page clone approach) ───────────────────────────────
+    // Plain window.print() on this modal previously produced two pages
+    // because the live app layout contributes phantom page height. The
+    // bills.js print path solved this by cloning the bill HTML to body,
+    // setting body.bl-printing so the CSS hides everything else, then
+    // restoring on completion. Reuse the same approach here so Bills
+    // tab and Register tab print identically.
+    const regBillPrintBtn = dom("reg-bill-print-btn");
+    if (regBillPrintBtn) {
+      regBillPrintBtn.addEventListener("click", function () {
+        const area = dom("reg-bill-print-area");
+        if (!area || !area.innerHTML.trim()) return;
+        var old = document.getElementById("bl-print-clone");
+        if (old) old.remove();
+        var clone = document.createElement("div");
+        clone.id = "bl-print-clone";
+        clone.innerHTML = area.innerHTML;
+        document.body.appendChild(clone);
+        document.body.classList.add("bl-printing");
+        try {
+          window.print();
+        } finally {
+          document.body.classList.remove("bl-printing");
+          clone.remove();
+        }
+      });
+    }
 
     // Close modals on overlay click
     const rpmOverlay = dom("rpm-overlay");
@@ -2045,6 +2462,15 @@
     pmState.password = "_rbac_";
     _loadAndShowPayments();
   }
+
+  // Exposed for the Bills tab — clicking the Payment cell there opens the
+  // same Payment Records modal we use in Register. The shared modal markup
+  // (rp-overlay / rp-content / rp-meta) is already in the DOM (injected
+  // when register.js bootstraps), so consumers only need to call this
+  // entry point with a bill-shaped object: { id, stay_id, room,
+  // guest_name, checkin_time }. RBAC (payment.edit, admin-only) is
+  // enforced inside the function.
+  window.openRegisterPaymentsModal = _openPasswordPrompt;
 
   // Fetch payment records for the active stay. Returns a Promise that
   // resolves to the payments array. De-dupes concurrent calls via
@@ -2692,6 +3118,35 @@
 
   function bootRoleAware() {
     buildHTML();
+    // ── Re-parent overlay modals to document.body ──────────────────────
+    //
+    // buildHTML() writes the register tab's HTML INTO #register-tab,
+    // which carries .hidden (display:none !important) whenever another
+    // tab is active. The payment / delete / ID-doc / bill modals were
+    // declared inside that subtree, so adding .show to e.g. #rp-overlay
+    // had no effect when the user was on the Bills tab — the ancestor
+    // hide won the cascade.
+    //
+    // Moving them to be direct children of <body> decouples their
+    // visibility from the register tab's display state. IDs are
+    // preserved, so every dom("rp-overlay")-style lookup elsewhere in
+    // register.js (and the cross-tab opener window.openRegisterPaymentsModal)
+    // continues to find them. Event listeners attached AFTER this move
+    // by wireEvents() bind to the now-relocated elements, so there's
+    // no listener-loss to worry about.
+    try {
+      var _overlayIds = ["rp-overlay", "rpd-overlay", "rdoc-overlay", "reg-bill-overlay"];
+      for (var _i = 0; _i < _overlayIds.length; _i++) {
+        var _el = document.getElementById(_overlayIds[_i]);
+        if (_el && _el.parentNode !== document.body) {
+          document.body.appendChild(_el);
+        }
+      }
+    } catch (_e) {
+      // Non-fatal — modals will still work as long as the active tab
+      // is the register tab. Logged so it's diagnosable.
+      try { console.warn("Register: overlay re-parent skipped:", _e); } catch (_) {}
+    }
     setDefaults();
     wireEvents();
     watchTab();

@@ -1,7 +1,10 @@
 from flask import Flask, render_template, send_from_directory, send_file, jsonify, request, Response
 from flask_compress import Compress
 import mimetypes
-from config import initialize_data, logger, db, UPLOAD_FOLDER
+from config import (
+    initialize_data, logger, db, UPLOAD_FOLDER,
+    CIBARA_ENV, FIREBASE_WEB_CONFIG,
+)
 from routes.rooms import rooms_bp
 from routes.bookings import bookings_bp
 from routes.billing import billing_bp
@@ -153,20 +156,16 @@ def health():
 #   1. environment variable
 #   2. hardcoded fallback for the cibara-software-61512 project
 # ---------------------------------------------------------------------------
-_FIREBASE_WEB_FALLBACK = {
-    "apiKey":            "AIzaSyAj_K8Bq8IA0mYH94pu03s3DeDxc2pyCF4",
-    "authDomain":        "cibara-software-61512.firebaseapp.com",
-    "projectId":         "cibara-software-61512",
-    "storageBucket":     "cibara-software-61512.firebasestorage.app",
-    "messagingSenderId": "117552649945",
-    "appId":             "1:117552649945:web:5d4983739b1a8c077e50c8",
-    "measurementId":     "G-5VY26JYPN0",
-}
+# Web Firebase config served to browsers. The fallback comes from
+# config.FIREBASE_WEB_CONFIG (driven by the CIBARA_ENV toggle in config.py),
+# so flipping the toggle there flips both Admin SDK and front-end at once.
+# Per-field FIREBASE_* env vars still win for one-off overrides on Cloud Run.
+_FIREBASE_WEB_FALLBACK = FIREBASE_WEB_CONFIG
 
 @app.route("/firebase-config.js")
 def firebase_config_js():
     def pick(env_key, fallback_key):
-        return os.environ.get(env_key) or _FIREBASE_WEB_FALLBACK[fallback_key]
+        return os.environ.get(env_key) or _FIREBASE_WEB_FALLBACK.get(fallback_key, "")
 
     config = {
         "apiKey":            pick("FIREBASE_WEB_API_KEY",         "apiKey"),
@@ -177,8 +176,13 @@ def firebase_config_js():
         "appId":             pick("FIREBASE_APP_ID",              "appId"),
         "measurementId":     pick("FIREBASE_MEASUREMENT_ID",      "measurementId"),
     }
-    js = "// Firebase web config (env vars override fallback)\nwindow.FIREBASE_CONFIG = " + json.dumps(config) + ";\n"
-    return Response(js, mimetype="application/javascript", headers={"Cache-Control": "no-store"})
+    js = (
+        f"// Firebase web config — CIBARA_ENV={CIBARA_ENV} "
+        f"(env vars override fallback)\n"
+        f"window.FIREBASE_CONFIG = {json.dumps(config)};\n"
+    )
+    return Response(js, mimetype="application/javascript",
+                    headers={"Cache-Control": "no-store"})
 
 # ---------------------------------------------------------------------------
 # DEPRECATED: PIN verification.

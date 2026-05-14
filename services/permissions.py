@@ -43,6 +43,10 @@ PERMISSIONS = frozenset(
         # Discounts / payments
         "discount.apply",
         "payment.edit",
+        # Bill — GST recipient details (B2B GSTIN/legal name) editing
+        # and Section 34 credit-note issuance. Admin-only by default.
+        "bill.gst.edit",
+        "credit_note.issue",
         # Bookings
         "booking.create",
         "booking.update",

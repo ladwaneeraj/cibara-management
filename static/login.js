@@ -163,11 +163,4 @@
         passwordInput.focus();
       });
   });
-
-  // Autofocus
-  if (!userIdInput.value) {
-    userIdInput.focus();
-  } else {
-    passwordInput.focus();
-  }
 })();

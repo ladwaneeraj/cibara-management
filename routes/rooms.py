@@ -486,7 +486,11 @@ def checkout():
                 totals_update["refunds"] = firestore.Increment(refund_amount)
                 refund_processed = True
 
-                # --- Dual-write: checkout refund (background thread) ---
+                # A3: write the refund payment INTO the same checkout batch
+                # so it commits atomically with the room/bill/totals updates.
+                # The previous daemon-thread pattern could lose the payment
+                # row if the process died between batch.commit() and the
+                # thread flushing (Cloud Run scale-down, OOM, deploy).
                 _refund_payload = {
                     "room": room, "name": guest_name, "amount": refund_amount,
                     "method": refund_method, "type": "checkout_refund",
@@ -495,20 +499,19 @@ def checkout():
                     "transaction_type": "checkout_refund",
                     "stay_room_key": f"{room}_{room_data.get('checkin_time', '')}",
                 }
-                import threading as _thr
                 if active_bill_id:
-                    # Snapshot active_bill_id into a local for the closure
-                    _abid = active_bill_id
-                    _thr.Thread(
-                        target=payment_service.write_payment_with_stay,
-                        args=(_abid, _refund_payload),
-                        daemon=True,
-                    ).start()
+                    payment_service.write_payment_with_stay(
+                        active_bill_id, _refund_payload, batch=batch,
+                    )
                 else:
-                    _thr.Thread(target=payment_service.write_payment, args=(_refund_payload,), daemon=True).start()
-                logger.info(f"Checkout refund of ₹{refund_amount} queued for room {room}")
+                    payment_service.write_payment(_refund_payload, batch=batch)
+                logger.info(
+                    f"Checkout refund of ₹{refund_amount} added to checkout "
+                    f"batch for room {room}"
+                )
 
-            # --- Dual-write: settlement (background thread) ---
+            # A3: settlement payment also goes into the same batch (atomic
+            # with the rest of the checkout).
             if balance > 0 and settle_later:
                 _settle_payload = {
                     "room": room, "name": guest_info["name"],
@@ -519,16 +522,12 @@ def checkout():
                     "settlement_id": settlement_id,
                     "stay_room_key": f"{room}_{room_data.get('checkin_time', '')}",
                 }
-                import threading as _thr
                 if active_bill_id:
-                    _abid = active_bill_id
-                    _thr.Thread(
-                        target=payment_service.write_payment_with_stay,
-                        args=(_abid, _settle_payload),
-                        daemon=True,
-                    ).start()
+                    payment_service.write_payment_with_stay(
+                        active_bill_id, _settle_payload, batch=batch,
+                    )
                 else:
-                    _thr.Thread(target=payment_service.write_payment, args=(_settle_payload,), daemon=True).start()
+                    payment_service.write_payment(_settle_payload, batch=batch)
 
             # Save to bills + mark room cleaning — all in one batch commit
             checkout_time = datetime.now(IST).strftime("%Y-%m-%d %H:%M")
@@ -678,12 +677,27 @@ def checkout():
                 "room.checkout",
                 target_collection="rooms",
                 target_id=str(room),
+                # A1: before/after snapshots — only the fields this action
+                # flips. Full doc dumps would bloat the audit_logs collection.
+                before={
+                    "status":       "occupied",
+                    "guest_name":   guest_name,
+                    "balance":      balance,
+                    "checkin_time": room_data.get("checkin_time"),
+                },
+                after={
+                    "status":         "cleaning",
+                    "guest":          None,
+                    "balance":        0,
+                    "bill_status":    (bill_record or {}).get("status") if bill_record else None,
+                    "settle_later":   bool(data_json.get("settle_later", False)),
+                    "refund_processed": bool(refund_processed),
+                },
                 metadata={
                     "guest": guest_name,
                     "balance_at_checkout": balance,
-                    "refund_processed": bool(refund_processed),
-                    "settle_later": bool(data_json.get("settle_later", False)),
                     "bill_id": bill_id if bool(bill_record) else None,
+                    "bill_number": (bill_record or {}).get("bill_number") if bill_record else None,
                 },
             )
 
@@ -945,19 +959,21 @@ def revert_checkout():
             totals_update["refunds"] = firestore.Increment(-refund_total)
             refund_reversed = True
 
-        # 6c. Bill: flip to draft via the audited revert function.
-        reverted_bill = bills_service.revert_to_draft(
+        # 6c. Bill: issue CN against original + create fresh draft.
+        revert_result = bills_service.revert_to_draft(
             stay_id,
             reason=reason,
             actor=f"manager:{request.remote_addr or 'unknown'}",
             batch=batch,
         )
-        if reverted_bill is None:
+        if revert_result is None:
             # bills_service refused — bail out before committing anything.
             return jsonify(
                 success=False,
                 message="Bill revert refused by bills_service — see server logs",
             ), 500
+        new_stay_id = revert_result.get("new_stay_id") or stay_id
+        revert_cn   = revert_result.get("credit_note")
 
         # 6d. Room: restore from snapshot.
         restored_balance = int(snapshot.get("balance", guest_snap.get("balance", 0)) or 0)
@@ -972,8 +988,10 @@ def revert_checkout():
             "last_renewal_time":       snapshot.get("last_renewal_time"),
             "last_renewal_date":       snapshot.get("last_renewal_date"),
             "checkin_time_edit_count": int(snapshot.get("checkin_time_edit_count", 0) or 0),
-            # Re-attach the stay-doc pointer so subsequent payments find it.
-            "active_bill_id":          stay_id,
+            # Re-attach to the FRESH draft stay_id (the original is now
+            # superseded with a credit note linked). Future payments and
+            # the next checkout flow will write against this new ID.
+            "active_bill_id":          new_stay_id,
             # Cancel cleaning state.
             "cleaning_status":         None,
             "cleaning_start_time":     None,
@@ -1025,6 +1043,7 @@ def revert_checkout():
         try:
             db.collection("revert_audit").document().set({
                 "stay_id":              stay_id,
+                "new_stay_id":          new_stay_id,
                 "room":                 str(room),
                 "reason":               reason,
                 "reverted_at":          datetime.now(_tz.utc).isoformat(),
@@ -1039,12 +1058,34 @@ def revert_checkout():
                 "refund_reversed":      refund_total if refund_reversed else 0,
                 "snapshot_used":        bool(snapshot.get("guest")),
                 "age_hours_at_revert":  round(age_hours, 3),
+                "credit_note_number":   (revert_cn or {}).get("cn_number"),
+                "credit_note_id":       (revert_cn or {}).get("cn_id"),
             })
         except Exception as _e:
             logger.warning(f"revert_checkout: audit log write failed: {_e}")
 
+        # CN-specific audit (Goal 2 requirement: every CN write goes through
+        # services.audit_log.write_log).
+        if revert_cn:
+            try:
+                write_log(
+                    "credit_note.create",
+                    target_collection="credit_notes",
+                    target_id=str(revert_cn.get("cn_id") or ""),
+                    metadata={
+                        "reason":               "checkout_mistake",
+                        "against_bill_id":      stay_id,
+                        "against_bill_number":  bill.get("bill_number"),
+                        "credit_amount_total":  revert_cn.get("credit_amount_total"),
+                        "cn_number":            revert_cn.get("cn_number"),
+                    },
+                )
+            except Exception as _le:
+                logger.warning(f"revert_checkout: CN audit-log failed: {_le}")
+
         logger.info(
-            f"revert_checkout: stay_id={stay_id} room={room} age_hours={age_hours:.2f} "
+            f"revert_checkout: stay_id={stay_id} → new_stay_id={new_stay_id} "
+            f"room={room} age_hours={age_hours:.2f} "
             f"settle_later_reversed={was_settle_later} refund_reversed={refund_reversed} "
             f"snapshot_used={bool(snapshot.get('guest'))}"
         )
@@ -1055,16 +1096,20 @@ def revert_checkout():
             target_id=str(room),
             metadata={
                 "stay_id": stay_id,
+                "new_stay_id": new_stay_id,
                 "reason": reason,
                 "had_settlement": was_settle_later,
                 "refund_reversed": refund_total if refund_reversed else 0,
                 "age_hours_at_revert": round(age_hours, 3),
+                "credit_note_number": (revert_cn or {}).get("cn_number"),
             },
         )
         return jsonify(
             success=True,
             message=f"Checkout reverted. Room {room} restored.",
             stay_id=stay_id,
+            new_stay_id=new_stay_id,
+            credit_note_number=(revert_cn or {}).get("cn_number"),
             room=str(room),
             refund_reversed=refund_total if refund_reversed else 0,
             settlement_reversed=was_settle_later,
@@ -1099,6 +1144,54 @@ def add_on():
         room_data = room_doc.to_dict()
         batch = db.batch()
 
+        # ── Stamp applied_on_day for the daily folio model ────────────────────
+        # The 24h stay-day boundary is anchored to checkin_time (renewal at
+        # checkin + 24h, not at midnight). Day index = floor((now - checkin)
+        # / 24h) + 1. So a service added at +1h is Day 1; at +25h is Day 2.
+        #
+        # Frontend may override by sending an explicit applied_on_day (e.g.
+        # operator wants to retroactively bill an AC charge to Day 2 instead
+        # of Day 1). When omitted, we default to the computed current day.
+        # This stamp lets create_bill_record's daily_folio attribute the
+        # right slab to the right night even when stays cross slab thresholds.
+        _default_day_idx = 1
+        _checkin_str = room_data.get("checkin_time")
+        if _checkin_str:
+            try:
+                _ci_dt = datetime.strptime(_checkin_str, "%Y-%m-%d %H:%M")
+                _ci_dt = IST.localize(_ci_dt)
+                _elapsed_h = (datetime.now(IST) - _ci_dt).total_seconds() / 3600.0
+                _default_day_idx = max(1, int(_elapsed_h // 24) + 1)
+            except (ValueError, TypeError):
+                _default_day_idx = 1
+        try:
+            applied_on_day = int(
+                data_json.get("applied_on_day") or _default_day_idx
+            )
+        except (TypeError, ValueError):
+            applied_on_day = _default_day_idx
+        if applied_on_day < 1:
+            applied_on_day = 1
+
+        # Pin the service to an absolute date too. applied_on_day is a
+        # RELATIVE index counted from check-in; if the operator later
+        # corrects the check-in time, the day index for a previously
+        # written service is no longer correct. applied_on_date stores
+        # the actual calendar date the service applies to, computed
+        # from the CURRENT check-in time + (applied_on_day - 1) full
+        # days. The folio computation prefers this absolute date when
+        # present and falls back to the relative index for legacy rows.
+        applied_on_date = None
+        if _checkin_str:
+            try:
+                _ci_dt_pin = datetime.strptime(_checkin_str, "%Y-%m-%d %H:%M")
+                applied_on_date = (
+                    _ci_dt_pin.date()
+                    + timedelta(days=(applied_on_day - 1))
+                ).strftime("%Y-%m-%d")
+            except (ValueError, TypeError):
+                applied_on_date = None
+
         add_on_entry = {
             "room": room,
             "item": item,
@@ -1111,7 +1204,45 @@ def add_on():
             "transaction_type": "service",
             # Mark whether this add-on is an accommodation charge for GST purposes.
             "accommodation_charge": accommodation_charge,
+            # Daily folio: which stay-day this charge belongs to.
+            # `applied_on_day` is the relative 1-based index counted from
+            # check-in; `applied_on_date` is the absolute calendar date the
+            # service applies to. The folio prefers the date when present
+            # so a later check-in time correction does NOT silently move
+            # the charge to a different night.
+            "applied_on_day":  applied_on_day,
+            "applied_on_date": applied_on_date,
         }
+
+        # ── Tax classification (Rule 46) ──────────────────────────────────────
+        # Accommodation charges (AC, extra bed, extra person) share the room's
+        # SAC 996311 and follow the per-night room tariff slab — those are
+        # handled by the folio renderer. For non-accommodation services we
+        # infer HSN/SAC + GST rate from the item name so every line on the
+        # bill carries a correct tax tag and the tax summary aggregates per
+        # (HSN/SAC, rate). Explicit fields in the request payload win.
+        try:
+            if accommodation_charge:
+                add_on_entry["hsn_or_sac"] = "996311"
+                add_on_entry["tax_category"] = "accommodation"
+                # gst_rate is determined per-night by the folio; not stamped here.
+            else:
+                _payload_hsn = (data_json.get("hsn_or_sac") or "").strip()
+                if _payload_hsn:
+                    add_on_entry["hsn_or_sac"] = _payload_hsn
+                    add_on_entry["gst_rate"] = int(data_json.get("gst_rate") or 0)
+                    add_on_entry["tax_category"] = data_json.get("tax_category", "goods")
+                else:
+                    from routes.billing import infer_service_tax as _infer
+                    _hsn, _rate, _cat = _infer({"item": item})
+                    if _hsn:
+                        add_on_entry["hsn_or_sac"] = _hsn
+                        add_on_entry["gst_rate"] = _rate
+                        add_on_entry["tax_category"] = _cat
+        except Exception as _tax_e:
+            # Inference failure must never block the add-on write. Render-time
+            # inference will fill the gap.
+            logger.warning(f"tax inference for add_on failed: {_tax_e}")
 
         # Build atomic update for totals
         totals_update = {}
@@ -1134,29 +1265,29 @@ def add_on():
 
         # ── Mid-stay price change for accommodation add-ons ──────────────────────
         # When an accommodation_charge add-on is added (AC, Extra Bed, etc.) it
-        # represents a permanent per-night increase going forward.  We snapshot
-        # the current days at the old price (using the same pre_transfer_charges
-        # mechanism as room transfers), then bump guest.price so the next renewal
-        # shows the correct updated nightly rate automatically.
+        # CAN represent a permanent per-night increase going forward — in which
+        # case we snapshot prior days at the old rate and bump guest.price so
+        # the next renewal picks up the new rate.
         #
-        # Example: 2 days at ₹1200, then AC (₹600/night) enabled.
-        #   → pre_transfer_charges: [{days:2, price:1200, total:2400}]
-        #   → guest.price: ₹1800
-        #   → Day 3 renewal modal shows ₹1800 ✓
-        if accommodation_charge:
+        # But it CAN ALSO be a retroactive charge for a past day only ("guest
+        # used AC yesterday, forgot to record it"). In that case the room
+        # rate must NOT change for future days — the addon sits on the
+        # specific past day in the folio and that's it.
+        #
+        # We use the applied_on_day stamp to distinguish:
+        #   applied_on_day < _default_day_idx  → retroactive (past day)
+        #     → just record the addon, don't touch guest.price
+        #   applied_on_day >= _default_day_idx → going-forward
+        #     → bump guest.price + snapshot prior days (legacy behaviour)
+        is_retroactive = applied_on_day < _default_day_idx
+        if accommodation_charge and not is_retroactive:
             guest        = room_data.get("guest", {})
             old_price    = guest.get("price", 0)
             renewal_count = room_data.get("renewal_count", 0)
             existing_offset = guest.get("transfer_day_offset", 0)
             # For accommodation add-ons (Extra Bed, AC): use +1 formula.
-            # The service price (₹300) covers TODAY at old room rate.
-            # The bumped price covers future renewals.
-            # e.g. Add Extra Bed Day 1 (renewal_count=0):
-            #   old_days=1 → pre_transfer: 1 day at ₹700
-            #   days_in_current_room=0 → current charges=₹0 at bumped price
-            #   services_total adds ₹300 → total = ₹700 + ₹300 = ₹1000 ✓
-            # Day 2 renewal: days_in_current_room=1 at ₹1000 (bumped) = ₹1000
-            #   total = ₹700 + ₹1000 + ₹300(service) = ₹2000 ✓
+            # The service price covers TODAY at old room rate; the bumped
+            # price covers future renewals.
             old_days     = (renewal_count + 1) - existing_offset
 
             existing_pre = list(guest.get("pre_transfer_charges", []) or [])
@@ -1172,6 +1303,10 @@ def add_on():
             room_update["guest.pre_transfer_charges"] = existing_pre
             room_update["guest.transfer_day_offset"]  = existing_offset + old_days
             room_update["guest.price"]                = new_price
+        # Retroactive addons fall through with no guest.price change. The
+        # addon row is still written to room.add_ons + payments above, and
+        # picked up by the daily_folio at checkout (it knows which day to
+        # attribute the charge to via applied_on_day).
         # ─────────────────────────────────────────────────────────────────────────
 
         batch.update(rooms_ref.document(room), room_update)
@@ -1190,6 +1325,8 @@ def add_on():
             "item": item, "unit_price": unit_price, "quantity": quantity,
             "transaction_type": "service",
             "accommodation_charge": accommodation_charge,
+            "applied_on_day":  applied_on_day,
+            "applied_on_date": applied_on_date,
             "stay_room_key": f"{room}_{room_data.get('checkin_time', '')}",
         }
         _abid_addon = room_data.get("active_bill_id")
@@ -1214,50 +1351,76 @@ def add_on():
 
 @rooms_bp.route("/renew_rent", methods=["POST"])
 def renew_rent():
+    """
+    Renew rent for one more 24h cycle on a room.
+
+    Race-safe: the read of (renewal_count, last_renewal_date) and the
+    write of the incremented values run inside one Firestore transaction.
+    Two simultaneous renew requests cannot both pass the
+    `incoming_count == current_count + 1` guard -- the second one sees
+    the first's committed state and is rejected with the
+    "Renewal already processed" message.
+
+    Payment-row write (the dual-write into the `payments` collection)
+    happens AFTER the transaction commits and is keyed by the canonical
+    stay_id when available. The transaction guarantees that for any
+    successful renewal, exactly one renewal_count++ happened on the
+    room doc, so at most one payment row can be produced per click.
+    """
     try:
         data_json = request.json
         room = data_json["room"]
-
-        room_doc = rooms_ref.document(room).get()
-        if not room_doc.exists:
-            return jsonify(success=False, message="Room not found")
-
-        room_data = room_doc.to_dict()
-
-        if room_data["status"] != "occupied" or not room_data["guest"]:
-            return jsonify(success=False, message="Room not occupied.")
-
-        guest = room_data["guest"]
-        price = guest["price"]
-
-        # ── Fix 1: Verify renewal_count is exactly current + 1 ──────────────────
         incoming_count = data_json.get("renewal_count", 0)
-        current_count  = room_data.get("renewal_count", 0)
-        if incoming_count != current_count + 1:
-            return jsonify(success=False,
-                           message="Renewal already processed. Please refresh and try again.")
-
-        # ── Fix 2: Prevent double-renewal on the same calendar day ──────────────
         today_str = datetime.now(IST).strftime("%Y-%m-%d")
-        last_renewal_date = room_data.get("last_renewal_date", "")
-        if last_renewal_date == today_str:
-            return jsonify(success=False,
-                           message="Rent already renewed today for this room.")
 
+        room_ref = rooms_ref.document(room)
+
+        # State captured by the transactional closure so we can use it
+        # for the (outside-transaction) payment + audit-log writes.
+        captured = {"room_data": None, "price": 0}
+
+        @firestore.transactional
+        def _txn_renew(txn):
+            snap = room_ref.get(transaction=txn)
+            if not snap.exists:
+                return ("err", "Room not found")
+            rd = snap.to_dict() or {}
+            if rd.get("status") != "occupied" or not rd.get("guest"):
+                return ("err", "Room not occupied.")
+            current_count = rd.get("renewal_count", 0) or 0
+            if incoming_count != current_count + 1:
+                return ("err",
+                        "Renewal already processed. Please refresh and try again.")
+            if rd.get("last_renewal_date", "") == today_str:
+                return ("err", "Rent already renewed today for this room.")
+
+            guest_in_txn = rd["guest"]
+            price_in_txn = int(guest_in_txn["price"])
+            new_balance  = int(rd.get("balance", 0)) + price_in_txn
+
+            txn.update(room_ref, {
+                "balance":           new_balance,
+                "renewal_count":     incoming_count,
+                "last_renewal_date": today_str,
+            })
+            txn.update(
+                totals_ref.document("current_totals"),
+                {"balance": firestore.Increment(price_in_txn)},
+            )
+            captured["room_data"] = rd
+            captured["price"]     = price_in_txn
+            return ("ok", None)
+
+        txn = db.transaction()
+        status, msg = _txn_renew(txn)
+        if status != "ok":
+            return jsonify(success=False, message=msg)
+
+        room_data     = captured["room_data"]
+        price         = captured["price"]
+        guest         = room_data["guest"]
         renewal_count = incoming_count
-        new_balance = room_data["balance"] + price
 
-        batch = db.batch()
-
-        batch.update(rooms_ref.document(room), {
-            "balance": new_balance,
-            "renewal_count": renewal_count,
-            "last_renewal_date": today_str
-        })
-
-        batch.update(totals_ref.document('current_totals'), {"balance": firestore.Increment(price)})
-
-        batch.commit()
         invalidate_rooms_and_totals()
 
         from config import update_last_rent_check
@@ -2738,107 +2901,31 @@ def toggle_housekeeping():
     Toggle mid-stay housekeeping request for a room.
     Sets service_cleaning.room and/or service_cleaning.bathroom flags.
 
-    Body: { room: str, room_clean: bool (optional), bathroom_clean: bool (optional) }
+    Body: { room: str, room_clean: bool, bathroom_clean: bool }
     """
     try:
         data = request.json or {}
-        room = str(data.get("room", "")).strip()
+        room = data.get("room", "")
         if not room:
             return jsonify(success=False, message="room is required"), 400
 
-        update_data = {}
-        if "room_clean" in data:
-            update_data["service_cleaning.room"] = bool(data["room_clean"])
-        if "bathroom_clean" in data:
-            update_data["service_cleaning.bathroom"] = bool(data["bathroom_clean"])
+        room_clean     = bool(data.get("room_clean", False))
+        bathroom_clean = bool(data.get("bathroom_clean", False))
 
-        if not update_data:
-            return jsonify(success=False, message="Nothing to update"), 400
+        room_doc = rooms_ref.document(str(room)).get()
+        if not room_doc.exists:
+            return jsonify(success=False, message="Room not found"), 404
 
-        rooms_ref.document(room).update(update_data)
+        update = {
+            "service_cleaning": {
+                "room":     room_clean,
+                "bathroom": bathroom_clean,
+                "requested_at": datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S"),
+            }
+        }
+        rooms_ref.document(str(room)).update(update)
         invalidate_rooms_and_totals()
-
-        logger.info(f"toggle_housekeeping: room={room} update={update_data}")
-        return jsonify(success=True, message="Housekeeping updated")
-
+        return jsonify(success=True, message="Housekeeping flags updated")
     except Exception as e:
         logger.error(f"toggle_housekeeping error: {e}", exc_info=True)
-        return jsonify(success=False, message=f"Error: {str(e)}"), 500
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Upcoming bookings (within 24 hours) — for room card indicator
-# ─────────────────────────────────────────────────────────────────────────────
-
-@rooms_bp.route("/get_upcoming_bookings", methods=["GET"])
-def get_upcoming_bookings():
-    """
-    Returns bookings whose check_in_date falls today or tomorrow (within ~24 hrs),
-    excluding cancelled and already checked-in bookings.
-    Response: { success: true, upcoming: { "roomNumber": { ...booking info } } }
-    """
-    try:
-        now = datetime.now(IST)
-        today_str = now.strftime("%Y-%m-%d")
-        tomorrow_str = (now + timedelta(days=1)).strftime("%Y-%m-%d")
-
-        # Fetch bookings for today and tomorrow in parallel via two queries
-        today_docs = bookings_ref.where(
-            filter=FieldFilter("check_in_date", "==", today_str)
-        ).stream()
-        tomorrow_docs = bookings_ref.where(
-            filter=FieldFilter("check_in_date", "==", tomorrow_str)
-        ).stream()
-
-        skip_statuses = {"cancelled", "checked_in"}
-        result = {}
-
-        for doc in list(today_docs) + list(tomorrow_docs):
-            b = doc.to_dict()
-            b["booking_id"] = doc.id
-
-            status = b.get("status", "")
-            if status in skip_statuses:
-                continue
-
-            room = str(b.get("room", "")).strip()
-            if not room:
-                continue
-
-            check_in_date = b.get("check_in_date", today_str)
-            check_in_time = b.get("check_in_time", "12:00")
-
-            try:
-                check_in_dt_naive = datetime.strptime(
-                    f"{check_in_date} {check_in_time}", "%Y-%m-%d %H:%M"
-                )
-                check_in_dt = IST.localize(check_in_dt_naive)
-            except ValueError:
-                check_in_dt = IST.localize(
-                    datetime.strptime(f"{check_in_date} 12:00", "%Y-%m-%d %H:%M")
-                )
-
-            hours_until = (check_in_dt - now).total_seconds() / 3600
-
-            # Only surface bookings within the next 24 hrs (or already overdue)
-            if hours_until > 24:
-                continue
-
-            # If multiple bookings for the same room, keep the soonest one
-            if room not in result or hours_until < result[room]["hours_until"]:
-                result[room] = {
-                    "booking_id":     b.get("booking_id", ""),
-                    "name":           b.get("name", ""),
-                    "mobile":         b.get("mobile", ""),
-                    "check_in_date":  check_in_date,
-                    "check_in_time":  check_in_time,
-                    "hours_until":    round(hours_until, 1),
-                    "booking_source": b.get("booking_source", "normal"),
-                    "status":         status,
-                }
-
-        return jsonify(success=True, upcoming=result)
-
-    except Exception as e:
-        logger.error(f"get_upcoming_bookings error: {e}", exc_info=True)
-        return jsonify(success=False, message=str(e)), 500
+        return jsonify(success=False, message=f"Error: {e}"), 500

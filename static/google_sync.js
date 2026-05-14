@@ -8,7 +8,13 @@ import {
   onSnapshot,
 } from "https://www.gstatic.com/firebasejs/9.15.0/firebase-firestore.js";
 
-const firebaseConfig = {
+// Read the Firebase web config from window.FIREBASE_CONFIG, which is populated
+// by the inline <script src="/firebase-config.js"></script> in templates/.
+// That endpoint reads FIREBASE_* env vars on the server so prod / dev /
+// staging can be switched without editing client code. The hardcoded fallback
+// here matches the prod project — used only when this script is opened in a
+// page that didn't load /firebase-config.js (defensive, shouldn't happen).
+const firebaseConfig = (typeof window !== "undefined" && window.FIREBASE_CONFIG) || {
   apiKey: "AIzaSyAj_K8Bq8IA0mYH94pu03s3DeDxc2pyCF4",
   authDomain: "cibara-software-61512.firebaseapp.com",
   projectId: "cibara-software-61512",

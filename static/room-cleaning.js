@@ -1043,18 +1043,10 @@ async function submitRevertCheckout() {
     if (errEl) errEl.textContent = "Missing stay reference — close and try again.";
     return;
   }
-  if (!_revertCachedPassword) {
-    // Cache expired (60s timeout) or password was never captured. Restart
-    // the flow from the password gate so we have a fresh credential.
-    if (errEl) errEl.textContent = "Session expired. Please re-authenticate.";
-    setTimeout(function () {
-      const room = _revertTargetRoom;
-      const info = (typeof rooms !== "undefined" && rooms) ? rooms[room] : null;
-      closeRevertConfirmModal();
-      if (room && info) handleRevertCheckoutClick(null, room);
-    }, 600);
-    return;
-  }
+  // Password gate removed — RBAC (booking.revert permission) is now the
+  // sole authorisation check; backend re-verifies via @requires_permission.
+  // The legacy _revertCachedPassword is kept for the body field below for
+  // backwards compatibility but the backend ignores it.
 
   if (errEl) errEl.textContent = "";
   if (btn)   {
@@ -1076,27 +1068,36 @@ async function submitRevertCheckout() {
     let data = null;
     try { data = await res.json(); } catch (e) { data = null; }
 
-    if (res.ok && data && data.success) {
-      closeRevertConfirmModal();
-      if (typeof showNotification === "function") {
-        showNotification(data.message || "Checkout reverted.", "success");
-      }
-      if (typeof loadInitialData === "function") {
-        loadInitialData();
-      } else if (typeof refreshRooms === "function") {
-        refreshRooms();
-      }
-    } else {
-      const msg = (data && data.message) ? data.message
-                 : `Revert failed (HTTP ${res.status})`;
+    if (!res.ok) {
+      const msg = (data && data.message) || `Server returned ${res.status}`;
       if (errEl) errEl.textContent = msg;
-      if (btn)   { btn.disabled = false; btn.textContent = "Revert checkout"; }
-      // If the server says auth failed, drop the cached password so the next
-      // attempt re-prompts cleanly.
-      if (res.status === 403) _clearCachedRevertPassword();
+      if (btn)   { btn.disabled = false; btn.innerHTML = '<i class="fas fa-undo" style="margin-right:6px"></i>Revert checkout'; }
+      return;
     }
-  } catch (e) {
-    if (errEl) errEl.textContent = "Network error — please try again.";
-    if (btn)   { btn.disabled = false; btn.textContent = "Revert checkout"; }
+    if (!data || !data.success) {
+      const msg = (data && data.message) || "Revert failed.";
+      if (errEl) errEl.textContent = msg;
+      if (btn)   { btn.disabled = false; btn.innerHTML = '<i class="fas fa-undo" style="margin-right:6px"></i>Revert checkout'; }
+      return;
+    }
+
+    closeRevertConfirmModal();
+    _clearCachedRevertPassword();
+    if (typeof showNotification === "function") {
+      const cnNote = data.credit_note_number ? ` (Credit Note ${data.credit_note_number} issued)` : "";
+      showNotification(`Checkout reverted for Room ${data.room || ""}${cnNote}.`, "success");
+    }
+    // Reload room data so the UI reflects the restored stay.
+    if (typeof fetchData === "function") fetchData();
+    else if (typeof loadInitialData === "function") loadInitialData();
+
+  } catch (err) {
+    if (errEl) errEl.textContent = "Network error: " + (err && err.message || err);
+    if (btn)   { btn.disabled = false; btn.innerHTML = '<i class="fas fa-undo" style="margin-right:6px"></i>Revert checkout'; }
   }
 }
+
+// Expose globally for the inline onclicks in the rendered modal.
+window.handleRevertCheckoutClick = handleRevertCheckoutClick;
+window.submitRevertCheckout      = submitRevertCheckout;
+window.closeRevertConfirmModal   = closeRevertConfirmModal;

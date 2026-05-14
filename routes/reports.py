@@ -351,13 +351,19 @@ def revenue_report():
                 "total_cash":         total_cash,
                 "total_online":       total_online,
                 "total_refunds":      total_refunds,
-                "net_collected":      total_cash + total_online - total_refunds,
+                "net_collected":      total_cash + total_online- total_refunds,
+                # Backward-compat: static/analytics.js still reads
+                # `total_balance_due`. Expose both the legacy and the
+                # newer `balance_due` / `invoice_count` aliases so any
+                # caller that already adopted the rename keeps working.
                 "total_balance_due":  total_balance_due,
+                "balance_due":        total_balance_due,
                 "invoices_issued":    invoice_count,
+                "invoice_count":      invoice_count,
             },
             bills=bills,
         )
-
     except Exception as e:
-        logger.error(f"Error generating revenue report: {str(e)}", exc_info=True)
-        return jsonify(success=False, message=f"Error: {str(e)}")
+        logger.error(f"revenue_report error: {e}", exc_info=True)
+        return jsonify(success=False, message=str(e)), 500
+

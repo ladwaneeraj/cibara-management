@@ -521,6 +521,22 @@ def list_audit_logs():
 @users_bp.route("/api/audit-logs/doc/<collection>/<doc_id>", methods=["GET"])
 @requires_role("admin", "manager", "housekeeping")
 def latest_audit_for_doc(collection: str, doc_id: str):
+    """
+    Return the most recent audit log entry for a single target document.
+    Used by the "last action by ..." footer that decorates bill / room /
+    booking modals via static/attribution.js.
+
+    Fails OPEN: if the underlying Firestore query errors (most commonly a
+    missing composite index on (targetCollection, targetId, server_ts)),
+    we return HTTP 200 with `entry=None` rather than HTTP 500. The
+    decoration is non-critical UX — it hides itself when there is no
+    entry — so a 500 here was needlessly breaking the user's network
+    console and making the bill / payment modal look like it had errored
+    when in fact the modal itself loaded fine. The index URL is still
+    logged on the server side so an admin can create the index when
+    convenient; once the index exists, this endpoint returns entries
+    normally with no caller changes required.
+    """
     if not collection or not doc_id:
         return jsonify(success=False, message="collection and doc_id required"), 400
     try:
@@ -546,10 +562,19 @@ def latest_audit_for_doc(collection: str, doc_id: str):
             break
         return jsonify(success=True, entry=entry)
     except Exception as e:
-        # Likely a missing composite index on first call — Firestore returns
-        # an actionable error in the message including the URL to create one.
-        logger.warning(f"latest_audit_for_doc({collection}/{doc_id}) failed: {e}")
-        return jsonify(success=False, message="Failed to look up audit entry"), 500
+        # Most common cause: missing composite index on
+        # (targetCollection, targetId, server_ts). Firestore returns an
+        # actionable error message containing the URL that auto-creates
+        # the index when followed. Log it (warning, not error) so an
+        # admin can act on it without the endpoint surfacing as a 500
+        # to every consumer.
+        logger.warning(
+            f"latest_audit_for_doc({collection}/{doc_id}) "
+            f"falling back to entry=None due to: {e}"
+        )
+        return jsonify(success=True, entry=None,
+                       degraded=True,
+                       message="audit lookup unavailable (index missing or error)")
 
 
 # ─── Per-stay history ─────────────────────────────────────────────────────

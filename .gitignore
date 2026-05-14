@@ -27,6 +27,9 @@ wheels/
 # CRITICAL: Never commit these sensitive files
 service-account.json
 firebase-creds-base64.txt
+# Per-environment Firebase service-account JSON files
+# (covers cibara-dev.json, cibara-prod.json, cibara-staging.json, etc.)
+cibara-*.json
 .env
 .env.local
 .env.*.local

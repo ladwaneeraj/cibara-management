@@ -2680,6 +2680,13 @@
               </div>
             </div>
             <div style="text-align: right; margin: 0.4rem 0 0.6rem; font-size: 0.9rem; color: var(--dark);">Total: <strong id="service-total-price">₹0</strong></div>
+            <div class="form-group" id="svc-apply-day-row" style="display:none;">
+              <label class="form-label" for="service-apply-day">Apply to night</label>
+              <select id="service-apply-day" class="form-control"></select>
+              <div style="font-size:0.72rem;color:var(--text-muted);margin-top:0.25rem;">
+                The GST slab for accommodation services (AC, Extra Bed) is determined per night. Picking the wrong night can shift tax.
+              </div>
+            </div>
             <div class="form-group">
               <label class="form-label">Payment Method</label>
               <div class="payment-options">
@@ -4253,6 +4260,28 @@
               </button>
             </div>
             <input type="hidden" id="cancel-refund-method" value="cash" />
+          </div>
+
+          <!-- Cancellation forfeiture (SAC 999794, GST 18%) -->
+          <div class="form-group cancel-retain-section" id="cancel-retain-wrap" style="margin-top:0.5rem;padding:0.7rem 0.85rem;border:1px solid #e2e8f0;border-radius:8px;background:#f8fafc;">
+            <label style="display:flex;align-items:flex-start;gap:.5rem;cursor:pointer;font-size:.84rem;font-weight:600;color:#0f172a;">
+              <input type="checkbox" id="cancel-retain-charge" style="margin-top:.2rem;flex-shrink:0;" />
+              <span>
+                Treat retained amount as cancellation charge
+                <span style="display:block;font-weight:400;font-size:.74rem;color:#64748b;margin-top:.15rem;">
+                  Issues a separate Tax Invoice at SAC 999794 / 18% (Schedule II — agreement to refrain). Recommended when refund &lt; paid amount.
+                </span>
+              </span>
+            </label>
+            <div id="cancel-retain-summary" style="display:none;margin-top:.55rem;padding:.5rem .65rem;border-radius:6px;background:#fff;border:1px solid #cbd5e1;font-size:.78rem;color:#334155;font-variant-numeric:tabular-nums;">
+              <div style="display:flex;justify-content:space-between;"><span>Retained amount</span><strong id="cancel-retain-amt">₹0</strong></div>
+              <div style="display:flex;justify-content:space-between;"><span>Taxable value (excl GST)</span><span id="cancel-retain-taxable">₹0</span></div>
+              <div style="display:flex;justify-content:space-between;"><span>CGST 9%</span><span id="cancel-retain-cgst">₹0</span></div>
+              <div style="display:flex;justify-content:space-between;"><span>SGST 9%</span><span id="cancel-retain-sgst">₹0</span></div>
+              <div style="margin-top:.3rem;font-size:.7rem;color:#64748b;line-height:1.4;">
+                A separate <strong>CC/&hellip;</strong> tax invoice will be minted for this amount.
+              </div>
+            </div>
           </div>
 
           <div class="form-group">

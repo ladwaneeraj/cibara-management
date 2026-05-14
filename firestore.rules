@@ -118,6 +118,25 @@ service cloud.firestore {
     match /totals/{id}                { allow read: if isStaff(); allow write: if isAdmin(); }
     match /logs/{id}                  { allow read: if isStaff(); allow write: if isAdmin(); }
 
+    // ─── Credit Notes (Section 34 CGST) — staff read, admin write ─────
+    // Reads are required so the Credit Notes sub-tab and the GSTR-1
+    // export can stream them. Writes are admin-only because issuing a
+    // CN reduces output-tax liability and must be auditable.
+    match /credit_notes/{cnId} {
+      allow read:   if isStaff();
+      allow create: if isAdmin();
+      allow update: if isAdmin();
+      allow delete: if false;   // Section 34 documents are append-only
+    }
+
+    // ─── Revert audit — admin-only read, server writes ─────────────────
+    match /revert_audit/{id} {
+      allow read:   if isAdmin();
+      allow create: if isAdmin();
+      allow update: if false;
+      allow delete: if false;
+    }
+
     // ─── Default deny for anything else ───────────────────────────────
     match /{document=**} {
       allow read, write: if false;

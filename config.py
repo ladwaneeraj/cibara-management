@@ -33,21 +33,161 @@ _cache = {}
 _cache_lock = threading.Lock()
 CACHE_TTL = 5  # seconds
 
-# Initialize Firebase Admin SDK
+# ══════════════════════════════════════════════════════════════════════════
+# ENVIRONMENT TOGGLE
+# ══════════════════════════════════════════════════════════════════════════
+# Single switch that decides which Firebase project the whole app talks to —
+# both the Admin SDK (this file) and the front-end Firebase web SDK (served
+# from /firebase-config.js in app.py).
+#
+# To switch locally, change DEFAULT_CIBARA_ENV below. To switch on Cloud Run
+# / CI without editing code, set the CIBARA_ENV environment variable.
+#
+#   CIBARA_ENV = "PROD"  → talks to cibara-software-61512  (live customers)
+#   CIBARA_ENV = "UAT"   → talks to cibara-dev             (testing)
+#
+# Each env entry holds:
+#   key_file   – path to the Admin SDK service-account JSON for that project
+#                (gitignored via cibara-*.json)
+#   web_config – the Firebase web app config served to browsers. Get this
+#                from Firebase Console → Project Settings → "Your apps" →
+#                Web app config.
+# ══════════════════════════════════════════════════════════════════════════
+
+DEFAULT_CIBARA_ENV = "UAT"  # ← change this to flip local default
+
+ENVIRONMENTS = {
+    "PROD": {
+        "key_file": "cibara-software-Prod.json",
+        "web_config": {
+            "apiKey":            "AIzaSyAj_K8Bq8IA0mYH94pu03s3DeDxc2pyCF4",
+            "authDomain":        "cibara-software-61512.firebaseapp.com",
+            "projectId":         "cibara-software-61512",
+            "storageBucket":     "cibara-software-61512.firebasestorage.app",
+            "messagingSenderId": "117552649945",
+            "appId":             "1:117552649945:web:5d4983739b1a8c077e50c8",
+            "measurementId":     "G-5VY26JYPN0",
+        },
+    },
+    "UAT": {
+        "key_file": "cibara-dev.json",
+        # Web config from Firebase Console → cibara-dev → Project settings.
+        # These values are public (the apiKey is exposed in the browser to
+        # every visitor of /firebase-config.js); committing them is safe.
+        # The corresponding private key is in cibara-dev.json which IS
+        # gitignored via the cibara-*.json pattern.
+        "web_config": {
+            "apiKey":            "AIzaSyBikK4mEIEkUWe9zfSdro__0oqNYH3juek",
+            "authDomain":        "cibara-dev.firebaseapp.com",
+            "projectId":         "cibara-dev",
+            "storageBucket":     "cibara-dev.firebasestorage.app",
+            "messagingSenderId": "192930036248",
+            "appId":             "1:192930036248:web:db63f04b3f1103d45ea16d",
+            "measurementId":     "G-R4HLKKJCJ4",
+        },
+    },
+}
+
+# Cloud Run safety: when we're running on Cloud Run (it sets K_SERVICE
+# automatically) and CIBARA_ENV is not explicitly set, refuse to start
+# rather than silently fall back to DEFAULT_CIBARA_ENV. This prevents the
+# scenario where a deploy lands without env vars configured and the
+# production service silently flips to dev (or vice-versa). Local dev is
+# unaffected — the K_SERVICE env var only exists on Cloud Run.
+if os.environ.get("K_SERVICE") and not os.environ.get("CIBARA_ENV"):
+    raise RuntimeError(
+        "Refusing to start on Cloud Run without CIBARA_ENV set. "
+        "Set CIBARA_ENV=PROD (or UAT) as a service env variable in the "
+        "Cloud Run console — DEFAULT_CIBARA_ENV is for local dev only."
+    )
+
+CIBARA_ENV = (os.environ.get("CIBARA_ENV") or DEFAULT_CIBARA_ENV).upper()
+if CIBARA_ENV not in ENVIRONMENTS:
+    raise RuntimeError(
+        f"Unknown CIBARA_ENV={CIBARA_ENV!r} — must be one of "
+        f"{sorted(ENVIRONMENTS.keys())}"
+    )
+ACTIVE_ENV = ENVIRONMENTS[CIBARA_ENV]
+FIREBASE_WEB_CONFIG = dict(ACTIVE_ENV["web_config"])  # exported for app.py
+
+
+# ── Firebase Admin SDK initialisation ──────────────────────────────────────
+# Credential resolution order (first hit wins):
+#   1. FIREBASE_CREDENTIALS env var — base64-encoded service-account JSON
+#      (Cloud Run / production).
+#   2. FIREBASE_KEY_FILE env var — explicit path; wins over the env-toggle.
+#   3. ACTIVE_ENV["key_file"] from the toggle above.
+#   4. service-account.json — legacy local-prod path, kept for back-compat.
 try:
+    cred_dict = None
+    cred_source = None
+
     if 'FIREBASE_CREDENTIALS' in os.environ:
-        cred_json = base64.b64decode(os.environ.get('FIREBASE_CREDENTIALS')).decode('utf-8')
+        cred_json = base64.b64decode(
+            os.environ.get('FIREBASE_CREDENTIALS')
+        ).decode('utf-8')
         cred_dict = json.loads(cred_json)
-        cred = credentials.Certificate(cred_dict)
-        storage_bucket = os.environ.get('FIREBASE_STORAGE_BUCKET', 'cibara-software-61512.firebasestorage.app')
-        firebase_admin.initialize_app(cred, {'storageBucket': storage_bucket})
+        cred_source = "env:FIREBASE_CREDENTIALS"
     else:
-        cred = credentials.Certificate('service-account.json')
-        firebase_admin.initialize_app(cred, {'storageBucket': 'cibara-software-61512.firebasestorage.app'})
+        _key_path_env = os.environ.get('FIREBASE_KEY_FILE')
+        _candidate_files = []
+        if _key_path_env:
+            _candidate_files.append(_key_path_env)
+        _candidate_files.append(ACTIVE_ENV["key_file"])
+        _candidate_files.append('service-account.json')
+
+        _picked = None
+        for _p in _candidate_files:
+            if _p and os.path.isfile(_p):
+                _picked = _p
+                break
+
+        if not _picked:
+            raise FileNotFoundError(
+                f"No Firebase credentials found for CIBARA_ENV={CIBARA_ENV!r}. "
+                f"Tried: {_candidate_files}. "
+                f"Place {ACTIVE_ENV['key_file']!r} in the project root, set "
+                f"FIREBASE_KEY_FILE=<path>, or set FIREBASE_CREDENTIALS to "
+                f"the base64-encoded JSON."
+            )
+
+        with open(_picked, 'r', encoding='utf-8') as _fh:
+            cred_dict = json.load(_fh)
+        cred_source = f"file:{_picked}"
+
+    cred = credentials.Certificate(cred_dict)
+
+    # Sanity check: cred's project_id should match the toggle's expected
+    # project. A mismatch usually means the wrong key file was dropped in.
+    _project_id = cred_dict.get('project_id') or ''
+    _expected_project = ACTIVE_ENV["web_config"].get("projectId", "")
+    if _expected_project and _project_id and _project_id != _expected_project:
+        raise RuntimeError(
+            f"Firebase project mismatch: CIBARA_ENV={CIBARA_ENV!r} expects "
+            f"projectId={_expected_project!r} but the loaded credential "
+            f"({cred_source}) is for {_project_id!r}. Either swap key files "
+            f"or update ENVIRONMENTS in config.py."
+        )
+
+    storage_bucket = (
+        os.environ.get('FIREBASE_STORAGE_BUCKET')
+        or ACTIVE_ENV["web_config"].get("storageBucket")
+        or (f"{_project_id}.firebasestorage.app" if _project_id else None)
+    )
+    if not storage_bucket:
+        raise RuntimeError(
+            "Could not determine Firebase storage bucket — set "
+            "FIREBASE_STORAGE_BUCKET or fix ACTIVE_ENV.web_config.storageBucket."
+        )
+
+    firebase_admin.initialize_app(cred, {'storageBucket': storage_bucket})
 
     db = firestore.client()
     bucket = storage.bucket()
-    logger.info("Firebase initialized successfully")
+    logger.info(
+        f"Firebase initialised — env={CIBARA_ENV} project={_project_id!r} "
+        f"bucket={storage_bucket!r} source={cred_source}"
+    )
 
     # Initialise optimisation services (payments + customers + pdf + expenses collections)
     payment_service.init(db)
@@ -73,6 +213,8 @@ counters_ref = db.collection('daily_counters')
 metadata_ref = db.collection('transaction_metadata')
 bills_ref = db.collection('bills')
 expenses_ref = db.collection('expenses')
+credit_notes_ref = db.collection('credit_notes')        # Section 34 CGST credit notes
+audit_logs_ref = db.collection('audit_logs')            # mirrors AUDIT_COLLECTION
 
 # Upload folder
 UPLOAD_FOLDER = 'uploads'
@@ -158,7 +300,15 @@ def invalidate_rooms_and_totals():
 # invalidates this cache explicitly via invalidate_billing_config_cache().
 
 _BILLING_CONFIG_DEFAULTS = {
-    "always_generate_bill": False,
+    # G4: default to True so every taxable supply gets a sequential bill
+    # number and an invoice flag, regardless of payment mode. Rule 46(a)
+    # CGST Rules requires a tax invoice for every supply by a registered
+    # supplier; the prior False default suppressed bill numbers for
+    # all-cash stays which technically violated the rule.
+    # An operator can still flip this back to False via the settings UI
+    # if they explicitly want the legacy "cash-only stays don't get a
+    # numbered bill" behaviour, but the safe default is True.
+    "always_generate_bill": True,
 }
 
 
@@ -461,8 +611,24 @@ def create_bill_record(room, room_data, checkout_time, batch=None,
         # from the already-fetched payments list (no duplicate query).
 
         def _fetch_payments():
+            # Prefer the canonical stay_id foreign key — single equality
+            # query on the FK is complete regardless of date corrections,
+            # room shifts, or payment-date edits. Falls back to the legacy
+            # multi-query helper only when stay_id is missing (very old
+            # stays that pre-date the stay_id migration).
+            _sid = room_data.get("active_bill_id")
+            if _sid and hasattr(payment_service, "query_payments_by_stay_id"):
+                try:
+                    _r = payment_service.query_payments_by_stay_id(_sid)
+                    if _r:
+                        return _r
+                except Exception as _e:
+                    logger.warning(
+                        f"create_bill_record: query_payments_by_stay_id"
+                        f"({_sid}) failed: {_e}; falling back to legacy helper"
+                    )
             return payment_service.query_payments_for_stay(
-                room, guest["name"], checkin_dt
+                room, guest["name"], checkin_dt, stay_id=_sid
             ) or []
 
         def _fetch_meta_serial():
@@ -537,6 +703,14 @@ def create_bill_record(room, room_data, checkout_time, batch=None,
                     "price": p.get("amount", 0),
                     # Accommodation charges (AC, Extra Bed) are taxable alongside room rent.
                     "accommodation_charge": p.get("accommodation_charge", False),
+                    # Folio attribution. `applied_on_date` is the absolute
+                    # calendar date the service applies to and is robust under
+                    # check-in time corrections; `applied_on_day` is the legacy
+                    # relative index (1-based from check-in) and is kept for
+                    # backward compatibility. The folio prefers the date when
+                    # present and falls back to the index for legacy rows.
+                    "applied_on_day":  p.get("applied_on_day", 1),
+                    "applied_on_date": p.get("applied_on_date"),
                 })
                 services_total += p.get("amount", 0)
 
@@ -626,45 +800,78 @@ def create_bill_record(room, room_data, checkout_time, batch=None,
         )
         non_accommodation_total = services_total - accommodation_addons_total
 
-        # GST slab is determined by the combined per-night tariff.
-        # room_price_per_night is already bumped to include Extra Bed / AC unit prices,
-        # so _gst_rate_for_price(room_price_per_night) reflects the correct slab.
-        gst_rate = _gst_rate_for_price(room_price_per_night)
+        # ── Discount allocation (accommodation vs. non-accommodation) ────────
+        # We don't capture which line the operator applied the discount to,
+        # so allocate proportionally based on each bucket's share. Used to
+        # pass through to the folio so the per-day GST math respects it.
+        accommodation_total_pre_discount = room_charges_total + accommodation_addons_total
+        gross_pre_discount = accommodation_total_pre_discount + non_accommodation_total
+        accommodation_discount_share = 0.0
+        if total_discounts > 0 and gross_pre_discount > 0:
+            accommodation_share_ratio = (
+                accommodation_total_pre_discount / gross_pre_discount
+            )
+            accommodation_discount_share = round(
+                total_discounts * accommodation_share_ratio, 2
+            )
 
-        # Prices entered are GST-INCLUSIVE (the amount charged to the customer).
-        # GST is back-calculated: gst = total_inclusive × rate / (100 + rate)
-        # e.g. room ₹800 + Extra Bed ₹300 = ₹1,100 inclusive → 5% slab
-        #      GST = 1100 × 5 / 105 = ₹52.38; taxable base = ₹1,047.62
+        # ── Daily folio — canonical per-night ledger (24h windows from check-in) ─
+        # Each entry holds one 24h period's accommodation charges and its OWN
+        # GST slab + tax-head split. This replaces the previous "one slab
+        # for the whole stay (averaged)" math and matches what every commercial
+        # PMS does. Crucially, when nights differ in value of supply (mid-stay
+        # AC add, extra-person charge applied to Day 1 only, etc.) each night
+        # gets its legally correct slab independently.
+        #
+        # See compute_daily_folio() docstring for the full schema.
+        daily_folio = compute_daily_folio(
+            checkin_dt=checkin_dt,
+            days_stayed=days_stayed,
+            room_price_per_night=room_price_per_night,
+            current_room_no=str(room),
+            accommodation_services=services,
+            pre_transfer_charges=pre_transfer_charges,
+            discount_on_accom=accommodation_discount_share,
+            recipient_state_code="29",  # intra-state default; refreshed by /update_bill_gst
+        )
 
-        if accommodation_addons_total > 0:
-            # Add-ons change the effective slab for the full stay — apply combined
-            # back-calculation on the full inclusive accommodation total.
-            divisor = 100 + gst_rate  # 105 for 5%, 118 for 18%, 100 for 0%
+        # Aggregate flat-field totals from the folio. These are the values
+        # the PDF, GSTR-1 export, and frontend currently read. The folio
+        # is the source of truth; these aggregates are derived from it.
+        if daily_folio:
+            gst_amount             = round(sum(e["day_gst_amount"] for e in daily_folio), 2)
+            accommodation_taxable  = round(sum(e["day_taxable"]    for e in daily_folio), 2)
+            bill_cgst_amount       = round(sum(e["day_cgst"]       for e in daily_folio), 2)
+            bill_sgst_amount       = round(sum(e["day_sgst"]       for e in daily_folio), 2)
+            bill_igst_amount       = round(sum(e["day_igst"]       for e in daily_folio), 2)
+
+            # gst_rate field on the bill is for display fall-back only — the
+            # per-day rate is the source of truth. Use the most common slab
+            # across the stay (ties broken in favour of the larger rate).
+            _rate_counts = {}
+            for _e in daily_folio:
+                _rate_counts[_e["day_gst_rate"]] = _rate_counts.get(_e["day_gst_rate"], 0) + 1
+            gst_rate = max(
+                _rate_counts.keys(),
+                key=lambda r: (_rate_counts[r], r),
+            )
+            # First-day effective per-night, kept for audit visibility
+            effective_per_night_for_slab = daily_folio[0]["day_total"]
+        else:
+            # Defensive fallback (only fires if days_stayed <= 0, which
+            # shouldn't normally happen). Keep the legacy single-slab math.
+            gst_rate = _gst_rate_for_price(room_price_per_night)
+            divisor = 100 + gst_rate if gst_rate else 100
             gst_amount = round(
                 (room_charges_total + accommodation_addons_total) * gst_rate / divisor, 2
+            ) if gst_rate else 0
+            accommodation_taxable = round(
+                (room_charges_total + accommodation_addons_total) - gst_amount, 2
             )
-        else:
-            # No accommodation add-ons — use per-segment back-calculation so room
-            # transfers are taxed accurately at each segment's own slab.
-            pre_transfer_gst = sum(
-                round(
-                    entry.get("total", 0)
-                    * _gst_rate_for_price(entry.get("price", 0))
-                    / (100 + _gst_rate_for_price(entry.get("price", 0))),
-                    2,
-                )
-                for entry in pre_transfer_charges
+            bill_cgst_amount, bill_sgst_amount, bill_igst_amount = compute_gst_split(
+                gst_amount, recipient_state_code="29",
             )
-            current_divisor = 100 + gst_rate
-            current_gst = round(current_room_charges * gst_rate / current_divisor, 2)
-            gst_amount = pre_transfer_gst + current_gst
-
-        # accommodation_taxable = PRE-GST taxable base (what goes on GST returns).
-        # = (room_charges + addons inclusive) - gst_amount
-        # This is the value a CA uses for CGST/SGST filing.
-        accommodation_taxable = round(
-            (room_charges_total + accommodation_addons_total) - gst_amount, 2
-        )
+            effective_per_night_for_slab = room_price_per_night
 
         # bill_number is determined after invoice logic below
         bill_number = None
@@ -820,10 +1027,13 @@ def create_bill_record(room, room_data, checkout_time, batch=None,
             room_charges_total = 0
             days_stayed = 0
             clean_segments = []
+            # MMT room is billed by MakeMyTrip — the hotel only invoices
+            # in-hotel services. The daily folio model doesn't apply here
+            # (there are no nights of accommodation from the hotel side);
+            # the folio is empty and we fall back to flat math on services.
+            daily_folio = []
             total_amount = services_total - total_discounts
             balance = total_amount - payment_cash - payment_online + total_refunds
-            # Recompute GST: only accommodation-charge addons (AC, Extra Bed)
-            # are taxable. Water / misc services are non-accommodation.
             if accommodation_addons_total > 0 and gst_rate > 0:
                 _divisor = 100 + gst_rate
                 gst_amount = round(accommodation_addons_total * gst_rate / _divisor, 2)
@@ -833,6 +1043,9 @@ def create_bill_record(room, room_data, checkout_time, batch=None,
                 gst_amount = 0
                 accommodation_taxable = 0
             non_accommodation_total = services_total - accommodation_addons_total
+            bill_cgst_amount, bill_sgst_amount, bill_igst_amount = compute_gst_split(
+                gst_amount, recipient_state_code="29"
+            )
         # ─────────────────────────────────────────────────────────────────────
 
         bill_record = {
@@ -875,14 +1088,62 @@ def create_bill_record(room, room_data, checkout_time, batch=None,
             # Settle-later link
             "settlement_id": settlement_id if settle_later else None,
             # ── GST breakdown (SAC 9963 — Accommodation Services) ─────────────
-            # gst_rate     : 0 / 5 / 18 — determined by room_price_per_night slab
+            # gst_rate     : 0 / 5 / 18 — slab determined by EFFECTIVE per-night
+            #                value of supply (post-discount; see G3 block above).
             # accommodation_taxable : room charges + accommodation add-ons (AC, Extra Bed)
             # non_accommodation_total : water, misc services (outside GST scope)
-            # gst_amount   : accommodation_taxable × gst_rate / 100 (exclusive of tariff)
+            # gst_amount   : back-calculated from inclusive accommodation total
+            # cgst/sgst/igst_amount : split per place of supply (G1). Intra-state
+            #                at create-time; refreshed by /update_bill_gst when
+            #                an inter-state recipient is captured.
+            # sac_or_hsn   : "9963" for accommodation. Required on the bill body
+            #                per Rule 46(g); also used by the GSTR-1 export (G6).
+            # effective_per_night_for_slab : audit aid showing which per-night value
+            #                was used to pick the slab (G3 traceability).
+            # round_off    : reserved for any sum-of-components vs. total drift.
+            #                Always 0 today (total math is integer-exact); the
+            #                field is here so GSTR-1 exports can carry the
+            #                round_off column without a schema change (G7).
             "gst_rate": gst_rate,
             "accommodation_taxable": accommodation_taxable,
             "non_accommodation_total": non_accommodation_total,
             "gst_amount": gst_amount,
+            "cgst_amount": bill_cgst_amount,
+            "sgst_amount": bill_sgst_amount,
+            "igst_amount": bill_igst_amount,
+            "sac_or_hsn": "9963",
+            "effective_per_night_for_slab": effective_per_night_for_slab,
+            # ── Daily folio — per-night accommodation ledger (24h windows) ──
+            # Canonical source of truth. Flat fields above (gst_amount,
+            # cgst_amount, etc.) are derived by summing per-day values from
+            # this array. Empty for MMT service-only bills (no accommodation).
+            # Schema: see compute_daily_folio() docstring.
+            "daily_folio": daily_folio,
+            "round_off": round(
+                total_amount
+                - (
+                    accommodation_taxable
+                    + gst_amount
+                    + non_accommodation_total
+                    - total_discounts
+                ),
+                2,
+            ),
+            # ── B2B / GST recipient fields ────────────────────────────────────
+            # All default to empty/None — a B2C bill carries blank recipient
+            # info. Filled in via /update_bill_gst (Bills tab "GST" icon).
+            # invoice_type defaults to "B2C"; classify_invoice_type recomputes
+            # whenever recipient details change.
+            "recipient_gstin":      "",
+            "recipient_legal_name": "",
+            "recipient_trade_name": "",
+            "recipient_address":    "",
+            "recipient_state":      "Karnataka",
+            "recipient_state_code": "29",
+            "invoice_type":         "B2C",
+            # Linked credit notes — populated by create_credit_note.
+            "linked_credit_note_ids": [],
+            "linked_credit_note_id":  None,
             # ── Room segments — clean array for all stays ──────────────────────
             # Each entry: {room, date_from, date_to, nights, rate, total}
             # Single-room stays have exactly one entry.
@@ -1113,5 +1374,751 @@ def _build_active_entry_fast(room_number, room_data, all_logs, checkin_dt, log_i
         logger.error(f"Error building active entry for room {room_number}: {e}")
         return None
 
-# Start initialization in background
+
+# ============================================================================
+# GST helpers - recipient (B2B) capture, validation, classification (Goal 1)
+# ============================================================================
+
+import re as _re
+
+_GSTIN_RE = _re.compile(
+    r"^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[0-9A-Z]{1}Z[0-9A-Z]{1}$"
+)
+
+_STATE_CODE_TO_NAME = {
+    "01": "Jammu and Kashmir",     "02": "Himachal Pradesh",
+    "03": "Punjab",                "04": "Chandigarh",
+    "05": "Uttarakhand",           "06": "Haryana",
+    "07": "Delhi",                 "08": "Rajasthan",
+    "09": "Uttar Pradesh",         "10": "Bihar",
+    "11": "Sikkim",                "12": "Arunachal Pradesh",
+    "13": "Nagaland",              "14": "Manipur",
+    "15": "Mizoram",               "16": "Tripura",
+    "17": "Meghalaya",             "18": "Assam",
+    "19": "West Bengal",           "20": "Jharkhand",
+    "21": "Odisha",                "22": "Chhattisgarh",
+    "23": "Madhya Pradesh",        "24": "Gujarat",
+    "25": "Daman and Diu",         "26": "Dadra and Nagar Haveli",
+    "27": "Maharashtra",           "28": "Andhra Pradesh (old)",
+    "29": "Karnataka",             "30": "Goa",
+    "31": "Lakshadweep",           "32": "Kerala",
+    "33": "Tamil Nadu",            "34": "Puducherry",
+    "35": "Andaman and Nicobar Islands",
+    "36": "Telangana",             "37": "Andhra Pradesh",
+    "38": "Ladakh",                "97": "Other Territory",
+    "99": "Centre Jurisdiction",
+}
+
+
+def validate_gstin(gstin):
+    """Format-only check against Rule 46(b). True if valid format."""
+    if not gstin or not isinstance(gstin, str):
+        return False
+    return bool(_GSTIN_RE.match(gstin.strip().upper()))
+
+
+def derive_state_from_gstin(gstin):
+    """Return (state_name, state_code) from GSTIN's first 2 digits."""
+    if not validate_gstin(gstin):
+        return ("", "")
+    code = gstin.strip()[:2]
+    return (_STATE_CODE_TO_NAME.get(code, ""), code)
+
+
+B2CL_THRESHOLD = 100000
+
+
+def classify_invoice_type(recipient_gstin, total_amount, recipient_state_code=""):
+    """Compute GSTR-1 invoice_type bucket. Returns 'B2B' / 'B2CL' / 'B2C'."""
+    if validate_gstin(recipient_gstin or ""):
+        return "B2B"
+    try:
+        amt = int(total_amount or 0)
+    except (TypeError, ValueError):
+        amt = 0
+    if (
+        amt > B2CL_THRESHOLD
+        and recipient_state_code
+        and recipient_state_code != "29"
+    ):
+        return "B2CL"
+    return "B2C"
+
+
+def _slab_for_value(value):
+    """Accommodation slab per CBIC 03/2024-CTR — value of supply per night."""
+    try:
+        v = float(value or 0)
+    except (TypeError, ValueError):
+        v = 0
+    if v < 1000:
+        return 0
+    if v <= 7500:
+        return 5
+    return 18
+
+
+def compute_daily_folio(
+    *,
+    checkin_dt,
+    days_stayed,
+    room_price_per_night,
+    current_room_no,
+    accommodation_services,
+    pre_transfer_charges,
+    discount_on_accom,
+    recipient_state_code,
+):
+    """
+    Build a per-night folio — one entry per 24-hour accommodation period
+    starting from check-in. This is the canonical model for billing under
+    the lodge's 24-hour stay-day rule (renewal at checkin_time + 24h, not
+    at calendar midnight).
+
+    Why this exists
+    ---------------
+    The legacy create_bill_record used a single room_price_per_night plus
+    a flat list of addons, then averaged the effective per-night value to
+    pick ONE GST slab for the whole stay. That works when every night is
+    in the same slab — but it silently mis-classifies tax when nights
+    cross a slab boundary (e.g. Day 1 = ₹2,400 with addons → 5%, Day 2
+    = ₹950 base only → exempt). The folio fixes this by computing each
+    night's slab from its OWN value of supply, then summing GST.
+
+    Each entry carries:
+        day_index       1-based, day_index == 1 covers the first 24h
+        day_start       checkin_dt + (day_index-1) * 24h, IST string
+        day_end         checkin_dt + day_index * 24h
+        room            the room occupied that night (transfer-aware)
+        base_rate       per-night room rate for that night (gross, incl GST)
+        addons          accommodation services applied to that day
+        addons_total    sum of addon prices for that day (gross)
+        discount_allocated   proportional share of the stay's discount
+        day_total       gross (incl GST) accommodation charge for the day
+                        after discount allocation
+        day_taxable     pre-GST taxable base
+        day_gst_rate    0 / 5 / 18 — determined per-day from day_total
+        day_gst_amount  back-calculated from day_total at day_gst_rate
+        day_cgst / day_sgst / day_igst    place-of-supply split
+
+    Parameters
+    ----------
+    checkin_dt : datetime
+    days_stayed : int
+        Total 24h periods covered.
+    room_price_per_night : int
+        Rate of the CURRENT (last-segment) room.
+    current_room_no : str
+        The current room number — used for nights not covered by
+        pre_transfer_charges.
+    accommodation_services : list[dict]
+        All services on the stay. Only those with accommodation_charge=True
+        are folded into per-day totals. Each may carry `applied_on_day`
+        (1-based). Missing values default to Day 1 — this keeps the
+        backward-compat behaviour for stays that pre-date the folio model
+        (their AC/extra-person charges land on Day 1, which is correct
+        the vast majority of the time).
+    pre_transfer_charges : list[dict]
+        Previous-room segments [{from_room, days, price, total, ...}].
+        Days 1..N1 from check-in are billed at segment 1's rate; the
+        next N2 at segment 2's; etc. Residual days go to the current room.
+    discount_on_accom : float
+        Total discount allocated to accommodation. Distributed across days
+        proportionally to each day's pre-discount accommodation total.
+    recipient_state_code : str
+        "29" (Karnataka, intra) → CGST + SGST; anything else → IGST.
+
+    Returns
+    -------
+    list[dict]
+        One entry per night, ordered Day 1 → Day N.
+    """
+    from datetime import timedelta as _td
+
+    if not checkin_dt or not days_stayed or days_stayed <= 0:
+        return []
+
+    # ── 1. Walk transfer segments to build (room, rate) per day ────────────
+    daily_room_rate = []
+    if pre_transfer_charges:
+        for seg in pre_transfer_charges:
+            try:
+                seg_days = int(seg.get("days", 0) or 0)
+            except (TypeError, ValueError):
+                seg_days = 0
+            try:
+                seg_rate = int(seg.get("price", 0) or 0)
+            except (TypeError, ValueError):
+                seg_rate = 0
+            seg_room = seg.get("from_room") or current_room_no
+            for _ in range(seg_days):
+                daily_room_rate.append((str(seg_room), seg_rate))
+    # Fill remaining days with the current room's rate
+    remaining = days_stayed - len(daily_room_rate)
+    if remaining > 0:
+        for _ in range(remaining):
+            daily_room_rate.append((str(current_room_no), int(room_price_per_night or 0)))
+    # Truncate any over-shoot if pre_transfer_charges had stale extras
+    daily_room_rate = daily_room_rate[:days_stayed]
+
+    # -- 2. Group accommodation services by their day index ---------------
+    # Prefer `applied_on_date` (absolute YYYY-MM-DD) when present, falling
+    # back to the relative `applied_on_day` index for legacy rows. Absolute
+    # date is robust under check-in time corrections; the relative index
+    # silently drifts if the check-in time is later edited.
+    addons_by_day = {}
+    _checkin_date = checkin_dt.date() if checkin_dt else None
+    for s in (accommodation_services or []):
+        if not s.get("accommodation_charge"):
+            continue
+
+        day_idx = None
+        _applied_date = s.get("applied_on_date")
+        if _applied_date and _checkin_date:
+            try:
+                from datetime import datetime as _dt
+                _ad = _dt.strptime(str(_applied_date)[:10], "%Y-%m-%d").date()
+                # day_idx is 1-based: the check-in date itself is Day 1.
+                day_idx = (_ad - _checkin_date).days + 1
+            except (TypeError, ValueError):
+                day_idx = None
+
+        if day_idx is None:
+            try:
+                day_idx = int(s.get("applied_on_day", 1) or 1)
+            except (TypeError, ValueError):
+                day_idx = 1
+
+        if day_idx < 1:
+            day_idx = 1
+        if day_idx > days_stayed:
+            day_idx = days_stayed  # clamp to last day
+        addons_by_day.setdefault(day_idx, []).append(s)
+
+    # ── 3. First pass — pre-discount per-day totals (for discount allocation) ─
+    pre_discount = []
+    for day_idx in range(1, days_stayed + 1):
+        room_no, base_rate = daily_room_rate[day_idx - 1]
+        addons = addons_by_day.get(day_idx, [])
+        addons_total = sum(
+            int(a.get("price", 0) or 0) for a in addons
+        )
+        pre_discount.append({
+            "day_idx":            day_idx,
+            "room":               room_no,
+            "base_rate":          int(base_rate or 0),
+            "addons":             addons,
+            "addons_total":       addons_total,
+            "pre_discount_total": int(base_rate or 0) + addons_total,
+        })
+
+    sum_pre_discount = sum(e["pre_discount_total"] for e in pre_discount) or 1
+
+    # ── 4. Build the final folio with per-day GST math ────────────────────
+    folio = []
+    discount_remaining = float(discount_on_accom or 0)
+    for i, entry in enumerate(pre_discount):
+        is_last = (i == len(pre_discount) - 1)
+        if is_last:
+            # Last day absorbs any rounding drift so the discount sum is exact
+            day_discount = round(discount_remaining, 2)
+        else:
+            share = entry["pre_discount_total"] / sum_pre_discount
+            day_discount = round(float(discount_on_accom or 0) * share, 2)
+            discount_remaining -= day_discount
+
+        day_total = round(entry["pre_discount_total"] - day_discount, 2)
+        if day_total < 0:
+            day_total = 0.0
+
+        day_gst_rate = _slab_for_value(day_total)
+        if day_gst_rate > 0 and day_total > 0:
+            divisor = 100 + day_gst_rate
+            day_gst = round(day_total * day_gst_rate / divisor, 2)
+        else:
+            day_gst = 0.0
+        day_taxable = round(day_total - day_gst, 2)
+
+        # Place-of-supply split — same logic as compute_gst_split, inlined
+        # here so the helper has no inter-dependency.
+        is_intra = (not recipient_state_code) or recipient_state_code == "29"
+        if is_intra:
+            day_cgst = round(day_gst / 2, 2)
+            day_sgst = round(day_gst - day_cgst, 2)
+            day_igst = 0.0
+        else:
+            day_cgst = 0.0
+            day_sgst = 0.0
+            day_igst = round(day_gst, 2)
+
+        # 24h day window anchored on check-in time
+        day_start = checkin_dt + _td(hours=24 * (entry["day_idx"] - 1))
+        day_end   = checkin_dt + _td(hours=24 * entry["day_idx"])
+
+        folio.append({
+            "day_index":          entry["day_idx"],
+            "day_start":          day_start.strftime("%Y-%m-%d %H:%M"),
+            "day_end":            day_end.strftime("%Y-%m-%d %H:%M"),
+            "room":               entry["room"],
+            "base_rate":          entry["base_rate"],
+            "addons":             entry["addons"],
+            "addons_total":       entry["addons_total"],
+            "discount_allocated": day_discount,
+            "day_total":          day_total,
+            "day_taxable":        day_taxable,
+            "day_gst_rate":       day_gst_rate,
+            "day_gst_amount":     day_gst,
+            "day_cgst":           day_cgst,
+            "day_sgst":           day_sgst,
+            "day_igst":           day_igst,
+        })
+
+    return folio
+
+
+def compute_gst_split(gst_amount, recipient_state_code=""):
+    """
+    Split a GST amount into (cgst, sgst, igst) based on place of supply.
+
+    The supplier is fixed in Karnataka (state code "29"). Intra-state supply
+    (recipient in KA-29, OR no recipient info → assume local B2C) attracts
+    CGST + SGST in equal halves. Inter-state supply (recipient_state_code
+    set to anything other than "29") attracts IGST instead, with CGST = SGST = 0.
+
+    Storing the split on the bill (rather than just `gst_amount`) is required
+    for a correct GSTR-1 / GSTR-3B filing and lets the PDF render the right
+    tax-head columns. Without this split, every inter-state B2B invoice
+    silently mis-classifies the tax head.
+
+    Returns
+    -------
+    tuple[float, float, float]
+        (cgst, sgst, igst), each rounded to 2 decimal places. The sum equals
+        the input gst_amount within at most one paise of rounding drift
+        (the SGST half absorbs any drift so CGST + SGST == gst_amount).
+    """
+    try:
+        total = float(gst_amount or 0)
+    except (TypeError, ValueError):
+        total = 0.0
+    if total <= 0:
+        return (0.0, 0.0, 0.0)
+
+    code = (recipient_state_code or "").strip()
+    is_intra_state = (not code) or code == "29"
+    if is_intra_state:
+        half = round(total / 2, 2)
+        return (half, round(total - half, 2), 0.0)
+    return (0.0, 0.0, round(total, 2))
+
+
+# ============================================================================
+# CREDIT NOTE numbering and creation (Section 34 CGST Act) - Goal 2
+# ============================================================================
+
+def create_cancellation_charge_bill(*, booking_id, booking_data, retained_amount,
+                                    cancel_dt=None, actor=None):
+    """
+    Issue a separate Tax Invoice for a cancellation forfeiture amount.
+
+    Per Schedule II + SAC 999794 ("agreement to refrain from an act, or to
+    tolerate an act"), the retained portion of a cancelled booking is a
+    distinct supply taxable at 18% (CGST 9 + SGST 9) — NOT at the
+    accommodation slab. The retained amount is treated as GST-inclusive
+    (the operator collected exactly that amount as advance).
+
+    The new bill mints its own CC/YYYY/MM/XXXXX from the same monthly
+    counter so the numbering stays consecutive (Rule 46(b)). It is
+    written as `is_cancellation_charge=True` and `sac_or_hsn="999794"`
+    so the GSTR-1 export can route it to the correct HSN bucket and the
+    Bills tab can show a distinct pill.
+
+    Returns the bill dict on success, None on failure (including
+    retained_amount <= 0).
+    """
+    if not booking_id or not isinstance(booking_data, dict):
+        return None
+    try:
+        retained_amount = int(retained_amount or 0)
+    except (TypeError, ValueError):
+        return None
+    if retained_amount <= 0:
+        return None
+
+    cancel_dt = cancel_dt or datetime.now(IST)
+    bill_number = generate_sequential_bill_number(cancel_dt)
+
+    # 18% inclusive math. SAC 999794 ("agreement to refrain") — a B2C
+    # forfeiture by default; the operator never has GSTIN for a no-show.
+    # If a corporate cancellation needs B2B treatment, the bill can be
+    # upgraded via /update_bill_gst, which will also recompute the split.
+    gst_rate    = 18
+    gst_amount  = round(retained_amount * 18 / 118, 2)
+    taxable     = round(retained_amount - gst_amount, 2)
+    cgst_amt, sgst_amt, igst_amt = compute_gst_split(
+        gst_amount, recipient_state_code="29"
+    )
+    now_str     = cancel_dt.strftime("%Y-%m-%d %H:%M:%S")
+    co_str      = cancel_dt.strftime("%Y-%m-%d %H:%M")
+
+    bill_id = uuid.uuid4().hex
+    bill_doc = {
+        "stay_id":               bill_id,
+        "bill_number":           bill_number,
+        "is_cancellation_charge": True,
+        "against_booking_id":    booking_id,
+        "guest_name":            booking_data.get("guest_name", "") or "",
+        "guest_mobile":          booking_data.get("guest_mobile", "") or "",
+        "guest_count":           int(booking_data.get("guests", 1) or 1),
+        "room":                  str(booking_data.get("room", "") or "-"),
+        # checkin/checkout timestamps make the bill render properly even
+        # though no actual stay occurred. checkin = booked check-in date,
+        # checkout = cancel datetime.
+        "checkin_time":          (booking_data.get("check_in_date") or "")[:10] + " 00:00",
+        "checkout_time":         co_str,
+        "days_stayed":           0,
+        "room_price_per_night":  0,
+        "room_charges_total":    0,
+        "services":              [],
+        "services_total":        0,
+        "discounts":             0,
+        "refunds":               0,
+        "total_amount":          retained_amount,
+        # The retained amount was already collected as part of the
+        # booking advance. We classify the receipt by the booking's
+        # original payment method when available, defaulting to cash.
+        "payment_cash":          retained_amount if (booking_data.get("payment_method") or "cash") != "online" else 0,
+        "payment_online":        retained_amount if (booking_data.get("payment_method") or "cash") == "online" else 0,
+        "balance":               0,
+        "status":                "completed",
+        "created_at":            now_str,
+        "invoice_generated":     True,
+        "gst_rate":              gst_rate,
+        "accommodation_taxable": taxable,
+        "non_accommodation_total": 0,
+        "gst_amount":            gst_amount,
+        # G1: CGST/SGST/IGST split. Intra-state (KA-29) at creation; will be
+        # recomputed by /update_bill_gst if the bill is later flagged B2B.
+        "cgst_amount":           cgst_amt,
+        "sgst_amount":           sgst_amt,
+        "igst_amount":           igst_amt,
+        "sac_or_hsn":            "999794",
+        "round_off":             0.0,
+        "effective_per_night_for_slab": 0,
+        "service_description":   ("Cancellation forfeiture — agreement to refrain "
+                                  "from supply (Schedule II of CGST Act, "
+                                  "SAC 999794, GST 18%)"),
+        "invoice_type":          "B2C",
+        "recipient_gstin":       "",
+        "recipient_legal_name":  "",
+        "recipient_trade_name":  "",
+        "recipient_address":     "",
+        "recipient_state":       "Karnataka",
+        "recipient_state_code":  "29",
+        "linked_credit_note_ids": [],
+        "linked_credit_note_id":  None,
+        "createdBy":             actor or "system",
+        "lastModifiedBy":        actor or "system",
+        "lastModifiedAt":        now_str,
+        "booking_source":        "cancellation_charge",
+        "payment_source":        "hotel",
+    }
+    try:
+        bills_ref.document(bill_id).set(bill_doc)
+        logger.info(
+            f"create_cancellation_charge_bill: minted {bill_number} "
+            f"booking={booking_id} amount=Rs.{retained_amount} "
+            f"taxable={taxable} gst={gst_amount}"
+        )
+        return bill_doc
+    except Exception as e:
+        logger.error(f"create_cancellation_charge_bill failed: {e}", exc_info=True)
+        return None
+
+
+def generate_sequential_credit_note_number(cn_date):
+    """Mint next CN/YYYY/MM/XXXXX. Atomic Firestore transaction. Min value 1."""
+    try:
+        year  = cn_date.year
+        month = str(cn_date.month).zfill(2)
+        counter_key = f"cn_{year}_{month}"
+        counter_ref = counters_ref.document(counter_key)
+        txn         = db.transaction()
+
+        @firestore.transactional
+        def _inc(t, ref):
+            snap    = ref.get(transaction=t)
+            new_val = (snap.get("count") + 1) if snap.exists else 1
+            t.set(ref, {"count": new_val})
+            return new_val
+
+        seq    = _inc(txn, counter_ref)
+        serial = str(seq).zfill(5)
+        return f"CN/{year}/{month}/{serial}"
+    except Exception as e:
+        logger.error(f"Error generating CN number: {e}")
+        ts = max(1, int(cn_date.timestamp()) % 100000)
+        return f"CN/{cn_date.year}/{str(cn_date.month).zfill(2)}/{ts:05d}"
+
+
+CN_REASONS = (
+    "checkout_mistake",
+    "post_supply_discount",
+    "service_deficiency",
+    "cancellation",
+    "other",
+)
+
+CN_REASON_GSTR1 = {
+    "checkout_mistake":     "04-Correction in Invoice",
+    "post_supply_discount": "02-Post Sale Discount",
+    "service_deficiency":   "03-Deficiency in services",
+    "cancellation":         "01-Sales Return",
+    "other":                "07-Others",
+}
+
+
+def create_credit_note(
+    *,
+    bill_id,
+    bill_data,
+    cn_date,
+    reason,
+    reason_text,
+    credit_taxable,
+    credit_cgst,
+    credit_sgst,
+    credit_total,
+    actor=None,
+    idempotency_key=None,
+):
+    """Mint CN number, write credit_notes/{cn_id}, link onto original bill.
+    Idempotent on idempotency_key."""
+    import uuid as _uuid
+    if reason not in CN_REASONS:
+        logger.error(f"create_credit_note: invalid reason {reason!r}")
+        return None
+    if not bill_id or not isinstance(bill_data, dict):
+        logger.error("create_credit_note: missing bill_id or bill_data")
+        return None
+    if not cn_date:
+        logger.error("create_credit_note: cn_date is required")
+        return None
+
+    try:
+        if idempotency_key:
+            try:
+                existing = (
+                    credit_notes_ref
+                    .where("idempotency_key", "==", idempotency_key)
+                    .limit(1).stream()
+                )
+                for snap in existing:
+                    d = snap.to_dict() or {}
+                    d["cn_id"] = snap.id
+                    logger.info(
+                        f"create_credit_note: idempotent hit "
+                        f"(key={idempotency_key}) -> {d.get('cn_number')}"
+                    )
+                    return d
+            except Exception as _ie:
+                logger.warning(f"create_credit_note: idempotency lookup failed: {_ie}")
+
+        cn_id     = _uuid.uuid4().hex
+        cn_number = generate_sequential_credit_note_number(cn_date)
+        cn_date_s = cn_date.strftime("%Y-%m-%d")
+        now_iso   = datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S")
+
+        gst_rate = int(bill_data.get("gst_rate", 0) or 0)
+
+        # G1 (CN side): route the credit GST to the correct tax head based on
+        # the original bill's place of supply. Callers pass (cgst, sgst) from
+        # compute_credit_components which always returns the half-split; if the
+        # bill is inter-state we re-route those into igst here so the CN
+        # reverses the same tax head that was charged on the invoice.
+        _rcpt_state_code = (bill_data.get("recipient_state_code") or "29")
+        _rcpt_state_code = str(_rcpt_state_code).strip() or "29"
+        _is_inter_state_cn = _rcpt_state_code != "29"
+        _cgst_in = float(credit_cgst or 0)
+        _sgst_in = float(credit_sgst or 0)
+        if _is_inter_state_cn:
+            _cn_cgst = 0.0
+            _cn_sgst = 0.0
+            _cn_igst = round(_cgst_in + _sgst_in, 2)
+        else:
+            _cn_cgst = _cgst_in
+            _cn_sgst = _sgst_in
+            _cn_igst = 0.0
+
+        _rcpt_state = (bill_data.get("recipient_state") or "Karnataka")
+
+        cn_doc = {
+            "cn_id":               cn_id,
+            "cn_number":           cn_number,
+            "cn_date":             cn_date_s,
+            "against_bill_id":     bill_id,
+            "against_bill_number": bill_data.get("bill_number") or "",
+            "against_invoice_date": (bill_data.get("checkout_time") or "")[:10],
+            "reason":              reason,
+            "reason_text":         (reason_text or "")[:500],
+            "recipient_gstin":     (bill_data.get("recipient_gstin")     or ""),
+            "recipient_legal_name": (bill_data.get("recipient_legal_name") or
+                                     bill_data.get("guest_name") or ""),
+            "recipient_trade_name": (bill_data.get("recipient_trade_name") or ""),
+            "recipient_address":   (bill_data.get("recipient_address") or ""),
+            "recipient_state":     _rcpt_state,
+            "recipient_state_code": _rcpt_state_code,
+            "invoice_type":        (bill_data.get("invoice_type") or "B2C"),
+            "credit_amount_taxable": float(credit_taxable or 0),
+            "credit_amount_cgst":  _cn_cgst,
+            "credit_amount_sgst":  _cn_sgst,
+            "credit_amount_igst":  _cn_igst,
+            "credit_amount_total": int(round(credit_total or 0)),
+            "gst_rate":            gst_rate,
+            "sac_or_hsn":          "9963",
+            # Place of supply mirrors the original bill — used by GSTR-1
+            # export to bucket the CN into the right destination state.
+            "place_of_supply":     f"{_rcpt_state} ({_rcpt_state_code})",
+            "created_at":          now_iso,
+            "created_by":          actor or "system",
+            "pdf_url":             "",
+            "idempotency_key":     idempotency_key or "",
+            "guest_name":          bill_data.get("guest_name") or "",
+            "guest_mobile":        bill_data.get("guest_mobile") or "",
+            "room":                str(bill_data.get("room") or ""),
+        }
+
+        batch = db.batch()
+        batch.set(credit_notes_ref.document(cn_id), cn_doc)
+        existing_links = bill_data.get("linked_credit_note_ids") or []
+        if cn_id not in existing_links:
+            updated_links = list(existing_links) + [cn_id]
+            batch.update(bills_ref.document(bill_id), {
+                "linked_credit_note_ids": updated_links,
+                "linked_credit_note_id":  cn_id,
+                "lastModifiedAt":         now_iso,
+            })
+        batch.commit()
+
+        logger.info(
+            f"create_credit_note: minted {cn_number} for bill "
+            f"{bill_data.get('bill_number') or bill_id} reason={reason} "
+            f"amount={credit_total}"
+        )
+
+        # Fire-and-forget PDF generation so the CN is downloadable
+        # immediately from the Credit Notes sub-tab. Best-effort —
+        # failure here only delays the PDF until the operator clicks
+        # "Generate" manually.
+        try:
+            import threading as _thr
+            _thr.Thread(target=_auto_generate_cn_pdf,
+                        args=(cn_id,), daemon=True).start()
+        except Exception as _pe:
+            logger.warning(f"create_credit_note: CN PDF auto-gen skipped: {_pe}")
+
+        return cn_doc
+
+    except Exception as e:
+        logger.error(f"create_credit_note failed: {e}", exc_info=True)
+        return None
+
+
+def _auto_generate_cn_pdf(cn_id):
+    """Background helper — builds + uploads the CN PDF for a freshly
+    minted credit note. Mirrors render_credit_note_pdf but without
+    going through the HTTP layer."""
+    try:
+        if not cn_id:
+            return
+        snap = credit_notes_ref.document(cn_id).get()
+        if not snap.exists:
+            return
+        cn = snap.to_dict() or {}
+        cn["cn_id"] = snap.id
+        if cn.get("pdf_url"):
+            return   # already generated (e.g. idempotency or manual click)
+
+        from routes.billing import _build_credit_note_html, _build_pdf_html
+        try:
+            from xhtml2pdf import pisa
+        except ImportError:
+            logger.warning("_auto_generate_cn_pdf: xhtml2pdf not installed; skipping")
+            return
+
+        import io as _io, urllib.parse as _u, uuid as _uu
+        from firebase_admin import storage as _fb_storage
+        from firebase_admin import firestore as _fs
+
+        full_html = _build_pdf_html(_build_credit_note_html(cn))
+        buf = _io.BytesIO()
+        result = pisa.CreatePDF(full_html, dest=buf)
+        if result.err:
+            logger.warning(f"_auto_generate_cn_pdf({cn_id}): xhtml2pdf error code {result.err}")
+            return
+
+        bucket = _fb_storage.bucket()
+        safe_no = (cn.get("cn_number") or cn_id).replace("/", "_").replace(" ", "_")
+        existing_versions = cn.get("versions") or []
+        next_version = len(existing_versions) + 1
+        blob_path = f"credit_notes/{safe_no}/v{next_version}.pdf"
+        blob = bucket.blob(blob_path)
+        token = str(_uu.uuid4())
+        blob.metadata = {"firebaseStorageDownloadTokens": token}
+        blob.upload_from_string(buf.getvalue(), content_type="application/pdf")
+        encoded = _u.quote(blob_path, safe="")
+        url = (f"https://firebasestorage.googleapis.com/v0/b/"
+               f"{bucket.name}/o/{encoded}?alt=media&token={token}")
+
+        credit_notes_ref.document(cn_id).update({
+            "pdf_url":        url,
+            "versions":       _fs.ArrayUnion([{
+                "version": next_version, "url": url,
+                "uploaded_at": datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S"),
+            }]),
+            "pdf_updated_at": datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S"),
+        })
+        logger.info(f"_auto_generate_cn_pdf: PDF v{next_version} stored for {cn.get('cn_number')}")
+    except Exception as e:
+        logger.error(f"_auto_generate_cn_pdf({cn_id}) failed: {e}", exc_info=True)
+
+
+
+def section_34_window_status(invoice_date, today=None):
+    """30-Nov deadline check for Section 34 credit notes."""
+    from datetime import date as _date, datetime as _dt
+    if invoice_date is None:
+        return {"in_window": True, "deadline": None, "days_left": None}
+    if isinstance(invoice_date, str):
+        try:
+            invoice_date = _dt.strptime(invoice_date[:10], "%Y-%m-%d").date()
+        except (ValueError, TypeError):
+            return {"in_window": True, "deadline": None, "days_left": None}
+    elif isinstance(invoice_date, _dt):
+        invoice_date = invoice_date.date()
+    if invoice_date.month >= 4:
+        fy_start_year = invoice_date.year
+    else:
+        fy_start_year = invoice_date.year - 1
+    deadline = _date(fy_start_year + 1, 11, 30)
+    today_d = (today or _dt.now(IST)).date() if not isinstance(today, _date) else today
+    days_left = (deadline - today_d).days
+    return {"in_window": days_left >= 0, "deadline": deadline, "days_left": days_left}
+
+
+
+def compute_credit_components(bill_data, credit_total):
+    """Split a CN total into taxable, cgst, sgst per GST-inclusive math."""
+    try:
+        rate = int(bill_data.get("gst_rate", 0) or 0)
+        total = float(credit_total or 0)
+        if rate <= 0 or total <= 0:
+            return (round(total, 2), 0.0, 0.0)
+        gst = round(total * rate / (100 + rate), 2)
+        taxable = round(total - gst, 2)
+        return (taxable, round(gst / 2, 2), round(gst / 2, 2))
+    except Exception:
+        return (round(float(credit_total or 0), 2), 0.0, 0.0)
+
+
 threading.Thread(target=initialize_data, daemon=True).start()

@@ -386,10 +386,6 @@ def batch_check_customer_docs():
                         mobiles_with_docs.append(snap.id)
 
         return jsonify(success=True, mobiles_with_docs=mobiles_with_docs)
-
     except Exception as e:
         logger.error(f"batch_check_customer_docs error: {e}")
-        # Non-fatal — return empty so the UI just hides all doc buttons
-        return jsonify(success=True, mobiles_with_docs=[])
-
-
+        return jsonify(success=False, message=str(e)), 500

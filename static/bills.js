@@ -12,7 +12,8 @@
 
 .bills-header {
   display: flex; justify-content: space-between;
-  align-items: center; margin-bottom: 0.6rem;
+  align-items: center; margin-bottom: 0.7rem; gap: .6rem;
+  flex-wrap: wrap;
 }
 .bills-header h1 {
   font-size: 1.05rem; font-weight: 700;
@@ -152,6 +153,14 @@
   flex-shrink: 0;
 }
 .bl-bill-btn:hover { opacity: 0.82; }
+
+/* Payment cell click affordance — only visible to admin users.
+   body[data-role] is stamped by auth.js once the role is known, so the
+   cursor/hover only appear after CibaraAuth has resolved. Non-admin
+   users see the cell unchanged. */
+.bl-pay-clickable { border-radius: 4px; padding: 2px 4px; margin: -2px -4px; transition: background .12s; }
+body[data-role="admin"] .bl-pay-clickable { cursor: pointer; }
+body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
 
 /* Pending settlement row */
 .bl-row-pending { background: #fffbf0; }
@@ -392,6 +401,248 @@
 }
 .bl-bill-save-btn:hover { opacity: .85; }
 .bl-bill-save-btn:disabled { opacity: .5; cursor: wait; }
+
+/* ────────────────────────────────────────────────────────────────────
+   GST / Section-34 UI — minimalist, audit-readable
+   ──────────────────────────────────────────────────────────────────── */
+
+/* B2B / Reverted pills (row indicators) */
+.bl-b2b-pill { display:inline-flex; align-items:center; margin-left:.35rem;
+  padding:.1rem .42rem .1rem .32rem; border-radius:4px;
+  font-size:.62rem; font-weight:700; letter-spacing:.05em;
+  background:linear-gradient(180deg, #1e40af 0%, #1e3a8a 100%); color:#fff;
+  vertical-align:middle; box-shadow:0 1px 2px rgba(30,58,138,.25);
+  cursor:default; }
+.bl-b2b-pill::before { content:"\\2666"; margin-right:.2rem; opacity:.85; font-size:.6rem; }
+.bl-reverted-pill { display:inline-flex; align-items:center; margin-left:.35rem;
+  padding:.1rem .42rem; border-radius:4px;
+  font-size:.62rem; font-weight:700; letter-spacing:.05em;
+  background:#fef2f2; color:#991b1b; border:1px solid #fecaca;
+  vertical-align:middle; cursor:default; }
+.bl-reverted-pill::before { content:"\\21BA"; margin-right:.2rem; font-weight:800; }
+.bl-cancel-pill { display:inline-flex; align-items:center; margin-left:.35rem;
+  padding:.1rem .42rem; border-radius:4px;
+  font-size:.62rem; font-weight:700; letter-spacing:.05em;
+  background:#fffbeb; color:#92400e; border:1px solid #fde68a;
+  vertical-align:middle; cursor:default; }
+.bl-cancel-pill::before { content:"\\2716"; margin-right:.2rem; font-weight:800; }
+
+/* Per-row GST icon: subdued when no GSTIN, primary when B2B set */
+.bl-gst-btn { width:28px; height:28px; padding:0; border:none; border-radius:6px;
+  cursor:pointer; font-size:.78rem; display:inline-flex; align-items:center;
+  justify-content:center; background:#e2e8f0; color:#475569; flex-shrink:0;
+  transition:background .15s, color .15s, transform .1s; }
+.bl-gst-btn:hover { background:#cbd5e1; color:#1e293b; }
+.bl-gst-btn.bl-gst-set { background:#1e40af; color:#fff; }
+.bl-gst-btn.bl-gst-set:hover { background:#1e3a8a; }
+.bl-gst-btn.bl-gst-locked { background:#fef2f2; color:#991b1b; cursor:not-allowed; border:1px solid #fecaca; }
+.bl-gst-btn:active { transform:scale(.95); }
+
+/* GST modal — cleaner card, two-column for code+state */
+.bl-gst-backdrop { display:none; position:fixed; inset:0;
+  background:rgba(15,23,42,.5); z-index:10001;
+  align-items:center; justify-content:center;
+  backdrop-filter:blur(2px); -webkit-backdrop-filter:blur(2px); }
+.bl-gst-backdrop.open { display:flex; }
+.bl-gst-modal { background:#fff; border-radius:14px; padding:0;
+  width:520px; max-width:94vw; max-height:92vh; overflow:auto;
+  box-shadow:0 20px 60px rgba(15,23,42,.18), 0 4px 12px rgba(15,23,42,.06); }
+.bl-gst-head { padding:1.1rem 1.3rem .85rem;
+  border-bottom:1px solid #f1f5f9;
+  display:flex; align-items:flex-start; gap:.8rem; }
+.bl-gst-head-icon { width:36px; height:36px; border-radius:8px;
+  background:#dbeafe; color:#1e40af; display:flex; align-items:center;
+  justify-content:center; font-size:1rem; flex-shrink:0; }
+.bl-gst-head-text { flex:1; min-width:0; }
+.bl-gst-head h2 { margin:0; font-size:1rem; color:#0f172a; font-weight:700;
+  letter-spacing:-.01em; }
+.bl-gst-head .bl-gst-sub { margin-top:.15rem; font-size:.74rem; color:#64748b;
+  display:flex; gap:.45rem; align-items:center; flex-wrap:wrap; }
+.bl-gst-head .bl-gst-billno { font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  background:#f1f5f9; color:#0f172a; padding:.05rem .35rem; border-radius:4px; }
+.bl-gst-state-chip { padding:.13rem .42rem; border-radius:4px;
+  font-size:.62rem; font-weight:700; letter-spacing:.05em; text-transform:uppercase; }
+.bl-gst-state-b2c { background:#f1f5f9; color:#475569; }
+.bl-gst-state-b2b { background:#1e40af; color:#fff; }
+.bl-gst-state-locked { background:#fee2e2; color:#991b1b; }
+
+.bl-gst-body { padding:.9rem 1.3rem 1rem; }
+.bl-gst-row { display:flex; flex-direction:column; margin-bottom:.7rem; }
+.bl-gst-row.row-2col { display:grid; grid-template-columns:1fr 1fr; gap:.7rem; }
+.bl-gst-modal label { display:block; font-size:.7rem; font-weight:700;
+  color:#475569; margin-bottom:.2rem; text-transform:uppercase; letter-spacing:.06em; }
+.bl-gst-modal label .bl-req { color:#dc2626; margin-left:.15rem; }
+.bl-gst-modal label .bl-hint-text { color:#94a3b8; font-weight:500; text-transform:none;
+  letter-spacing:0; margin-left:.3rem; }
+.bl-gst-modal input { width:100%; padding:.5rem .65rem; border:1px solid #cbd5e1;
+  border-radius:7px; font-size:.88rem; outline:none; box-sizing:border-box;
+  transition:border-color .15s, box-shadow .15s; color:#0f172a; }
+.bl-gst-modal input:focus { border-color:#1e40af;
+  box-shadow:0 0 0 3px rgba(30,64,175,.12); }
+.bl-gst-modal input::placeholder { color:#94a3b8; font-size:.85rem; }
+.bl-gst-modal input.bl-gst-invalid { border-color:#dc2626; background:#fef2f2; }
+.bl-gst-modal input.bl-gst-valid { border-color:#16a34a; padding-right:2rem;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%2316a34a' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='20 6 9 17 4 12'/%3E%3C/svg%3E");
+  background-repeat:no-repeat; background-position:right .55rem center; }
+.bl-gst-derived { font-size:.7rem; color:#64748b; margin-top:.25rem; display:flex;
+  align-items:center; gap:.3rem; min-height:1rem; }
+.bl-gst-derived.ok { color:#15803d; }
+.bl-gst-derived.bad { color:#b91c1c; }
+.bl-gst-warn { font-size:.72rem; color:#92400e;
+  background:#fffbeb; border:1px solid #fde68a; padding:.4rem .55rem;
+  border-radius:6px; margin-top:.45rem; display:flex; gap:.4rem; }
+.bl-gst-warn::before { content:"\\26A0"; flex-shrink:0; }
+.bl-gst-error { color:#b91c1c; font-size:.78rem; min-height:1.1rem;
+  margin:.3rem 0 .15rem; }
+.bl-gst-foot-note { font-size:.68rem; color:#64748b; line-height:1.5;
+  padding:.55rem .75rem; background:#f8fafc;
+  border:1px solid #e2e8f0; border-radius:6px;
+  margin-top:.55rem; }
+.bl-gst-foot-note strong { color:#0f172a; }
+
+.bl-gst-actions { padding:.85rem 1.3rem 1.1rem;
+  border-top:1px solid #f1f5f9;
+  display:flex; gap:.55rem; justify-content:flex-end; }
+.bl-gst-actions button { padding:.55rem 1.1rem; border:none; border-radius:7px;
+  font-size:.84rem; font-weight:600; cursor:pointer;
+  transition:opacity .15s, background .15s; }
+.bl-gst-actions .bl-gst-cancel { background:#f1f5f9; color:#475569; }
+.bl-gst-actions .bl-gst-cancel:hover { background:#e2e8f0; }
+.bl-gst-actions .bl-gst-clear { background:#fff; color:#dc2626; border:1px solid #fecaca; }
+.bl-gst-actions .bl-gst-clear:hover { background:#fef2f2; }
+.bl-gst-actions .bl-gst-save { background:#1e40af; color:#fff; min-width:120px; }
+.bl-gst-actions .bl-gst-save:hover { background:#1e3a8a; }
+.bl-gst-actions button:disabled { opacity:.5; cursor:not-allowed; }
+
+/* ────────────────────────────────────────────────────────────────────
+   Bills / Credit Notes sub-tabs
+   ──────────────────────────────────────────────────────────────────── */
+.bl-subtab-bar { display:flex; gap:0; margin-bottom:.7rem;
+  border-bottom:1.5px solid #e2e8f0; padding:0 .1rem; }
+.bl-subtab-btn { padding:.45rem .9rem; border:none; background:transparent;
+  font-size:.79rem; font-weight:600; color:#64748b; cursor:pointer;
+  border-bottom:2px solid transparent; margin-bottom:-1.5px;
+  transition:color .15s, border-color .15s;
+  display:flex; align-items:center; gap:.4rem; }
+.bl-subtab-btn:hover { color:#0f172a; }
+.bl-subtab-btn.active { color:#1e40af; border-bottom-color:#1e40af; }
+.bl-subtab-btn .bl-subtab-count { background:#f1f5f9; color:#475569;
+  font-size:.66rem; font-weight:700; padding:.05rem .35rem; border-radius:8px; }
+.bl-subtab-btn.active .bl-subtab-count { background:#dbeafe; color:#1e40af; }
+
+/* ────────────────────────────────────────────────────────────────────
+   Credit Notes pane — summary stat strip + table
+   ──────────────────────────────────────────────────────────────────── */
+.bl-cn-stats { display:grid; grid-template-columns:repeat(auto-fit, minmax(140px, 1fr));
+  gap:.5rem; margin-bottom:.7rem; }
+.bl-cn-stat { background:#fff; border:1px solid #e2e8f0; border-radius:8px;
+  padding:.55rem .75rem; }
+.bl-cn-stat-label { font-size:.66rem; font-weight:700; color:#64748b;
+  text-transform:uppercase; letter-spacing:.05em; }
+.bl-cn-stat-value { font-size:1.05rem; font-weight:700; color:#0f172a;
+  margin-top:.15rem; font-variant-numeric: tabular-nums; }
+.bl-cn-stat.b2b { border-left:3px solid #1e40af; }
+.bl-cn-stat.b2c { border-left:3px solid #475569; }
+.bl-cn-stat.value { border-left:3px solid #b91c1c; }
+.bl-cn-stat.value .bl-cn-stat-value { color:#b91c1c; }
+
+.bl-cn-filters { display:flex; gap:.35rem; margin-bottom:.55rem; flex-wrap:wrap; }
+.bl-cn-filter { padding:.25rem .65rem; border-radius:14px;
+  border:1px solid #cbd5e1; background:#fff; font-size:.72rem; font-weight:600;
+  color:#475569; cursor:pointer; transition:all .15s; }
+.bl-cn-filter:hover { background:#f1f5f9; }
+.bl-cn-filter.active { background:#1e40af; color:#fff; border-color:#1e40af; }
+
+.bl-cn-container { background:#fff; border-radius:8px;
+  border:1px solid #e2e8f0; box-shadow:0 1px 3px rgba(15,23,42,.04);
+  overflow:hidden; }
+.bl-cn-table { width:100%; border-collapse:collapse; font-size:.81rem;
+  font-variant-numeric: tabular-nums; }
+.bl-cn-table thead { background:#f8fafc; border-bottom:1px solid #e2e8f0; }
+.bl-cn-table th { padding:.55rem .7rem; text-align:left; font-weight:700;
+  font-size:.69rem; color:#475569; text-transform:uppercase;
+  letter-spacing:.04em; white-space:nowrap; }
+.bl-cn-table td { padding:.6rem .7rem; border-bottom:1px solid #f1f5f9;
+  vertical-align:middle; }
+.bl-cn-table tbody tr:hover { background:#fafbfc; }
+.bl-cn-table tbody tr:last-child td { border-bottom:0; }
+
+.bl-cn-num { font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size:.78rem; color:#0f172a; font-weight:600; }
+.bl-cn-against { font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size:.74rem; color:#64748b; }
+.bl-cn-amt { color:#b91c1c; font-weight:700; text-align:right;
+  font-variant-numeric: tabular-nums; }
+.bl-cn-recipient-b2b { display:inline-flex; align-items:center; gap:.3rem; }
+.bl-cn-recipient-b2b .bl-cn-tag-b2b { background:#dbeafe; color:#1e3a8a;
+  font-size:.6rem; font-weight:700; padding:.05rem .3rem; border-radius:3px;
+  letter-spacing:.04em; }
+.bl-cn-reason-badge { display:inline-block; padding:.13rem .45rem;
+  border-radius:4px; font-size:.66rem; font-weight:600;
+  letter-spacing:.02em; }
+.bl-cn-reason-revert { background:#fef2f2; color:#991b1b; }
+.bl-cn-reason-discount { background:#fefce8; color:#854d0e; }
+.bl-cn-reason-cancel { background:#f3f4f6; color:#374151; }
+.bl-cn-reason-deficiency { background:#eff6ff; color:#1e40af; }
+.bl-cn-reason-other { background:#f5f3ff; color:#5b21b6; }
+
+.bl-cn-pdf-link { color:#1e40af; text-decoration:none; padding:.25rem .55rem;
+  border-radius:5px; background:#dbeafe; font-size:.72rem; font-weight:600;
+  display:inline-flex; align-items:center; gap:.3rem; }
+.bl-cn-pdf-link:hover { background:#bfdbfe; }
+.bl-cn-pdf-btn { padding:.28rem .55rem; border:1px solid #cbd5e1;
+  border-radius:5px; background:#fff; color:#475569; font-size:.72rem;
+  font-weight:600; cursor:pointer; display:inline-flex; align-items:center;
+  gap:.3rem; transition:all .15s; }
+.bl-cn-pdf-btn:hover { border-color:#1e40af; color:#1e40af; }
+.bl-cn-pdf-btn:disabled { opacity:.6; cursor:wait; }
+.bl-cn-wa-btn { padding:.28rem .5rem; border:none; border-radius:5px;
+  background:#25D366; color:#fff; font-size:.78rem; cursor:pointer;
+  display:inline-flex; align-items:center; justify-content:center;
+  flex-shrink:0; transition:opacity .15s, background .15s; }
+.bl-cn-wa-btn:hover { opacity:.85; }
+.bl-cn-wa-btn:disabled { opacity:.5; cursor:wait; }
+/* "Pending" state — shown when PDF hasn't been generated yet. Lighter
+   green so it reads as "available but requires one extra step". */
+.bl-cn-wa-btn.bl-cn-wa-pending { background:#c8e6c9; color:#388e3c; }
+.bl-cn-wa-btn.bl-cn-wa-pending:hover { background:#a5d6a7; }
+
+.bl-cn-empty { padding:2.5rem 1.5rem; text-align:center; color:#94a3b8; }
+.bl-cn-empty-icon { font-size:2rem; opacity:.4; margin-bottom:.5rem; display:block; }
+.bl-cn-empty-text { font-size:.85rem; }
+
+.bl-cn-foot-note { font-size:.68rem; color:#64748b;
+  padding:.6rem .75rem; background:#f8fafc;
+  border-top:1px solid #f1f5f9; line-height:1.5; }
+.bl-cn-foot-note strong { color:#0f172a; }
+
+/* ────────────────────────────────────────────────────────────────────
+   Segmented control in the header (Bills / Credit Notes)
+   ──────────────────────────────────────────────────────────────────── */
+.bl-seg { display:inline-flex; gap:.25rem; padding:.18rem;
+  background:#f1f5f9; border-radius:8px;
+  border:1px solid #e2e8f0; }
+.bl-seg-btn { padding:.32rem .8rem; border:none;
+  background:transparent; border-radius:6px;
+  font-size:.78rem; font-weight:600; color:#64748b;
+  cursor:pointer; display:inline-flex; align-items:center;
+  gap:.4rem; transition:background .15s, color .15s;
+  white-space:nowrap; }
+.bl-seg-btn:hover { color:#0f172a; }
+.bl-seg-btn.active { background:#fff; color:#1e40af;
+  box-shadow:0 1px 2px rgba(15,23,42,.05),
+             0 0 0 1px rgba(15,23,42,.04); }
+.bl-seg-btn .bl-seg-count { background:rgba(100,116,139,.12);
+  color:#475569; font-size:.66rem; font-weight:700;
+  padding:.05rem .35rem; border-radius:8px;
+  font-variant-numeric: tabular-nums; min-width:1rem; text-align:center; }
+.bl-seg-btn.active .bl-seg-count { background:#dbeafe; color:#1e40af; }
+.bl-seg-btn i { font-size:.78rem; }
+
+/* Bills-only chrome — hidden when the Credit Notes view is active */
+.bills-container.cn-active .bills-tally,
+.bills-container.cn-active .bl-filter-bar,
+.bills-container.cn-active .bl-view-toggle { display:none !important; }
 `;
 
   function injectStyles() {
@@ -613,7 +864,18 @@
     tab.innerHTML = `
 <div class="bills-container">
   <div class="bills-header">
-    <h1><i class="fas fa-file-invoice-dollar"></i> Bills</h1>
+    <div class="bl-seg" role="tablist" aria-label="Bills views">
+      <button class="bl-seg-btn active" id="bl-subtab-bills" role="tab" aria-selected="true">
+        <i class="fas fa-file-invoice-dollar"></i>
+        <span>Bills</span>
+        <span class="bl-seg-count" id="bl-subtab-count-bills">0</span>
+      </button>
+      <button class="bl-seg-btn" id="bl-subtab-cn" role="tab" aria-selected="false">
+        <i class="fas fa-undo"></i>
+        <span>Credit Notes</span>
+        <span class="bl-seg-count" id="bl-subtab-count-cn">0</span>
+      </button>
+    </div>
     <div class="bills-toolbar">
       <button class="bl-icon-btn refresh" id="bl-refresh-btn" title="Refresh">
         <i class="fas fa-sync-alt"></i>
@@ -704,7 +966,59 @@
     <button id="bl-view-billno" class="bl-view-btn bl-view-active">&#8645; Bill No &#9660;</button>
   </div>
 
+  <!-- Credit Notes pane (Section 34) — stat strip + filters + table -->
+  <div id="bl-cn-pane" style="display:none;">
+    <div class="bl-cn-stats" id="bl-cn-stats">
+      <div class="bl-cn-stat">
+        <div class="bl-cn-stat-label">Total Credit Notes</div>
+        <div class="bl-cn-stat-value" id="bl-cn-stat-total">—</div>
+      </div>
+      <div class="bl-cn-stat value">
+        <div class="bl-cn-stat-label">Total Credited</div>
+        <div class="bl-cn-stat-value" id="bl-cn-stat-amt">—</div>
+      </div>
+      <div class="bl-cn-stat b2b">
+        <div class="bl-cn-stat-label">B2B (CDNR)</div>
+        <div class="bl-cn-stat-value" id="bl-cn-stat-b2b">—</div>
+      </div>
+      <div class="bl-cn-stat b2c">
+        <div class="bl-cn-stat-label">B2C</div>
+        <div class="bl-cn-stat-value" id="bl-cn-stat-b2c">—</div>
+      </div>
+    </div>
+
+    <div class="bl-cn-filters">
+      <button class="bl-cn-filter active" data-cnf="all">All</button>
+      <button class="bl-cn-filter" data-cnf="b2b">B2B (CDNR)</button>
+      <button class="bl-cn-filter" data-cnf="b2c">B2C</button>
+      <button class="bl-cn-filter" data-cnf="checkout_mistake">Checkout reverted</button>
+      <button class="bl-cn-filter" data-cnf="post_supply_discount">Post-supply discount</button>
+      <button class="bl-cn-filter" data-cnf="cancellation">Cancellation</button>
+    </div>
+
+    <div class="bl-cn-container">
+      <table class="bl-cn-table">
+        <thead><tr>
+          <th>CN Number</th>
+          <th>Date</th>
+          <th>Against Invoice</th>
+          <th>Recipient</th>
+          <th>Reason · Section 34</th>
+          <th style="text-align:right;">Amount</th>
+          <th>PDF</th>
+        </tr></thead>
+        <tbody id="bl-cn-tbody"><tr><td colspan="7" class="bl-cn-empty"><span class="bl-cn-empty-icon"><i class="far fa-file-alt"></i></span><div class="bl-cn-empty-text">Loading…</div></td></tr></tbody>
+      </table>
+      <div class="bl-cn-foot-note">
+        <strong>Section 34 of the CGST Act:</strong> a credit note reverses the GST
+        already charged on the original tax invoice. B2B credit notes flow into
+        GSTR-1 Table 9B (CDNR); B2C credit notes net out the B2C summary.
+      </div>
+    </div>
+  </div>
+
   <!-- Table -->
+  <div id="bl-bills-pane">
   <div class="bills-table-container">
     <table class="bills-table">
       <thead>
@@ -723,6 +1037,7 @@
         </td></tr>
       </tbody>
     </table>
+  </div>
   </div>
 </div>
 
@@ -749,6 +1064,25 @@
 
     <label for="bl-pm-discount">Discount (₹) <span style="color:#aaa;font-weight:400;font-size:.72rem;">— optional</span></label>
     <input type="number" id="bl-pm-discount" placeholder="0" min="0" value="0" />
+
+    <div id="bl-pm-disc-type-row" style="display:none; margin:.4rem 0; font-size:.78rem;">
+      <label style="display:flex; align-items:center; gap:.4rem; margin-bottom:.2rem; cursor:pointer;">
+        <input type="radio" name="bl-pm-disc-type" value="financial" checked />
+        Financial discount (no GST credit) — default
+      </label>
+      <label style="display:flex; align-items:center; gap:.4rem; cursor:pointer;">
+        <input type="radio" name="bl-pm-disc-type" value="credit_note" />
+        GST credit note (reduces output tax)
+      </label>
+      <!-- Bad-debt sub-checkbox — only meaningful on the financial path -->
+      <label id="bl-pm-baddebt-wrap" style="display:flex; align-items:center; gap:.4rem; margin:.2rem 0 .15rem 1.4rem; cursor:pointer; font-size:.74rem; color:#475569;">
+        <input type="checkbox" id="bl-pm-baddebt" />
+        Mark as bad-debt write-off
+        <span style="font-size:.66rem; color:#94a3b8;">(can&rsquo;t collect — book as loss)</span>
+      </label>
+      <input type="text" id="bl-pm-disc-reason" placeholder="Reason (mandatory for non-B2B credit note)" style="width:100%; margin-top:.3rem; padding:.25rem .4rem; border:1px solid #d0d0d0; border-radius:6px; font-size:.78rem;" />
+      <div style="font-size:.7rem; color:#666; margin-top:.15rem;">CN-discount allowed only for B2B bills or where the discount was agreed at/before time of supply (Section 15(3)(b)).</div>
+    </div>
 
     <div class="bl-pm-net-row" id="bl-pm-net-row">
       <span class="bl-pm-net-label">Net Payable</span>
@@ -779,6 +1113,61 @@
   </div>
 </div>
 
+<!-- GST Recipient Edit Modal (Goal 1) -->
+<div class="bl-gst-backdrop" id="bl-gst-backdrop">
+  <div class="bl-gst-modal">
+    <div class="bl-gst-head">
+      <div class="bl-gst-head-icon"><i class="fas fa-id-card-alt"></i></div>
+      <div class="bl-gst-head-text">
+        <h2>GST Recipient Details</h2>
+        <div class="bl-gst-sub">
+          <span class="bl-gst-billno" id="bl-gst-billno">—</span>
+          <span class="bl-gst-state-chip bl-gst-state-b2c" id="bl-gst-state-chip">B2C</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="bl-gst-body">
+      <div class="bl-gst-row">
+        <label for="bl-gst-gstin">GSTIN<span class="bl-req">*</span></label>
+        <input id="bl-gst-gstin" maxlength="15" placeholder="e.g. 29AAACB1234F1Z5" autocomplete="off" />
+        <div class="bl-gst-derived" id="bl-gst-state-hint">15 characters · 2-digit state code · 10-char PAN · entity number · checksum</div>
+      </div>
+
+      <div class="bl-gst-row">
+        <label for="bl-gst-legal">Legal Name<span class="bl-req">*</span></label>
+        <input id="bl-gst-legal" placeholder="As registered on GST portal" autocomplete="off" />
+      </div>
+
+      <div class="bl-gst-row">
+        <label for="bl-gst-trade">Trade Name <span class="bl-hint-text">optional</span></label>
+        <input id="bl-gst-trade" placeholder="Brand / DBA name" autocomplete="off" />
+      </div>
+
+      <div class="bl-gst-row">
+        <label for="bl-gst-addr">Address <span class="bl-hint-text">optional · Rule 46 recommends</span></label>
+        <input id="bl-gst-addr" placeholder="Street, City, State - PIN" autocomplete="off" />
+      </div>
+
+      <div class="bl-gst-warn" id="bl-gst-rule46" style="display:none;">
+        Rule 46(e) of the CGST Rules requires the recipient&rsquo;s full address on a B2B tax invoice. You can save without it, but a strict auditor may ask the recipient to request a re-issue.
+      </div>
+
+      <div class="bl-gst-error" id="bl-gst-error"></div>
+
+      <div class="bl-gst-foot-note">
+        <strong>Note:</strong> Place of supply for accommodation (SAC 9963) is always Karnataka (KA-29) regardless of the recipient&rsquo;s state. Tax breakup is therefore CGST + SGST. Saving here re-generates the bill PDF with the recipient block.
+      </div>
+    </div>
+
+    <div class="bl-gst-actions">
+      <button class="bl-gst-cancel" id="bl-gst-cancel">Cancel</button>
+      <button class="bl-gst-clear" id="bl-gst-clear">Clear &amp; revert to B2C</button>
+      <button class="bl-gst-save" id="bl-gst-save">Save as B2B</button>
+    </div>
+  </div>
+</div>
+
 <!-- Bill Modal — self-contained, bl- prefixed IDs -->
 <div class="bill-modal" id="bl-bill-modal">
   <div class="bill-content">
@@ -789,6 +1178,20 @@
     <div id="bl-bill-print-area"></div>
     <div class="bill-actions">
       <button class="action-btn btn-secondary" id="bl-bill-close2">Close</button>
+      <!--
+        Recalculate — admin-only.
+        Re-reads every payment doc tagged with this bill's stay_id and
+        rewrites payment_cash / payment_online / balance on the bill doc,
+        then re-opens the bill so the new totals render. Use this when
+        a bill shows a stale total (e.g. a duplicate-payment fix or a
+        manually-added payment that didn't auto-trigger a recalc).
+        Hidden for non-admin users by the data-roles handler in auth.js.
+      -->
+      <button class="action-btn btn-secondary" id="bl-bill-recalc"
+              data-roles="admin"
+              title="Re-read payments from Firestore and refresh the bill totals">
+        <i class="fas fa-sync-alt"></i> Recalculate
+      </button>
       <button class="bl-bill-save-btn" id="bl-bill-save-pdf" title="Save PDF to cloud &amp; share on WhatsApp">
         <i class="fab fa-whatsapp"></i> Save &amp; Share
       </button>
@@ -1053,14 +1456,158 @@
       });
     }
 
+    // ── "Recalculate" button in bill modal (admin-only) ──────────────────
+    //
+    // Triggers /recalculate_bill on the backend, which re-reads every
+    // payment doc tagged with this bill's stay_id and rewrites
+    // payment_cash / payment_online / balance onto the bill document.
+    // Use this whenever a bill displays stale totals — for example after
+    // a duplicate-payment fix, a payment edit that didn't auto-recalc,
+    // or a manual Firestore correction.
+    //
+    // Visibility is gated client-side by data-roles="admin" on the button
+    // markup (auth.js hides it for non-admin). The backend endpoint is
+    // additionally gated by @requires_permission("payment.edit"), which
+    // is effectively admin-only because no other role grants payment.edit
+    // (see services/permissions.py).
+    const bRecalc = dom("bl-bill-recalc");
+    if (bRecalc) {
+      bRecalc.addEventListener("click", async function () {
+        if (!_openBillId) return;
+        // Belt-and-braces: even if the button somehow becomes visible
+        // outside admin (CSS bug, debug tools, etc.), refuse to fire.
+        const _auth = window.CibaraAuth;
+        if (!(_auth && _auth.isAdmin && _auth.isAdmin())) {
+          alert("Only admin users can recalculate bills.");
+          return;
+        }
+        const _origHtml = bRecalc.innerHTML;
+        bRecalc.disabled = true;
+        bRecalc.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Recalculating…';
+        try {
+          const res = await apiFetch("/recalculate_bill", {
+            method:  "POST",
+            headers: { "Content-Type": "application/json" },
+            body:    JSON.stringify({ bill_id: _openBillId }),
+          });
+          const data = await res.json().catch(() => ({}));
+          if (res.ok && data && data.success) {
+            alert(
+              `Bill recalculated.\n` +
+              `Cash: ₹${data.payment_cash ?? 0}\n` +
+              `Online: ₹${data.payment_online ?? 0}\n` +
+              `Balance: ₹${data.balance ?? 0}`
+            );
+            // Bust any cached entry for this bill so the list view also
+            // reflects the new totals on next load, then re-open the
+            // modal so the printed total updates immediately.
+            try {
+              if (Array.isArray(state.allEntries)) {
+                const ix = state.allEntries.findIndex((x) => x.id === _openBillId);
+                if (ix !== -1) {
+                  state.allEntries[ix] = {
+                    ...state.allEntries[ix],
+                    payment_cash:   data.payment_cash,
+                    payment_online: data.payment_online,
+                    balance:        data.balance,
+                  };
+                }
+              }
+            } catch (_) { /* non-fatal cache update */ }
+            await openBill(_openBillId);
+          } else {
+            const _msg = (data && data.message) || `Recalculate failed (HTTP ${res.status}).`;
+            alert("Error: " + _msg);
+          }
+        } catch (err) {
+          console.error("[Bills] recalculate failed:", err);
+          alert("Network error during recalculate.");
+        } finally {
+          bRecalc.disabled = false;
+          bRecalc.innerHTML = _origHtml;
+        }
+      });
+    }
+
+    // ── Sub-tabs: Bills / Credit Notes ────────────────────────────────────
+    // _setSubTab swaps the visible pane and fires loadCreditNotes() when
+    // switching to CN. Wire both segmented-control buttons to it.
+    const subBills = dom("bl-subtab-bills");
+    const subCn    = dom("bl-subtab-cn");
+    if (subBills) subBills.addEventListener("click", () => _setSubTab("bills"));
+    if (subCn)    subCn.addEventListener("click",    () => _setSubTab("cn"));
+
+    // ── GST recipient modal wiring (save / clear / cancel) ────────────────
+    // These buttons live inside the static modal HTML. openGstModal only
+    // sets the input values; the click handlers need to be bound once.
+    const gstSave   = dom("bl-gst-save");
+    const gstClear  = dom("bl-gst-clear");
+    const gstCancel = dom("bl-gst-cancel");
+    const gstBackdrop = dom("bl-gst-backdrop");
+    if (gstSave)   gstSave.addEventListener("click", saveBillGst);
+    if (gstClear)  gstClear.addEventListener("click", clearBillGst);
+    if (gstCancel) gstCancel.addEventListener("click", closeGstModal);
+    if (gstBackdrop) gstBackdrop.addEventListener("click", (e) => {
+      if (e.target === gstBackdrop) closeGstModal();
+    });
+
     // Delegated clicks: bill view + collect settlement + group toggle + WhatsApp
     const tbody = dom("bl-table-body");
     if (tbody) {
       tbody.addEventListener("click", async (e) => {
+        // Admin-only: clicking the Payment cell opens the Register
+        // Payment Records modal for this stay. Reuses the existing
+        // modal (window.openRegisterPaymentsModal); no markup duplicated.
+        const payCell = e.target.closest(".bl-pay-clickable");
+        if (payCell) {
+          // Click-time admin gate. Non-admin clicks are a no-op (the cell
+          // is wrapped unconditionally but only styled clickable for
+          // admin; this is the belt-and-braces enforcement).
+          const _auth = window.CibaraAuth;
+          if (!(_auth && _auth.isAdmin && _auth.isAdmin())) {
+            return;
+          }
+          e.stopPropagation();
+          const billId = payCell.dataset.billId || "";
+          if (!billId) return;
+          const entry = (state.allEntries || []).find((x) => x.id === billId);
+          if (!entry) {
+            alert("Could not load this bill's data. Refresh and retry.");
+            return;
+          }
+          if (typeof window.openRegisterPaymentsModal !== "function") {
+            alert("Payment Records modal not available — open the Register tab once and try again.");
+            return;
+          }
+          // The register modal expects an entry with these keys; bill
+          // docs already carry all of them (id == stay_id by convention).
+          window.openRegisterPaymentsModal({
+            id:           entry.id,
+            stay_id:      entry.stay_id || entry.id,
+            room:         entry.room,
+            guest_name:   entry.guest_name,
+            guest_mobile: entry.guest_mobile,
+            checkin_time: entry.checkin_time,
+            bill_number:  entry.bill_number,
+          });
+          return;
+        }
+
         const billBtn = e.target.closest(".bl-bill-btn");
         if (billBtn) {
           e.stopPropagation();
-          openBill(billBtn.dataset.id);
+          // Delegate to the Register tab's bill modal so the rendered
+          // bill is identical across the app (user requirement: one
+          // bill modal everywhere — Register's is the canonical one).
+          // Fallback to the local openBill only if window.openRegBill
+          // isn't available for some reason (e.g. register.js failed
+          // to boot); this preserves at least some functionality.
+          const _billId = billBtn.dataset.id;
+          if (typeof window.openRegBill === "function") {
+            window.openRegBill(_billId);
+          } else {
+            openBill(_billId);
+          }
           return;
         }
 
@@ -1074,6 +1621,20 @@
             collectBtn.dataset.guest,
             parseInt(collectBtn.dataset.balance, 10) || 0,
           );
+          return;
+        }
+
+        // GST recipient edit button
+        const gstBtn = e.target.closest(".bl-gst-btn");
+        if (gstBtn) {
+          e.stopPropagation();
+          if (gstBtn.disabled) return;
+          const billId   = gstBtn.dataset.id;
+          const billNo   = gstBtn.dataset.billno || "";
+          const locked   = gstBtn.dataset.locked === "1";
+          if (typeof openGstModal === "function") {
+            openGstModal(billId, billNo, locked);
+          }
           return;
         }
 
@@ -1443,6 +2004,10 @@
     const pendingEl = dom("bl-tc-pending");
     if (countEl)   countEl.textContent   = entries.length;
     if (pendingEl) pendingEl.textContent = pending || "0";
+
+    // Sub-tab "Bills" badge mirrors invoice count.
+    const subTabBills = dom("bl-subtab-count-bills");
+    if (subTabBills) subTabBills.textContent = entries.length;
   }
 
   // ── Pay Modal ─────────────────────────────────────────────────────────────────
@@ -1452,6 +2017,7 @@
     const discountEl = dom("bl-pm-discount");
     const amtEl = dom("bl-pm-amount");
     const netValEl = dom("bl-pm-net");
+    const discTypeRow = dom("bl-pm-disc-type-row");
     const discount = Math.max(0, parseInt(discountEl?.value || "0", 10) || 0);
     const clamped = Math.min(discount, balance); // can't exceed balance
     if (discountEl && clamped !== discount) discountEl.value = clamped;
@@ -1461,7 +2027,18 @@
       amtEl.value = net;
       amtEl.max = net;
     }
+    if (discTypeRow) discTypeRow.style.display = clamped > 0 ? "" : "none";
+    // Bad-debt checkbox is only relevant on the 'financial' path.
+    const _typeEl    = document.querySelector('input[name="bl-pm-disc-type"]:checked');
+    const _bdWrap    = dom("bl-pm-baddebt-wrap");
+    if (_bdWrap) _bdWrap.style.display = (_typeEl && _typeEl.value === "financial") ? "flex" : "none";
   }
+  // React to disc-type radio changes so bad-debt visibility tracks live.
+  document.addEventListener("change", function(e) {
+    if (e.target && e.target.name === "bl-pm-disc-type") {
+      try { _updatePayModalNet(); } catch(err) {}
+    }
+  }, true);
 
   function openPayModal(billId, billNumber, guestName, balance) {
     state.payModal = { billId, billNumber, guestName, balance, mode: "cash" };
@@ -1548,18 +2125,55 @@
     confirmBtn.innerHTML = '<span style="opacity:.6">Processing…</span>';
 
     try {
-      const res = await apiFetch("/add_bill_payment", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          bill_id: billId,
-          payment_mode: mode,
-          amount,
-          discount,
-        }),
-      });
-      const data = await res.json();
-
+      // Discount classification (Goal 2). Default 'financial' preserves
+      // historic behaviour; 'credit_note' issues a Section 34 CN.
+      const discTypeEl = document.querySelector('input[name="bl-pm-disc-type"]:checked');
+      const discType   = (discTypeEl && discTypeEl.value) || "financial";
+      const discReason = (dom("bl-pm-disc-reason")?.value || "").trim();
+      const badDebt    = !!(dom("bl-pm-baddebt") && dom("bl-pm-baddebt").checked && discType === "financial");
+      // S34 ack starts false; set to true if the user confirms the warning.
+      let ackS34Late   = false;
+      while (true) {
+        const res = await apiFetch("/add_bill_payment", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            bill_id: billId,
+            payment_mode: mode,
+            amount,
+            discount,
+            discount_type: discType,
+            discount_reason: discReason,
+            bad_debt: badDebt,
+            acknowledge_section34_window: ackS34Late,
+          }),
+        });
+        const data = await res.json();
+        // Out-of-window CN — surface a confirm dialog and retry.
+        if (data && data.section34_warning && !ackS34Late) {
+          const days = data.section34_days_overdue || 0;
+          const ok = confirm(
+            "WARNING — Section 34(2) cutoff exceeded.\n\n" +
+            "This bill is " + days + " day(s) past the deadline (" +
+            (data.section34_deadline || "") + ").\n\n" +
+            "Issuing a Credit Note here may be disallowed by the GSTN at " +
+            "filing time. Most CAs would refuse.\n\n" +
+            "Click OK to proceed against your CA's advice, Cancel to stop."
+          );
+          if (!ok) {
+            confirmBtn.disabled = false;
+            confirmBtn.innerHTML = '<i class="fas fa-check"></i> Confirm Payment';
+            return;
+          }
+          ackS34Late = true;
+          continue;
+        }
+        // Stash final response for the rest of the handler below.
+        window._blAddBillRes = { res, data };
+        break;
+      }
+      const res  = window._blAddBillRes.res;
+      const data = window._blAddBillRes.data;
       if (data.success) {
         closePayModal();
         if (window.showNotification) showNotification(data.message, "success");
@@ -1654,6 +2268,36 @@
   // Expose globally so other modules (e.g. script.js after checkout) can trigger
   // PDF generation without coupling to the bills.js IIFE internals.
   window._cibaraBillsGeneratePDF = generateAndUploadPDF;
+
+  // Single combined helper for cross-module Save-and-Share flows. Called
+  // by register.js's bill modal so the Bills and Register tabs both
+  // share the exact same code path: reuse the bill doc's stored
+  // pdf_url if present, otherwise generate+upload, then open the
+  // WhatsApp send modal. Returns true on success, false if PDF
+  // generation failed or the user cancelled.
+  window.cibaraSaveAndShareBill = async function(billId, billData) {
+    if (!billId || !billData) return false;
+    try {
+      let pdfUrl = (billData && billData.pdf_url) || null;
+      if (!pdfUrl) {
+        pdfUrl = await generateAndUploadPDF(billId, billData);
+      }
+      if (!pdfUrl) return false;
+      const entry = {
+        id:           billId,
+        pdf_url:      pdfUrl,
+        guest_name:   billData.guest_name,
+        guest_mobile: billData.guest_mobile,
+        bill_number:  billData.bill_number,
+        total_amount: billData.total_amount,
+      };
+      openWhatsAppModal(entry);
+      return true;
+    } catch (err) {
+      console.error("[Bills] cibaraSaveAndShareBill failed:", err);
+      return false;
+    }
+  };
 
   /**
    * Auto-generate PDF after checkout — called from script.js with just the bill_id.
@@ -1753,6 +2397,7 @@
   function closeWhatsAppModal() {
     const backdrop = dom("bl-wa-backdrop");
     if (backdrop) backdrop.classList.remove("bl-wa-open");
+    if (state.waModal) state.waModal._isCN = false;
   }
 
   function sendWhatsApp() {
@@ -1793,12 +2438,15 @@
       targetMobile = raw;
     }
 
-    const message = _buildWaMessage(
-      s.guestName,
-      s.invoiceNo,
-      s.amount,
-      s.pdfUrl,
-    );
+    const message = s._isCN
+      ? (
+          `Hi ${s.guestName || "Guest"}, credit note ${s.invoiceNo || ""} for ` +
+          `\u20b9${inr(s.amount)} from Cibara Comforts is ready.\n\n` +
+          `View / Download: ${s.pdfUrl}\n\n` +
+          `This reverses the GST charged on the original invoice. ` +
+          `Keep both documents for your records.`
+        )
+      : _buildWaMessage(s.guestName, s.invoiceNo, s.amount, s.pdfUrl);
     const encoded = encodeURIComponent(message);
     const waUrl = `https://wa.me/91${targetMobile}?text=${encoded}`;
 
@@ -1901,10 +2549,26 @@
       isPending || hasBalance
         ? `<span class="bl-pending-badge">Pending</span>`
         : "";
-    // Action cell: collect button if outstanding balance, else receipt
-    const mainBtn =
-      isPending || hasBalance
-        ? `<button class="bl-collect-btn"
+    // Action cell — fixed 4-slot grid so buttons never shift between rows.
+    //
+    // Each row reserves the same four columns (Collect / View / WhatsApp /
+    // GST), each 28x28px. If a particular button is absent for this row
+    // we still emit a placeholder div of the same size so subsequent
+    // columns don't slide left. Visibility-based hiding (data-roles) on
+    // a wrapped button also keeps its slot reserved.
+    //
+    // Slot 1  Collect:   rendered only for pending / balance > 0 rows.
+    // Slot 2  View Bill: always rendered. On pending rows it carries
+    //                    data-roles="admin" so non-admins don't see it
+    //                    (slot stays — auth.js sets display:none on the
+    //                    button, not the wrapper, so the column position
+    //                    is preserved).
+    // Slots 3-4 are composed below from waBtn + gstBtn.
+    const _slot = (content) =>
+      `<div style="width:28px;height:28px;display:inline-flex;align-items:center;justify-content:center;flex:0 0 28px;">${content || ""}</div>`;
+
+    const _collectBtnHtml = (isPending || hasBalance)
+      ? `<button class="bl-collect-btn"
            data-id="${e.id}"
            data-billno="${e.bill_number || ""}"
            data-guest="${(e.guest_name || "").replace(/"/g, "&quot;")}"
@@ -1912,7 +2576,21 @@
            title="Collect Payment">
            <i class="fas fa-hand-holding-usd"></i>
          </button>`
-        : `<button class="bl-bill-btn" data-id="${e.id}" title="View/Print Bill"><i class="fas fa-receipt"></i></button>`;
+      : "";
+
+    const _viewBtnHtml = (isPending || hasBalance)
+      // Pending row: admin-only View (Recalculate available inside modal).
+      ? `<button class="bl-bill-btn"
+           data-id="${e.id}"
+           data-roles="admin"
+           title="View / Recalculate Bill (admin)">
+           <i class="fas fa-receipt"></i>
+         </button>`
+      // Completed row: View visible to everyone.
+      : `<button class="bl-bill-btn" data-id="${e.id}" title="View/Print Bill"><i class="fas fa-receipt"></i></button>`;
+
+    const collectSlot = _slot(_collectBtnHtml);
+    const viewSlot    = _slot(_viewBtnHtml);
 
     // WhatsApp share button — green if PDF already saved, light-green "generate first" if not
     const hasPdf = !!e.pdf_url;
@@ -1931,11 +2609,37 @@
       <i class="fab fa-whatsapp"></i>
     </button>`;
 
-    const actionCell = `<div style="display:flex;gap:5px;align-items:center;flex-wrap:nowrap;justify-content:center;">${mainBtn}${waBtn}</div>`;
+    // B2B / Reverted / Cancellation-charge pills (Goal 1 / Goal 2 / SAC 999794)
+    const b2bPill = (e.invoice_type === "B2B")
+      ? '<span class="bl-b2b-pill" title="B2B Tax Invoice">B2B</span>' : '';
+    const revertedPill = e.superseded_by_revert
+      ? '<span class="bl-reverted-pill" title="Bill reverted - credit note issued">REVERTED</span>' : '';
+    const cancelPill = e.is_cancellation_charge
+      ? '<span class="bl-cancel-pill" title="Cancellation forfeiture invoice — SAC 999794 / 18%">CANCEL CHG</span>' : '';
+
+    // GST-edit icon — admin-only via data-perm gating in the rendered DOM.
+    const linkedCn = e.linked_credit_note_id ? true : false;
+    const isB2B    = e.invoice_type === "B2B";
+    const gstBtnCls = linkedCn ? "bl-gst-locked" : (isB2B ? "bl-gst-set" : "");
+    const gstBtnTitle = linkedCn
+      ? "GST details locked — credit note linked"
+      : isB2B
+        ? `B2B • ${e.recipient_legal_name || e.recipient_gstin || ""} — click to edit`
+        : "Add B2B GSTIN for tax-invoice recipient";
+    const gstBtn = `<button class="bl-gst-btn ${gstBtnCls}"
+       data-perm="bill.gst.edit"
+       data-id="${e.id}"
+       data-billno="${e.bill_number || ''}"
+       data-locked="${linkedCn ? '1' : '0'}"
+       title="${gstBtnTitle}">
+       <i class="fas fa-id-card-alt"></i>
+     </button>`;
+
+    const actionCell = `<div style="display:inline-flex;gap:5px;align-items:center;flex-wrap:nowrap;justify-content:flex-end;">${collectSlot}${viewSlot}${_slot(waBtn)}${_slot(gstBtn)}</div>`;
 
     return `<tr class="${rowCls}" data-date-group="${dk}" data-entry-id="${e.id || ''}">
       <td style="color:#888;font-size:.75rem;">${rowIndex}</td>
-      <td style="font-size:.73rem;white-space:nowrap;font-family:monospace;">${billNo}${pendingBadge}</td>
+      <td style="font-size:.73rem;white-space:nowrap;font-family:monospace;">${billNo}${pendingBadge}${b2bPill}${revertedPill}${cancelPill}</td>
       <td><strong>${e.guest_name || "-"}</strong></td>
       <td style="font-size:.78rem;">${e.guest_mobile || "-"}</td>
       <td><strong>${e.room || "-"}</strong></td>
@@ -1976,7 +2680,17 @@
     }
     if (b > 0)
       h += `<div class="bl-pay-item"><span class="bl-pm-bal">Due</span><span>₹${inr(b)}</span></div>`;
-    return h + "</div>";
+    h += "</div>";
+
+    // Always wrap. The click handler does an explicit isAdmin() check at
+    // click time. Cursor + hover styling are scoped to admin via CSS
+    // (body[data-role=\"admin\"] .bl-pay-clickable …) so non-admin users
+    // see no pointer cue and no hover effect, while the wrapper itself
+    // is unconditionally present in the DOM. This avoids the failure
+    // mode where the first table render happens before CibaraAuth has
+    // resolved the user's role, leaving every cell permanently
+    // un-clickable even after auth resolves later.
+    return `<div class="bl-pay-clickable" data-bill-id="${e.id || ""}" title="View all payments (admin)">${h}</div>`;
   }
 
   function toggleGroup(hdr) {
@@ -2059,8 +2773,12 @@
             '<i class="fab fa-whatsapp"></i> Save &amp; Share';
         }
       }
-    } catch {
-      area.innerHTML = `<div class="bl-state" style="color:#c00"><i class="fas fa-times-circle"></i><p>Network error</p></div>`;
+    } catch (err) {
+      // Surface the real error — bare `catch` was hiding render exceptions
+      // from buildBillHTML behind a generic "Network error" string.
+      console.error("[Bills] openBill failed:", err);
+      const _msg = (err && (err.message || err.toString())) || "Network error";
+      area.innerHTML = `<div class="bl-state" style="color:#c00"><i class="fas fa-times-circle"></i><p>${_msg}</p></div>`;
       if (saveBtn) {
         saveBtn.disabled = true;
         saveBtn.innerHTML = '<i class="fab fa-whatsapp"></i> Save &amp; Share';
@@ -2184,7 +2902,7 @@
     const billDate = fmtBillDT(b.checkout_time);
 
     // ── Accommodation add-on rows ────────────────────────────────────────────────
-    const accomAddonRows = accomAddons
+    let accomAddonRows = accomAddons
       .map(
         (s) => `
       <tr>
@@ -2367,7 +3085,7 @@
     }
 
     // For add-on stays show a "Taxable Base" row so math is transparent
-    const taxableBaseRow = accomAddons.length > 0
+    let taxableBaseRow = accomAddons.length > 0
       ? `<tr class="b-gst-row">
            <td>Taxable Base (excl. GST)</td>
            <td class="b-tr">—</td><td class="b-tr">—</td>
@@ -2390,12 +3108,143 @@
     // (taxable_base + CGST + SGST) and the inclusive MRP. Show when ≥ ₹0.01.
     const computedAccomSum = Math.round((accomBase + cgst + sgst) * 100) / 100;
     const roundDiff = Math.round((effectiveAccom - computedAccomSum) * 100) / 100;
-    const roundOffRow = Math.abs(roundDiff) >= 0.01
+    let roundOffRow = Math.abs(roundDiff) >= 0.01
       ? `<tr class="b-gst-row">
            <td colspan="3" style="text-align:right;color:#aaa;">Round-off</td>
            <td class="b-tr" style="color:#aaa;">${roundDiff > 0 ? "+" : ""}${fix2(roundDiff)}</td>
          </tr>`
       : "";
+
+    // ── Inter-state detection (drives CGST+SGST vs IGST display) ────────────
+    const rcptStateCode = (b.recipient_state_code || "29").trim() || "29";
+    const isInterState  = rcptStateCode !== "29";
+    const rcptStateName = b.recipient_state || "Karnataka";
+
+    // ── Daily folio per-night rendering ─────────────────────────────────────
+    // When `b.daily_folio` is present (bills created post-folio-migration),
+    // render one section per night with its own room rent, addons, taxable
+    // base, tax-head split, and night total. Matches the backend PDF
+    // builder so the in-browser preview and the downloadable PDF are
+    // visually identical. Legacy bills without folio fall through to the
+    // single-block rendering above.
+    let accomSubtotalRowFinal = accomSubtotalRow;
+    const folio = Array.isArray(b.daily_folio) ? b.daily_folio : [];
+    if (folio.length > 0) {
+      const folioParts = [];
+      let allNightsTotal = 0;
+      for (const e of folio) {
+        const di          = e.day_index || 1;
+        const diRoom      = e.room || b.room || "";
+        const diRate      = Number(e.day_gst_rate || 0);
+        const diDivisor   = diRate > 0 ? (1 + diRate / 100) : 1;
+        const diBase      = Number(e.base_rate || 0);
+        const diAddons    = Array.isArray(e.addons) ? e.addons : [];
+        const diTotal     = Number(e.day_total || 0);
+        const diTaxable   = Number(e.day_taxable || 0);
+        const diCgst      = Number(e.day_cgst || 0);
+        const diSgst      = Number(e.day_sgst || 0);
+        const diIgst      = Number(e.day_igst || 0);
+        const diDiscount  = Number(e.discount_allocated || 0);
+        const diStart     = e.day_start || "";
+
+        // Per-line discount allocation (proportional)
+        const diGrossPre = diBase + diAddons.reduce(
+          (s, a) => s + Number(a.price || 0), 0);
+        const baseDisc = (diDiscount > 0 && diGrossPre > 0)
+          ? diDiscount * (diBase / diGrossPre) : 0;
+        const baseEffGross = diBase - baseDisc;
+        const baseTaxable  = baseEffGross / diDivisor;
+
+        allNightsTotal += diTotal;
+
+        // ─ Night N · DATE · Rm X ─
+        folioParts.push(`<tr class="b-sec"><td colspan="4" style="text-align:center;">
+          ─ Night ${di} &nbsp;·&nbsp; ${diStart.slice(0, 10)} &nbsp;·&nbsp; Rm ${diRoom} ─
+        </td></tr>`);
+
+        folioParts.push(`<tr>
+          <td>Room Rent</td>
+          <td class="b-tr">1</td>
+          <td class="b-tr">${fix2(baseTaxable)}</td>
+          <td class="b-tr">${fix2(baseTaxable)}</td>
+        </tr>`);
+
+        for (const a of diAddons) {
+          const aGross = Number(a.price || 0);
+          const aUnit  = Number(a.unit_price || a.price || 0);
+          const aQty   = Number(a.quantity || 1);
+          const aDisc = (diDiscount > 0 && diGrossPre > 0)
+            ? diDiscount * (aGross / diGrossPre) : 0;
+          const aEffGross = aGross - aDisc;
+          const aTaxable  = aEffGross / diDivisor;
+          const aUnitTaxable = aUnit / diDivisor;
+          folioParts.push(`<tr>
+            <td>${a.item || "Service"}</td>
+            <td class="b-tr">${aQty}</td>
+            <td class="b-tr">${fix2(aUnitTaxable)}</td>
+            <td class="b-tr">${fix2(aTaxable)}</td>
+          </tr>`);
+        }
+
+        if (diDiscount > 0) {
+          folioParts.push(`<tr>
+            <td colspan="3" style="text-align:right;color:#2e7d32;font-weight:600;">
+              Less: Discount allocated to Night ${di}
+            </td>
+            <td class="b-tr" style="color:#2e7d32;font-weight:700;">− ${fix2(diDiscount)}</td>
+          </tr>`);
+        }
+
+        folioParts.push(`<tr class="b-gst-row">
+          <td>Taxable Base (excl. GST)</td>
+          <td class="b-tr">—</td><td class="b-tr">—</td>
+          <td class="b-tr">${fix2(diTaxable)}</td>
+        </tr>`);
+
+        if (diRate > 0 && diTaxable > 0) {
+          if (diIgst > 0) {
+            folioParts.push(`<tr class="b-gst-row">
+              <td>IGST @ ${diRate}%</td>
+              <td class="b-tr">—</td><td class="b-tr">—</td>
+              <td class="b-tr">${fix2(diIgst)}</td>
+            </tr>`);
+          } else {
+            const half = diRate / 2;
+            folioParts.push(`<tr class="b-gst-row">
+              <td>CGST @ ${half}%</td>
+              <td class="b-tr">—</td><td class="b-tr">—</td>
+              <td class="b-tr">${fix2(diCgst)}</td>
+            </tr>`);
+            folioParts.push(`<tr class="b-gst-row">
+              <td>SGST @ ${half}%</td>
+              <td class="b-tr">—</td><td class="b-tr">—</td>
+              <td class="b-tr">${fix2(diSgst)}</td>
+            </tr>`);
+          }
+        } else if (diRate === 0 && diTaxable > 0) {
+          folioParts.push(`<tr class="b-gst-row">
+            <td colspan="3" style="color:#888;">GST Exempt (per-night value &lt; ₹1,000)</td>
+            <td class="b-tr">0.00</td>
+          </tr>`);
+        }
+
+        folioParts.push(`<tr class="b-subtotal">
+          <td colspan="3" class="b-tr">Night ${di} Total (incl. GST)</td>
+          <td class="b-tr">${fix2(diTotal)}</td>
+        </tr>`);
+      }
+
+      // Override the legacy single-block accommodation rows
+      roomRentRows = folioParts.join("");
+      accomAddonRows = "";
+      taxableBaseRow = "";
+      gstRows = "";
+      roundOffRow = "";
+      accomSubtotalRowFinal = `<tr class="b-subtotal">
+        <td colspan="3" class="b-tr">Accommodation Total (all nights, incl. GST)</td>
+        <td class="b-tr">${fix2(allNightsTotal)}</td>
+      </tr>`;
+    }
 
     return `
 <div class="b-bill-wrap">
@@ -2425,10 +3274,45 @@
         <div class="b-row"><span class="b-lbl">Check-out:</span> ${fmtBillDT(b.checkout_time)}</div>
         <div class="b-row"><span class="b-lbl">Days Stayed:</span> ${days}</div>
         <div class="b-row"><span class="b-lbl">Bill Date:</span> ${billDate}</div>
-        <div class="b-row"><span class="b-lbl">Place of Supply:</span> Karnataka (KA – 29)</div>
+        <div class="b-row"><span class="b-lbl">Place of Supply:</span> ${rcptStateName} (${rcptStateCode}) − ${isInterState ? "IGST" : "CGST+SGST"}</div>
       </td>
     </tr>
   </table>
+
+  ${(function() {
+    const it = b.invoice_type || "B2C";
+    const gstin = (b.recipient_gstin || "").trim();
+    const legal = (b.recipient_legal_name || "").trim();
+    const trade = (b.recipient_trade_name || "").trim();
+    const addr  = (b.recipient_address || "").trim();
+    const stN   = b.recipient_state || "Karnataka";
+    const stC   = b.recipient_state_code || "29";
+    if (it === "B2B" && gstin) {
+      return `
+  <table class="b-info-outer" style="margin-top:6px;">
+    <tr><td class="b-info-col" colspan="2" style="background:#f8f9fc;">
+      <div class="b-row" style="font-weight:bold;color:#1a1a1a;">BILL TO (Recipient — Registered)</div>
+      <div class="b-row"><span class="b-lbl">Legal Name:</span> ${legal}</div>
+      ${trade ? `<div class="b-row"><span class="b-lbl">Trade Name:</span> ${trade}</div>` : ""}
+      <div class="b-row"><span class="b-lbl">GSTIN:</span> ${gstin}</div>
+      ${addr  ? `<div class="b-row"><span class="b-lbl">Address:</span> ${addr.replace(/\n/g, ", ")}</div>` : ""}
+      <div class="b-row"><span class="b-lbl">State:</span> ${stN} (${stC})</div>
+      <div class="b-row" style="font-size:8.5pt;color:#666;margin-top:4px;">GST payable on reverse charge: No</div>
+    </td></tr>
+  </table>`;
+    }
+    if (it === "B2CL" && (addr || stN)) {
+      return `
+  <table class="b-info-outer" style="margin-top:6px;">
+    <tr><td class="b-info-col" colspan="2" style="background:#f8f9fc;">
+      <div class="b-row" style="font-weight:bold;color:#1a1a1a;">BILL TO (Recipient — Unregistered, Inter-State)</div>
+      ${addr ? `<div class="b-row"><span class="b-lbl">Address:</span> ${addr.replace(/\n/g, ", ")}</div>` : ""}
+      <div class="b-row"><span class="b-lbl">State:</span> ${stN} (${stC})</div>
+    </td></tr>
+  </table>`;
+    }
+    return "";
+  })()}
 
   <!-- ── Items Table ── -->
   <table class="b-tbl">
@@ -2447,7 +3331,7 @@
       ${taxableBaseRow}
       ${gstRows}
       ${roundOffRow}
-      ${accomSubtotalRow}
+      ${accomSubtotalRowFinal}
       ${waterSvcSection}
       ${otherSvcSection}
       ${discountRow}
@@ -2513,11 +3397,21 @@
 </div>`;
   }
 
-  // ── Export — CA-ready 3-sheet GST Workbook ───────────────────────────────────
-  // Sheet 1: Invoice Register  — full line-item detail for the period
-  // Sheet 2: GST B2C Summary   — mirrors GSTR-1 Table 7/8 (B2C aggregated)
-  // Sheet 3: HSN/SAC Summary   — mirrors GSTR-1 Table 12
-  function exportToExcel() {
+  // ── Export — CA-ready 8-sheet GSTR-1 Workbook (Goal 3) ────────────────────
+  // Sheet 1: Invoice Register   — line-item detail (incl. invoice_type, GSTIN cols)
+  // Sheet 2: B2B Invoices       — GSTR-1 Table 4 (registered recipients)
+  // Sheet 3: B2C Summary        — GSTR-1 Table 7 (excl. B2B; net of B2C CNs)
+  // Sheet 4: B2CL Invoices      — GSTR-1 Table 5 (unregistered, > B2CL threshold)
+  // Sheet 5: HSN/SAC Summary    — GSTR-1 Table 12
+  // Sheet 6: CDNR (B2B CNs)     — GSTR-1 Table 9B (registered credit notes)
+  // Sheet 7: B2C Credit Notes   — credit notes against unregistered customers
+  // Sheet 8: GSTR-3B Summary    — output tax / ITC / RCM / net cash payable
+  // Hidden:  _schema            — GSTN JSON-schema version reference
+  //
+  // Column orders mirror GSTN's published GSTR-1 JSON schema (2.1) field
+  // order so a CA can paste rows directly into the offline GSTR-1 utility.
+  // Schema version recorded in the hidden _schema sheet.
+  async function exportToExcel() {
     if (!state.filteredEntries.length) {
       alert("No invoiced bills to export.");
       return;
@@ -2528,48 +3422,110 @@
     }
 
     const period = `${state.dateRange.start} to ${state.dateRange.end}`;
-
-    // ── helpers ───────────────────────────────────────────────────────────────
     const r2 = v => +parseFloat(v || 0).toFixed(2);
 
-    // ── aggregate per entry ───────────────────────────────────────────────────
-    // Buckets for sheet 2/3:
-    //   accom5     – accommodation 5% slab  (SAC 9963)
-    //   accom18    – accommodation 18% slab (SAC 9963)
-    //   accomExmpt – accommodation exempt   (SAC 9963)
-    //   water5     – packaged water 5%      (HSN 2201)
+    // Fetch credit notes for the same period (parallel with bill aggregation
+    // — Firestore call, ~200ms typical). If it fails we still produce a
+    // best-effort export with empty CN sheets.
+    let creditNotes = [];
+    try {
+      const cnRes = await apiFetch("/list_credit_notes", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          start_date: state.dateRange.start,
+          end_date:   state.dateRange.end,
+        }),
+      });
+      const cnData = await cnRes.json();
+      if (cnData && cnData.success) creditNotes = cnData.credit_notes || [];
+    } catch (err) {
+      console.warn("[Bills] export: list_credit_notes failed", err);
+    }
+
+    // Pull advances (Table 11A/B) for the same period.
+    let advances = [];
+    try {
+      const advRes = await apiFetch("/list_advances", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          start_date: state.dateRange.start,
+          end_date:   state.dateRange.end,
+        }),
+      });
+      const advData = await advRes.json();
+      if (advData && advData.success) advances = advData.advances || [];
+    } catch (err) {
+      console.warn("[Bills] export: list_advances failed", err);
+    }
+
+    // Buckets for B2C summary / HSN sheets
     const b = {
       accom5:     { taxable: 0, cgst: 0, sgst: 0, igst: 0 },
       accom18:    { taxable: 0, cgst: 0, sgst: 0, igst: 0 },
       accomExmpt: { taxable: 0, cgst: 0, sgst: 0, igst: 0 },
       water5:     { taxable: 0, cgst: 0, sgst: 0, igst: 0, mrp: 0 },
+      // SAC 999794 — cancellation forfeiture / agreement to refrain.
+      // Separate bucket so it lands in its own HSN row, not bundled with 9963.
+      cancel18:   { taxable: 0, cgst: 0, sgst: 0, igst: 0, count: 0 },
     };
 
-    // Sheet 1 rows
     const regRows = [];
+    const b2bRows = [];
+    const b2clRows = [];
     let regSerial = 1;
 
-    state.filteredEntries.forEach((e, i) => {
+    // CA workbook is always chronological — sort by bill_number ASC so the
+    // Invoice Register reads top-to-bottom as 1, 2, 3 … N regardless of how
+    // the on-screen Bills tab is sorted (latest-first by default for the
+    // operator).
+    const _exportEntries = [...state.filteredEntries].sort(
+      (a, b) => parseBillNo(a.bill_number) - parseBillNo(b.bill_number),
+    );
+    _exportEntries.forEach((e) => {
       const days = e.days_stayed || calcDays(e.checkin_time, e.checkout_time);
-
-      // Accommodation (room + accommodation_charge add-ons)
-      const ag  = accomGst(e, days);
-      // Water (HSN 2201)
-      const wg  = waterGst(e.services || []);
-      // Non-water, non-accommodation services (plain add-ons, no GST classification here)
-      const nonWaterSvcTotal = (e.services || [])
-        .filter(s => !s.accommodation_charge && !(s.item || '').toLowerCase().includes('water'))
-        .reduce((sum, s) => sum + parseFloat(s.price || 0), 0);
-
-      const accomInclGst = (e.room_rent || 0) * days +
-        (e.services || [])
-          .filter(s => s.accommodation_charge && !(s.item || '').toLowerCase().includes('water'))
+      // Cancellation-charge bills are SAC 999794 (agreement to refrain) at
+      // 18% inclusive, NOT accommodation 9963. Bucket them separately so
+      // the GSTR-1 / HSN sheets don't misclassify.
+      const isCancelCharge = !!e.is_cancellation_charge;
+      let ag, wg, nonWaterSvcTotal, accomInclGst;
+      if (isCancelCharge) {
+        const tot     = parseFloat(e.total_amount || 0);
+        const gstAmt  = +(tot * 18 / 118).toFixed(2);
+        const taxable = +(tot - gstAmt).toFixed(2);
+        ag = {
+          taxable, cgst: +(gstAmt / 2).toFixed(2), sgst: +(gstAmt / 2).toFixed(2),
+          cgstRate: 9,
+        };
+        wg = { mrp: 0, taxable: 0, cgst: 0, sgst: 0, qty: 0 };
+        nonWaterSvcTotal = 0;
+        accomInclGst = tot;
+      } else {
+        ag  = accomGst(e, days);
+        wg  = waterGst(e.services || []);
+        nonWaterSvcTotal = (e.services || [])
+          .filter(s => !s.accommodation_charge && !(s.item || '').toLowerCase().includes('water'))
           .reduce((sum, s) => sum + parseFloat(s.price || 0), 0);
+        accomInclGst = (e.room_rent || 0) * days +
+          (e.services || [])
+            .filter(s => s.accommodation_charge && !(s.item || '').toLowerCase().includes('water'))
+            .reduce((sum, s) => sum + parseFloat(s.price || 0), 0);
+      }
 
-      // Sheet 1 row
+      const invoiceType = e.invoice_type || "B2C";
+      const recipientGstin = e.recipient_gstin || "";
+      const recipientName  = e.recipient_legal_name || "";
+
       regRows.push({
-        "Sr No":                   e.serial_number || regSerial++,
+        // Sr No is a SEQUENTIAL row counter (1, 2, 3 … N) for the workbook —
+        // exactly what a CA expects in an invoice register.
+        "Sr No":                   regSerial++,
         "Bill No":                 e.bill_number || "-",
+        "Invoice Type":            invoiceType,
+        "Recipient GSTIN":         recipientGstin,
+        "Recipient Legal Name":    recipientName,
+        "Recipient State":         e.recipient_state || "",
         "Guest Name":              e.guest_name || "-",
         "Contact":                 e.guest_mobile || "-",
         "Room":                    e.room || "-",
@@ -2577,19 +3533,16 @@
         "Check-out":               e.checkout_time ? fmtDT(e.checkout_time) : "-",
         "Days":                    days,
         "Room Rate/Night":         e.room_rent || 0,
-        // Accommodation columns
         "Accom Taxable (excl GST)": r2(ag.taxable),
         "Accom GST Rate %":        ag.cgstRate * 2,
         "Accom CGST":              r2(ag.cgst),
         "Accom SGST":              r2(ag.sgst),
         "Accom Total (incl GST)":  r2(accomInclGst),
-        // Water columns
         "Water MRP (incl GST)":    r2(wg.mrp),
         "Water Taxable (excl GST)":r2(wg.taxable),
         "Water CGST (2.5%)":       r2(wg.cgst),
         "Water SGST (2.5%)":       r2(wg.sgst),
         "Water GST Total":         r2(wg.cgst + wg.sgst),
-        // Other
         "Other Services":          r2(nonWaterSvcTotal),
         "Grand Total":             e.total_amount || 0,
         "Cash Paid":               e.payment_cash || 0,
@@ -2599,92 +3552,137 @@
         "Booking Source":          e.booking_source || "normal",
         "Place of Supply":         "Karnataka (KA-29)",
         "SAC/HSN":                 "9963 / 2201",
+        "Linked CN ID":            e.linked_credit_note_id || "",
+        "Reverted":                e.superseded_by_revert ? "Yes" : "",
       });
 
-      // Accumulate into buckets for sheet 2/3
-      if (ag.cgstRate === 9) {
-        b.accom18.taxable += ag.taxable;
-        b.accom18.cgst    += ag.cgst;
-        b.accom18.sgst    += ag.sgst;
-      } else if (ag.cgstRate === 2.5) {
-        b.accom5.taxable  += ag.taxable;
-        b.accom5.cgst     += ag.cgst;
-        b.accom5.sgst     += ag.sgst;
-      } else {
-        b.accomExmpt.taxable += ag.taxable;
+      // B2B rows mirror GSTR-1 Table 4 column order exactly.
+      if (invoiceType === "B2B") {
+        const totalTaxable = r2(ag.taxable + wg.taxable);
+        const cessAmount = 0;
+        // One row per rate slab present on this bill — accommodation only,
+        // since water is HSN 2201 and goes in HSN sheet too. For practical
+        // purposes a hotel B2B bill has a single accommodation rate.
+        const ratePct = ag.cgstRate * 2;
+        b2bRows.push({
+          "GSTIN/UIN of Recipient": recipientGstin,
+          "Receiver Name":          recipientName,
+          "Invoice Number":         e.bill_number || "",
+          "Invoice Date":           (e.checkout_time || "").split(" ")[0],
+          "Invoice Value":          r2(e.total_amount || 0),
+          "Place Of Supply":        "29-Karnataka",
+          "Reverse Charge":         "N",
+          "Applicable % of Tax Rate": "",
+          "Invoice Type":           "Regular B2B",
+          "E-Commerce GSTIN":       "",
+          "Rate":                   ratePct,
+          "Taxable Value":          r2(ag.taxable),
+          "Cess Amount":            cessAmount,
+        });
+      } else if (invoiceType === "B2CL") {
+        b2clRows.push({
+          "Invoice Number":         e.bill_number || "",
+          "Invoice Date":           (e.checkout_time || "").split(" ")[0],
+          "Invoice Value":          r2(e.total_amount || 0),
+          "Place Of Supply":        "29-Karnataka",
+          "Applicable % of Tax Rate": "",
+          "Rate":                   ag.cgstRate * 2,
+          "Taxable Value":          r2(ag.taxable),
+          "Cess Amount":            0,
+          "E-Commerce GSTIN":       "",
+        });
       }
+
+      // B2C summary aggregation EXCLUDES B2B (Table 4 covers them),
+      // EXCLUDES B2CL (Table 5 covers them), and EXCLUDES cancellation
+      // charges (separate SAC 999794 bucket below). Only true B2C
+      // accommodation lands here.
+      if (invoiceType === "B2C" && !isCancelCharge) {
+        if (ag.cgstRate === 9) {
+          b.accom18.taxable += ag.taxable;
+          b.accom18.cgst    += ag.cgst;
+          b.accom18.sgst    += ag.sgst;
+        } else if (ag.cgstRate === 2.5) {
+          b.accom5.taxable  += ag.taxable;
+          b.accom5.cgst     += ag.cgst;
+          b.accom5.sgst     += ag.sgst;
+        } else {
+          b.accomExmpt.taxable += ag.taxable;
+        }
+      }
+      if (isCancelCharge) {
+        b.cancel18.taxable += ag.taxable;
+        b.cancel18.cgst    += ag.cgst;
+        b.cancel18.sgst    += ag.sgst;
+        b.cancel18.count   += 1;
+      }
+      // Water aggregates regardless of invoice_type — separate HSN sheet
+      // covers it; B2B HSN values are duplicated in Table 12 by design.
       b.water5.mrp     += wg.mrp;
       b.water5.taxable += wg.taxable;
       b.water5.cgst    += wg.cgst;
       b.water5.sgst    += wg.sgst;
     });
 
-    // ── Sheet 1: Invoice Register ─────────────────────────────────────────────
-    const wsReg = XLSX.utils.json_to_sheet(regRows);
-    wsReg["!cols"] = [
-      { wch: 6 },  // Sr No
-      { wch: 20 }, // Bill No
-      { wch: 22 }, // Guest Name
-      { wch: 14 }, // Contact
-      { wch: 6 },  // Room
-      { wch: 18 }, // Check-in
-      { wch: 18 }, // Check-out
-      { wch: 5 },  // Days
-      { wch: 14 }, // Room Rate/Night
-      { wch: 20 }, // Accom Taxable
-      { wch: 14 }, // Accom GST Rate
-      { wch: 12 }, // Accom CGST
-      { wch: 12 }, // Accom SGST
-      { wch: 18 }, // Accom Total
-      { wch: 16 }, // Water MRP
-      { wch: 20 }, // Water Taxable
-      { wch: 14 }, // Water CGST
-      { wch: 14 }, // Water SGST
-      { wch: 14 }, // Water GST Total
-      { wch: 14 }, // Other Services
-      { wch: 13 }, // Grand Total
-      { wch: 11 }, // Cash Paid
-      { wch: 14 }, // Online Paid
-      { wch: 10 }, // Refund
-      { wch: 12 }, // Balance Due
-      { wch: 14 }, // Booking Source
-      { wch: 18 }, // Place of Supply
-      { wch: 12 }, // SAC/HSN
-    ];
+    // ── Net B2C summary by B2C credit notes ──────────────────────────────────
+    // CDNR (B2B) and B2C-CN are separately reported. Within the B2C summary
+    // sheet we subtract B2C credit-note taxable values so the totals align
+    // with the operator's actual GSTR-1 Table 7 row.
+    let b2cCnTaxable5  = 0, b2cCnCgst5  = 0, b2cCnSgst5  = 0;
+    let b2cCnTaxable18 = 0, b2cCnCgst18 = 0, b2cCnSgst18 = 0;
+    creditNotes.forEach(cn => {
+      const isB2B = !!(cn.recipient_gstin || "").trim();
+      if (isB2B) return;
+      const rate = parseInt(cn.gst_rate, 10) || 0;
+      const tax  = parseFloat(cn.credit_amount_taxable || 0);
+      const cgst = parseFloat(cn.credit_amount_cgst || 0);
+      const sgst = parseFloat(cn.credit_amount_sgst || 0);
+      if (rate === 18) { b2cCnTaxable18 += tax; b2cCnCgst18 += cgst; b2cCnSgst18 += sgst; }
+      else if (rate === 5) { b2cCnTaxable5  += tax; b2cCnCgst5  += cgst; b2cCnSgst5  += sgst; }
+    });
 
-    // ── Sheet 2: GST B2C Summary (GSTR-1 Table 7/8 format) ───────────────────
-    // Intra-state B2C — aggregate by rate slab
+    // Sheet 1: Invoice Register
+    const wsReg = XLSX.utils.json_to_sheet(regRows);
+
+    // Sheet 2: B2B Invoices (GSTR-1 Table 4)
+    const wsB2B = XLSX.utils.json_to_sheet(b2bRows.length ? b2bRows : [{
+      "GSTIN/UIN of Recipient": "(none in this period)",
+      "Receiver Name": "", "Invoice Number": "", "Invoice Date": "",
+      "Invoice Value": 0, "Place Of Supply": "", "Reverse Charge": "",
+      "Applicable % of Tax Rate": "", "Invoice Type": "",
+      "E-Commerce GSTIN": "", "Rate": 0, "Taxable Value": 0, "Cess Amount": 0,
+    }]);
+
+    // Sheet 3: B2C Summary (with CN net-out)
     const b2cRows = [
       {
-        "Description":           "Accommodation Services (SAC 9963) — 5% slab",
+        "Description":           "Accommodation Services (SAC 9963) — 5% slab (B2C only)",
         "Place of Supply":       "Karnataka (KA-29)",
         "Applicable % of Tax":   "5%",
-        "Integrated Tax Amount": r2(b.accom5.igst),
-        "Central Tax Amount":    r2(b.accom5.cgst),
-        "State/UT Tax Amount":   r2(b.accom5.sgst),
+        "Integrated Tax Amount": 0,
+        "Central Tax Amount":    r2(b.accom5.cgst - b2cCnCgst5),
+        "State/UT Tax Amount":   r2(b.accom5.sgst - b2cCnSgst5),
         "Cess Amount":           0,
-        "Total Taxable Value":   r2(b.accom5.taxable),
-        "Remarks":               "Room charges ₹1,000–₹7,500/night",
+        "Total Taxable Value":   r2(b.accom5.taxable - b2cCnTaxable5),
+        "Remarks":               "Net of B2C credit notes",
       },
       {
-        "Description":           "Accommodation Services (SAC 9963) — 18% slab",
+        "Description":           "Accommodation Services (SAC 9963) — 18% slab (B2C only)",
         "Place of Supply":       "Karnataka (KA-29)",
         "Applicable % of Tax":   "18%",
-        "Integrated Tax Amount": r2(b.accom18.igst),
-        "Central Tax Amount":    r2(b.accom18.cgst),
-        "State/UT Tax Amount":   r2(b.accom18.sgst),
+        "Integrated Tax Amount": 0,
+        "Central Tax Amount":    r2(b.accom18.cgst - b2cCnCgst18),
+        "State/UT Tax Amount":   r2(b.accom18.sgst - b2cCnSgst18),
         "Cess Amount":           0,
-        "Total Taxable Value":   r2(b.accom18.taxable),
-        "Remarks":               "Room charges above ₹7,500/night",
+        "Total Taxable Value":   r2(b.accom18.taxable - b2cCnTaxable18),
+        "Remarks":               "Net of B2C credit notes",
       },
       {
-        "Description":           "Accommodation Services (SAC 9963) — Exempt",
+        "Description":           "Accommodation Services (SAC 9963) — Exempt (B2C only)",
         "Place of Supply":       "Karnataka (KA-29)",
         "Applicable % of Tax":   "0%",
-        "Integrated Tax Amount": 0,
-        "Central Tax Amount":    0,
-        "State/UT Tax Amount":   0,
-        "Cess Amount":           0,
+        "Integrated Tax Amount": 0, "Central Tax Amount": 0,
+        "State/UT Tax Amount":   0, "Cess Amount": 0,
         "Total Taxable Value":   r2(b.accomExmpt.taxable),
         "Remarks":               "Room charges below ₹1,000/night",
       },
@@ -2692,21 +3690,30 @@
         "Description":           "Packaged Drinking Water (HSN 2201) — 5% slab",
         "Place of Supply":       "Karnataka (KA-29)",
         "Applicable % of Tax":   "5%",
-        "Integrated Tax Amount": r2(b.water5.igst),
+        "Integrated Tax Amount": 0,
         "Central Tax Amount":    r2(b.water5.cgst),
         "State/UT Tax Amount":   r2(b.water5.sgst),
         "Cess Amount":           0,
         "Total Taxable Value":   r2(b.water5.taxable),
         "Remarks":               "MRP-inclusive; back-calculated taxable = MRP/1.05",
       },
+      ...(b.cancel18.count > 0 ? [{
+        "Description":           "Cancellation Forfeiture (SAC 999794) — 18%",
+        "Place of Supply":       "Karnataka (KA-29)",
+        "Applicable % of Tax":   "18%",
+        "Integrated Tax Amount": 0,
+        "Central Tax Amount":    r2(b.cancel18.cgst),
+        "State/UT Tax Amount":   r2(b.cancel18.sgst),
+        "Cess Amount":           0,
+        "Total Taxable Value":   r2(b.cancel18.taxable),
+        "Remarks":               "Agreement to refrain — Schedule II (count: " + b.cancel18.count + ")",
+      }] : []),
     ];
-
-    // Grand total row
-    const allCgst  = r2(b.accom5.cgst  + b.accom18.cgst  + b.water5.cgst);
-    const allSgst  = r2(b.accom5.sgst  + b.accom18.sgst  + b.water5.sgst);
-    const allTaxbl = r2(b.accom5.taxable + b.accom18.taxable + b.accomExmpt.taxable + b.water5.taxable);
+    const allCgst = r2(b2cRows.reduce((s, r) => s + parseFloat(r["Central Tax Amount"] || 0), 0));
+    const allSgst = r2(b2cRows.reduce((s, r) => s + parseFloat(r["State/UT Tax Amount"] || 0), 0));
+    const allTaxbl = r2(b2cRows.reduce((s, r) => s + parseFloat(r["Total Taxable Value"] || 0), 0));
     b2cRows.push({
-      "Description":           "TOTAL",
+      "Description":           "TOTAL (B2C, net of CNs)",
       "Place of Supply":       "",
       "Applicable % of Tax":   "",
       "Integrated Tax Amount": 0,
@@ -2716,26 +3723,35 @@
       "Total Taxable Value":   allTaxbl,
       "Remarks":               `Period: ${period}`,
     });
-
     const wsB2C = XLSX.utils.json_to_sheet(b2cRows);
-    wsB2C["!cols"] = [
-      { wch: 46 }, // Description
-      { wch: 20 }, // Place of Supply
-      { wch: 18 }, // Applicable %
-      { wch: 20 }, // IGST
-      { wch: 18 }, // CGST
-      { wch: 18 }, // SGST
-      { wch: 12 }, // Cess
-      { wch: 20 }, // Taxable Value
-      { wch: 40 }, // Remarks
-    ];
 
-    // ── Sheet 3: HSN/SAC Summary (GSTR-1 Table 12) ───────────────────────────
-    const accom5TotalGst  = r2(b.accom5.cgst  + b.accom5.sgst);
-    const accom18TotalGst = r2(b.accom18.cgst + b.accom18.sgst);
-    const water5TotalGst  = r2(b.water5.cgst  + b.water5.sgst);
+    // Sheet 4: B2CL Invoices (GSTR-1 Table 5)
+    const wsB2CL = XLSX.utils.json_to_sheet(b2clRows.length ? b2clRows : [{
+      "Invoice Number": "(none in this period)",
+      "Invoice Date":"", "Invoice Value":0, "Place Of Supply":"",
+      "Applicable % of Tax Rate":"", "Rate":0, "Taxable Value":0,
+      "Cess Amount":0, "E-Commerce GSTIN":"",
+    }]);
 
+    // Sheet 5: HSN/SAC Summary (Table 12)
+    const water5TotalGst = r2(b.water5.cgst + b.water5.sgst);
+    const accomTotalTax  = r2(b.accom5.taxable + b.accom18.taxable + b.accomExmpt.taxable);
+    const accomTotalCgst = r2(b.accom5.cgst + b.accom18.cgst);
+    const accomTotalSgst = r2(b.accom5.sgst + b.accom18.sgst);
     const hsnRows = [
+      ...(b.cancel18.count > 0 ? [{
+        "HSN/SAC Code":          "999794",
+        "Description":           "Agreement to refrain (cancellation forfeiture)",
+        "UQC":                   "NOS",
+        "Total Quantity":        b.cancel18.count,
+        "Total Value (MRP)":     r2(b.cancel18.taxable + b.cancel18.cgst + b.cancel18.sgst),
+        "Taxable Value":         r2(b.cancel18.taxable),
+        "IGST Amount":           0,
+        "CGST Amount":           r2(b.cancel18.cgst),
+        "SGST Amount":           r2(b.cancel18.sgst),
+        "Total GST":             r2(b.cancel18.cgst + b.cancel18.sgst),
+        "Applicable GST Rate":   "18% (inclusive)",
+      }] : []),
       {
         "HSN/SAC Code":          "9963",
         "Description":           "Accommodation and Hospitality Services",
@@ -2746,20 +3762,20 @@
           b.accom18.taxable + b.accom18.cgst + b.accom18.sgst +
           b.accomExmpt.taxable
         ),
-        "Taxable Value":         r2(b.accom5.taxable + b.accom18.taxable + b.accomExmpt.taxable),
+        "Taxable Value":         accomTotalTax,
         "IGST Amount":           0,
-        "CGST Amount":           r2(b.accom5.cgst + b.accom18.cgst),
-        "SGST Amount":           r2(b.accom5.sgst + b.accom18.sgst),
-        "Total GST":             r2(accom5TotalGst + accom18TotalGst),
+        "CGST Amount":           accomTotalCgst,
+        "SGST Amount":           accomTotalSgst,
+        "Total GST":             r2(parseFloat(accomTotalCgst) + parseFloat(accomTotalSgst)),
         "Applicable GST Rate":   "0% / 5% / 18% (slab based)",
       },
       {
         "HSN/SAC Code":          "2201",
-        "Description":           "Packaged Drinking Water (not branded / hotel supply)",
+        "Description":           "Packaged Drinking Water",
         "UQC":                   "NOS",
-        "Total Quantity":        state.filteredEntries.reduce((s, e) => {
-          return s + waterGst(e.services || []).qty;
-        }, 0),
+        "Total Quantity":        state.filteredEntries.reduce(
+          (s, e) => s + waterGst(e.services || []).qty, 0,
+        ),
         "Total Value (MRP)":     r2(b.water5.mrp || (b.water5.taxable + b.water5.cgst + b.water5.sgst)),
         "Taxable Value":         r2(b.water5.taxable),
         "IGST Amount":           0,
@@ -2768,51 +3784,177 @@
         "Total GST":             water5TotalGst,
         "Applicable GST Rate":   "5% (MRP inclusive)",
       },
-      // Grand total
-      {
-        "HSN/SAC Code":          "TOTAL",
-        "Description":           "",
-        "UQC":                   "",
-        "Total Quantity":        "",
-        "Total Value (MRP)":     "",
-        "Taxable Value":         allTaxbl,
-        "IGST Amount":           0,
-        "CGST Amount":           allCgst,
-        "SGST Amount":           allSgst,
-        "Total GST":             r2(parseFloat(allCgst) + parseFloat(allSgst)),
-        "Applicable GST Rate":   "",
-      },
     ];
-
     const wsHSN = XLSX.utils.json_to_sheet(hsnRows);
-    wsHSN["!cols"] = [
-      { wch: 14 }, // HSN/SAC
-      { wch: 44 }, // Description
-      { wch: 6 },  // UQC
-      { wch: 14 }, // Qty
-      { wch: 16 }, // Total Value
-      { wch: 16 }, // Taxable Value
-      { wch: 12 }, // IGST
-      { wch: 12 }, // CGST
-      { wch: 12 }, // SGST
-      { wch: 12 }, // Total GST
-      { wch: 24 }, // GST Rate
-    ];
 
-    // ── Build workbook ────────────────────────────────────────────────────────
+    // Sheet 6: CDNR (B2B Credit Notes — GSTR-1 Table 9B)
+    const cdnrRows = creditNotes
+      .filter(cn => (cn.recipient_gstin || "").trim() !== "")
+      .map(cn => ({
+        "GSTIN/UIN of Recipient":        cn.recipient_gstin || "",
+        "Receiver Name":                 cn.recipient_legal_name || cn.guest_name || "",
+        "CN/DN Number":                  cn.cn_number || "",
+        "CN/DN Date":                    cn.cn_date || "",
+        "Original Invoice Number":       cn.against_bill_number || "",
+        "Original Invoice Date":         cn.against_invoice_date || "",
+        "Document Type":                 "C",
+        "Reason for Issuing Document":   _cnReasonGstr1(cn.reason),
+        "Place of Supply":               "29-Karnataka",
+        "CN/DN Value":                   r2(cn.credit_amount_total || 0),
+        "Applicable % of Tax Rate":      "",
+        "Rate":                          cn.gst_rate || 0,
+        "Taxable Value":                 r2(cn.credit_amount_taxable || 0),
+        "Cess Amount":                   0,
+        "Pre-GST":                       "N",
+      }));
+    const wsCDNR = XLSX.utils.json_to_sheet(cdnrRows.length ? cdnrRows : [{
+      "GSTIN/UIN of Recipient": "(none in this period)",
+      "Receiver Name":"","CN/DN Number":"","CN/DN Date":"","Original Invoice Number":"",
+      "Original Invoice Date":"","Document Type":"","Reason for Issuing Document":"",
+      "Place of Supply":"","CN/DN Value":0,"Applicable % of Tax Rate":"",
+      "Rate":0,"Taxable Value":0,"Cess Amount":0,"Pre-GST":"",
+    }]);
+
+    // Sheet 7: B2C Credit Notes (against unregistered customers)
+    const b2cCnRows = creditNotes
+      .filter(cn => !(cn.recipient_gstin || "").trim())
+      .map(cn => ({
+        "CN Number":                  cn.cn_number || "",
+        "CN Date":                    cn.cn_date || "",
+        "Original Invoice Number":    cn.against_bill_number || "",
+        "Original Invoice Date":      cn.against_invoice_date || "",
+        "Reason":                     _cnReasonGstr1(cn.reason),
+        "Reason Narrative":           cn.reason_text || "",
+        "Place of Supply":            "29-Karnataka",
+        "CN Value":                   r2(cn.credit_amount_total || 0),
+        "Rate":                       cn.gst_rate || 0,
+        "Taxable Value":              r2(cn.credit_amount_taxable || 0),
+        "CGST":                       r2(cn.credit_amount_cgst || 0),
+        "SGST":                       r2(cn.credit_amount_sgst || 0),
+        "Guest Name":                 cn.guest_name || "",
+        "Room":                       cn.room || "",
+      }));
+    const wsB2CCN = XLSX.utils.json_to_sheet(b2cCnRows.length ? b2cCnRows : [{
+      "CN Number": "(none in this period)",
+      "CN Date":"","Original Invoice Number":"","Original Invoice Date":"",
+      "Reason":"","Reason Narrative":"","Place of Supply":"","CN Value":0,
+      "Rate":0,"Taxable Value":0,"CGST":0,"SGST":0,"Guest Name":"","Room":"",
+    }]);
+
+    // Sheet 8: GSTR-3B Summary (output tax / ITC / RCM / net cash)
+    // ITC and RCM are NOT computed here — the operator's CA will fill them
+    // from expenses with vendor_gstin. We surface output tax + a placeholder
+    // for ITC/RCM with a clear UNCERTAINTY note.
+    const totalOutputCgst = r2(allCgst);
+    const totalOutputSgst = r2(allSgst);
+    // B2B and B2CL output tax also flows into 3B — combine them.
+    const b2bOutputCgst = r2(b2bRows.reduce((s, r) => s + parseFloat(r["Taxable Value"]||0) * (parseFloat(r["Rate"]||0)/200), 0));
+    const b2bOutputSgst = b2bOutputCgst;
+    const totalCnCgst = r2(creditNotes.reduce((s, cn) => s + parseFloat(cn.credit_amount_cgst || 0), 0));
+    const totalCnSgst = r2(creditNotes.reduce((s, cn) => s + parseFloat(cn.credit_amount_sgst || 0), 0));
+    const gstr3b = [
+      { "Item": "Outward taxable supplies (B2C, accommodation+water)",
+        "Taxable Value": allTaxbl, "CGST": totalOutputCgst, "SGST": totalOutputSgst, "IGST": 0, "Cess": 0 },
+      { "Item": "Outward taxable supplies (B2B, accommodation)",
+        "Taxable Value": r2(b2bRows.reduce((s, r) => s + parseFloat(r["Taxable Value"]||0), 0)),
+        "CGST": b2bOutputCgst, "SGST": b2bOutputSgst, "IGST": 0, "Cess": 0 },
+      { "Item": "(less) Credit Notes issued (CDNR + B2C-CN)",
+        "Taxable Value": r2(creditNotes.reduce((s, cn) => s + parseFloat(cn.credit_amount_taxable || 0), 0)),
+        "CGST": totalCnCgst, "SGST": totalCnSgst, "IGST": 0, "Cess": 0 },
+      { "Item": "Net output tax (after CN reversal)",
+        "Taxable Value": "(see CA reconciliation)",
+        "CGST": r2(parseFloat(totalOutputCgst) + parseFloat(b2bOutputCgst) - parseFloat(totalCnCgst)),
+        "SGST": r2(parseFloat(totalOutputSgst) + parseFloat(b2bOutputSgst) - parseFloat(totalCnSgst)),
+        "IGST": 0, "Cess": 0 },
+      { "Item": "Eligible ITC from expenses (NOT auto-computed — CA to fill)",
+        "Taxable Value": "—", "CGST": "—", "SGST": "—", "IGST": "—", "Cess": "—" },
+      { "Item": "RCM liability on OTA commission (NOT auto-computed — see migration doc)",
+        "Taxable Value": "—", "CGST": "—", "SGST": "—", "IGST": "—", "Cess": "—" },
+      { "Item": "Net cash payable",
+        "Taxable Value": "(net output - ITC + RCM)",
+        "CGST": "—", "SGST": "—", "IGST": "—", "Cess": "—" },
+    ];
+    const wsGSTR3B = XLSX.utils.json_to_sheet(gstr3b);
+
+    // ── Advances (GSTR-1 Table 11A "received" / 11B "adjusted") ────────────
+    const advRows = (advances || []).map(a => ({
+      "Status":            a.status || "",          // Received / Adjusted
+      "Date":              a.date || "",
+      "Booking ID":        a.booking_id || "",
+      "Guest Name":        a.guest_name || "",
+      "Room":              a.room || "",
+      "Check-in Date":     a.check_in_date || "",
+      "Bill Number":       a.bill_number || "",
+      "Place Of Supply":   "29-Karnataka",
+      "Rate":              a.gst_rate || 0,
+      "Gross Amount":      a.amount || 0,
+      "Taxable Value":     r2(a.taxable || 0),
+      "CGST":              r2(a.cgst || 0),
+      "SGST":              r2(a.sgst || 0),
+      "IGST":              0,
+      "Method":            a.method || "",
+    }));
+    const wsAdvances = XLSX.utils.json_to_sheet(advRows.length ? advRows : [{
+      "Status": "(none in this period)",
+      "Date": "", "Booking ID": "", "Guest Name": "", "Room": "",
+      "Check-in Date": "", "Bill Number": "", "Place Of Supply": "",
+      "Rate": 0, "Gross Amount": 0, "Taxable Value": 0,
+      "CGST": 0, "SGST": 0, "IGST": 0, "Method": "",
+    }]);
+
+    // Hidden _schema sheet — record the GSTN schema version used.
+    const schemaSheet = XLSX.utils.json_to_sheet([
+      { "Field": "GSTN_GSTR1_SCHEMA_VERSION", "Value": "2.1 (offline utility 4.x format)" },
+      { "Field": "Generated By",              "Value": "Cibara Comforts Lodge Mgmt" },
+      { "Field": "Generated At",              "Value": new Date().toISOString() },
+      { "Field": "Period",                    "Value": period },
+      { "Field": "B2CL Threshold",            "Value": "₹1,00,000 (Notification 12/2024-CT)" },
+      { "Field": "Place of Supply",           "Value": "Always Karnataka (KA-29) for SAC 9963" },
+      { "Field": "Advances Table",            "Value": "Table 11A/B — cross-month advances only; same-month advances net out and are excluded" },
+      { "Field": "Cancellation Charges SAC",   "Value": "999794 (agreement to refrain) @ 18% — appears in HSN sheet alongside 9963 / 2201 once issued" },
+      { "Field": "Notes",                     "Value": "ITC/RCM rows in GSTR-3B sheet are placeholders — CA must fill from expense ledger" },
+    ]);
+    schemaSheet["!hidden"] = true;
+
     try {
       const wb = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wb, wsReg,  "Invoice Register");
-      XLSX.utils.book_append_sheet(wb, wsB2C,  "GST B2C Summary");
-      XLSX.utils.book_append_sheet(wb, wsHSN,  "HSN SAC Summary");
+      XLSX.utils.book_append_sheet(wb, wsReg,    "Invoice Register");
+      XLSX.utils.book_append_sheet(wb, wsB2B,    "B2B Invoices");
+      XLSX.utils.book_append_sheet(wb, wsB2C,    "B2C Summary");
+      XLSX.utils.book_append_sheet(wb, wsB2CL,   "B2CL Invoices");
+      XLSX.utils.book_append_sheet(wb, wsHSN,    "HSN SAC Summary");
+      XLSX.utils.book_append_sheet(wb, wsCDNR,   "CDNR (B2B CNs)");
+      XLSX.utils.book_append_sheet(wb, wsB2CCN,  "B2C Credit Notes");
+      XLSX.utils.book_append_sheet(wb, wsAdvances, "Advances (Table 11)");
+      XLSX.utils.book_append_sheet(wb, wsGSTR3B, "GSTR-3B Summary");
+      XLSX.utils.book_append_sheet(wb, schemaSheet, "_schema");
+      // Mark hidden sheet so Excel respects it.
+      if (wb.Workbook && wb.Workbook.Sheets) {
+        const idx = wb.SheetNames.indexOf("_schema");
+        if (idx >= 0 && wb.Workbook.Sheets[idx]) {
+          wb.Workbook.Sheets[idx].Hidden = 1;
+        }
+      }
       XLSX.writeFile(
         wb,
-        `CIBARA_GST_Report_${state.dateRange.start}_to_${state.dateRange.end}.xlsx`,
+        `CIBARA_GSTR1_Workbook_${state.dateRange.start}_to_${state.dateRange.end}.xlsx`,
       );
     } catch (err) {
       console.error("[Bills] export error:", err);
       alert("Export failed: " + err.message);
     }
+  }
+
+  // GSTR-1 Table 9B "Reason for Issuing Document" enum mapping.
+  function _cnReasonGstr1(reason) {
+    const map = {
+      "checkout_mistake":     "04-Correction in Invoice",
+      "post_supply_discount": "02-Post Sale Discount",
+      "service_deficiency":   "03-Deficiency in services",
+      "cancellation":         "01-Sales Return",
+      "other":                "07-Others",
+    };
+    return map[reason] || "07-Others";
   }
 
   // ── Tab watch ─────────────────────────────────────────────────────────────────
@@ -2948,6 +4090,406 @@
     }
   }
 
+  // ─── GST recipient modal wiring (Goal 1) ──────────────────────────────────
+  function _gstClientChecksum(g) {
+    // Format check only — full GSTN checksum is non-trivial. Backend re-validates.
+    return /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[0-9A-Z]{1}Z[0-9A-Z]{1}$/.test((g||"").toUpperCase());
+  }
+  const _STATE_FROM_CODE = {
+    "01":"Jammu and Kashmir","02":"Himachal Pradesh","03":"Punjab","04":"Chandigarh",
+    "05":"Uttarakhand","06":"Haryana","07":"Delhi","08":"Rajasthan","09":"Uttar Pradesh",
+    "10":"Bihar","11":"Sikkim","12":"Arunachal Pradesh","13":"Nagaland","14":"Manipur",
+    "15":"Mizoram","16":"Tripura","17":"Meghalaya","18":"Assam","19":"West Bengal",
+    "20":"Jharkhand","21":"Odisha","22":"Chhattisgarh","23":"Madhya Pradesh","24":"Gujarat",
+    "27":"Maharashtra","29":"Karnataka","30":"Goa","32":"Kerala","33":"Tamil Nadu",
+    "36":"Telangana","37":"Andhra Pradesh","38":"Ladakh"
+  };
+
+  function openGstModal(billId, billNumber, locked) {
+    const e = state.allEntries.find(x => x.id === billId);
+    const bd = dom("bl-gst-backdrop");
+    const billnoEl = dom("bl-gst-billno");
+    const gstinEl  = dom("bl-gst-gstin");
+    const legalEl  = dom("bl-gst-legal");
+    const tradeEl  = dom("bl-gst-trade");
+    const addrEl   = dom("bl-gst-addr");
+    const errEl    = dom("bl-gst-error");
+    const stateEl  = dom("bl-gst-state-hint");
+    const ruleEl   = dom("bl-gst-rule46");
+    const saveBtn  = dom("bl-gst-save");
+    const clearBtn = dom("bl-gst-clear");
+    const chipEl   = dom("bl-gst-state-chip");
+    if (!bd) return;
+
+    if (billnoEl) billnoEl.textContent = billNumber || "—";
+    if (gstinEl)  gstinEl.value = (e && e.recipient_gstin) || "";
+    if (legalEl)  legalEl.value = (e && e.recipient_legal_name) || "";
+    if (tradeEl)  tradeEl.value = (e && e.recipient_trade_name) || "";
+    if (addrEl)   addrEl.value  = (e && e.recipient_address) || "";
+    if (errEl)    errEl.textContent = "";
+    if (ruleEl)   ruleEl.style.display = "none";
+    if (stateEl)  stateEl.textContent = "15 characters · 2-digit state code · 10-char PAN · entity number · checksum";
+    if (stateEl)  stateEl.classList.remove("ok", "bad");
+
+    // State chip — current invoice type
+    if (chipEl) {
+      chipEl.classList.remove("bl-gst-state-b2c", "bl-gst-state-b2b", "bl-gst-state-locked");
+      if (locked) {
+        chipEl.classList.add("bl-gst-state-locked");
+        chipEl.textContent = "Locked";
+      } else if (e && e.invoice_type === "B2B") {
+        chipEl.classList.add("bl-gst-state-b2b");
+        chipEl.textContent = "B2B";
+      } else {
+        chipEl.classList.add("bl-gst-state-b2c");
+        chipEl.textContent = "B2C";
+      }
+    }
+
+    if (locked) {
+      [gstinEl, legalEl, tradeEl, addrEl].forEach(el => { if (el) el.disabled = true; });
+      if (saveBtn)  saveBtn.disabled = true;
+      if (clearBtn) clearBtn.disabled = true;
+      if (errEl) errEl.textContent = "This bill has a credit note linked — GST details are locked. Issue a fresh invoice if recipient details need to change.";
+    } else {
+      [gstinEl, legalEl, tradeEl, addrEl].forEach(el => { if (el) el.disabled = false; });
+      if (saveBtn)  saveBtn.disabled = false;
+      if (clearBtn) clearBtn.disabled = false;
+      if (saveBtn)  saveBtn.textContent = (e && e.invoice_type === "B2B") ? "Update B2B" : "Save as B2B";
+    }
+
+    state._gstModal = { billId, billNumber };
+    bd.classList.add("open");
+    if (gstinEl) gstinEl.focus();
+    _gstUpdateDerived();
+  }
+
+  function closeGstModal() {
+    const bd = dom("bl-gst-backdrop");
+    if (bd) bd.classList.remove("open");
+  }
+
+  function _gstUpdateDerived() {
+    const gstinEl = dom("bl-gst-gstin");
+    const stateEl = dom("bl-gst-state-hint");
+    const ruleEl  = dom("bl-gst-rule46");
+    const addrEl  = dom("bl-gst-addr");
+    if (!gstinEl) return;
+    const v = (gstinEl.value || "").toUpperCase().trim();
+    gstinEl.classList.remove("bl-gst-invalid", "bl-gst-valid");
+    if (stateEl) stateEl.classList.remove("ok", "bad");
+    if (!v) {
+      if (stateEl) stateEl.textContent = "15 characters · 2-digit state code · 10-char PAN · entity number · checksum";
+      if (ruleEl)  ruleEl.style.display = "none";
+      return;
+    }
+    const valid = _gstClientChecksum(v);
+    if (!valid) {
+      gstinEl.classList.add("bl-gst-invalid");
+      if (stateEl) {
+        stateEl.classList.add("bad");
+        stateEl.textContent = "Invalid format — expected 15 chars (Rule 46(b))";
+      }
+      if (ruleEl)  ruleEl.style.display = "none";
+      return;
+    }
+    gstinEl.classList.add("bl-gst-valid");
+    const code = v.slice(0, 2);
+    const stName = _STATE_FROM_CODE[code] || "Unknown state";
+    if (stateEl) {
+      stateEl.classList.add("ok");
+      stateEl.textContent = `Recipient state: ${stName} (${code})`;
+    }
+    if (ruleEl)  ruleEl.style.display = (addrEl && !addrEl.value.trim()) ? "flex" : "none";
+  }
+
+  async function saveBillGst() {
+    const ctx = state._gstModal || {};
+    const gstinEl = dom("bl-gst-gstin");
+    const legalEl = dom("bl-gst-legal");
+    const tradeEl = dom("bl-gst-trade");
+    const addrEl  = dom("bl-gst-addr");
+    const errEl   = dom("bl-gst-error");
+    const saveBtn = dom("bl-gst-save");
+    if (!ctx.billId) return;
+    const gstin = (gstinEl?.value || "").toUpperCase().trim();
+    const legal = (legalEl?.value || "").trim();
+    if (errEl) errEl.textContent = "";
+    if (!gstin) { if (errEl) errEl.textContent = "GSTIN is required"; return; }
+    if (!_gstClientChecksum(gstin)) {
+      if (errEl) errEl.textContent = "Invalid GSTIN format (15 chars, see Rule 46(b)).";
+      return;
+    }
+    if (!legal) { if (errEl) errEl.textContent = "Legal Name is required"; return; }
+
+    if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = "Saving…"; }
+    try {
+      const res = await apiFetch("/update_bill_gst", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          bill_id: ctx.billId,
+          recipient_gstin: gstin,
+          recipient_legal_name: legal,
+          recipient_trade_name: (tradeEl?.value || "").trim(),
+          recipient_address: (addrEl?.value || "").trim(),
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        closeGstModal();
+        if (window.showNotification) showNotification(data.message, "success");
+        loadData(true);
+      } else {
+        if (errEl) errEl.textContent = data.message || "Save failed";
+      }
+    } catch (err) {
+      if (errEl) errEl.textContent = "Network error: " + err.message;
+    } finally {
+      if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = "Save"; }
+    }
+  }
+
+  async function clearBillGst() {
+    const ctx = state._gstModal || {};
+    const errEl = dom("bl-gst-error");
+    const clearBtn = dom("bl-gst-clear");
+    if (!ctx.billId) return;
+    if (!confirm("Clear all B2B GST details and revert this invoice to B2C?")) return;
+    if (clearBtn) { clearBtn.disabled = true; clearBtn.textContent = "Clearing…"; }
+    try {
+      const res = await apiFetch("/update_bill_gst", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ bill_id: ctx.billId, clear: true }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        closeGstModal();
+        if (window.showNotification) showNotification("GST details cleared", "success");
+        loadData(true);
+      } else {
+        if (errEl) errEl.textContent = data.message || "Clear failed";
+      }
+    } catch (err) {
+      if (errEl) errEl.textContent = "Network error: " + err.message;
+    } finally {
+      if (clearBtn) { clearBtn.disabled = false; clearBtn.textContent = "Clear (revert to B2C)"; }
+    }
+  }
+
+  // ─── Sub-tab toggle (Bills / Credit Notes) ─────────────────────────────────
+  function _setSubTab(which) {
+    const bills  = dom("bl-bills-pane");
+    const cn     = dom("bl-cn-pane");
+    const btnB   = dom("bl-subtab-bills");
+    const btnC   = dom("bl-subtab-cn");
+    const wrap   = document.querySelector(".bills-container");
+    if (!bills || !cn) return;
+    if (which === "cn") {
+      bills.style.display = "none";
+      cn.style.display    = "";
+      if (btnB) { btnB.classList.remove("active"); btnB.setAttribute("aria-selected","false"); }
+      if (btnC) { btnC.classList.add("active");    btnC.setAttribute("aria-selected","true");  }
+      if (wrap) wrap.classList.add("cn-active");
+      loadCreditNotes();
+    } else {
+      bills.style.display = "";
+      cn.style.display    = "none";
+      if (btnC) { btnC.classList.remove("active"); btnC.setAttribute("aria-selected","false"); }
+      if (btnB) { btnB.classList.add("active");    btnB.setAttribute("aria-selected","true");  }
+      if (wrap) wrap.classList.remove("cn-active");
+    }
+  }
+
+  // Credit-note state (cached so filters re-render without re-fetch).
+  state._cnList = [];
+  state._cnFilter = "all";
+
+  async function loadCreditNotes() {
+    const tbody = dom("bl-cn-tbody");
+    if (!tbody) return;
+    tbody.innerHTML = '<tr><td colspan="7" class="bl-cn-empty"><span class="bl-cn-empty-icon"><i class="fas fa-spinner fa-spin"></i></span><div class="bl-cn-empty-text">Loading credit notes…</div></td></tr>';
+    try {
+      const res = await apiFetch("/list_credit_notes", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          start_date: state.dateRange.start,
+          end_date:   state.dateRange.end,
+        }),
+      });
+      const data = await res.json();
+      if (!data.success) {
+        tbody.innerHTML = `<tr><td colspan="7" class="bl-cn-empty"><span class="bl-cn-empty-icon"><i class="fas fa-exclamation-circle"></i></span><div class="bl-cn-empty-text">Error: ${data.message || "load failed"}</div></td></tr>`;
+        return;
+      }
+      state._cnList = data.credit_notes || [];
+      _renderCreditNotes();
+    } catch (err) {
+      tbody.innerHTML = `<tr><td colspan="7" class="bl-cn-empty"><span class="bl-cn-empty-icon"><i class="fas fa-exclamation-circle"></i></span><div class="bl-cn-empty-text">Network error: ${err.message}</div></td></tr>`;
+    }
+  }
+
+  function _renderCreditNotes() {
+    const tbody = dom("bl-cn-tbody");
+    if (!tbody) return;
+    const list = state._cnList || [];
+
+    // Stats — based on full unfiltered list.
+    const totalAmt = list.reduce((s, c) => s + parseFloat(c.credit_amount_total || 0), 0);
+    const b2bCount = list.filter(c => (c.recipient_gstin || "").trim() !== "").length;
+    const b2cCount = list.length - b2bCount;
+    const setText = (id, v) => { const el = dom(id); if (el) el.textContent = v; };
+    setText("bl-cn-stat-total", list.length);
+    setText("bl-cn-stat-amt",   "₹" + inr(Math.round(totalAmt)));
+    setText("bl-cn-stat-b2b",   b2bCount);
+    setText("bl-cn-stat-b2c",   b2cCount);
+    const subTabCn = dom("bl-subtab-count-cn");
+    if (subTabCn) subTabCn.textContent = list.length;
+
+    // Filter
+    const f = state._cnFilter || "all";
+    const filtered = list.filter(c => {
+      if (f === "all") return true;
+      if (f === "b2b") return (c.recipient_gstin || "").trim() !== "";
+      if (f === "b2c") return !(c.recipient_gstin || "").trim();
+      return c.reason === f;
+    });
+
+    if (!filtered.length) {
+      const msg = list.length
+        ? "No credit notes match this filter in the selected period."
+        : "No credit notes issued in this period.";
+      tbody.innerHTML = `<tr><td colspan="7" class="bl-cn-empty">
+        <span class="bl-cn-empty-icon"><i class="far fa-file-alt"></i></span>
+        <div class="bl-cn-empty-text">${msg}</div>
+      </td></tr>`;
+      return;
+    }
+
+    const reasonMeta = {
+      "checkout_mistake":     { label: "Checkout reverted",   cls: "bl-cn-reason-revert"     },
+      "post_supply_discount": { label: "Post-supply discount", cls: "bl-cn-reason-discount"  },
+      "cancellation":         { label: "Cancellation",        cls: "bl-cn-reason-cancel"     },
+      "service_deficiency":   { label: "Service deficiency",  cls: "bl-cn-reason-deficiency" },
+      "other":                { label: "Other",               cls: "bl-cn-reason-other"      },
+    };
+
+    tbody.innerHTML = filtered.map(cn => {
+      const isB2B = !!(cn.recipient_gstin || "").trim();
+      const recipientName = cn.recipient_legal_name || cn.guest_name || "—";
+      const recipientCell = isB2B
+        ? `<div class="bl-cn-recipient-b2b">
+             <span>${recipientName}</span>
+             <span class="bl-cn-tag-b2b">B2B</span>
+           </div>
+           <div style="font-family:ui-monospace,monospace;font-size:.7rem;color:#64748b;margin-top:.1rem;">${cn.recipient_gstin}</div>`
+        : `<div>${recipientName}</div>
+           <div style="font-size:.7rem;color:#94a3b8;margin-top:.1rem;">Unregistered (B2C)</div>`;
+
+      const meta = reasonMeta[cn.reason] || { label: cn.reason || "—", cls: "bl-cn-reason-other" };
+      const reasonCell = `<span class="bl-cn-reason-badge ${meta.cls}">${meta.label}</span>`;
+
+      const pdfCell = cn.pdf_url
+        ? `<a class="bl-cn-pdf-link" href="${cn.pdf_url}" target="_blank" rel="noopener">
+             <i class="fas fa-file-pdf"></i> View
+           </a>`
+        : `<button class="bl-cn-pdf-btn" data-cnid="${cn.cn_id}" title="Generate PDF">
+             <i class="fas fa-file-pdf"></i> Generate
+           </button>`;
+      // WhatsApp send — always visible when a mobile is on file. When the
+      // PDF doesn't exist yet, the button shows a "pending" state and
+      // clicking it generates the PDF first, then opens the send modal.
+      const _cnMob = (cn.guest_mobile || "").replace(/\D/g, "").slice(-10);
+      const _hasPdf = !!cn.pdf_url;
+      const waCell = _cnMob
+        ? `<button class="bl-cn-wa-btn ${_hasPdf ? '' : 'bl-cn-wa-pending'}"
+                   data-cnid="${cn.cn_id}"
+                   data-pdfurl="${cn.pdf_url || ''}"
+                   data-guest="${(cn.guest_name || cn.recipient_legal_name || '').replace(/"/g, '&quot;')}"
+                   data-mobile="${_cnMob}"
+                   data-cnno="${cn.cn_number || ''}"
+                   data-amount="${cn.credit_amount_total || 0}"
+                   title="${_hasPdf ? 'Send credit note via WhatsApp' : 'Generate PDF + send via WhatsApp'}">
+             <i class="fab fa-whatsapp"></i>
+           </button>`
+        : '';
+
+      return `<tr>
+        <td><div class="bl-cn-num">${cn.cn_number || "—"}</div>
+            <div style="font-size:.66rem;color:#94a3b8;margin-top:.1rem;">@ ${cn.gst_rate || 0}% GST</div></td>
+        <td>${cn.cn_date || "—"}</td>
+        <td><div class="bl-cn-against">${cn.against_bill_number || "—"}</div>
+            <div style="font-size:.66rem;color:#94a3b8;margin-top:.1rem;">${cn.against_invoice_date || ""}</div></td>
+        <td>${recipientCell}</td>
+        <td>${reasonCell}
+            ${cn.reason_text ? `<div style="font-size:.66rem;color:#94a3b8;margin-top:.15rem;max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${cn.reason_text.replace(/"/g,'&quot;')}">${cn.reason_text}</div>` : ""}</td>
+        <td class="bl-cn-amt">- ₹${inr(cn.credit_amount_total || 0)}</td>
+        <td>
+          <div style="display:flex;gap:.3rem;align-items:center;flex-wrap:nowrap;">
+            ${pdfCell}
+            ${waCell}
+          </div>
+        </td>
+      </tr>`;
+    }).join("");
+  }
+
+  // Open the existing WhatsApp send modal with a CN-specific message body.
+  // If the CN has no PDF yet, generate it first (background fetch), then
+  // open the modal. This mirrors the bill-row "WhatsApp pending" flow.
+  async function _openCnWhatsAppModal(btn) {
+    const cnId  = btn.dataset.cnid  || "";
+    const cnNo  = btn.dataset.cnno  || "";
+    let   url   = btn.dataset.pdfurl || "";
+    const guest = btn.dataset.guest || "Guest";
+    const mob   = (btn.dataset.mobile || "").replace(/\D/g, "").slice(-10);
+    const amt   = btn.dataset.amount || 0;
+
+    if (!/^\d{10}$/.test(mob)) {
+      alert("Recipient has no valid 10-digit mobile number on file.");
+      return;
+    }
+
+    // PDF missing — generate first, then continue.
+    if (!url) {
+      if (!confirm("PDF not yet generated for this credit note. Generate and share now?")) {
+        return;
+      }
+      btn.disabled = true;
+      const _origHtml = btn.innerHTML;
+      btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+      try {
+        const res = await apiFetch("/render_credit_note_pdf", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ cn_id: cnId }),
+        });
+        const data = await res.json();
+        if (!(data && data.success && data.pdf_url)) {
+          alert("PDF generation failed: " + ((data && data.message) || "unknown error"));
+          btn.disabled = false;
+          btn.innerHTML = _origHtml;
+          return;
+        }
+        url = data.pdf_url;
+        // Patch the row in-memory so a re-render keeps the new PDF state.
+        const _row = (state._cnList || []).find(x => x.cn_id === cnId);
+        if (_row) _row.pdf_url = url;
+        // Re-render the CN table so the row shows "View" + the WhatsApp
+        // button flips to its full-colour state.
+        _renderCreditNotes();
+      } catch (err) {
+        alert("Network error: " + err.message);
+        btn.disabled = false;
+        btn.innerHTML = _origHtml;
+        return;
+      }
+    }
+  }
+
+  // ── Boot trigger (was missing — IIFE closer below) ────────────────────────
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", bootWhenReady);
   } else {

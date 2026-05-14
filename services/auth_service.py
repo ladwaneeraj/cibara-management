@@ -279,5 +279,13 @@ def set_user_claims(auth_uid: str, *, user_id: str, name: str, role: str) -> Non
 
 
 def revoke_user_tokens(auth_uid: str) -> None:
-    """Force-logout: existing ID tokens become invalid on next verify call."""
+    """
+    Force-logout: revoke all refresh tokens for this user.
+
+    Existing ID tokens stay technically valid until their natural expiry
+    (~1h), but `verify_token()` calls `check_revoked=True` so any token
+    issued before the revocation timestamp gets rejected on the next
+    backend call. Net effect: the user is signed out within seconds of
+    this call returning.
+    """
     fb_auth.revoke_refresh_tokens(auth_uid)

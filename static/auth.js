@@ -404,83 +404,6 @@
   function _injectIdentityChip() {
     _wireProfileMenu();
   }
-  // Dead code from the old bottom-left chip — wrapped so it never runs.
-  function _DEAD_oldChip() {
-    if (document.getElementById("cibara-identity-chip")) return;
-
-    const chip = document.createElement("div");
-    chip.id = "cibara-identity-chip";
-    chip.setAttribute("style", [
-      "position:fixed",
-      "left:12px",
-      "bottom:12px",
-      "z-index:99996",
-      "display:flex",
-      "align-items:center",
-      "gap:0",
-      "padding:4px",
-      "background:rgba(17,23,58,0.92)",
-      "color:#fff",
-      "font:600 12px/1 'Inter',system-ui,sans-serif",
-      "border:1px solid rgba(255,255,255,0.12)",
-      "border-radius:999px",
-      "box-shadow:0 4px 14px -4px rgba(0,0,0,0.4)",
-      "backdrop-filter:blur(8px)",
-      "transition:gap .15s, padding .15s",
-      "max-width:60vw",
-    ].join(";"));
-
-    const initial = (_user.name || _user.userId || "?").charAt(0).toUpperCase();
-    chip.innerHTML =
-      '<button id="cibara-id-toggle" type="button" aria-label="Account" ' +
-      'style="display:grid;place-items:center;width:30px;height:30px;border:0;border-radius:50%;cursor:pointer;' +
-      'background:linear-gradient(135deg,#6366f1 0%,#8b5cf6 100%);color:#fff;font-size:12px;font-weight:700;">' +
-      initial +
-      "</button>" +
-      '<div id="cibara-id-details" style="display:none;align-items:center;gap:8px;padding:0 8px 0 8px;white-space:nowrap;overflow:hidden;">' +
-      '<div style="display:flex;flex-direction:column;line-height:1.2;">' +
-      '<span>' + escapeHtml(_user.name || _user.userId) + '</span>' +
-      '<span style="font-weight:500;font-size:10px;opacity:.7;text-transform:uppercase;letter-spacing:.04em;">' +
-      escapeHtml(_user.role) +
-      '</span>' +
-      '</div>' +
-      '<button id="cibara-logout-btn" type="button" title="Sign out" ' +
-      'style="background:transparent;border:0;color:#cbd5e1;cursor:pointer;padding:4px 6px;border-radius:6px;display:grid;place-items:center;">' +
-      '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
-      '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/>' +
-      '</svg></button>' +
-      '</div>';
-
-    document.body.appendChild(chip);
-
-    const details = document.getElementById("cibara-id-details");
-    const toggle = document.getElementById("cibara-id-toggle");
-
-    function openChip() {
-      details.style.display = "flex";
-      chip.style.gap = "4px";
-    }
-    function closeChip() {
-      details.style.display = "none";
-      chip.style.gap = "0";
-    }
-
-    toggle.addEventListener("click", function (e) {
-      e.stopPropagation();
-      if (details.style.display === "none") openChip(); else closeChip();
-    });
-
-    // Click outside → collapse
-    document.addEventListener("click", function (ev) {
-      if (!chip.contains(ev.target)) closeChip();
-    });
-
-    document.getElementById("cibara-logout-btn").addEventListener("click", function (e) {
-      e.stopPropagation();
-      logout();
-    });
-  }
-
   function escapeHtml(s) {
     return String(s || "").replace(/[&<>"']/g, function (c) {
       return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
@@ -648,6 +571,12 @@
     _firebaseAuth = firebase.auth();
 
     _wrapFetch();
+    // Expose apiFetch as a bare global so legacy modules can call it
+    // directly. It's just window.fetch with auth-token wrapping applied
+    // by _wrapFetch(). Calls made before this point fall back to fetch.
+    window.apiFetch = function (input, init) {
+      return window.fetch(input, init);
+    };
 
     _firebaseAuth.onAuthStateChanged(function (fbUser) {
       if (!fbUser) {
@@ -735,25 +664,36 @@
         })
         .catch(function (e) {
           console.error("Cibara: failed to load token claims", e);
-          logout();
+          // Token is valid but the metadata fetch blip is non-fatal — flag
+          // ready so the rest of the UI stops blocking on this promise.
+          _markReady();
         });
     });
   }
 
-  // ── Wire up ───────────────────────────────────────────────────────────
-  api.userCan = userCan;
-  api.currentUser = currentUser;
-  api.isAdmin = isAdmin;
-  api.isManager = isManager;
-  api.isHousekeeping = isHousekeeping;
-  api.logout = logout;
-  api.ready = ready;
-  api.applyRoleGating = applyRoleGating;
-  // Expose token getter for code that needs to construct its own requests
-  // (e.g. WebSockets, EventSource). Returns the most recent token.
-  api.getIdToken = function () { return _idToken; };
+  // ── Public API ────────────────────────────────────────────────────────────
+  // Exposed under window.CibaraAuth — used by every role-gated widget in
+  // the rest of the app (admin-users.js, bills.js, register.js, etc.).
+  // Every method tolerates being called before token claims have loaded.
 
-  global.CibaraAuth = api;
+  // Kick off the actual auth flow. Defines `window.apiFetch`, registers
+  // onAuthStateChanged, schedules token refresh, wires the profile menu.
+  // Skip on the login page itself (handled inside _bootstrap).
+  try {
+    _bootstrap();
+  } catch (e) {
+    console.error("Cibara: _bootstrap failed:", e);
+  }
 
-  _bootstrap();
+  window.CibaraAuth = Object.freeze({
+    currentUser:     currentUser,
+    getCurrentUser:  currentUser,    // alias for legacy callers
+    isAdmin:         isAdmin,
+    isManager:       isManager,
+    isHousekeeping:  isHousekeeping,
+    userCan:         userCan,
+    ready:           ready,
+    logout:          logout,
+    applyRoleGating: applyRoleGating,
+  });
 })(window);

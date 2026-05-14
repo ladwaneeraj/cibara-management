@@ -1260,6 +1260,51 @@ function showCancelBookingModal(bookingId) {
     refundAmountInput.value = booking.paid_amount;
   }
 
+  // ── Cancellation forfeiture (SAC 999794, 18% inclusive) ──────────────────
+  // The retained portion = paid_amount − refund_amount. When the operator
+  // ticks the checkbox, render the GST split live as they edit the refund.
+  // Backend mints a separate Tax Invoice for this amount.
+  const _retainCheck   = document.getElementById("cancel-retain-charge");
+  const _retainSummary = document.getElementById("cancel-retain-summary");
+  const _retainAmtEl   = document.getElementById("cancel-retain-amt");
+  const _retainTaxEl   = document.getElementById("cancel-retain-taxable");
+  const _retainCgstEl  = document.getElementById("cancel-retain-cgst");
+  const _retainSgstEl  = document.getElementById("cancel-retain-sgst");
+  const _paidAmt       = parseInt(booking.paid_amount || 0, 10) || 0;
+
+  function _bkFmtR(n) { return "₹" + (n || 0).toLocaleString("en-IN"); }
+  function _bkRefreshRetain() {
+    if (!_retainCheck || !_retainSummary) return;
+    const refund   = parseInt((refundAmountInput && refundAmountInput.value) || 0, 10) || 0;
+    const retained = Math.max(0, _paidAmt - refund);
+    if (_retainCheck.checked && retained > 0) {
+      _retainSummary.style.display = "";
+      const gst     = Math.round((retained * 18 / 118) * 100) / 100;
+      const taxable = Math.round((retained - gst) * 100) / 100;
+      const half    = Math.round((gst / 2) * 100) / 100;
+      if (_retainAmtEl)  _retainAmtEl.textContent  = _bkFmtR(retained);
+      if (_retainTaxEl)  _retainTaxEl.textContent  = _bkFmtR(taxable);
+      if (_retainCgstEl) _retainCgstEl.textContent = _bkFmtR(half);
+      if (_retainSgstEl) _retainSgstEl.textContent = _bkFmtR(half);
+    } else {
+      _retainSummary.style.display = "none";
+    }
+  }
+  // Default: pre-tick if paid > 0 — most operators keep some forfeiture.
+  if (_retainCheck) {
+    _retainCheck.checked = (_paidAmt > 0);
+    // Avoid stacking listeners on repeated modal opens.
+    const _newCheck = _retainCheck.cloneNode(true);
+    _retainCheck.parentNode.replaceChild(_newCheck, _retainCheck);
+    _newCheck.addEventListener("change", _bkRefreshRetain);
+  }
+  if (refundAmountInput) {
+    const _newRef = refundAmountInput.cloneNode(true);
+    refundAmountInput.parentNode.replaceChild(_newRef, refundAmountInput);
+    _newRef.addEventListener("input", _bkRefreshRetain);
+  }
+  _bkRefreshRetain();
+
   // Show modal
   modal.classList.add("show");
 }
@@ -1323,6 +1368,8 @@ function initializeCancelBookingForm() {
       '<span class="loader" style="width: 20px; height: 20px;"></span> Processing...';
 
     try {
+      const _retainEl = document.getElementById("cancel-retain-charge");
+      const retainAsCharge = !!(_retainEl && _retainEl.checked);
       const response = await apiFetch("/cancel_booking", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1331,6 +1378,7 @@ function initializeCancelBookingForm() {
           refund_amount: refundAmount,
           refund_method: refundMethod,
           reason: reason,
+          retain_as_charge: retainAsCharge,
         }),
       });
 
@@ -1350,8 +1398,13 @@ function initializeCancelBookingForm() {
         // Reset form
         event.target.reset();
 
-        // Show success notification
-        showNotification("Booking cancelled successfully!", "success");
+        // Show success — include the cancellation-charge invoice number when
+        // the operator chose to keep the retained amount as a 999794 supply.
+        const _chrgNo = result.charge_bill_number;
+        const _msg    = _chrgNo
+          ? `Booking cancelled. Cancellation invoice ${_chrgNo} issued (SAC 999794 / 18%).`
+          : "Booking cancelled successfully!";
+        showNotification(_msg, "success");
 
         // Refresh bookings
         fetchBookings();

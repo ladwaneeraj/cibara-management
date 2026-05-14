@@ -40,7 +40,7 @@ import pytz
 import logging
 from google.cloud.firestore_v1.base_query import FieldFilter
 
-from config import db, IST
+from config import db, IST, totals_ref
 from services.auth_service import requires_permission, requires_role
 
 logger = logging.getLogger(__name__)
@@ -729,25 +729,23 @@ def _ist_at_date(date_str):
 
 def _update_expense_totals(amount: int, method: str, now_ist):
     """
-    Mirror what billing.py does -- increment totals/<date> for expenses.
-    Pass a NEGATIVE `amount` to reverse a previously-recorded expense.
+    Mirror routes/reports.py::add_expense — increment the canonical
+    totals/current_totals counter that the dashboard reads. Pass a
+    NEGATIVE `amount` to reverse a previously-recorded expense.
+
+    `method` ("cash" / "online") is currently unused for the totals
+    counter (the dashboard aggregates expenses irrespective of method),
+    but the parameter is kept on the signature so callers don't need to
+    change. If a per-method split is ever needed, add a dedicated field
+    name like `cash_expense` / `online_expense` rather than reusing the
+    `cash` / `online` field names (which represent gross receipts in
+    this collection).
     """
     try:
-        date_key = now_ist.strftime("%Y-%m-%d")
-        totals_doc = db.collection("totals").document(date_key)
-        snap = totals_doc.get()
-        existing = snap.to_dict() if snap.exists else {}
-
-        field = "cash_expense" if method == "cash" else "online_expense"
-        current_val = int(existing.get(field, 0))
-        new_val = current_val + amount
-        # Don't drive the field below zero -- shows up in audit logs as a bug.
-        if new_val < 0:
-            logger.warning(
-                f"_update_expense_totals: clamping {field} on {date_key} from "
-                f"{current_val} + {amount} = {new_val} -> 0"
-            )
-            new_val = 0
-        totals_doc.set({field: new_val}, merge=True)
+        from firebase_admin import firestore as _fs
+        totals_ref.document("current_totals").set(
+            {"expenses": _fs.Increment(amount)},
+            merge=True,
+        )
     except Exception as e:
-        logger.warning(f"_update_expense_totals failed (non-fatal): {e}")
+        logger.warning(f"_update_expense_totals failed: {e}")

@@ -18,6 +18,27 @@ const CATEGORY_TIER = {
   others:             "tier2",
 };
 
+// Format any common date input (YYYY-MM-DD, ISO, or Date-parseable string)
+// to DD/MM/YYYY for display. Keeps storage / API formats untouched —
+// callers should pass the raw value in and use the return value only
+// for rendering. Returns empty string on invalid input so failure
+// produces a blank, not "NaN/NaN/NaN".
+function _fmtDateIN(raw) {
+  if (!raw) return "";
+  // Fast path: server emits "YYYY-MM-DD" — split, reorder, no Date object.
+  if (typeof raw === "string" && /^\d{4}-\d{2}-\d{2}/.test(raw)) {
+    const ymd = raw.slice(0, 10).split("-");
+    return ymd[2] + "/" + ymd[1] + "/" + ymd[0];
+  }
+  // Fallback: try Date parsing for anything else (ISO, RFC 2822, etc.).
+  const d = new Date(raw);
+  if (isNaN(d.getTime())) return String(raw);
+  const dd = String(d.getDate()).padStart(2, "0");
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const yy = d.getFullYear();
+  return dd + "/" + mm + "/" + yy;
+}
+
 let expenseType = "transaction";
 let _invoicePhotoUrl = "";
 let _invoiceUploadInProgress = false;
@@ -589,7 +610,11 @@ function updateRenderLogs(originalRenderLogs) {
     allRecentLogs.forEach((l) => { (logsByDate[l.date] = logsByDate[l.date] || []).push(l); });
 
     function formatDate(ds) {
-      return new Date(ds).toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" });
+      // DD/MM/YYYY consistently. The recent-expenses panel previously
+      // emitted en-US weekday/month-name format ("Wednesday, May 13"),
+      // which is ambiguous to Indian operators and inconsistent with
+      // the rest of the panel.
+      return _fmtDateIN(ds);
     }
 
     let logsHTML = "";
@@ -766,7 +791,7 @@ function renderReportDataWithExpenses(data) {
         ? `<div style="font-size:0.78rem;color:var(--text-muted);">Vendor: ${log.vendor_name || "-"} | Taxable: ₹${log.taxable_amount || 0} | GST ${log.gst_rate || 0}%: ₹${log.gst_amount || 0}${log.vendor_gstin ? " | GSTIN: " + log.vendor_gstin : ""}</div>`
         : "";
       const invoiceDetail = log.has_bill && log.invoice_number
-        ? `<div style="font-size:0.78rem;color:var(--text-muted);">Invoice: ${log.invoice_number}${log.invoice_date ? " | Date: " + log.invoice_date : ""}</div>`
+        ? `<div style="font-size:0.78rem;color:var(--text-muted);">Invoice: ${log.invoice_number}${log.invoice_date ? " | Date: " + _fmtDateIN(log.invoice_date) : ""}</div>`
         : "";
       const photoLink = log.invoice_photo_url
         ? `<a href="${log.invoice_photo_url}" target="_blank" style="font-size:0.78rem;color:var(--primary);margin-left:6px;"><i class="fas fa-file-image"></i> View Invoice</a>`
@@ -796,7 +821,7 @@ function renderReportDataWithExpenses(data) {
               <span class="expense-indicator ${log.expense_type}">${typeLabel}</span>
               ${photoLink}
             </div>
-            <div class="log-subtitle">Expense on ${log.date} at ${log.time || "N/A"}</div>
+            <div class="log-subtitle">Expense on ${_fmtDateIN(log.date)} at ${log.time || "N/A"}</div>
             ${paidToLine}${invoiceDetail}${gstDetail}${commDetail}
           </div>
           <div class="log-amount" style="color:var(--danger);">₹${log.amount}</div>
@@ -820,7 +845,7 @@ function renderReportDataWithExpenses(data) {
     data.cash_logs.forEach((log) => {
       html += `<div class="log-item"><div class="log-details">
         <div class="log-title">Room ${log.room} - ${log.name} ${log.item ? `(${log.item})` : ""}</div>
-        <div class="log-subtitle">Cash on ${log.date} at ${log.time || "N/A"}</div>
+        <div class="log-subtitle">Cash on ${_fmtDateIN(log.date)} at ${log.time || "N/A"}</div>
       </div><div class="log-amount">₹${log.amount}</div></div>`;
     });
   }
@@ -834,7 +859,7 @@ function renderReportDataWithExpenses(data) {
     data.online_logs.forEach((log) => {
       html += `<div class="log-item"><div class="log-details">
         <div class="log-title">Room ${log.room} - ${log.name} ${log.item ? `(${log.item})` : ""}</div>
-        <div class="log-subtitle">Online on ${log.date} at ${log.time || "N/A"}</div>
+        <div class="log-subtitle">Online on ${_fmtDateIN(log.date)} at ${log.time || "N/A"}</div>
       </div><div class="log-amount">₹${log.amount}</div></div>`;
     });
   }

@@ -9,7 +9,11 @@ steps:
       - "--platform=managed"
       - "--allow-unauthenticated"
       - "--clear-base-image"
-      - "--update-env-vars=FIREBASE_CREDENTIALS=$$FIREBASE_CREDS,FIREBASE_STORAGE_BUCKET=cibara-software-61512.firebasestorage.app,MANAGER_PASSWORD=$$MANAGER_PASS,API_KEY=$$API_KEY_VAL,LODGE_PIN=$$LODGE_PIN"
+      # CIBARA_ENV=PROD is REQUIRED — config.py refuses to start on Cloud
+      # Run without it (safety guard so we never silently boot into the
+      # wrong Firebase project). This file targets the cibara-software-61512
+      # project, which is PROD per the ENVIRONMENTS map in config.py.
+      - "--update-env-vars=CIBARA_ENV=PROD,FIREBASE_CREDENTIALS=$$FIREBASE_CREDS,FIREBASE_STORAGE_BUCKET=cibara-software-61512.firebasestorage.app,MANAGER_PASSWORD=$$MANAGER_PASS,API_KEY=$$API_KEY_VAL,LODGE_PIN=$$LODGE_PIN"
     secretEnv: ["FIREBASE_CREDS", "MANAGER_PASS", "API_KEY_VAL", "LODGE_PIN"]
 
 availableSecrets:

@@ -16,6 +16,7 @@ import pytz
 import base64
 
 from services import payment_service, customer_service, pdf_service, expense_service, bills_service
+from services.banking import init_banking
 
 # Configure logging
 logging.basicConfig(
@@ -197,6 +198,10 @@ try:
     # Phase 1 of the stay_id migration — adds the bills/stay-document helper.
     # Additive, no behaviour change. See docs/STAY_DOC_CONTRACT.md.
     bills_service.init(db)
+    # Banking package — cash receipts, deposits, adjustments, bank
+    # accounts. Adds five new Firestore collections plus a bill_events
+    # audit log. Initialiser is idempotent.
+    init_banking(db)
 except Exception as e:
     logger.error(f"Error initializing Firebase: {str(e)}")
     raise
@@ -1631,7 +1636,18 @@ def compute_daily_folio(
         if day_total < 0:
             day_total = 0.0
 
-        day_gst_rate = _slab_for_value(day_total)
+        # GST slab is determined by the TARIFF (the per-night rate the
+        # hotel actually charges), NOT the post-discount net. Under
+        # CBIC Notification 11/2017-CTR as amended, the slab follows
+        # the value-of-supply BEFORE discount is applied; the discount
+        # is then treated as a deduction (Section 15(3)).
+        #
+        # Previously this used `day_total` (post-discount). That broke
+        # for fully-discounted nights: a ₹1800 room with a ₹1800 disc
+        # would reclassify to Exempt (post-discount net = ₹0), even
+        # though the tariff is firmly in the 5% bracket. Same row would
+        # then show Rate=Exempt while Taxable=₹1800 — visibly broken.
+        day_gst_rate = _slab_for_value(entry["pre_discount_total"])
         if day_gst_rate > 0 and day_total > 0:
             divisor = 100 + day_gst_rate
             day_gst = round(day_total * day_gst_rate / divisor, 2)

@@ -1,0 +1,450 @@
+/* =========================================================================
+ * Banking module styles.
+ * Mirrors the visual idiom used by bills.css / settle-later.css:
+ *   - same --primary brand colour and rounded-card aesthetic
+ *   - subtab segmented control at the top
+ *   - sticky right-side summary panel on the New Deposit screen
+ * ========================================================================= */
+
+.banking-container {
+  padding: 1rem;
+  max-width: 100%;
+  padding-bottom: 5rem;  /* breathing room above bottom nav */
+}
+
+/* ----- Header --------------------------------------------------------- */
+.bk-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.8rem;
+}
+.bk-header h1 {
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: var(--primary);
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0;
+}
+.bk-toolbar {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+}
+.bk-icon-btn {
+  width: 32px; height: 32px;
+  border: none; border-radius: 6px;
+  background: #6c757d; color: #fff;
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer; font-size: 0.85rem;
+  transition: opacity 0.15s;
+}
+.bk-icon-btn:hover { opacity: 0.78; }
+.bk-icon-btn.bk-refresh  { background: #6c757d; }
+.bk-icon-btn.bk-primary  { background: var(--primary); }
+.bk-icon-btn.bk-warn     { background: var(--warning); }
+
+/* ----- Subtab segmented control --------------------------------------- */
+.bk-seg {
+  display: flex;
+  gap: 0.25rem;
+  background: #eef0f7;
+  border-radius: 10px;
+  padding: 4px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.bk-seg::-webkit-scrollbar { display: none; }
+.bk-seg-btn {
+  flex: 0 0 auto;
+  padding: 0.4rem 0.75rem;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: #555;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  transition: background 0.15s, color 0.15s;
+  white-space: nowrap;
+}
+.bk-seg-btn i { font-size: 0.85rem; }
+.bk-seg-btn.active {
+  background: #fff;
+  color: var(--primary);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+}
+.bk-seg-count {
+  background: #d8dbe6;
+  color: #444;
+  border-radius: 10px;
+  padding: 0.02rem 0.4rem;
+  font-size: 0.65rem;
+  font-weight: 700;
+  min-width: 18px;
+  text-align: center;
+}
+.bk-seg-btn.active .bk-seg-count {
+  background: var(--primary);
+  color: #fff;
+}
+
+/* ----- Cash on Hand card --------------------------------------------- */
+.bk-coh-card {
+  background: linear-gradient(135deg, var(--primary), var(--secondary));
+  color: #fff;
+  border-radius: 14px;
+  padding: 1.2rem 1.3rem;
+  box-shadow: 0 4px 12px rgba(67, 97, 238, 0.25);
+}
+.bk-coh-label {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  opacity: 0.9;
+  font-weight: 600;
+  margin-bottom: 0.3rem;
+}
+.bk-coh-amount {
+  font-size: 2rem;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+.bk-coh-foot {
+  margin-top: 0.6rem;
+  font-size: 0.75rem;
+  opacity: 0.92;
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+.bk-coh-foot strong { font-weight: 700; }
+
+.bk-threshold-banner {
+  margin-top: 0.7rem;
+  background: #fff3cd;
+  border: 1px solid #ffe399;
+  color: #7a5800;
+  border-radius: 8px;
+  padding: 0.55rem 0.8rem;
+  font-size: 0.8rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.bk-threshold-banner i { color: var(--warning); }
+
+/* ----- Generic table -------------------------------------------------- */
+.bk-table-wrap {
+  background: #fff;
+  border-radius: 10px;
+  border: 1px solid #e8eaf0;
+  overflow: hidden;
+  margin-top: 0.8rem;
+}
+.bk-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+}
+.bk-table thead { background: #f4f6fb; }
+.bk-table th {
+  text-align: left;
+  padding: 0.55rem 0.7rem;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #5a6275;
+  font-weight: 700;
+  border-bottom: 1px solid #e8eaf0;
+}
+.bk-table td {
+  padding: 0.5rem 0.7rem;
+  border-top: 1px solid #f1f3f8;
+  color: #333;
+}
+.bk-table tbody tr:hover { background: #f7f9fc; cursor: default; }
+.bk-table .bk-num { text-align: right; font-variant-numeric: tabular-nums; }
+.bk-table tfoot td {
+  background: #f9fafd;
+  font-weight: 700;
+  border-top: 2px solid #d8dde9;
+}
+.bk-empty {
+  padding: 1.5rem;
+  text-align: center;
+  color: #888;
+  font-size: 0.85rem;
+}
+
+/* Status pills */
+.bk-pill {
+  display: inline-block;
+  padding: 0.15rem 0.55rem;
+  border-radius: 12px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.bk-pill-draft      { background: #e3e5ed; color: #444; }
+.bk-pill-confirmed  { background: #cfe5ff; color: #134a87; }
+.bk-pill-reconciled { background: #d3f0d8; color: #1d6f30; }
+.bk-pill-reversed   { background: #ffd8d8; color: #8a1f1f; }
+.bk-pill-eligible   { background: #d3f0d8; color: #1d6f30; }
+.bk-pill-pending    { background: #fff3cd; color: #7a5800; }
+.bk-pill-excluded   { background: #e3e5ed; color: #555; }
+
+/* ----- New-deposit two-column layout --------------------------------- */
+.bk-newdep-grid {
+  display: grid;
+  grid-template-columns: 1fr 280px;
+  gap: 1rem;
+  margin-top: 0.6rem;
+  align-items: start;
+}
+@media (max-width: 820px) {
+  .bk-newdep-grid { grid-template-columns: 1fr; }
+}
+
+.bk-newdep-left section {
+  background: #fff;
+  border-radius: 10px;
+  border: 1px solid #e8eaf0;
+  margin-bottom: 0.8rem;
+  overflow: hidden;
+}
+.bk-section-title {
+  background: #f4f6fb;
+  padding: 0.55rem 0.8rem;
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: #555;
+  border-bottom: 1px solid #e8eaf0;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.bk-section-title .bk-sub {
+  font-size: 0.7rem;
+  font-weight: 500;
+  color: #888;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+/* Sticky summary panel on the right */
+.bk-summary {
+  position: sticky;
+  top: 0.6rem;
+  background: #fff;
+  border: 1px solid #e8eaf0;
+  border-radius: 10px;
+  padding: 0.9rem 1rem;
+  box-shadow: var(--shadow-sm);
+}
+.bk-summary h3 {
+  font-size: 0.9rem;
+  margin-bottom: 0.6rem;
+  color: #333;
+}
+.bk-summary-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  padding: 0.32rem 0;
+  font-size: 0.85rem;
+  border-bottom: 1px dashed #ececec;
+}
+.bk-summary-row:last-of-type { border-bottom: none; }
+.bk-summary-label { color: #666; }
+.bk-summary-value { font-weight: 700; font-variant-numeric: tabular-nums; }
+.bk-summary-row.bk-net {
+  border-top: 2px solid #333;
+  border-bottom: none !important;
+  margin-top: 0.4rem;
+  padding-top: 0.5rem;
+}
+.bk-summary-row.bk-net .bk-summary-value {
+  font-size: 1.15rem;
+  color: var(--primary);
+}
+.bk-summary-row.bk-neg .bk-summary-value { color: var(--danger); }
+
+.bk-summary .bk-input {
+  width: 100%;
+  margin-top: 0.35rem;
+  padding: 0.4rem 0.55rem;
+  border: 1px solid #d8d8d8;
+  border-radius: 6px;
+  font-size: 0.85rem;
+  box-sizing: border-box;
+}
+
+.bk-cta-btn {
+  width: 100%;
+  margin-top: 0.7rem;
+  padding: 0.65rem;
+  border: none;
+  border-radius: 8px;
+  background: var(--primary);
+  color: #fff;
+  font-weight: 700;
+  font-size: 0.9rem;
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  gap: 0.4rem;
+  transition: opacity 0.15s;
+}
+.bk-cta-btn:hover  { opacity: 0.9; }
+.bk-cta-btn:disabled,
+.bk-cta-btn.disabled {
+  background: #b8bdc6;
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+.bk-cta-btn.bk-success { background: var(--success); }
+.bk-cta-btn.bk-danger  { background: var(--danger); }
+.bk-cta-btn.bk-secondary {
+  background: #fff;
+  color: var(--primary);
+  border: 1.5px solid var(--primary);
+}
+
+/* ----- Filter bar ---------------------------------------------------- */
+.bk-filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  background: #f4f6fb;
+  border-radius: 10px;
+  padding: 0.5rem 0.7rem;
+  border: 1px solid #e8eaf0;
+  margin-bottom: 0.6rem;
+}
+.bk-filter-bar label {
+  font-size: 0.72rem;
+  color: #555;
+  font-weight: 600;
+  margin-right: 0.2rem;
+}
+.bk-filter-bar input[type="date"],
+.bk-filter-bar select,
+.bk-filter-bar input[type="text"] {
+  padding: 0.25rem 0.5rem;
+  border: 1px solid #d8d8d8;
+  border-radius: 6px;
+  font-size: 0.8rem;
+  height: 30px;
+  background: #fff;
+}
+
+/* ----- Modal --------------------------------------------------------- */
+.bk-modal-backdrop {
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,0.55);
+  z-index: 1500;
+  display: flex; align-items: center; justify-content: center;
+  padding: 1rem;
+}
+.bk-modal-backdrop.hidden { display: none; }
+.bk-modal {
+  background: #fff;
+  width: 100%;
+  max-width: 460px;
+  border-radius: 14px;
+  overflow: hidden;
+  box-shadow: var(--shadow-lg);
+}
+.bk-modal-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0.8rem 1rem;
+  border-bottom: 1px solid #e8eaf0;
+}
+.bk-modal-header h2 {
+  margin: 0; font-size: 1rem; color: var(--primary);
+  display: flex; align-items: center; gap: 0.4rem;
+}
+.bk-modal-close {
+  border: none; background: transparent;
+  font-size: 1.4rem; line-height: 1;
+  color: #888; cursor: pointer;
+}
+.bk-modal-body { padding: 1rem; }
+.bk-modal-body label {
+  display: block;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: #444;
+  margin: 0.5rem 0 0.2rem;
+}
+.bk-modal-body input,
+.bk-modal-body select,
+.bk-modal-body textarea {
+  width: 100%;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid #d8d8d8;
+  border-radius: 6px;
+  font-size: 0.85rem;
+  box-sizing: border-box;
+}
+.bk-modal-body textarea { min-height: 60px; resize: vertical; }
+.bk-modal-footer {
+  display: flex; gap: 0.5rem;
+  padding: 0.8rem 1rem;
+  border-top: 1px solid #e8eaf0;
+  justify-content: flex-end;
+}
+
+/* ----- Toast --------------------------------------------------------- */
+.bk-toast-host {
+  position: fixed;
+  bottom: 5rem;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1800;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  pointer-events: none;
+}
+.bk-toast {
+  background: #333;
+  color: #fff;
+  padding: 0.55rem 0.9rem;
+  border-radius: 8px;
+  font-size: 0.82rem;
+  box-shadow: var(--shadow-md);
+  pointer-events: auto;
+  max-width: 360px;
+}
+.bk-toast.bk-toast-success { background: #1d6f30; }
+.bk-toast.bk-toast-error   { background: #8a1f1f; }
+.bk-toast.bk-toast-info    { background: #2c3e50; }
+
+/* ----- Misc helpers -------------------------------------------------- */
+.bk-row-spread {
+  display: flex; align-items: center; justify-content: space-between; gap: 0.5rem;
+}
+.bk-muted { color: #888; font-size: 0.78rem; }
+.bk-mono  { font-variant-numeric: tabular-nums; }
+.bk-checkbox { transform: scale(1.05); cursor: pointer; }
+.bk-spinner {
+  display: inline-block;
+  width: 14px; height: 14px;
+  border: 2px solid #ccc;
+  border-top-color: var(--primary);
+  border-radius: 50%;
+  animation: bk-spin 0.7s linear infinite;
+  vertical-align: -2px;
+}
+@keyframes bk-spin { to { transform: rotate(360deg); } }

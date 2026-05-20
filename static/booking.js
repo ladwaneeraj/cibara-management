@@ -347,7 +347,10 @@ async function createBooking(event) {
 
   // OTA vs normal fields
   const isMmt = bookingSource === "mmt";
-  const totalAmount = isMmt
+  // For normal bookings, we recompute the total below from rate × nights as a
+  // safety net (see "Submit-time recompute"). We still read the form value
+  // here so the existing required-field validation works.
+  let totalAmount = isMmt
     ? parseInt(document.getElementById("booking-ota-total")?.value || 0)
     : parseInt(document.getElementById("booking-total-amount").value);
   const partialPayment = isMmt ? 0 : parseInt(
@@ -397,6 +400,72 @@ async function createBooking(event) {
   if (checkOut <= checkIn) {
     showNotification("Check-out date must be after check-in date", "error");
     return;
+  }
+
+  // ── Submit-time recompute (defence against stale form state) ───────────
+  // Several user-reported bugs trace back to the form's `total_amount`
+  // field being out of sync with `rate × nights`:
+  //
+  //   - operator picks a 3-night range, then edits the rate without the
+  //     listener firing in the right order
+  //   - flatpickr fires onChange twice during range selection and an
+  //     intermediate state leaks into the total
+  //   - operator types a manual total then changes dates without
+  //     re-clicking the rate field
+  //
+  // We compute the authoritative `nights` from the validated dates above
+  // and, for non-MMT bookings where a rate is known, force
+  // `totalAmount = ratePerNight × nights`. If the operator deliberately
+  // entered a discounted total (e.g. ₹100 off), we still honour it —
+  // we only override when the mismatch can't be a deliberate discount
+  // (i.e. it's exactly 1× the rate while nights > 1, the classic bug
+  // signature).
+  if (!isMmt) {
+    const computedNights = Math.round(
+      (checkOut.getTime() - checkIn.getTime()) / (1000 * 60 * 60 * 24),
+    );
+    if (computedNights < 1) {
+      showNotification(
+        "Check-out must be at least one night after check-in.",
+        "error",
+      );
+      return;
+    }
+
+    if (ratePerNight && ratePerNight > 0) {
+      const expectedTotal = ratePerNight * computedNights;
+      // Classic-bug signature: total equals one night's rate while the
+      // stay is multi-night. Force-correct without prompting and let
+      // the operator know what we changed.
+      if (computedNights > 1 && totalAmount === ratePerNight) {
+        totalAmount = expectedTotal;
+        const totalEl = document.getElementById("booking-total-amount");
+        if (totalEl) totalEl.value = expectedTotal;
+        showNotification(
+          "Total corrected: ₹" + ratePerNight + " × " + computedNights +
+            " nights = ₹" + expectedTotal,
+          "info",
+        );
+      } else if (totalAmount !== expectedTotal) {
+        // Any other mismatch — could be a legitimate discount/markup.
+        // Ask the operator before changing anything.
+        const diff = expectedTotal - totalAmount;
+        const direction = diff > 0 ? "less than" : "more than";
+        const ok = window.confirm(
+          "The total you entered (₹" + totalAmount + ") is " +
+            Math.abs(diff) + " " + direction +
+            " ₹" + ratePerNight + " × " + computedNights + " nights = ₹" +
+            expectedTotal + ".\n\nClick OK to use the computed total (" +
+            "₹" + expectedTotal + "), or Cancel to keep ₹" + totalAmount + ".",
+        );
+        if (ok) {
+          totalAmount = expectedTotal;
+          const totalEl = document.getElementById("booking-total-amount");
+          if (totalEl) totalEl.value = expectedTotal;
+        }
+        // If not OK, totalAmount stays as the operator entered it.
+      }
+    }
   }
 
   // Disable submit button
@@ -1800,6 +1869,15 @@ function showUpdateBookingModal(bookingId) {
   document.getElementById("update-total-amount").value = booking.total_amount;
   document.getElementById("update-notes").value = booking.notes || "";
 
+  // Populate AC toggle. The container is shown only for AC-capable rooms
+  // (200-206). On open we use the booking's current room; updateUpdateAcUi()
+  // re-evaluates whenever the user picks a different room from the dropdown.
+  const _acToggle = document.getElementById("update-ac-toggle");
+  if (_acToggle) {
+    _acToggle.checked = booking.is_ac === true;
+  }
+  updateUpdateAcUi(booking.room);
+
   // Set room options
   updateRoomOptions(
     booking.room,
@@ -1809,6 +1887,35 @@ function showUpdateBookingModal(bookingId) {
 
   // Show modal
   modal.classList.add("show");
+}
+
+// Show/hide and refresh the AC toggle on the Update Booking modal based on
+// the currently selected room. Mirrors the show/hide logic used by the new
+// booking form's updateBookingPriceCalc, but does NOT recalculate the total
+// — staff editing a booking may have manually set a price and we don't want
+// to overwrite it silently when they tick the AC flag. They can adjust the
+// total field by hand if needed.
+function updateUpdateAcUi(roomNumber) {
+  const container = document.getElementById("update-ac-toggle-container");
+  const toggle    = document.getElementById("update-ac-toggle");
+  const label     = document.getElementById("update-ac-label");
+  const slider    = document.getElementById("update-ac-slider");
+  if (!container || !toggle) return;
+
+  const isAcRoom = BOOKING_AC_ROOMS.includes(String(roomNumber || ""));
+  container.style.display = isAcRoom ? "block" : "none";
+  // If the user switches to a non-AC room, clear the flag so we don't
+  // accidentally persist isAC=true on a room that can't have AC.
+  if (!isAcRoom) toggle.checked = false;
+
+  const on = toggle.checked;
+  if (label) {
+    label.textContent = on ? "ON" : "OFF";
+    label.style.color = on ? "#0284c7" : "#64748b";
+  }
+  if (slider) {
+    slider.style.background = on ? "#0ea5e9" : "#cbd5e1";
+  }
 }
 
 // Initialize update booking form
@@ -1850,6 +1957,26 @@ function initializeUpdateBookingForm() {
     });
   }
 
+  // Room change → refresh AC toggle visibility for the newly selected room.
+  // Without this, the toggle would stay visible/hidden based on the old
+  // room until the modal is reopened.
+  const roomSelectEl = document.getElementById("update-room");
+  if (roomSelectEl) {
+    roomSelectEl.addEventListener("change", function () {
+      updateUpdateAcUi(this.value);
+    });
+  }
+
+  // Toggle change → refresh slider visuals (CSS handles the knob position,
+  // JS handles label + slider background colour).
+  const acToggleEl = document.getElementById("update-ac-toggle");
+  if (acToggleEl) {
+    acToggleEl.addEventListener("change", function () {
+      const room = (roomSelectEl && roomSelectEl.value) || "";
+      updateUpdateAcUi(room);
+    });
+  }
+
   // Form submission
   form.addEventListener("submit", async function (event) {
     event.preventDefault();
@@ -1868,6 +1995,15 @@ function initializeUpdateBookingForm() {
       document.getElementById("update-total-amount").value,
     );
     const notes = document.getElementById("update-notes").value;
+
+    // AC flag — only meaningful for rooms 200-206. We always include it in
+    // the payload (defaulting to false for non-AC rooms) so the server can
+    // flip an existing isAC=true off if staff swap to a non-AC room.
+    const _updateAcToggle = document.getElementById("update-ac-toggle");
+    const isAc =
+      BOOKING_AC_ROOMS.includes(String(room)) && _updateAcToggle
+        ? _updateAcToggle.checked
+        : false;
 
     // Validation
     if (
@@ -1935,6 +2071,7 @@ function initializeUpdateBookingForm() {
           guest_count: guestCount,
           total_amount: totalAmount,
           notes: notes,
+          is_ac: isAc,
         }),
       });
 

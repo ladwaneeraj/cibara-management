@@ -287,9 +287,20 @@ def write_payment_with_stay(stay_id: str, payment_data: dict, *,
         )
         return True
 
+    # Pre-mint the doc reference so we know the ID *before* the write,
+    # which lets us hand it to the banking trigger hook below regardless
+    # of write mode (batch / sync / async).
+    new_ref = _payments_ref.document()
+
     if batch is not None:
         try:
-            batch.set(_payments_ref.document(), doc)
+            batch.set(new_ref, doc)
+            # NOTE: batch-write callers commit the batch themselves. The
+            # banking trigger is therefore NOT fired here — firing it now
+            # would query Firestore for prior cash payments that haven't
+            # been flushed yet. Batch callers that want the trigger must
+            # call cash_receipts.issue_receipt_for_new_payment(stay_id,
+            # new_ref.id, method=...) after their commit succeeds.
             return True
         except Exception as e:
             logger.error(f"write_payment_with_stay batch-write failed: {e}")
@@ -297,14 +308,90 @@ def write_payment_with_stay(stay_id: str, payment_data: dict, *,
 
     if sync:
         try:
-            _payments_ref.document().set(doc)
+            new_ref.set(doc)
+            _fire_banking_hook(stay_id, new_ref.id, doc)
             return True
         except Exception as e:
             logger.error(f"write_payment_with_stay sync-write failed: {e}")
             return False
 
-    threading.Thread(target=_write_async, args=(doc,), daemon=True).start()
+    # Async path. Stamp the doc + fire the banking hook on the daemon
+    # thread so the HTTP response is unblocked. Banking-trigger latency
+    # (one read query + one transaction) is acceptable in the background.
+    threading.Thread(
+        target=_write_async_with_hook,
+        args=(new_ref, doc, stay_id),
+        daemon=True,
+    ).start()
     return True
+
+
+# ---------------------------------------------------------------------------
+# Banking trigger hook
+# ---------------------------------------------------------------------------
+# These are the inflow methods that participate in the deposit / receipt-
+# voucher workflow. Anything else (refund, discount, expense, balance,
+# pay_later, settlement, ...) is silently ignored — the trigger only
+# cares about real money coming IN.
+
+_BANKING_CASH_METHODS = frozenset({"cash"})
+_BANKING_ONLINE_METHODS = frozenset({"online", "upi", "card", "bank_transfer"})
+
+# Mirrors the exclusion list used by config.sum_payments_for_stay so the
+# trigger sees the same row population the totals computation does.
+_BANKING_EXCLUDED_TYPES = frozenset({
+    "refund", "checkout_refund", "manual_refund", "booking_cancel_refund",
+    "discount", "expense",
+})
+
+
+def _fire_banking_hook(stay_id: str, payment_id: str, doc: dict) -> None:
+    """
+    Best-effort hook called after a successful payment write. Fires
+    cash_receipts.issue_receipt_for_new_payment(...) when the payment
+    is a real inflow that participates in the receipt-voucher flow.
+
+    Never raises — banking failures must not regress payment recording.
+    """
+    try:
+        method_raw = (doc.get("method") or "").lower().strip()
+        type_raw   = (doc.get("type")   or "").lower().strip()
+        if not stay_id or not payment_id:
+            return
+        if type_raw in _BANKING_EXCLUDED_TYPES:
+            return
+        # Negative amounts are also refunds-by-shape; skip them.
+        try:
+            if int(doc.get("amount") or 0) <= 0:
+                return
+        except (TypeError, ValueError):
+            return
+        if method_raw in _BANKING_CASH_METHODS:
+            method = "cash"
+        elif method_raw in _BANKING_ONLINE_METHODS:
+            method = "online"
+        else:
+            return
+        # Local import — banking package may not be initialised in some
+        # legacy test paths. Falling back silently is correct here.
+        from services.banking import cash_receipts
+        cash_receipts.issue_receipt_for_new_payment(
+            stay_id, payment_id, method=method,
+        )
+    except Exception as e:
+        logger.warning(
+            f"_fire_banking_hook({stay_id}, {payment_id}) failed: {e}"
+        )
+
+
+def _write_async_with_hook(new_ref, doc: dict, stay_id: str) -> None:
+    """Async write that also fires the banking trigger after commit."""
+    try:
+        new_ref.set(doc)
+    except Exception as e:
+        logger.error(f"PaymentService async-write failed: {e}")
+        return
+    _fire_banking_hook(stay_id, new_ref.id, doc)
 
 
 def _safe_userid_from_request() -> str:

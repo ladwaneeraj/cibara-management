@@ -296,11 +296,22 @@ def update_booking():
             "guest_name", "guest_mobile", "check_in_date", "check_in_time", "check_out_date",
             "room", "notes", "guest_count", "total_amount", "status"
         ]
-        
+
         for field in updatable_fields:
             if field in booking_data:
                 booking[field] = booking_data[field]
-        
+
+        # AC flag — only meaningful for rooms 200-206. We always coerce to
+        # bool so the doc never holds truthy strings ("true"/"false"). If
+        # the caller didn't send the field we leave the existing value
+        # untouched (back-compat with older clients that don't yet send it).
+        # When the caller switches to a non-AC room we force the flag off
+        # so an old isAC=true can't survive on a room that can't have AC.
+        AC_ROOMS = {"200", "201", "202", "203", "204", "205", "206"}
+        if "is_ac" in booking_data:
+            new_room = str(booking.get("room", ""))
+            booking["is_ac"] = bool(booking_data["is_ac"]) if new_room in AC_ROOMS else False
+
         if "total_amount" in booking_data:
             booking["total_amount"] = int(booking_data["total_amount"])
             booking["balance"] = booking["total_amount"] - booking["paid_amount"]
@@ -549,6 +560,19 @@ def convert_booking_to_checkin():
         #   2. `booking.rate_per_night` if stored at booking time
         #   3. total_amount / nights between check_in_date and check_out_date
         #   4. final fallback: total_amount (one-night stay or unknown dates)
+        # Always compute nights up-front — we need it for renewal_count below,
+        # and previously it was only computed inside the rate-fallback branch.
+        _nights = 1
+        try:
+            _ci = datetime.strptime(booking["check_in_date"], "%Y-%m-%d")
+            _co = datetime.strptime(booking["check_out_date"], "%Y-%m-%d")
+            _nights = max((_co - _ci).days, 1)
+        except Exception as _e:
+            logger.warning(
+                f"convert_booking_to_checkin: nights calc fell back to 1 "
+                f"(booking_id={booking_id}, err={_e})"
+            )
+
         _override_price = booking_data.get("room_price")
         if _override_price is not None:
             room_price = int(_override_price)
@@ -557,16 +581,6 @@ def convert_booking_to_checkin():
             if _stored_rate and int(_stored_rate) > 0:
                 room_price = int(_stored_rate)
             else:
-                _nights = 1
-                try:
-                    _ci = datetime.strptime(booking["check_in_date"], "%Y-%m-%d")
-                    _co = datetime.strptime(booking["check_out_date"], "%Y-%m-%d")
-                    _nights = max((_co - _ci).days, 1)
-                except Exception as _e:
-                    logger.warning(
-                        f"convert_booking_to_checkin: nights calc fell back to 1 "
-                        f"(booking_id={booking_id}, err={_e})"
-                    )
                 _total = int(booking.get("total_amount") or 0)
                 room_price = int(round(_total / _nights)) if _nights else _total
         is_ac = False
@@ -579,20 +593,61 @@ def convert_booking_to_checkin():
             elif "is_ac" in booking_data:
                 is_ac = bool(booking_data["is_ac"])
 
+        # ── Walk-in-style balance model ─────────────────────────────────────
+        # Only Day 1's rent is on the room at check-in. Any prior advance
+        # paid against the booking (booking.paid_amount) plus the conversion
+        # payment (remaining_payment) are applied as credit against that
+        # Day-1 rate. Subsequent nights are added to the balance only when
+        # the operator manually clicks Renew Rent — exactly the same flow
+        # as a walk-in stay.
+        #
+        # Why this beats pre-charging N nights up-front:
+        #   1. Single mental model for booking + walk-in stays.
+        #   2. Early check-out is handled by *not renewing* — no special
+        #      "shorten stay" / "discount-as-hack" workflow needed for the
+        #      common case. The existing refund flow handles any leftover
+        #      credit naturally.
+        #   3. Bill renderer's `days = renewal_count + 1` and room.balance
+        #      stay in sync by construction.
+        #
+        # If the guest checks in via a 2-night booking with ₹1800 already
+        # paid and a ₹900/night rate:
+        #   - room.balance starts at  900 − 1800 = −900   (₹900 credit)
+        #   - operator renews on Day 2 → balance becomes 0 (credit consumed)
+        #   - guest checks out clean.
+        # If the guest leaves Day 2 morning without renewing:
+        #   - balance stays at −900, refund flow returns ₹900 to the guest.
+        _prior_paid_against_booking = int(booking.get("paid_amount", 0) or 0)
+        _total_paid_against_stay = _prior_paid_against_booking + remaining_payment
+        _room_balance_at_checkin = room_price - _total_paid_against_stay
+        # Negative balance is a legitimate credit — preserve the sign so the
+        # operator can see it and the refund flow can act on it. The old
+        # code clamped at zero, which silently lost the overpayment signal.
+
         guest = {
             "name": booking["guest_name"],
             "mobile": booking["guest_mobile"],
             "price": room_price,
             "guests": booking["guest_count"],
             "payment": payment_method,
-            "balance": balance_after_payment if balance_after_payment > 0 else 0,
+            "balance": _room_balance_at_checkin,
             "photo": booking.get("photo_path"),
             "isAC": is_ac
         }
 
-        # Mint stay_id and create the draft bill — same lifecycle as /checkin.
-        # The booking_id is recorded on the draft so prior advance payments
-        # can be traced through the conversion.
+        # Mint stay_id and create the draft bill — same lifecycle as /checkin
+        # except that booking-converted bills are born invoiceable=true.
+        #
+        # Why pre-officialise: a confirmed booking that has been converted
+        # is, operationally, an official stay — the operator already
+        # collected advance payment and committed to the room. Forcing
+        # the cash through the "pending → trigger fires on first online
+        # payment" lifecycle made booking-advance cash invisible to the
+        # deposit screen on cash-only stays (the common case for this
+        # hotel). Setting invoiceable=true at create_draft makes the
+        # banking hook below route each booking-advance cash row straight
+        # to "eligible" with an RV, so the operator can include it in
+        # a deposit on day one.
         stay_id = uuid.uuid4().hex
         bills_service.create_draft(
             room=room_number,
@@ -601,6 +656,7 @@ def convert_booking_to_checkin():
             stay_id=stay_id,
             booking_id=booking_id,
             source="booking_conversion",
+            invoiceable=True,
             batch=batch,
         )
 
@@ -615,9 +671,14 @@ def convert_booking_to_checkin():
             "status": "occupied",
             "guest": guest,
             "checkin_time": checkin_datetime_str,
-            "balance": balance_after_payment if balance_after_payment > 0 else 0,
+            "balance": _room_balance_at_checkin,
             "add_ons": [],
+            # Walk-in pattern: start on Day 1; operator renews each
+            # subsequent day manually. Booked nights N>1 are NOT
+            # pre-charged. See the long comment above the `guest` dict
+            # for the rationale.
             "renewal_count": 0,
+            "last_renewal_date": "",
             "last_renewal_time": None,
             # Pointer to the draft so /checkout finalizes it instead of
             # creating a second bill record.
@@ -643,8 +704,14 @@ def convert_booking_to_checkin():
             "lastModifiedAt": _conv_attr.get("lastModifiedAt"),
         })
 
-        if balance_after_payment > 0:
-            totals_update["balance"] = firestore.Increment(balance_after_payment)
+        # totals.balance reflects only money currently owed against
+        # *already-charged* nights. Under the walk-in model that's Day-1
+        # only; future nights get added to totals.balance when they're
+        # actually renewed. Negative room balances (credits) don't
+        # contribute — they're tracked on the room and consumed by
+        # subsequent renewals or refunded at checkout.
+        if _room_balance_at_checkin > 0:
+            totals_update["balance"] = firestore.Increment(_room_balance_at_checkin)
 
         booking["status"] = "checked_in"
         booking["check_in_time"] = checkin_datetime_str
@@ -672,6 +739,17 @@ def convert_booking_to_checkin():
         stay_key = f"{room_number}_{checkin_datetime_str}"
         relink_pending = False
         relink_count = 0
+        # Banking-hook queue. Booking-advance payments were written via the
+        # legacy `write_payment()` path at booking creation time — before a
+        # stay_id existed — so they never went through the banking hook
+        # and have no `deposit_eligibility` field. After we stamp stay_id
+        # on them in this batch, we'll fire the hook on each so they
+        # enter the cash-receipts lifecycle (cash → pending; online →
+        # triggers invoiceability). Without this, booking-advance cash
+        # is invisible to BOTH the deposit screen and the unofficial-cash
+        # list — it falls into a no-field limbo and the operator loses
+        # track of the money.
+        _advance_banking_queue: list[tuple[str, str, str]] = []
         try:
             from google.cloud.firestore_v1.base_query import FieldFilter as _FF
             _payments_coll = db.collection("payments")
@@ -686,6 +764,16 @@ def convert_booking_to_checkin():
                         "stay_checkin_date": current_date,
                     })
                     relink_count += 1
+                    # Capture for post-commit banking-hook firing. We only
+                    # need (payment_id, method, prior_eligibility) — the
+                    # hook decides what to do based on method, and we
+                    # gate on prior_eligibility so re-runs of conversion
+                    # don't regress an already-stamped doc.
+                    _advance_banking_queue.append((
+                        pdoc.reference.id,
+                        (pdata.get("method") or "").lower().strip(),
+                        (pdata.get("deposit_eligibility") or "").strip(),
+                    ))
         except Exception as _re:
             relink_pending = True
             logger.warning(
@@ -704,6 +792,60 @@ def convert_booking_to_checkin():
             })
 
         batch.commit()
+
+        # ── Fire banking hooks on the just-relinked booking advances ────────
+        # Must run AFTER batch.commit() so the stay_id stamps are durable
+        # before the banking flow reads each payment. Idempotent: skipped
+        # for any advance that already has a deposit_eligibility set (so
+        # a second run of conversion, manual retry, etc. is safe).
+        #
+        # Behaviour:
+        #   - cash advance:   stamps deposit_eligibility = "pending".
+        #                     Later picked up by either the trigger
+        #                     (an online payment hits the stay) or by
+        #                     mark_unofficial_on_checkout (stay closes
+        #                     without invoice), flipping to eligible or
+        #                     excluded respectively.
+        #   - online advance: fires the trigger immediately, which also
+        #                     officialises any prior cash on this stay.
+        #
+        # Failures are logged but never raised — the conversion has
+        # already succeeded and the advance can be retried via a
+        # follow-up admin tool if needed.
+        try:
+            from services.banking import cash_receipts as _cr
+            for (_pid, _pmethod, _peligibility) in _advance_banking_queue:
+                if _peligibility:
+                    # Already in the banking lifecycle — don't regress.
+                    continue
+                if _pmethod in ("cash",):
+                    try:
+                        _cr.issue_receipt_for_new_payment(
+                            stay_id, _pid, method="cash"
+                        )
+                    except Exception as _bhe:
+                        logger.warning(
+                            f"convert_booking_to_checkin: banking hook "
+                            f"failed for cash advance {_pid}: {_bhe}"
+                        )
+                elif _pmethod in ("online", "upi", "card", "bank_transfer"):
+                    try:
+                        _cr.issue_receipt_for_new_payment(
+                            stay_id, _pid, method="online"
+                        )
+                    except Exception as _bhe:
+                        logger.warning(
+                            f"convert_booking_to_checkin: banking hook "
+                            f"failed for online advance {_pid}: {_bhe}"
+                        )
+                # Other methods (ota, already_paid, balance, etc.) don't
+                # participate in the cash-receipts lifecycle — intentional.
+        except Exception as _bhe_outer:
+            logger.warning(
+                f"convert_booking_to_checkin: banking-hook pass failed "
+                f"outer ({_bhe_outer}); stay_id={stay_id}, "
+                f"queue_size={len(_advance_banking_queue)}"
+            )
 
         # Fix 4: store_transaction_metadata AFTER batch commit
         store_transaction_metadata(room_number, current_date, serial_number, "booking_conversion")

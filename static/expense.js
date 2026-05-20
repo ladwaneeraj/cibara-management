@@ -47,7 +47,15 @@ let _pendingInvoiceFile = null;   // File object selected by user — uploaded o
 // ─── Initialize ──────────────────────────────────────────────────────────────
 function initializeExpense() {
   const addExpenseBtn = document.getElementById("add-expense-btn");
-  if (addExpenseBtn) addExpenseBtn.addEventListener("click", () => showExpenseModal("transaction"));
+  if (addExpenseBtn) addExpenseBtn.addEventListener("click", () => {
+    // Admin gets to choose between Daily / From-Account at form-open
+    // time. Non-admin (manager) keeps the locked-to-transaction
+    // behaviour they had before.
+    const isAdmin = window.CibaraAuth
+      && typeof window.CibaraAuth.userCan === "function"
+      && window.CibaraAuth.userCan("banking.adjustment.create");
+    showExpenseModal("transaction", { allowTypeToggle: isAdmin });
+  });
 
   const addReportExpenseBtn = document.getElementById("add-report-expense-btn");
   if (addReportExpenseBtn) addReportExpenseBtn.addEventListener("click", () => showExpenseModal("report"));
@@ -297,7 +305,7 @@ function _resetUploadStatus() {
 }
 
 // ─── Show modal ───────────────────────────────────────────────────────────────
-function showExpenseModal(type) {
+function showExpenseModal(type, options) {
   const modal = document.getElementById("expense-modal");
   if (!modal) return;
 
@@ -347,14 +355,28 @@ function showExpenseModal(type) {
   const typeInput = document.getElementById("expense-type");
   if (typeInput) typeInput.value = type;
 
-  // ── Type toggle: hide the non-applicable option ───────────────────────────
-  // When opened from transaction tab → only Daily Expense; no From Account
-  // When opened from report section  → only From Account; no Daily Expense
+  // ── Type toggle: shown OR locked depending on caller ──────────────────────
+  // When opened from transaction tab by an admin (allowTypeToggle=true)
+  //   → show the Daily / From-Account toggle so admin can pick.
+  // When opened from report section, or from transaction tab as non-admin
+  //   → lock to the type the button represents and show a static label.
   const typeToggleWrap = document.getElementById("expense-type-toggle");
   const typeLockLabel  = document.getElementById("expense-type-lock-label");
-  if (typeToggleWrap) typeToggleWrap.style.display = "none";
+  const allowToggle = options && options.allowTypeToggle;
+  if (typeToggleWrap) {
+    typeToggleWrap.style.display = allowToggle ? "" : "none";
+    if (allowToggle) {
+      // Reflect the initial type in the toggle button's active state
+      document.querySelectorAll("#expense-form .exp-type-btn").forEach((b) => {
+        const matches = b.getAttribute("data-type") === type;
+        b.classList.toggle("active", matches);
+        b.style.background = matches ? "#e53e3e" : "transparent";
+        b.style.color      = matches ? "#fff" : "";
+      });
+    }
+  }
   if (typeLockLabel) {
-    typeLockLabel.style.display = "flex";
+    typeLockLabel.style.display = allowToggle ? "none" : "flex";
     if (type === "report") {
       typeLockLabel.innerHTML =
         '<i class="fas fa-university" style="color:#3182ce;"></i>' +

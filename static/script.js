@@ -596,8 +596,22 @@ function renderRooms() {
 
     roomCard.innerHTML = roomContent;
 
+    // Housekeeping role: the card body is read-only. The only way to act on
+    // a room is via the explicit broom icons (mid-stay HK requests) or the
+    // "Cleaned" button (post-checkout cleaning) — both of which call
+    // event.stopPropagation() so they bypass this card-level handler.
+    // Without this guard housekeeping can tap a room marked for cleaning and
+    // accidentally land on the check-in / checkout modal.
+    const _authHK = window.CibaraAuth;
+    const _isHousekeepingUser = !!(
+      _authHK && _authHK.isHousekeeping && _authHK.isHousekeeping()
+    );
+
     // Setup click handlers
     roomCard.addEventListener("click", () => {
+      // Housekeeping users never open modals from a card tap.
+      if (_isHousekeepingUser) return;
+
       // Prevent interaction with cleaning rooms
       if (info.status === "cleaning") {
         showNotification("Room is being cleaned", "info");
@@ -619,6 +633,7 @@ function renderRooms() {
     const longPressThreshold = 500;
 
     roomCard.addEventListener("mousedown", function (e) {
+      if (_isHousekeepingUser) return;
       if (info.status !== "cleaning") {
         longPressTimer = setTimeout(() => {
           showRoomDetailsModal(roomNumber);
@@ -635,6 +650,7 @@ function renderRooms() {
     });
 
     roomCard.addEventListener("touchstart", function (e) {
+      if (_isHousekeepingUser) return;
       if (info.status !== "cleaning") {
         longPressTimer = setTimeout(() => {
           showRoomDetailsModal(roomNumber);
@@ -1893,6 +1909,155 @@ function updateCheckoutModal(roomNumber) {
   // Update payment logs using transaction log manager
   if (typeof updatePaymentLogs === "function") {
     updatePaymentLogs(roomNumber);
+  }
+
+  // ── Shorten-stay action (early-checkout workflow) ─────────────────────────
+  // When the room has been renewed at least once (renewal_count >= 1), expose
+  // an admin-only "Shorten Stay" action. This is the proper way to handle a
+  // guest who booked / renewed for N nights but is leaving early — it
+  // decrements renewal_count and reverses the corresponding rent charges on
+  // the server so the bill recomputes against the actual stay length.
+  //
+  // Previously operators worked around this by applying a fake discount,
+  // which produced misleading bills (Day-1 = ₹0, "PAID IN FULL" badge on a
+  // ₹1800 overpayment, etc.). The OVERPAID badge fix in register.js handles
+  // the display side; this is the workflow fix.
+  ensureShortenStayButton(roomNumber);
+}
+
+// Injects (once) and toggles visibility of the "Shorten Stay" button on the
+// checkout modal. Visible only for admin role on a room with renewal_count >= 1.
+// Idempotent — safe to call on every updateCheckoutModal().
+function ensureShortenStayButton(roomNumber) {
+  try {
+    const roomInfo = rooms[roomNumber];
+    if (!roomInfo || !roomInfo.guest) return;
+
+    const _auth = window.CibaraAuth;
+    const role = _auth && _auth.currentUser
+      ? (_auth.currentUser() || {}).role
+      : null;
+    const renewalCount = parseInt(roomInfo.renewal_count || 0, 10) || 0;
+    // OTA prepaid rooms don't have an editable balance — no use here.
+    const isOta = roomInfo.guest && roomInfo.guest.payment === "ota";
+    const shouldShow = role === "admin" && renewalCount >= 1 && !isOta;
+
+    // Find or create the button container immediately after the balance row.
+    let btn = document.getElementById("shorten-stay-btn");
+    if (!btn) {
+      const balanceEl = document.getElementById("checkout-balance");
+      const balanceRow = balanceEl ? balanceEl.closest(".detail-row") : null;
+      if (!balanceRow || !balanceRow.parentNode) return;
+
+      const wrap = document.createElement("div");
+      wrap.id = "shorten-stay-row";
+      wrap.style.cssText =
+        "padding: 0.4rem 0; text-align: right; display: none;";
+      btn = document.createElement("button");
+      btn.id = "shorten-stay-btn";
+      btn.type = "button";
+      btn.className = "btn-link";
+      btn.style.cssText =
+        "background:none;border:1px solid var(--warning,#f59e0b);" +
+        "color:var(--warning,#b45309);font-size:0.78rem;" +
+        "padding:0.32rem 0.7rem;border-radius:6px;cursor:pointer;" +
+        "font-weight:600;";
+      btn.innerHTML =
+        '<i class="fas fa-rotate-left"></i> Shorten Stay';
+      btn.title =
+        "Reverse one or more rent renewals — use this when the guest is " +
+        "leaving earlier than the days they were charged for.";
+      btn.onclick = function () { promptShortenStay(roomNumber); };
+      wrap.appendChild(btn);
+      balanceRow.parentNode.insertBefore(wrap, balanceRow.nextSibling);
+    }
+
+    const row = document.getElementById("shorten-stay-row");
+    if (row) row.style.display = shouldShow ? "block" : "none";
+  } catch (e) {
+    if (typeof debugLog === "function") {
+      debugLog("ensureShortenStayButton failed: " + (e && e.message));
+    }
+  }
+}
+
+// Prompts the operator for the number of days to reverse and dispatches the
+// API call. Uses a native confirm() to keep this surgical — wiring up a
+// dedicated modal would touch templates/index.html unnecessarily.
+async function promptShortenStay(roomNumber) {
+  const roomInfo = rooms[roomNumber];
+  if (!roomInfo || !roomInfo.guest) return;
+  const currentCount = parseInt(roomInfo.renewal_count || 0, 10) || 0;
+  if (currentCount < 1) {
+    showNotification("Nothing to reverse — no renewals on this stay.", "info");
+    return;
+  }
+  const rate = parseInt((roomInfo.guest || {}).price || 0, 10) || 0;
+
+  // Default to reversing 1 day; operator can edit. Cap at currentCount.
+  const raw = window.prompt(
+    "Shorten stay by how many day(s)?\n\n" +
+      "Current renewals: " + currentCount + "\n" +
+      "Rate: ₹" + rate + " / day\n\n" +
+      "Each reversed day removes ₹" + rate +
+      " from the balance. If the guest has already paid for those nights, " +
+      "the balance will go negative and the existing refund flow can return " +
+      "the difference.",
+    "1"
+  );
+  if (raw === null) return; // cancelled
+  const n = parseInt(raw, 10);
+  if (!Number.isFinite(n) || n < 1) {
+    showNotification("Please enter a positive whole number.", "error");
+    return;
+  }
+  if (n > currentCount) {
+    showNotification(
+      "Cannot reverse " + n + " day(s) — only " + currentCount +
+        " renewal(s) exist on this stay.",
+      "error"
+    );
+    return;
+  }
+
+  const reason = window.prompt(
+    "Reason (optional — recorded in the audit log):",
+    ""
+  );
+  // Note: prompt returning null means cancelled; "" means no reason given.
+  if (reason === null) return;
+
+  const confirmMsg =
+    "Reverse " + n + " day(s) of rent (₹" + (rate * n) + " total) " +
+    "on room " + roomNumber + "?";
+  if (!window.confirm(confirmMsg)) return;
+
+  try {
+    const res = await apiFetch("/shorten_stay", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        room: roomNumber,
+        days_to_reverse: n,
+        reason: reason || "",
+      }),
+    });
+    const out = await res.json();
+    if (!res.ok || !out.success) {
+      showNotification(out.message || "Failed to shorten stay", "error");
+      return;
+    }
+    // Patch local state so the modal reflects the change immediately, then
+    // refresh from server for ground truth.
+    if (rooms[roomNumber]) {
+      rooms[roomNumber].renewal_count = out.new_renewal_count;
+      rooms[roomNumber].balance       = out.new_balance;
+    }
+    showNotification(out.message || "Stay shortened.", "success");
+    updateCheckoutModal(roomNumber);
+    if (typeof fetchData === "function") fetchData();
+  } catch (e) {
+    showNotification("Network error: " + (e && e.message), "error");
   }
 }
 

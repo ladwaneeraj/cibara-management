@@ -24,6 +24,7 @@
     <link rel="stylesheet" href="/static/style.css" />
     <link rel="stylesheet" href="/static/booking.css" />
     <link rel="stylesheet" href="/static/laundry.css" />
+    <link rel="stylesheet" href="/static/banking.css" />
     <link
       rel="stylesheet"
       href="https://cdnjs.cloudflare.com/ajax/libs/flatpickr/4.6.13/flatpickr.min.css"
@@ -33,6 +34,13 @@
       #booking-ac-toggle:checked + #booking-ac-slider { background: #0ea5e9; }
       #booking-ac-toggle:checked + #booking-ac-slider:before { transform: translateX(18px); }
       #booking-ac-slider:before {
+        position: absolute; content: ""; height: 16px; width: 16px;
+        left: 3px; bottom: 3px; background: white; border-radius: 50%; transition: .3s;
+      }
+      /* Update Booking modal — same toggle visuals, separate IDs */
+      #update-ac-toggle:checked + #update-ac-slider { background: #0ea5e9; }
+      #update-ac-toggle:checked + #update-ac-slider:before { transform: translateX(18px); }
+      #update-ac-slider:before {
         position: absolute; content: ""; height: 16px; width: 16px;
         left: 3px; bottom: 3px; background: white; border-radius: 50%; transition: .3s;
       }
@@ -1013,6 +1021,14 @@
                 <select id="expense-category-filter" class="filter-select" style="display:none">
                   <option value="all">All Categories</option>
                 </select>
+                <!-- Daily / Report expense filter — shown only when Expenses is selected.
+                     Daily = transaction-type (drawer expenses).
+                     Report = from-account (off-deposit). -->
+                <select id="expense-type-filter" class="filter-select" style="display:none">
+                  <option value="all">Daily &amp; Report</option>
+                  <option value="transaction">Daily only</option>
+                  <option value="report">Report only</option>
+                </select>
                 <select id="report-sort" class="filter-select">
                   <option value="oldest">Oldest First</option>
                   <option value="newest">Newest First</option>
@@ -1268,6 +1284,9 @@
 
         <!-- Bills Tab Content (populated by bills.js) -->
         <div class="tab-content hidden" id="bills-tab"></div>
+
+        <!-- Banking Tab Content (populated by banking.js) -->
+        <div class="tab-content hidden" id="banking-tab"></div>
 
         <!-- Register Tab Content -->
         <div class="tab-content hidden" id="register-tab">
@@ -2865,6 +2884,15 @@
           <i class="fas fa-tshirt"></i>
           <span>Laundry</span>
         </div>
+
+        <!-- Banking shortcut — hidden from housekeeping and gated by the
+             banking.view permission so managers/admin see it, anyone
+             else doesn't. -->
+        <div class="quick-action-item" id="quick-banking-btn"
+             data-perm="banking.view" data-hide-roles="housekeeping">
+          <i class="fas fa-university"></i>
+          <span>Banking</span>
+        </div>
       </div>
     </div>
     <!-- Checkout Confirmation Modal -->
@@ -4454,6 +4482,24 @@
               <option value="">Loading available rooms...</option>
             </select>
           </div>
+
+          <!-- AC Toggle for rooms 200-206. Visibility is driven by JS
+               (see showUpdateBookingModal / update-room change handler)
+               so the toggle only appears when the selected room actually
+               supports AC. Mirrors the markup used by the new-booking form. -->
+          <div id="update-ac-toggle-container" style="display:none; margin-bottom:0.6rem;">
+            <div style="display:flex; align-items:center; gap:0.6rem; background:linear-gradient(135deg,#e0f2fe,#bae6fd); border:1px solid #7dd3fc; border-radius:8px; padding:0.5rem 0.75rem;">
+              <span style="font-size:1.1rem;">❄️</span>
+              <label for="update-ac-toggle" style="font-weight:600; font-size:0.88rem; color:#0369a1; cursor:pointer; flex:1; margin:0;">AC Room</label>
+              <label style="position:relative; display:inline-block; width:40px; height:22px; margin:0;">
+                <input type="checkbox" id="update-ac-toggle" style="opacity:0; width:0; height:0;">
+                <span style="position:absolute; cursor:pointer; top:0; left:0; right:0; bottom:0; background:#ccc; border-radius:22px; transition:.3s;"
+                  id="update-ac-slider"></span>
+              </label>
+              <span id="update-ac-label" style="font-size:0.8rem; color:#0369a1; font-weight:500; min-width:40px;">OFF</span>
+            </div>
+          </div>
+
           <div class="form-group">
             <label class="form-label" for="update-guest-count"
               >Number of Guests</label
@@ -4543,6 +4589,8 @@
     ></script>
     <script defer src="/static/register.js"></script>
     <script defer src="/static/bills.js"></script>
+    <!-- Banking Section: cash deposits, receipt vouchers, adjustments -->
+    <script defer src="/static/banking.js"></script>
     <script defer src="/static/script.js"></script>
     <script defer src="/static/shift.js"></script>
     <script defer src="/static/analytics.js"></script>

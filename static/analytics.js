@@ -1,3 +1,26 @@
+// Module-level filter for the two expense charts. Default = "transaction"
+// (daily expenses only) — matches what most operators want to see day-to-
+// day. The user can switch to "all" or "report" via the dropdown above
+// the expense-charts row.
+let _expenseTypeFilter = "transaction";
+
+// Last data snapshot the charts rendered against, kept so the filter-
+// change handler can re-render without forcing the whole report to
+// reload from the server.
+let _lastAnalyticsData = null;
+
+// Apply the current filter to a list of expense_logs. Treats missing
+// expense_type as "transaction" so legacy expenses from before that
+// field existed still show under the Daily filter.
+function _filterExpensesByType(expLogs) {
+  if (!expLogs) return [];
+  if (_expenseTypeFilter === "all") return expLogs;
+  return expLogs.filter((l) => {
+    const t = (l.expense_type || "transaction").toLowerCase();
+    return t === _expenseTypeFilter;
+  });
+}
+
 function setupChartDefaults() {
   // Disable animations globally
   Chart.defaults.animation = false;
@@ -81,6 +104,10 @@ async function generateAnalytics(reportData) {
   // KPI cards + insights
   updateSummaryCards(reportData);
 
+  // Stash the data so the expense-filter dropdown can re-render the two
+  // expense charts without re-fetching the whole report.
+  _lastAnalyticsData = reportData;
+
   // Charts that work off the payment-based reportData alone
   generateRevenueExpenseChart(reportData);
   generateDailyRevenueChart(reportData);
@@ -89,6 +116,23 @@ async function generateAnalytics(reportData) {
   generateExpenseCategoriesChart(reportData);
   generateExpenseTrendChart(reportData);
   generateTopServicesChart(reportData);
+
+  // Wire the expense-type filter dropdown — re-renders just the two
+  // expense charts on change. Done after the report's first render so
+  // the dropdown element exists in the DOM. Idempotent — re-binding on
+  // each report load is fine.
+  const _expFilterEl = document.getElementById("analytics-expense-filter");
+  if (_expFilterEl && !_expFilterEl.dataset.wired) {
+    _expFilterEl.dataset.wired = "1";
+    _expFilterEl.value = _expenseTypeFilter;
+    _expFilterEl.addEventListener("change", () => {
+      _expenseTypeFilter = _expFilterEl.value || "all";
+      if (_lastAnalyticsData) {
+        generateExpenseCategoriesChart(_lastAnalyticsData);
+        generateExpenseTrendChart(_lastAnalyticsData);
+      }
+    });
+  }
 
   // Bills payload — used by BOTH the Billing Analytics strip and the
   // Revenue-by-Room-Type chart (the chart needs `is_ac` per bill to split
@@ -583,9 +627,10 @@ function generateExpenseCategoriesChart(data) {
     chartCanvas.chart.destroy();
   }
 
-  // Group expenses by category
+  // Group expenses by category — respects the Daily/Report/All filter
+  // selected via the dropdown above the expense charts row.
   const expenseCategories = {};
-  (data.expense_logs || []).forEach((log) => {
+  _filterExpensesByType(data.expense_logs || []).forEach((log) => {
     const category = log.category || "Other";
     if (!expenseCategories[category]) {
       expenseCategories[category] = 0;
@@ -1025,7 +1070,8 @@ function generateExpenseTrendChart(data) {
   if (!canvas) return;
   if (canvas.chart) canvas.chart.destroy();
 
-  const expLogs = data.expense_logs || [];
+  // Respect the Daily/Report/All filter shared with the Breakdown chart.
+  const expLogs = _filterExpensesByType(data.expense_logs || []);
   if (expLogs.length === 0) {
     canvas.chart = null;
     showChartEmpty(canvas, "No expense records in this period");
@@ -1130,6 +1176,23 @@ function initializeAnalyticsView() {
     </div>
 
     <!-- Row 3: Expense Categories + Expense Trend -->
+    <!-- Filter scopes both expense charts in this row. Daily =
+         transaction-type (drawer expenses). Report = from-account
+         (off-deposit). All = both combined (legacy default). -->
+    <div style="display:flex; justify-content:flex-end; align-items:center;
+                gap:0.5rem; margin: 0.4rem 0 0.4rem; padding: 0 0.2rem;
+                font-size:0.82rem; color:#444;">
+      <i class="fas fa-filter" style="font-size:0.75rem; color:#888;"></i>
+      <label for="analytics-expense-filter" style="font-weight:600;">Expense type:</label>
+      <select id="analytics-expense-filter"
+              style="padding:0.25rem 0.5rem; border:1px solid #d8d8d8;
+                     border-radius:6px; font-size:0.82rem; height:30px;
+                     background:#fff;">
+        <option value="all">All</option>
+        <option value="transaction" selected>Daily only</option>
+        <option value="report">Report only</option>
+      </select>
+    </div>
     <div class="chart-row chart-row-2">
       ${chartCard("expense-categories-chart","#e63946","fas fa-tags","Expense Breakdown by Category", 280)}
       ${chartCard("expense-trend-chart","#ef4444","fas fa-receipt","Daily Expense Trend", 280)}
@@ -1511,8 +1574,11 @@ function renderCompactReportData(data) {
       cats.map(c => `<option value="${c}">${capFirst(c.replace(/_/g," "))}</option>`).join("");
   }
 
-  // Wire up filter controls (once)
-  ["report-search","report-type-filter","expense-category-filter","report-sort"].forEach(id => {
+  // Wire up filter controls (once). expense-type-filter is the
+  // Daily/Report selector that appears alongside the category filter
+  // when "Expenses Only" is the active transaction type.
+  ["report-search","report-type-filter","expense-category-filter",
+   "expense-type-filter","report-sort"].forEach(id => {
     const el = document.getElementById(id);
     if (el && !el._filterWired) {
       el.addEventListener(id === "report-search" ? "input" : "change", applyReportFilters);
@@ -1520,12 +1586,15 @@ function renderCompactReportData(data) {
     }
   });
 
-  // Show/hide category filter based on type
+  // Show/hide category + expense-type filters based on transaction-type
   const typeEl = document.getElementById("report-type-filter");
   if (typeEl && !typeEl._visWired) {
     typeEl.addEventListener("change", () => {
       const catEl = document.getElementById("expense-category-filter");
-      if (catEl) catEl.style.display = typeEl.value === "expenses" ? "" : "none";
+      const etEl  = document.getElementById("expense-type-filter");
+      const isExp = typeEl.value === "expenses";
+      if (catEl) catEl.style.display = isExp ? "" : "none";
+      if (etEl)  etEl.style.display  = isExp ? "" : "none";
     });
     typeEl._visWired = true;
   }
@@ -1535,6 +1604,8 @@ function renderCompactReportData(data) {
   if (searchEl) searchEl.value = "";
   if (typeEl) { typeEl.value = "all"; }
   if (catSelect) { catSelect.value = "all"; catSelect.style.display = "none"; }
+  const etEl = document.getElementById("expense-type-filter");
+  if (etEl) { etEl.value = "all"; etEl.style.display = "none"; }
   const sortEl = document.getElementById("report-sort");
   if (sortEl) sortEl.value = "oldest";
 
@@ -1555,6 +1626,9 @@ function applyReportFilters() {
   const search     = (document.getElementById("report-search")?.value||"").toLowerCase().trim();
   const typeFilter = document.getElementById("report-type-filter")?.value||"all";
   const catFilter  = document.getElementById("expense-category-filter")?.value||"all";
+  // Daily / Report sub-filter inside Expenses. "all" = both, default.
+  // Missing expense_type on a legacy row is treated as "transaction".
+  const expTypeFilter = document.getElementById("expense-type-filter")?.value||"all";
   const sortOrder  = document.getElementById("report-sort")?.value||"oldest";
 
   // Category filter badge color map
@@ -1586,13 +1660,18 @@ function applyReportFilters() {
   const expLogs    = showExp
     ? sortLogs((data.expense_logs||[]).filter(l => {
         const catOk = catFilter==="all" || (l.category||"other")===catFilter;
-        return catOk && hasSearch(l,["name","description","category","paid_to"]);
+        // Daily / Report sub-filter. Missing field counts as "transaction"
+        // so legacy expenses still show under "Daily only".
+        const et = (l.expense_type || "transaction").toLowerCase();
+        const etOk = expTypeFilter==="all" || et === expTypeFilter;
+        return catOk && etOk && hasSearch(l,["name","description","category","paid_to"]);
       }))
     : [];
 
   // Count active filters for result bar
   const total = cashLogs.length + onlineLogs.length + expLogs.length + refLogs.length;
-  const isFiltered = search || typeFilter!=="all" || catFilter!=="all";
+  const isFiltered = search || typeFilter!=="all" || catFilter!=="all"
+                     || expTypeFilter!=="all";
 
   let html = "";
   if (isFiltered) {
@@ -1600,6 +1679,8 @@ function applyReportFilters() {
       search ? `"${search}"` : "",
       typeFilter!=="all" ? typeFilter : "",
       catFilter!=="all" && showExp ? capFirst(catFilter) : "",
+      expTypeFilter!=="all" && showExp
+        ? (expTypeFilter === "transaction" ? "Daily" : "Report") : "",
     ].filter(Boolean).join(", ");
     html += `<div class="filter-result-bar"><i class="fas fa-filter"></i>&nbsp; <strong>${total}</strong> result${total!==1?"s":""} ${filterDesc ? `for <em>${filterDesc}</em>` : ""}</div>`;
   }

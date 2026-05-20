@@ -81,6 +81,16 @@ PERMISSIONS = frozenset(
         "data.export",
         "customer.manage",
         "quick_actions.use",
+        # Banking — cash deposits, receipt vouchers, adjustments,
+        # bank account directory. See services/banking/schema.py for
+        # the canonical PERM_* constants; the strings here must match.
+        "banking.view",
+        "banking.deposit.create",
+        "banking.deposit.confirm",
+        "banking.deposit.reconcile",
+        "banking.deposit.reverse",
+        "banking.adjustment.create",
+        "banking.account.manage",
     }
 )
 
@@ -104,11 +114,21 @@ ROLE_PERMISSIONS: dict[str, FrozenSet[str]] = {
             "room.cleaning.complete",
             "room.inspection.approve",
             "register.view",
+            # Banking — manager can VIEW the deposit screens and
+            # ASSEMBLE a draft deposit, but CANNOT confirm/reconcile/
+            # reverse a deposit or create cash adjustments. Those are
+            # admin-only because they involve money leaving the
+            # operator's custody.
+            "banking.view",
+            "banking.deposit.create",
             # Manager DOES NOT get: settings.view, discount.apply,
             # settlement.manage, transaction.history.full, payment.edit,
             # data.export, customer.manage, booking.revert, revenue.view,
             # analytics.view, laundry.price.edit, settle_later.use,
-            # logs.view, user.manage.
+            # logs.view, user.manage,
+            # banking.deposit.confirm, banking.deposit.reconcile,
+            # banking.deposit.reverse, banking.adjustment.create,
+            # banking.account.manage.
         }
     ),
     ROLE_HOUSEKEEPING: frozenset(

@@ -35,11 +35,18 @@
       "room.cleaning.complete",
       "room.inspection.approve",
       "register.view",
+      // Banking — manager can view + assemble drafts; cannot confirm,
+      // reconcile, reverse, create adjustments, or manage accounts.
+      "banking.view",
+      "banking.deposit.create",
       // Manager does NOT get: settings.view, discount.apply,
       // settlement.manage, transaction.history.full, payment.edit,
       // data.export, customer.manage, booking.revert, revenue.view,
       // analytics.view, laundry.price.edit, settle_later.use,
-      // logs.view, user.manage, quick_actions.use.
+      // logs.view, user.manage, quick_actions.use,
+      // banking.deposit.confirm, banking.deposit.reconcile,
+      // banking.deposit.reverse, banking.adjustment.create,
+      // banking.account.manage.
     ]),
     [ROLE_HOUSEKEEPING]: Object.freeze([
       "app.access",

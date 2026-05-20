@@ -14,6 +14,7 @@ from routes.customers import customers_bp
 from routes.utils import utils_bp
 from routes.laundry import laundry_bp
 from routes.users import users_bp
+from routes.banking import banking_bp
 from services.auth_service import load_current_user
 from flask import g
 import os
@@ -214,6 +215,7 @@ app.register_blueprint(customers_bp,   url_prefix="")
 app.register_blueprint(utils_bp,       url_prefix="")
 app.register_blueprint(laundry_bp,    url_prefix="")
 app.register_blueprint(users_bp,      url_prefix="")
+app.register_blueprint(banking_bp)    # /banking/* — owns its url_prefix
 
 # ---------------------------------------------------------------------------
 # Error handlers

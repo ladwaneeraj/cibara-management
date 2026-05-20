@@ -714,6 +714,26 @@ def checkout():
                 ).start()
             # ────────────────────────────────────────────────────────────────
 
+            # ── Banking: finalise pending cash on this stay ────────────────
+            # If the stay finished WITHOUT a real bill number (invoice
+            # toggle OFF -> bill_number == "-"), any cash collected on it
+            # is non-deposit cash. Flip its eligibility from `pending`
+            # to `excluded` so the deposit screen never offers it, and
+            # the Unofficial tab can list it. If the bill DOES have a
+            # real number, mark_unofficial_on_checkout is a no-op (the
+            # trigger should already have fired on the first online
+            # payment); calling it would simply do nothing.
+            try:
+                _bnum = (bill_record or {}).get("bill_number") if bill_record else None
+                if not _bnum or str(_bnum).strip() in ("", "-"):
+                    from services.banking import cash_receipts as _bk_receipts
+                    _bk_receipts.mark_unofficial_on_checkout(bill_id)
+            except Exception as _bk_e:
+                # Banking-side bookkeeping must never block a checkout.
+                logger.warning(
+                    f"mark_unofficial_on_checkout failed for stay={bill_id}: {_bk_e}"
+                )
+
             return jsonify(
                 success=True,
                 message=message,
@@ -959,7 +979,9 @@ def revert_checkout():
             totals_update["refunds"] = firestore.Increment(-refund_total)
             refund_reversed = True
 
-        # 6c. Bill: issue CN against original + create fresh draft.
+        # 6c. Bill: cancel the original bill (no Credit Note — the invoice
+        #     is not yet GSTR-1-filed, see revert_to_draft) and create a
+        #     fresh draft for the re-checkout.
         revert_result = bills_service.revert_to_draft(
             stay_id,
             reason=reason,
@@ -1449,6 +1471,200 @@ def renew_rent():
     except Exception as e:
         logger.error(f"Error renewing rent: {str(e)}")
         return jsonify(success=False, message=f"Error renewing rent: {str(e)}")
+
+
+@rooms_bp.route("/shorten_stay", methods=["POST"])
+@requires_permission("discount.apply")
+def shorten_stay():
+    """
+    Reverse one or more previously-applied rent renewals on an occupied room.
+
+    Use case: guest booked / renewed for N days but is leaving early. Instead
+    of papering over the mismatch with a fake discount (which produced
+    misleading bills before this endpoint existed), the operator clicks
+    "Shorten Stay" on the checkout modal and the system:
+
+      1. Decrements ``renewal_count`` by the requested amount.
+      2. Subtracts ``days_to_reverse × current_price`` from ``room.balance``
+         and from the global ``totals.balance`` counter, undoing the
+         "add a day's rent to balance" effect of past /renew_rent calls.
+      3. Clears ``last_renewal_date`` so the same day can be re-renewed
+         later if circumstances change (rare, but allowed).
+      4. Writes a single ``payments`` row of type ``rent_reversal`` for the
+         audit trail — this row carries ``stay_id`` so it appears in the
+         per-stay history alongside the original renewals it offsets.
+      5. Writes an audit log entry.
+
+    After this runs the operator's bill recomputes against the smaller
+    ``renewal_count`` (folio uses ``renewal_count + 1`` days). If the guest
+    has already paid for the now-reversed nights the resulting negative
+    balance flows naturally through the existing refund-on-checkout path.
+
+    Auth: ``discount.apply`` — same gate that protects the manual-discount
+    endpoint, since this is functionally a fee reduction.
+
+    Body
+    ----
+    room : str             — required, room number / id
+    days_to_reverse : int  — required, must be >= 1 and <= current renewal_count
+    reason : str           — optional, free-text note for the audit log
+
+    Returns
+    -------
+    JSON: {success, message, new_renewal_count, new_balance, reversal_amount}
+    """
+    try:
+        data_json = request.json or {}
+        room = data_json.get("room")
+        days_to_reverse = int(data_json.get("days_to_reverse", 0) or 0)
+        reason = (data_json.get("reason") or "").strip()[:200]
+
+        if not room:
+            return jsonify(success=False, message="Room is required"), 400
+        if days_to_reverse < 1:
+            return jsonify(success=False, message="days_to_reverse must be >= 1"), 400
+
+        room_ref = rooms_ref.document(str(room))
+
+        # State captured by the transactional closure so we can use it
+        # for the (outside-transaction) audit + payment-row writes.
+        captured = {
+            "room_data": None,
+            "price": 0,
+            "reversal_amount": 0,
+            "new_renewal_count": 0,
+            "new_balance": 0,
+        }
+
+        @firestore.transactional
+        def _txn_shorten(txn):
+            snap = room_ref.get(transaction=txn)
+            if not snap.exists:
+                return ("err", "Room not found", 404)
+            rd = snap.to_dict() or {}
+            if rd.get("status") != "occupied" or not rd.get("guest"):
+                return ("err", "Room is not occupied", 409)
+
+            current_count = int(rd.get("renewal_count", 0) or 0)
+            if days_to_reverse > current_count:
+                return (
+                    "err",
+                    f"Cannot reverse {days_to_reverse} day(s): only "
+                    f"{current_count} renewal(s) exist on this stay.",
+                    409,
+                )
+
+            price_in_txn = int((rd.get("guest") or {}).get("price", 0) or 0)
+            if price_in_txn <= 0:
+                return ("err", "Room rate missing on guest record", 409)
+
+            reversal_amount = price_in_txn * days_to_reverse
+            new_count   = current_count - days_to_reverse
+            new_balance = int(rd.get("balance", 0) or 0) - reversal_amount
+
+            # Update room doc.
+            #   - renewal_count: drops by N
+            #   - balance: drops by N * rate (undoes the +rate-per-renewal effect)
+            #   - last_renewal_date: cleared so the date-of-day guard in
+            #     /renew_rent doesn't lock today if the operator changes
+            #     their mind again. Re-renewal is rare but harmless.
+            txn.update(room_ref, {
+                "balance":           new_balance,
+                "renewal_count":     new_count,
+                "last_renewal_date": "",
+            })
+            txn.update(
+                totals_ref.document("current_totals"),
+                {"balance": firestore.Increment(-reversal_amount)},
+            )
+            captured["room_data"]        = rd
+            captured["price"]            = price_in_txn
+            captured["reversal_amount"]  = reversal_amount
+            captured["new_renewal_count"] = new_count
+            captured["new_balance"]      = new_balance
+            return ("ok", None, 200)
+
+        txn = db.transaction()
+        status, msg, http_code = _txn_shorten(txn)
+        if status != "ok":
+            return jsonify(success=False, message=msg), http_code
+
+        room_data       = captured["room_data"]
+        price           = captured["price"]
+        reversal_amount = captured["reversal_amount"]
+        guest           = room_data.get("guest") or {}
+
+        invalidate_rooms_and_totals()
+
+        # ── Audit-friendly payments row ──────────────────────────────────────
+        # type=rent_reversal, method=balance, amount=reversal_amount.
+        # This is a ledger entry — not a cash flow — so it sits on the
+        # "balance" rail like the original renewal entries it offsets. The
+        # bill renderer's folio math relies on renewal_count (which we just
+        # decremented), so this row is informational; it does not need to
+        # be summed into Cash Paid / Online Paid totals.
+        _reversal_payload = {
+            "room": str(room),
+            "name": guest.get("name", ""),
+            "amount": reversal_amount,
+            "method": "balance",
+            "type": "rent_reversal",
+            "date": datetime.now(IST).strftime("%Y-%m-%d"),
+            "time": datetime.now(IST).strftime("%H:%M"),
+            "transaction_type": "rent_reversal",
+            "note": (
+                f"Shorten stay by {days_to_reverse} day(s) "
+                f"@ ₹{price}/day"
+                + (f" — {reason}" if reason else "")
+            ),
+            "stay_room_key": f"{room}_{room_data.get('checkin_time', '')}",
+            "days_reversed": days_to_reverse,
+            "rate_at_reversal": price,
+        }
+        _abid = room_data.get("active_bill_id")
+        try:
+            if _abid:
+                payment_service.write_payment_with_stay(_abid, _reversal_payload)
+            else:
+                payment_service.write_payment(_reversal_payload)
+        except Exception as _e:
+            # Audit-row failure is non-fatal — the room state has already
+            # been corrected. Log loud and keep going.
+            logger.error(f"shorten_stay: failed to write audit payment row: {_e}")
+
+        logger.info(
+            f"shorten_stay: room={room} days_reversed={days_to_reverse} "
+            f"amount=₹{reversal_amount} new_renewal_count={captured['new_renewal_count']} "
+            f"new_balance=₹{captured['new_balance']}"
+        )
+        write_log(
+            "room.shorten_stay",
+            target_collection="rooms",
+            target_id=str(room),
+            metadata={
+                "guest": guest.get("name"),
+                "days_reversed": days_to_reverse,
+                "rate": price,
+                "reversal_amount": reversal_amount,
+                "new_renewal_count": captured["new_renewal_count"],
+                "new_balance": captured["new_balance"],
+                "reason": reason,
+            },
+        )
+        return jsonify(
+            success=True,
+            message=(
+                f"Stay shortened by {days_to_reverse} day(s). "
+                f"₹{reversal_amount} removed from balance."
+            ),
+            new_renewal_count=captured["new_renewal_count"],
+            new_balance=captured["new_balance"],
+            reversal_amount=reversal_amount,
+        )
+    except Exception as e:
+        logger.error(f"Error in shorten_stay: {str(e)}")
+        return jsonify(success=False, message=f"Error: {str(e)}"), 500
+
 
 @rooms_bp.route("/update_checkin_time", methods=["POST"])
 def update_checkin_time():
@@ -2170,10 +2386,17 @@ def get_data():
         _refund_types = ("refund", "checkout_refund", "manual_refund",
                          "booking_cancel_refund")
 
-        # Build logs in the shape the frontend expects
-        # "pay_later" method is used for settle-later check-ins; include alongside cash
+        # Build logs in the shape the frontend expects.
+        #   - "pay_later"   → settle-later check-ins (₹0 cash row).
+        #   - "already_paid" → booking conversions where the advance covered
+        #     the full amount; the conversion still represents a real check-in
+        #     event with a serial number, and staff expect to see it in
+        #     today's transactions even though no cash/online was tendered at
+        #     the conversion moment. Without this, fully-prepaid bookings
+        #     disappear from the transaction log on the conversion date.
+        _cash_methods = ("cash", "pay_later", "already_paid")
         cash_logs = [p for p in recent_payments
-                     if p.get("method") in ("cash", "pay_later")
+                     if p.get("method") in _cash_methods
                      and p.get("type") not in _refund_types
                      and p.get("type") not in ("expense", "discount")]
         online_logs = [p for p in recent_payments
@@ -2448,14 +2671,25 @@ def get_transactions_range():
         all_expenses = expense_service.query_expenses_by_date_range(from_date, end_exclusive) or []
 
         _refund_types = ("refund", "checkout_refund", "manual_refund", "booking_cancel_refund")
+        _hidden_types = ("expense", "discount")
+
+        # `already_paid` is written by /convert_booking_to_checkin when the
+        # booking's advance covered the full amount, so no cash/online was
+        # tendered at conversion time. The record still represents a real
+        # check-in event (with a serial number) that staff expect to see in
+        # the day's transactions list — without it, fully-prepaid bookings
+        # vanish from the transactions tab the moment they convert. Treat
+        # those rows like the existing zero-tender `pay_later` rows: cash
+        # bucket, ₹0 amount, BOOKING tag rendered by the frontend.
+        _cash_methods = ("cash", "pay_later", "already_paid")
 
         logs = {
-            "cash":     [p for p in payments if p.get("method") in ("cash", "pay_later")
+            "cash":     [p for p in payments if p.get("method") in _cash_methods
                          and p.get("type") not in _refund_types
-                         and p.get("type") not in ("expense", "discount")],
+                         and p.get("type") not in _hidden_types],
             "online":   [p for p in payments if p.get("method") == "online"
                          and p.get("type") not in _refund_types
-                         and p.get("type") not in ("expense", "discount")],
+                         and p.get("type") not in _hidden_types],
             "refunds":  [p for p in payments if p.get("type") in _refund_types],
             # Only transaction-type expenses from the expenses collection
             "expenses": [e for e in all_expenses
@@ -2733,6 +2967,89 @@ def update_stay_payment():
             return jsonify(success=False,
                            message="Amount cannot be edited for refund records"), 400
 
+        # ── Banking integrity guards ──────────────────────────────────────────
+        # These guards protect deposit and receipt-voucher integrity.
+        # They block edits that would silently corrupt downstream Banking
+        # state. The error message in each case tells the operator the
+        # supported recovery path.
+
+        # (a) If the payment is already bundled into a confirmed bank
+        # deposit, refuse the edit — changing the row would alter the
+        # gross/net of that deposit without the deposit knowing about
+        # it.
+        if old_data.get("cash_deposit_id"):
+            return jsonify(
+                success=False,
+                code="DEPOSIT_LINKED",
+                message=(
+                    "Cannot edit: this payment is linked to bank "
+                    f"deposit {old_data.get('cash_deposit_id')}. "
+                    f"Reverse the deposit first (Banking → History → "
+                    f"Reverse), then edit."
+                ),
+            ), 409
+
+        # (b) If a receipt voucher has been issued for this payment AND
+        # the method is changing (cash → online or vice versa), refuse.
+        # Re-stamping a different receipt prefix on the same payment is
+        # not a supported operation — the audit trail would lie. The
+        # supported workflow is: refund this payment and record a fresh
+        # one with the correct method.
+        _old_receipt = old_data.get("receipt_no")
+        _method_changing = (
+            new_method and new_method != (old_method or "").lower()
+        )
+        if _method_changing and _old_receipt:
+            return jsonify(
+                success=False,
+                code="RECEIPT_ISSUED",
+                message=(
+                    f"Cannot change method: receipt {_old_receipt} has "
+                    f"already been issued for this payment. To correct "
+                    f"the method, refund this payment and record a "
+                    f"fresh one with the right method."
+                ),
+            ), 409
+
+        # (c) If this payment is THE trigger that made the stay
+        # invoiceable AND the method is changing away from online, the
+        # stay's invoiceable state is no longer justified. Attempt to
+        # un-trigger automatically. revert_trigger_if_safe will refuse
+        # if any cash from this stay has already been deposited — in
+        # which case the operator must reverse the deposit first.
+        _stay_id = old_data.get("stay_id")
+        if _method_changing and new_method != "online" and _stay_id:
+            try:
+                bill_snap = db.collection("bills").document(_stay_id).get()
+                if bill_snap.exists:
+                    bill = bill_snap.to_dict() or {}
+                    if bill.get("invoiceable_trigger_payment_id") == payment_id:
+                        from services.banking import cash_receipts as _bk_rc
+                        from services.banking.cash_receipts import UnTriggerBlocked
+                        try:
+                            _bk_rc.revert_trigger_if_safe(
+                                _stay_id,
+                                reason="trigger_payment_method_change",
+                            )
+                        except UnTriggerBlocked as _bk_e:
+                            return jsonify(
+                                success=False,
+                                code="TRIGGER_LOCKED",
+                                message=(
+                                    "Cannot change method: this is the "
+                                    "online payment that made the stay "
+                                    "invoiceable, and cash from the "
+                                    "stay has already been deposited "
+                                    f"(on {_bk_e.first_deposit_at}). "
+                                    "Reverse that deposit first."
+                                ),
+                            ), 409
+            except Exception as _bk_e:
+                logger.warning(
+                    f"update_stay_payment: trigger-payment-edit guard "
+                    f"errored for {payment_id}: {_bk_e}"
+                )
+
         # ── Determine final values ────────────────────────────────────────────
         final_method = new_method if new_method else old_method
         final_amount = new_amount if new_amount is not None else old_amount
@@ -2852,6 +3169,26 @@ def delete_stay_payment():
         old_method = old_data.get("method", "")
         old_amount = int(old_data.get("amount", 0))
         room_id    = str(old_data.get("room", ""))
+
+        # ── Banking integrity guard ──────────────────────────────────────
+        # Refuse to delete a payment that's already been bundled into a
+        # confirmed/reconciled bank deposit. Deleting it would silently
+        # corrupt that deposit's gross/net totals — the deposit doc
+        # would still claim it includes a ₹X cash row that no longer
+        # exists. Force the operator to reverse the deposit first
+        # (which unlinks the rows cleanly), then they can delete.
+        _linked_deposit = old_data.get("cash_deposit_id")
+        if _linked_deposit:
+            return jsonify(
+                success=False,
+                code="DEPOSIT_LINKED",
+                message=(
+                    "Cannot delete: this payment is already linked to "
+                    f"bank deposit {_linked_deposit}. Reverse that "
+                    f"deposit first (Banking → History → Reverse), "
+                    f"then delete."
+                ),
+            ), 409
 
         batch = db.batch()
 

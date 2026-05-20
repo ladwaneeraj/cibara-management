@@ -203,6 +203,31 @@
   border-radius: 0 0 10px 10px;
 }
 
+/* ── Bill view toggle (Detailed / Consolidated) — control only, not printed ── */
+.bl-view-toggle {
+  display: flex; align-items: center; gap: .45rem;
+  margin: .6rem 1rem 0; padding: .5rem .7rem;
+  background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px;
+}
+.bl-view-toggle-label {
+  font-size: .68rem; font-weight: 700; color: #64748b;
+  text-transform: uppercase; letter-spacing: .06em;
+}
+.bl-vt-btn {
+  padding: .32rem .72rem; border: 1px solid #cbd5e1; border-radius: 6px;
+  background: #fff; color: #475569; font-size: .78rem; font-weight: 600;
+  cursor: pointer; transition: background .15s, color .15s, border-color .15s;
+}
+.bl-vt-btn:hover { background: #f1f5f9; }
+.bl-vt-btn.bl-vt-active {
+  background: #1e40af; color: #fff; border-color: #1e40af;
+}
+.bl-vt-hint {
+  margin-left: auto; font-size: .68rem; color: #94a3b8;
+  font-style: italic; text-align: right;
+}
+@media print { .bl-view-toggle { display: none !important; } }
+
 /* ── Bill print area (screen) ── */
 #reg-bill-print-area,
 #bl-bill-print-area {
@@ -365,7 +390,11 @@
 
 /* ── PRINT: force single A4 page ── */
 @media print {
-  @page { size: A4 portrait; margin: 10mm 12mm; }
+  /* margin:0 suppresses the browser's auto-printed URL / title / date
+     header & footer. The page margin is reinstated as padding on the
+     printed bill clone (#bl-print-clone) below, so content is never
+     edge-to-edge. */
+  @page { size: A4 portrait; margin: 0; }
 
   html, body {
     height: auto !important;
@@ -394,7 +423,7 @@
   #bl-print-clone {
     display: block !important;
     margin: 0 !important;
-    padding: 0 !important;
+    padding: 10mm 12mm !important;
     width: 100%;
     min-height: 0 !important;
     height: auto !important;
@@ -436,7 +465,7 @@
   #bl-print-clone,
   #reg-bill-print-area,
   #bill-print-area {
-    padding: 0 !important;
+    padding: 10mm 12mm !important;
     font-size: 9pt !important;
     line-height: 1.3 !important;
     width: 100% !important;
@@ -1028,6 +1057,69 @@
     return gstRate > 0 ? `${prefix}: ${hsnOrSac} - ${gstRate}%` : `${prefix}: ${hsnOrSac}`;
   }
 
+  // ══════════════════════════════════════════════════════════════════════════
+  // FOLIO VIEW MODES — Detailed vs Consolidated (Register-tab bill modal)
+  // The bill stores one folio entry per night. Detailed itemises every night;
+  // Consolidated collapses runs of add-on-free nights that share the same
+  // room, GST slab and nightly rate into one room block, showing only the
+  // days with extras in full. Pure rendering — storage and GST are untouched.
+  // ══════════════════════════════════════════════════════════════════════════
+
+  // Operator preference; null → auto (long stays default to Consolidated).
+  // Key is shared with the Bills-tab modal so the choice is consistent.
+  let _regBillViewMode = null;
+  try {
+    const _rvm = localStorage.getItem("cibara_bill_view");
+    if (_rvm === "detailed" || _rvm === "consolidated") _regBillViewMode = _rvm;
+  } catch (_e) { /* localStorage blocked — use auto */ }
+
+  // Two nights merge only when room, GST slab and nightly rate all match.
+  function folioNightKey(e) {
+    return [
+      e.room || "",
+      Number(e.day_gst_rate || 0),
+      Number(e.base_rate || 0),
+    ].join("|");
+  }
+  // A night with add-ons is always shown in full and breaks the run.
+  function folioNightHasExtras(e) {
+    return Array.isArray(e.addons) && e.addons.length > 0;
+  }
+  // Pure: folio[] -> blocks. { kind:"run", entries } | { kind:"day", entries:[one] }
+  function groupFolio(folio) {
+    const blocks = [];
+    let run = [];
+    const flush = () => {
+      if (run.length === 0) return;
+      blocks.push({ kind: run.length >= 2 ? "run" : "day", entries: run });
+      run = [];
+    };
+    for (const e of folio) {
+      if (folioNightHasExtras(e)) {
+        flush();
+        blocks.push({ kind: "day", entries: [e] });
+        continue;
+      }
+      if (run.length > 0 && folioNightKey(run[0]) !== folioNightKey(e)) flush();
+      run.push(e);
+    }
+    flush();
+    return blocks;
+  }
+  // True when Consolidated would actually merge something (a run of 2+ nights).
+  function folioIsCollapsible(folio) {
+    if (!Array.isArray(folio) || folio.length < 2) return false;
+    return groupFolio(folio).some((blk) => blk.kind === "run");
+  }
+  // Effective view mode: explicit operator choice wins, else auto.
+  function resolveViewMode(b) {
+    if (_regBillViewMode === "detailed" || _regBillViewMode === "consolidated") {
+      return _regBillViewMode;
+    }
+    const folio = Array.isArray(b && b.daily_folio) ? b.daily_folio : [];
+    return folioIsCollapsible(folio) ? "consolidated" : "detailed";
+  }
+
   function buildBillHTML(b) {
     const days = b.days_stayed || calcDays(b.checkin_time, b.checkout_time);
     const rate = b.room_price_per_night || b.room_rent || 0;
@@ -1109,53 +1201,108 @@
         return `${d} ${MONTH_NAMES[m - 1]} ${y} (${DAY_NAMES[(dt.getDay() + 6) % 7]})`;
       } catch (e) { return (s || "").slice(0, 10); }
     }
-    let folioRows = "";
-    if (folio.length > 0) {
-      for (const e of folio) {
-        const di       = e.day_index || 1;
-        const diRoom   = e.room || b.room || "";
-        const diBase   = Number(e.base_rate || 0);
-        const diAddons = Array.isArray(e.addons) ? e.addons : [];
-        const diTotal  = Number(e.day_total || 0);
-        const diDisc   = Number(e.discount_allocated || 0);
-        const dateDisp = fmtDayDate(e.day_start || "");
+    // renderRegFolioDay shows one night in full; renderRegFolioRun collapses
+    // a run of add-on-free nights into one room block. Both close over `b`
+    // and fmtDayDate. Amounts are summed from stored per-night fields.
+    function renderRegFolioDay(e) {
+      const di       = e.day_index || 1;
+      const diRoom   = e.room || b.room || "";
+      const diBase   = Number(e.base_rate || 0);
+      const diAddons = Array.isArray(e.addons) ? e.addons : [];
+      const diTotal  = Number(e.day_total || 0);
+      const diDisc   = Number(e.discount_allocated || 0);
+      const dateDisp = fmtDayDate(e.day_start || "");
 
-        folioRows += `<tr class="b-day-header"><td colspan="4" style="text-align:center;">
+      let out = `<tr class="b-day-header"><td colspan="4" style="text-align:center;">
           Day ${di} &nbsp;&mdash;&nbsp; ${dateDisp} &nbsp;&middot;&nbsp; Rm ${diRoom}
         </td></tr>`;
 
-        folioRows += `<tr>
+      out += `<tr>
           <td>Room Rent<br><span class="b-sac">SAC: 996311</span></td>
           <td class="b-tr">1</td>
           <td class="b-tr">${fix2(diBase)}</td>
           <td class="b-tr">${fix2(diBase)}</td>
         </tr>`;
 
-        for (const a of diAddons) {
-          const aGross = Number(a.price || 0);
-          const aUnit  = Number(a.unit_price || a.price || 0);
-          const aQty   = Number(a.quantity || 1);
-          folioRows += `<tr>
+      for (const a of diAddons) {
+        const aGross = Number(a.price || 0);
+        const aUnit  = Number(a.unit_price || a.price || 0);
+        const aQty   = Number(a.quantity || 1);
+        out += `<tr>
             <td>${a.item || "Service"}<br><span class="b-sac">SAC: 996311</span></td>
             <td class="b-tr">${aQty}</td>
             <td class="b-tr">${fix2(aUnit)}</td>
             <td class="b-tr">${fix2(aGross)}</td>
           </tr>`;
-        }
+      }
 
-        if (diDisc > 0) {
-          folioRows += `<tr>
+      if (diDisc > 0) {
+        out += `<tr>
             <td colspan="3" style="text-align:right;color:#2e7d32;font-weight:600;">
               Less: Discount allocated to Day ${di}
             </td>
             <td class="b-tr" style="color:#2e7d32;font-weight:700;">- ${fix2(diDisc)}</td>
           </tr>`;
-        }
+      }
 
-        folioRows += `<tr class="b-day-total">
+      out += `<tr class="b-day-total">
           <td colspan="3" class="b-tr">Day ${di} Total (incl. GST)</td>
           <td class="b-tr">${fix2(diTotal)}</td>
         </tr>`;
+      return out;
+    }
+
+    function renderRegFolioRun(entries) {
+      const n     = entries.length;
+      const first = entries[0];
+      const last  = entries[n - 1];
+      const room  = first.room || b.room || "";
+      const base  = Number(first.base_rate || 0);
+      const sum   = (k) => entries.reduce((s, e) => s + Number(e[k] || 0), 0);
+      const grossRoom = base * n;
+      const totDisc   = sum("discount_allocated");
+      const totDay    = sum("day_total");
+      const d1 = fmtDayDate(first.day_start || "");
+      const d2 = fmtDayDate(last.day_start  || "");
+
+      let out = `<tr class="b-day-header"><td colspan="4" style="text-align:center;">
+          Room Rent &nbsp;&mdash;&nbsp; ${d1} &nbsp;to&nbsp; ${d2} &nbsp;&middot;&nbsp; ${n} nights &nbsp;&middot;&nbsp; Rm ${room}
+        </td></tr>`;
+
+      out += `<tr>
+          <td>Room Rent<br><span class="b-sac">SAC: 996311</span></td>
+          <td class="b-tr">${n}</td>
+          <td class="b-tr">${fix2(base)}</td>
+          <td class="b-tr">${fix2(grossRoom)}</td>
+        </tr>`;
+
+      if (totDisc > 0) {
+        out += `<tr>
+            <td colspan="3" style="text-align:right;color:#2e7d32;font-weight:600;">
+              Less: Discount allocated to these ${n} nights
+            </td>
+            <td class="b-tr" style="color:#2e7d32;font-weight:700;">- ${fix2(totDisc)}</td>
+          </tr>`;
+      }
+
+      out += `<tr class="b-day-total">
+          <td colspan="3" class="b-tr">Room Charges (${n} nights) Total (incl. GST)</td>
+          <td class="b-tr">${fix2(totDay)}</td>
+        </tr>`;
+      return out;
+    }
+
+    let folioRows = "";
+    if (folio.length > 0) {
+      const viewMode = resolveViewMode(b);
+      if (viewMode === "consolidated") {
+        for (const blk of groupFolio(folio)) {
+          folioRows += blk.kind === "run"
+            ? renderRegFolioRun(blk.entries)
+            : renderRegFolioDay(blk.entries[0]);
+        }
+      } else {
+        for (const e of folio) folioRows += renderRegFolioDay(e);
       }
     }
 
@@ -1319,7 +1466,7 @@
     <tbody>
       <tr class="b-sec"><td colspan="4">Accommodation Charges (SAC: 9963)</td></tr>
       ${folio.length > 0 ? folioRows : (roomRentRows + accomAddonRows + taxableBaseRow + gstRows)}
-      ${folio.length > 0 ? `<tr class="b-subtotal"><td colspan="3" class="b-tr">Accommodation Total (all days, incl. GST)</td><td class="b-tr">${fix2(folio.reduce((s, e) => s + Number(e.day_total || 0), 0))}</td></tr>` : accomSubtotalRow}${otherSvcSection}${discountRow}
+      ${folio.length > 0 ? `<tr class="b-subtotal"><td colspan="3" class="b-tr">Accommodation Total (all days, incl. GST)</td><td class="b-tr">${fix2(folio.reduce((s, e) => s + Number(e.day_total || 0), 0))}</td></tr>` : accomSubtotalRow}${otherSvcSection}${folio.length > 0 ? "" : discountRow}
       <tr class="b-grand">
         <td colspan="3" class="b-tr">GRAND TOTAL</td>
         <td class="b-tr">₹ ${fix2(grandTotal)}</td>
@@ -1335,7 +1482,18 @@
       <tr class="b-subtotal"><td>Total Paid</td><td class="b-tr">₹ ${fix2(totalPaid)}</td></tr>
       ${refundRows}
       ${balance > 0 ? `<tr><td style="font-weight:800;color:#c62828;">Balance Due</td><td class="b-tr" style="font-weight:800;color:#c62828;">₹ ${fix2(balance)}</td></tr>` : ""}
-      ${balance <= 0 && refunds <= 0 ? `<tr><td style="color:#2e7d32;font-weight:700;">Payment Status</td><td class="b-tr" style="color:#2e7d32;font-weight:700;">PAID IN FULL</td></tr>` : ""}
+      ${(() => {
+        // Show OVERPAID only when (Total Paid − refunds) > Grand Total.
+        // The "PAID IN FULL" status line was removed per user preference —
+        // when the bill is settled cleanly nothing extra prints. The
+        // explicit Balance-Due row above already covers the unpaid case.
+        const _net = (totalPaid || 0) - (refunds || 0);
+        const _over = _net - (grandTotal || 0);
+        if (_over > 0.5) {
+          return `<tr><td style="font-weight:800;color:#b45309;">OVERPAID — refund due</td><td class="b-tr" style="font-weight:800;color:#b45309;">₹ ${fix2(_over)}</td></tr>`;
+        }
+        return "";
+      })()}
     </tbody></table>
   </div>
   <table class="b-sig"><tr>
@@ -1355,6 +1513,34 @@
   let _regOpenBillId   = null;
   let _regOpenBillData = null;
 
+  // (Re)render the open bill into the print area — called on open and
+  // whenever the Detailed/Consolidated toggle changes.
+  function _renderRegOpenBill() {
+    const area = dom("reg-bill-print-area");
+    if (!area || !_regOpenBillData) return;
+    area.innerHTML = buildBillHTML(_regOpenBillData);
+  }
+
+  // Show the toggle only when the open bill has a folio that can actually be
+  // consolidated, and highlight the button matching the resolved view mode.
+  function _syncRegViewToggle() {
+    const bar = dom("reg-view-toggle");
+    if (!bar) return;
+    const folio = Array.isArray(_regOpenBillData && _regOpenBillData.daily_folio)
+      ? _regOpenBillData.daily_folio : [];
+    if (!folioIsCollapsible(folio)) { bar.style.display = "none"; return; }
+    bar.style.display = "flex";
+    const mode = resolveViewMode(_regOpenBillData);
+    const dBtn = dom("reg-vt-detailed");
+    const cBtn = dom("reg-vt-consolidated");
+    if (dBtn) dBtn.classList.toggle("bl-vt-active", mode === "detailed");
+    if (cBtn) cBtn.classList.toggle("bl-vt-active", mode === "consolidated");
+    const hint = dom("reg-vt-hint");
+    if (hint) hint.textContent = mode === "consolidated"
+      ? "Room nights grouped — days with extras shown separately"
+      : "Every night itemised";
+  }
+
   async function openRegBill(id) {
     const overlay = dom("reg-bill-overlay");
     const area    = dom("reg-bill-print-area");
@@ -1369,7 +1555,8 @@
       if (data.success) {
         _regOpenBillId   = id;
         _regOpenBillData = data.bill;
-        area.innerHTML = buildBillHTML(data.bill);
+        _renderRegOpenBill();
+        _syncRegViewToggle();
       } else {
         area.innerHTML = `<div class="reg-state" style="color:#c00;"><i class="fas fa-times-circle"></i><p>${data.message || "Failed to load bill"}</p></div>`;
       }
@@ -1594,6 +1781,15 @@
     <div class="bill-header">
       <h2><i class="fas fa-receipt" style="margin-right:.4rem;"></i>Bill</h2>
       <button class="bill-close" id="reg-bill-close" title="Close">&times;</button>
+    </div>
+    <!-- View toggle — a control only. Sits outside #reg-bill-print-area so it
+         never appears in the printout (Print clones only the print area).
+         Hidden until openRegBill finds a consolidatable folio. -->
+    <div class="bl-view-toggle" id="reg-view-toggle" style="display:none;">
+      <span class="bl-view-toggle-label">View</span>
+      <button type="button" class="bl-vt-btn" id="reg-vt-detailed" data-view="detailed">Detailed</button>
+      <button type="button" class="bl-vt-btn" id="reg-vt-consolidated" data-view="consolidated">Consolidated</button>
+      <span class="bl-vt-hint" id="reg-vt-hint"></span>
     </div>
     <div id="reg-bill-print-area">
       <div class="reg-state"><div class="reg-loader"></div><p>Loading…</p></div>
@@ -1903,6 +2099,25 @@
           document.body.classList.remove("bl-printing");
           clone.remove();
         }
+      });
+    }
+
+    // ── View toggle (Detailed / Consolidated) ──────────────────────────────
+    // Re-renders the open bill in the chosen view. The Print button is
+    // unchanged — it clones the print area, so it always prints the view
+    // currently on screen.
+    const regViewToggle = dom("reg-view-toggle");
+    if (regViewToggle) {
+      regViewToggle.addEventListener("click", (e) => {
+        const btn = e.target.closest(".bl-vt-btn");
+        if (!btn || !_regOpenBillData) return;
+        const mode = btn.dataset.view;
+        if (mode !== "detailed" && mode !== "consolidated") return;
+        const prevMode = resolveViewMode(_regOpenBillData);
+        _regBillViewMode = mode;
+        try { localStorage.setItem("cibara_bill_view", mode); } catch (_e) {}
+        if (mode !== prevMode) _renderRegOpenBill();
+        _syncRegViewToggle();
       });
     }
 

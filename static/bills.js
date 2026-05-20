@@ -402,6 +402,32 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
 .bl-bill-save-btn:hover { opacity: .85; }
 .bl-bill-save-btn:disabled { opacity: .5; cursor: wait; }
 
+/* ── Bill view toggle (Detailed / Consolidated) ───────────────────────────
+   A control bar above the bill body — never part of the printed output. */
+.bl-view-toggle {
+  display: flex; align-items: center; gap: .45rem;
+  padding: .5rem .7rem; margin: 0 0 .55rem;
+  background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px;
+}
+.bl-view-toggle-label {
+  font-size: .68rem; font-weight: 700; color: #64748b;
+  text-transform: uppercase; letter-spacing: .06em;
+}
+.bl-vt-btn {
+  padding: .32rem .72rem; border: 1px solid #cbd5e1; border-radius: 6px;
+  background: #fff; color: #475569; font-size: .78rem; font-weight: 600;
+  cursor: pointer; transition: background .15s, color .15s, border-color .15s;
+}
+.bl-vt-btn:hover { background: #f1f5f9; }
+.bl-vt-btn.bl-vt-active {
+  background: #1e40af; color: #fff; border-color: #1e40af;
+}
+.bl-vt-hint {
+  margin-left: auto; font-size: .68rem; color: #94a3b8;
+  font-style: italic; text-align: right;
+}
+@media print { .bl-view-toggle { display: none !important; } }
+
 /* ────────────────────────────────────────────────────────────────────
    GST / Section-34 UI — minimalist, audit-readable
    ──────────────────────────────────────────────────────────────────── */
@@ -1175,6 +1201,15 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
       <h2>Tax Invoice</h2>
       <button class="bill-close" id="bl-bill-close">&times;</button>
     </div>
+    <!-- View toggle — a control only. It lives OUTSIDE bl-bill-print-area so
+         it never appears in the printed bill or the PDF (Print clones only
+         the print area). Hidden until openBill finds a consolidatable folio. -->
+    <div class="bl-view-toggle" id="bl-view-toggle" style="display:none;">
+      <span class="bl-view-toggle-label">View</span>
+      <button type="button" class="bl-vt-btn" id="bl-vt-detailed" data-view="detailed">Detailed</button>
+      <button type="button" class="bl-vt-btn" id="bl-vt-consolidated" data-view="consolidated">Consolidated</button>
+      <span class="bl-vt-hint" id="bl-vt-hint"></span>
+    </div>
     <div id="bl-bill-print-area"></div>
     <div class="bill-actions">
       <button class="action-btn btn-secondary" id="bl-bill-close2">Close</button>
@@ -1415,6 +1450,25 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
     if (bm)
       bm.addEventListener("click", (e) => {
         if (e.target === bm) closeBill();
+      });
+
+    // ── View toggle (Detailed / Consolidated) ─────────────────────────────────
+    // Event-delegated. Records the operator's preference (persisted), then
+    // re-renders the open bill in the chosen view. The Print button needs no
+    // change — it clones the print area as-is, so it always prints whichever
+    // view is currently on screen.
+    const vtBar = dom("bl-view-toggle");
+    if (vtBar)
+      vtBar.addEventListener("click", (e) => {
+        const btn = e.target.closest(".bl-vt-btn");
+        if (!btn || !_openBillData) return;
+        const mode = btn.dataset.view;
+        if (mode !== "detailed" && mode !== "consolidated") return;
+        const prevMode = resolveViewMode(_openBillData);
+        _billViewMode = mode;
+        try { localStorage.setItem("cibara_bill_view", mode); } catch (_e) {}
+        if (mode !== prevMode) _renderOpenBill();
+        _syncViewToggle();
       });
 
     // ── "Save & Share" button in bill modal ───────────────────────────────────
@@ -1874,7 +1928,8 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
 
     // Re-apply the bills filter to the new entries to get visible rows with correct rowIndex
     const visibleNew = newEntries.filter(
-      e => (e.status === "completed" || e.status === "pending_settlement") &&
+      e => (e.status === "completed" || e.status === "pending_settlement" ||
+            e.status === "cancelled") &&
            e.bill_number && e.bill_number.trim() !== "" && e.bill_number !== "-"
     );
 
@@ -1913,7 +1968,8 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
     // bill_number presence is the canonical indicator that a bill was generated.
     let f = state.allEntries.filter(
       (e) =>
-        (e.status === "completed" || e.status === "pending_settlement") &&
+        (e.status === "completed" || e.status === "pending_settlement" ||
+         e.status === "cancelled") &&
         e.bill_number &&
         e.bill_number !== "-" &&
         e.bill_number.trim() !== "",
@@ -2612,8 +2668,13 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
     // B2B / Reverted / Cancellation-charge pills (Goal 1 / Goal 2 / SAC 999794)
     const b2bPill = (e.invoice_type === "B2B")
       ? '<span class="bl-b2b-pill" title="B2B Tax Invoice">B2B</span>' : '';
-    const revertedPill = e.superseded_by_revert
-      ? '<span class="bl-reverted-pill" title="Bill reverted - credit note issued">REVERTED</span>' : '';
+    // Revert-cancelled bills (new flow) show CANCELLED; legacy reverted bills
+    // that pre-date the cancel-on-revert change still show REVERTED.
+    const revertedPill = (e.status === "cancelled")
+      ? '<span class="bl-reverted-pill" title="Checkout reverted — this bill was cancelled">CANCELLED</span>'
+      : (e.superseded_by_revert
+          ? '<span class="bl-reverted-pill" title="Bill reverted - credit note issued">REVERTED</span>'
+          : '');
     const cancelPill = e.is_cancellation_charge
       ? '<span class="bl-cancel-pill" title="Cancellation forfeiture invoice — SAC 999794 / 18%">CANCEL CHG</span>' : '';
 
@@ -2727,6 +2788,56 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
   let _openBillId = null;
   let _openBillData = null;
 
+  // Operator's bill view preference (Detailed / Consolidated). null → "auto"
+  // (long stays default to Consolidated). Persisted so the choice sticks
+  // across bills and sessions. localStorage access is guarded — a blocked
+  // store simply falls back to auto.
+  let _billViewMode = null;
+  try {
+    const _vm = localStorage.getItem("cibara_bill_view");
+    if (_vm === "detailed" || _vm === "consolidated") _billViewMode = _vm;
+  } catch (_e) { /* localStorage unavailable — use auto */ }
+
+  // (Re)render the open bill into the print area, keeping the inline
+  // attribution banner. Called on open and whenever the view toggle changes.
+  function _renderOpenBill() {
+    const area = dom("bl-bill-print-area");
+    if (!area || !_openBillData) return;
+    area.innerHTML = buildBillHTML(_openBillData);
+    if (window.CibaraAttribution && _openBillId) {
+      const attrEl = document.createElement("div");
+      attrEl.style.cssText = "margin: 0 0 10px 0;";
+      area.insertBefore(attrEl, area.firstChild);
+      window.CibaraAttribution.decorate(attrEl, "bills", _openBillId, { hideIfNone: true });
+    }
+  }
+
+  // Show the Detailed/Consolidated toggle only when the open bill has a
+  // multi-night folio that can actually be consolidated, and highlight the
+  // button matching the resolved view mode.
+  function _syncViewToggle() {
+    const bar = dom("bl-view-toggle");
+    if (!bar) return;
+    const folio = Array.isArray(_openBillData && _openBillData.daily_folio)
+      ? _openBillData.daily_folio : [];
+    if (!folioIsCollapsible(folio)) {
+      bar.style.display = "none";
+      return;
+    }
+    bar.style.display = "flex";
+    const mode = resolveViewMode(_openBillData);
+    const dBtn = dom("bl-vt-detailed");
+    const cBtn = dom("bl-vt-consolidated");
+    if (dBtn) dBtn.classList.toggle("bl-vt-active", mode === "detailed");
+    if (cBtn) cBtn.classList.toggle("bl-vt-active", mode === "consolidated");
+    const hint = dom("bl-vt-hint");
+    if (hint) {
+      hint.textContent = mode === "consolidated"
+        ? "Room nights grouped — days with extras shown separately"
+        : "Every night itemised";
+    }
+  }
+
   async function openBill(id) {
     const m = dom("bl-bill-modal"),
       area = dom("bl-bill-print-area");
@@ -2748,18 +2859,13 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
       const res = await apiFetch(`/generate_bill/${id}`);
       const data = await res.json();
       if (data.success) {
-        area.innerHTML = buildBillHTML(data.bill);
         _openBillId = id;
         _openBillData = data.bill;
-        // Inline "last action by ..." attribution at the top of the bill
-        // print area. The element is removed when the modal closes (whole
-        // area is rebuilt on each open).
-        if (window.CibaraAttribution) {
-          const attrEl = document.createElement("div");
-          attrEl.style.cssText = "margin: 0 0 10px 0;";
-          area.insertBefore(attrEl, area.firstChild);
-          window.CibaraAttribution.decorate(attrEl, "bills", id, { hideIfNone: true });
-        }
+        // Render the bill body (Detailed/Consolidated per resolveViewMode)
+        // with its inline attribution banner, then show the view toggle
+        // when this stay has a folio that can be consolidated.
+        _renderOpenBill();
+        _syncViewToggle();
         if (saveBtn) {
           saveBtn.disabled = false;
           saveBtn.innerHTML =
@@ -2784,6 +2890,270 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
         saveBtn.innerHTML = '<i class="fab fa-whatsapp"></i> Save &amp; Share';
       }
     }
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // FOLIO VIEW MODES — Detailed vs Consolidated
+  // ──────────────────────────────────────────────────────────────────────────
+  // The bill stores one folio entry per night (b.daily_folio). The Detailed
+  // view itemises every night. The Consolidated view collapses consecutive
+  // add-on-free nights that share the same room, GST rate and nightly rate
+  // into a single room block, and shows ONLY the nights that carry extra
+  // items in full detail. Both views are pure renderings of the same stored
+  // data — nothing about storage or GST computation changes.
+  // ══════════════════════════════════════════════════════════════════════════
+
+  // Grouping key for a collapsible night. Two consecutive plain nights merge
+  // only when room, GST slab and nightly rate all match — so a rate change,
+  // slab change or room transfer mid-stay correctly starts a new block.
+  function folioNightKey(e) {
+    return [
+      e.room || "",
+      Number(e.day_gst_rate || 0),
+      Number(e.base_rate || 0),
+    ].join("|");
+  }
+
+  // A night is "plain" (collapsible) only when it has no add-on line items.
+  // Any night with add-ons is always shown in full and breaks the run.
+  function folioNightHasExtras(e) {
+    return Array.isArray(e.addons) && e.addons.length > 0;
+  }
+
+  // Pure function: folio[] -> ordered blocks.
+  //   { kind: "run", entries: [...] }  — 2+ collapsible nights, one block
+  //   { kind: "day", entries: [one] }  — shown in full detail
+  // A run of a single night is emitted as a "day" (collapsing one night is
+  // pointless and would look inconsistent).
+  function groupFolio(folio) {
+    const blocks = [];
+    let run = [];
+    const flush = () => {
+      if (run.length === 0) return;
+      blocks.push({ kind: run.length >= 2 ? "run" : "day", entries: run });
+      run = [];
+    };
+    for (const e of folio) {
+      if (folioNightHasExtras(e)) {
+        flush();
+        blocks.push({ kind: "day", entries: [e] });
+        continue;
+      }
+      if (run.length > 0 && folioNightKey(run[0]) !== folioNightKey(e)) {
+        flush();
+      }
+      run.push(e);
+    }
+    flush();
+    return blocks;
+  }
+
+  // True when the Consolidated view would actually merge something — i.e.
+  // there is at least one run of 2+ collapsible nights. Drives whether the
+  // toggle is shown and what "auto" mode resolves to.
+  function folioIsCollapsible(folio) {
+    if (!Array.isArray(folio) || folio.length < 2) return false;
+    return groupFolio(folio).some((blk) => blk.kind === "run");
+  }
+
+  // Resolve the effective view mode for a bill. An explicit operator choice
+  // (stored in _billViewMode) always wins; otherwise "auto" — Consolidated
+  // when the stay has a collapsible run, Detailed when it does not.
+  function resolveViewMode(b) {
+    if (_billViewMode === "detailed" || _billViewMode === "consolidated") {
+      return _billViewMode;
+    }
+    const folio = Array.isArray(b && b.daily_folio) ? b.daily_folio : [];
+    return folioIsCollapsible(folio) ? "consolidated" : "detailed";
+  }
+
+  // Render ONE folio night in full detail (Night header, Room Rent, add-ons,
+  // taxable base, tax-head split, night total). Used by the Detailed view and
+  // for every add-on night inside the Consolidated view. Returns a <tr> string.
+  function renderFolioNight(e, b) {
+    const parts = [];
+    const di          = e.day_index || 1;
+    const diRoom      = e.room || (b && b.room) || "";
+    const diRate      = Number(e.day_gst_rate || 0);
+    const diDivisor   = diRate > 0 ? (1 + diRate / 100) : 1;
+    const diBase      = Number(e.base_rate || 0);
+    const diAddons    = Array.isArray(e.addons) ? e.addons : [];
+    const diTotal     = Number(e.day_total || 0);
+    const diTaxable   = Number(e.day_taxable || 0);
+    const diCgst      = Number(e.day_cgst || 0);
+    const diSgst      = Number(e.day_sgst || 0);
+    const diIgst      = Number(e.day_igst || 0);
+    const diDiscount  = Number(e.discount_allocated || 0);
+    const diStart     = e.day_start || "";
+
+    // Per-line discount allocation (proportional)
+    const diGrossPre = diBase + diAddons.reduce(
+      (s, a) => s + Number(a.price || 0), 0);
+    const baseDisc = (diDiscount > 0 && diGrossPre > 0)
+      ? diDiscount * (diBase / diGrossPre) : 0;
+    const baseEffGross = diBase - baseDisc;
+    const baseTaxable  = baseEffGross / diDivisor;
+
+    // ─ Night N · DATE · Rm X ─
+    parts.push(`<tr class="b-sec"><td colspan="4" style="text-align:center;">
+      ─ Night ${di} &nbsp;·&nbsp; ${diStart.slice(0, 10)} &nbsp;·&nbsp; Rm ${diRoom} ─
+    </td></tr>`);
+
+    parts.push(`<tr>
+      <td>Room Rent</td>
+      <td class="b-tr">1</td>
+      <td class="b-tr">${fix2(baseTaxable)}</td>
+      <td class="b-tr">${fix2(baseTaxable)}</td>
+    </tr>`);
+
+    for (const a of diAddons) {
+      const aGross = Number(a.price || 0);
+      const aUnit  = Number(a.unit_price || a.price || 0);
+      const aQty   = Number(a.quantity || 1);
+      const aDisc = (diDiscount > 0 && diGrossPre > 0)
+        ? diDiscount * (aGross / diGrossPre) : 0;
+      const aEffGross = aGross - aDisc;
+      const aTaxable  = aEffGross / diDivisor;
+      const aUnitTaxable = aUnit / diDivisor;
+      parts.push(`<tr>
+        <td>${a.item || "Service"}</td>
+        <td class="b-tr">${aQty}</td>
+        <td class="b-tr">${fix2(aUnitTaxable)}</td>
+        <td class="b-tr">${fix2(aTaxable)}</td>
+      </tr>`);
+    }
+
+    if (diDiscount > 0) {
+      parts.push(`<tr>
+        <td colspan="3" style="text-align:right;color:#2e7d32;font-weight:600;">
+          Less: Discount allocated to Night ${di}
+        </td>
+        <td class="b-tr" style="color:#2e7d32;font-weight:700;">− ${fix2(diDiscount)}</td>
+      </tr>`);
+    }
+
+    parts.push(`<tr class="b-gst-row">
+      <td>Taxable Base (excl. GST)</td>
+      <td class="b-tr">—</td><td class="b-tr">—</td>
+      <td class="b-tr">${fix2(diTaxable)}</td>
+    </tr>`);
+
+    if (diRate > 0 && diTaxable > 0) {
+      if (diIgst > 0) {
+        parts.push(`<tr class="b-gst-row">
+          <td>IGST @ ${diRate}%</td>
+          <td class="b-tr">—</td><td class="b-tr">—</td>
+          <td class="b-tr">${fix2(diIgst)}</td>
+        </tr>`);
+      } else {
+        const half = diRate / 2;
+        parts.push(`<tr class="b-gst-row">
+          <td>CGST @ ${half}%</td>
+          <td class="b-tr">—</td><td class="b-tr">—</td>
+          <td class="b-tr">${fix2(diCgst)}</td>
+        </tr>`);
+        parts.push(`<tr class="b-gst-row">
+          <td>SGST @ ${half}%</td>
+          <td class="b-tr">—</td><td class="b-tr">—</td>
+          <td class="b-tr">${fix2(diSgst)}</td>
+        </tr>`);
+      }
+    } else if (diRate === 0 && diTaxable > 0) {
+      parts.push(`<tr class="b-gst-row">
+        <td colspan="3" style="color:#888;">GST Exempt (per-night value &lt; ₹1,000)</td>
+        <td class="b-tr">0.00</td>
+      </tr>`);
+    }
+
+    parts.push(`<tr class="b-subtotal">
+      <td colspan="3" class="b-tr">Night ${di} Total (incl. GST)</td>
+      <td class="b-tr">${fix2(diTotal)}</td>
+    </tr>`);
+    return parts.join("");
+  }
+
+  // Render a run of consecutive add-on-free nights as ONE consolidated block.
+  // groupFolio guarantees every night in the run shares room, GST rate and
+  // nightly rate. All amounts are SUMMED from the stored per-night fields —
+  // never recomputed from rate × nights — so the consolidated total
+  // reconciles to the paisa with the Detailed view and the grand total.
+  function renderFolioRun(entries, b) {
+    const parts = [];
+    const n     = entries.length;
+    const first = entries[0];
+    const last  = entries[n - 1];
+    const room  = first.room || (b && b.room) || "";
+    const rate  = Number(first.day_gst_rate || 0);
+    const sum   = (k) => entries.reduce((s, e) => s + Number(e[k] || 0), 0);
+    const total    = sum("day_total");
+    const taxable  = sum("day_taxable");
+    const cgst     = sum("day_cgst");
+    const sgst     = sum("day_sgst");
+    const igst     = sum("day_igst");
+    const discount = sum("discount_allocated");
+    const d1 = (first.day_start || "").slice(0, 10);
+    const d2 = (last.day_start  || "").slice(0, 10);
+    const perNightTaxable = n ? taxable / n : 0;
+
+    // ─ Room Rent · DATE1 – DATE2 · N nights · Rm X ─
+    parts.push(`<tr class="b-sec"><td colspan="4" style="text-align:center;">
+      ─ Room Rent &nbsp;·&nbsp; ${d1} – ${d2} &nbsp;·&nbsp; ${n} nights &nbsp;·&nbsp; Rm ${room} ─
+    </td></tr>`);
+
+    parts.push(`<tr>
+      <td>Room Rent</td>
+      <td class="b-tr">${n}</td>
+      <td class="b-tr">${fix2(perNightTaxable)}</td>
+      <td class="b-tr">${fix2(taxable)}</td>
+    </tr>`);
+
+    if (discount > 0) {
+      parts.push(`<tr>
+        <td colspan="3" style="text-align:right;color:#2e7d32;font-weight:600;">
+          Less: Discount allocated to these ${n} nights
+        </td>
+        <td class="b-tr" style="color:#2e7d32;font-weight:700;">− ${fix2(discount)}</td>
+      </tr>`);
+    }
+
+    parts.push(`<tr class="b-gst-row">
+      <td>Taxable Base (excl. GST)</td>
+      <td class="b-tr">—</td><td class="b-tr">—</td>
+      <td class="b-tr">${fix2(taxable)}</td>
+    </tr>`);
+
+    if (rate > 0 && taxable > 0) {
+      if (igst > 0) {
+        parts.push(`<tr class="b-gst-row">
+          <td>IGST @ ${rate}%</td>
+          <td class="b-tr">—</td><td class="b-tr">—</td>
+          <td class="b-tr">${fix2(igst)}</td>
+        </tr>`);
+      } else {
+        const half = rate / 2;
+        parts.push(`<tr class="b-gst-row">
+          <td>CGST @ ${half}%</td>
+          <td class="b-tr">—</td><td class="b-tr">—</td>
+          <td class="b-tr">${fix2(cgst)}</td>
+        </tr>`);
+        parts.push(`<tr class="b-gst-row">
+          <td>SGST @ ${half}%</td>
+          <td class="b-tr">—</td><td class="b-tr">—</td>
+          <td class="b-tr">${fix2(sgst)}</td>
+        </tr>`);
+      }
+    } else if (rate === 0 && taxable > 0) {
+      parts.push(`<tr class="b-gst-row">
+        <td colspan="3" style="color:#888;">GST Exempt (per-night value &lt; ₹1,000)</td>
+        <td class="b-tr">0.00</td>
+      </tr>`);
+    }
+
+    parts.push(`<tr class="b-subtotal">
+      <td colspan="3" class="b-tr">Room Charges · ${d1} – ${d2} (${n} nights, incl. GST)</td>
+      <td class="b-tr">${fix2(total)}</td>
+    </tr>`);
+    return parts.join("");
   }
 
   // ── Bill HTML builder ─────────────────────────────────────────────────────────
@@ -3130,108 +3500,27 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
     let accomSubtotalRowFinal = accomSubtotalRow;
     const folio = Array.isArray(b.daily_folio) ? b.daily_folio : [];
     if (folio.length > 0) {
-      const folioParts = [];
+      // Detailed itemises every night; Consolidated collapses runs of
+      // add-on-free nights into one room block (see groupFolio) and shows
+      // only the days with extras in full. Both views sum to the identical
+      // Accommodation Total — all amounts come straight from the stored
+      // per-night folio fields, never recomputed.
+      const viewMode = resolveViewMode(b);
+
       let allNightsTotal = 0;
-      for (const e of folio) {
-        const di          = e.day_index || 1;
-        const diRoom      = e.room || b.room || "";
-        const diRate      = Number(e.day_gst_rate || 0);
-        const diDivisor   = diRate > 0 ? (1 + diRate / 100) : 1;
-        const diBase      = Number(e.base_rate || 0);
-        const diAddons    = Array.isArray(e.addons) ? e.addons : [];
-        const diTotal     = Number(e.day_total || 0);
-        const diTaxable   = Number(e.day_taxable || 0);
-        const diCgst      = Number(e.day_cgst || 0);
-        const diSgst      = Number(e.day_sgst || 0);
-        const diIgst      = Number(e.day_igst || 0);
-        const diDiscount  = Number(e.discount_allocated || 0);
-        const diStart     = e.day_start || "";
+      for (const e of folio) allNightsTotal += Number(e.day_total || 0);
 
-        // Per-line discount allocation (proportional)
-        const diGrossPre = diBase + diAddons.reduce(
-          (s, a) => s + Number(a.price || 0), 0);
-        const baseDisc = (diDiscount > 0 && diGrossPre > 0)
-          ? diDiscount * (diBase / diGrossPre) : 0;
-        const baseEffGross = diBase - baseDisc;
-        const baseTaxable  = baseEffGross / diDivisor;
-
-        allNightsTotal += diTotal;
-
-        // ─ Night N · DATE · Rm X ─
-        folioParts.push(`<tr class="b-sec"><td colspan="4" style="text-align:center;">
-          ─ Night ${di} &nbsp;·&nbsp; ${diStart.slice(0, 10)} &nbsp;·&nbsp; Rm ${diRoom} ─
-        </td></tr>`);
-
-        folioParts.push(`<tr>
-          <td>Room Rent</td>
-          <td class="b-tr">1</td>
-          <td class="b-tr">${fix2(baseTaxable)}</td>
-          <td class="b-tr">${fix2(baseTaxable)}</td>
-        </tr>`);
-
-        for (const a of diAddons) {
-          const aGross = Number(a.price || 0);
-          const aUnit  = Number(a.unit_price || a.price || 0);
-          const aQty   = Number(a.quantity || 1);
-          const aDisc = (diDiscount > 0 && diGrossPre > 0)
-            ? diDiscount * (aGross / diGrossPre) : 0;
-          const aEffGross = aGross - aDisc;
-          const aTaxable  = aEffGross / diDivisor;
-          const aUnitTaxable = aUnit / diDivisor;
-          folioParts.push(`<tr>
-            <td>${a.item || "Service"}</td>
-            <td class="b-tr">${aQty}</td>
-            <td class="b-tr">${fix2(aUnitTaxable)}</td>
-            <td class="b-tr">${fix2(aTaxable)}</td>
-          </tr>`);
+      const folioParts = [];
+      if (viewMode === "consolidated") {
+        for (const blk of groupFolio(folio)) {
+          folioParts.push(
+            blk.kind === "run"
+              ? renderFolioRun(blk.entries, b)
+              : renderFolioNight(blk.entries[0], b),
+          );
         }
-
-        if (diDiscount > 0) {
-          folioParts.push(`<tr>
-            <td colspan="3" style="text-align:right;color:#2e7d32;font-weight:600;">
-              Less: Discount allocated to Night ${di}
-            </td>
-            <td class="b-tr" style="color:#2e7d32;font-weight:700;">− ${fix2(diDiscount)}</td>
-          </tr>`);
-        }
-
-        folioParts.push(`<tr class="b-gst-row">
-          <td>Taxable Base (excl. GST)</td>
-          <td class="b-tr">—</td><td class="b-tr">—</td>
-          <td class="b-tr">${fix2(diTaxable)}</td>
-        </tr>`);
-
-        if (diRate > 0 && diTaxable > 0) {
-          if (diIgst > 0) {
-            folioParts.push(`<tr class="b-gst-row">
-              <td>IGST @ ${diRate}%</td>
-              <td class="b-tr">—</td><td class="b-tr">—</td>
-              <td class="b-tr">${fix2(diIgst)}</td>
-            </tr>`);
-          } else {
-            const half = diRate / 2;
-            folioParts.push(`<tr class="b-gst-row">
-              <td>CGST @ ${half}%</td>
-              <td class="b-tr">—</td><td class="b-tr">—</td>
-              <td class="b-tr">${fix2(diCgst)}</td>
-            </tr>`);
-            folioParts.push(`<tr class="b-gst-row">
-              <td>SGST @ ${half}%</td>
-              <td class="b-tr">—</td><td class="b-tr">—</td>
-              <td class="b-tr">${fix2(diSgst)}</td>
-            </tr>`);
-          }
-        } else if (diRate === 0 && diTaxable > 0) {
-          folioParts.push(`<tr class="b-gst-row">
-            <td colspan="3" style="color:#888;">GST Exempt (per-night value &lt; ₹1,000)</td>
-            <td class="b-tr">0.00</td>
-          </tr>`);
-        }
-
-        folioParts.push(`<tr class="b-subtotal">
-          <td colspan="3" class="b-tr">Night ${di} Total (incl. GST)</td>
-          <td class="b-tr">${fix2(diTotal)}</td>
-        </tr>`);
+      } else {
+        for (const e of folio) folioParts.push(renderFolioNight(e, b));
       }
 
       // Override the legacy single-block accommodation rows
@@ -3485,6 +3774,52 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
     );
     _exportEntries.forEach((e) => {
       const days = e.days_stayed || calcDays(e.checkin_time, e.checkout_time);
+
+      // ── Revert-cancelled bills ──────────────────────────────────────────
+      // Listed in the Invoice Register so the CC serial sequence has no
+      // unexplained gap, but at ZERO value and EXCLUDED from every tax
+      // bucket / B2C summary. The invoice was cancelled before the period's
+      // GSTR-1 was filed, so it carries no output tax to report.
+      if (e.status === "cancelled") {
+        regRows.push({
+          "Sr No":                    regSerial++,
+          "Bill No":                  e.bill_number || "-",
+          "Invoice Type":             e.invoice_type || "B2C",
+          "Recipient GSTIN":          e.recipient_gstin || "",
+          "Recipient Legal Name":     e.recipient_legal_name || "",
+          "Recipient State":          e.recipient_state || "",
+          "Guest Name":               e.guest_name || "-",
+          "Contact":                  e.guest_mobile || "-",
+          "Room":                     e.room || "-",
+          "Check-in":                 fmtDT(e.checkin_time),
+          "Check-out":                e.checkout_time ? fmtDT(e.checkout_time) : "-",
+          "Days":                     days,
+          "Room Rate/Night":          0,
+          "Accom Taxable (excl GST)": 0,
+          "Accom GST Rate %":         0,
+          "Accom CGST":               0,
+          "Accom SGST":               0,
+          "Accom Total (incl GST)":   0,
+          "Water MRP (incl GST)":     0,
+          "Water Taxable (excl GST)": 0,
+          "Water CGST (2.5%)":        0,
+          "Water SGST (2.5%)":        0,
+          "Water GST Total":          0,
+          "Other Services":           0,
+          "Grand Total":              0,
+          "Cash Paid":                0,
+          "Online/UPI Paid":          0,
+          "Refund":                   0,
+          "Balance Due":              0,
+          "Booking Source":           e.booking_source || "normal",
+          "Place of Supply":          "Karnataka (KA-29)",
+          "SAC/HSN":                  "9963 / 2201",
+          "Linked CN ID":             "",
+          "Reverted":                 "CANCELLED",
+        });
+        return;  // no tax-bucket aggregation — cancelled = zero output tax
+      }
+
       // Cancellation-charge bills are SAC 999794 (agreement to refrain) at
       // 18% inclusive, NOT accommodation 9963. Bucket them separately so
       // the GSTR-1 / HSN sheets don't misclassify.

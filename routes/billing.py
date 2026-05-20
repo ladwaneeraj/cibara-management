@@ -277,8 +277,18 @@ def get_register_data():
                 # "pending_settlement" = settle-later checkout; include these so
                 # the guest still appears in the register / bills module with the
                 # outstanding balance visible.
-                if bill_status not in ("completed", "checked_out",
-                                       "pending_settlement", ""):
+                # Revert-cancelled bills (status="cancelled" + cancelled_by_revert)
+                # are surfaced ONLY in checkout mode (the Bills tab) so they show
+                # there with a CANCELLED badge. The Register tab (checkin mode)
+                # stays clean — it tracks live occupancy, not the bill archive.
+                _is_revert_cancel = (
+                    bill_status == "cancelled"
+                    and bill_data.get("cancelled_by_revert")
+                    and mode == "checkout"
+                )
+                if (bill_status not in ("completed", "checked_out",
+                                        "pending_settlement", "")
+                        and not _is_revert_cancel):
                     skipped_count += 1
                     continue
 

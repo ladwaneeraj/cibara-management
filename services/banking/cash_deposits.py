@@ -56,6 +56,7 @@ from .schema import (
     PAY_CASH_DEPOSIT_ID, PAY_VOIDED_AT,
     EXP_CASH_DEPOSIT_ID, EXP_VOIDED_AT, EXP_AMOUNT_PAISE,
     BILL_FIRST_DEPOSIT_AT,
+    BANKING_START_DATE,
 )
 
 logger = logging.getLogger(__name__)
@@ -83,6 +84,40 @@ def init(db) -> None:
 
 def _ist_now_iso() -> str:
     return datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S")
+
+
+# --- Banking epoch ---------------------------------------------------
+# Cash dated before BANKING_START_DATE is invisible to every Banking
+# view. _banking_cutoff() parses the configured string; _floor_start()
+# clamps a query's lower date bound so callers never see pre-epoch rows.
+
+def _banking_cutoff() -> Optional[date]:
+    """The banking epoch as a date, or None when the cutoff is disabled."""
+    raw = (BANKING_START_DATE or "").strip()[:10]
+    if not raw:
+        return None
+    try:
+        return date.fromisoformat(raw)
+    except ValueError:
+        logger.warning(
+            f"BANKING_START_DATE {raw!r} is not a valid ISO date; "
+            f"banking cutoff disabled"
+        )
+        return None
+
+
+def _floor_start(period_start: Optional[date]) -> Optional[date]:
+    """
+    Clamp a query's lower date bound to the banking epoch. Returns the
+    later of `period_start` and the cutoff (whichever is set). When the
+    cutoff is disabled, `period_start` is returned unchanged.
+    """
+    cutoff = _banking_cutoff()
+    if cutoff is None:
+        return period_start
+    if period_start is None:
+        return cutoff
+    return max(period_start, cutoff)
 
 
 def _parallel_get(collection_ref, doc_ids):
@@ -142,6 +177,7 @@ def list_unofficial_payments(
     if _payments_ref is None:
         return []
     try:
+        period_start = _floor_start(period_start)
         q = (
             _payments_ref
             .where(filter=fa_firestore.FieldFilter(
@@ -198,6 +234,7 @@ def list_eligible_payments(
     if _payments_ref is None:
         return []
     try:
+        period_start = _floor_start(period_start)
         q = (
             _payments_ref
             .where(filter=fa_firestore.FieldFilter(
@@ -253,6 +290,8 @@ def list_eligible_expenses(
     """
     if _expenses_ref is None:
         return []
+
+    period_start = _floor_start(period_start)
 
     def _post_filter(snap_iter):
         out = []
@@ -401,7 +440,19 @@ def list_unofficial_cash_expenses(
     if _expenses_ref is None:
         return []
     try:
-        q = _expenses_ref
+        period_start = _floor_start(period_start)
+        # Push the cash-method filter into Firestore so the wire
+        # carries only cash expenses instead of every expense ever
+        # recorded. A single-field equality filter is covered by
+        # Firestore's automatic per-field index — it needs no
+        # composite index and cannot raise FailedPrecondition. The
+        # post-filter below still re-checks the method, so the result
+        # set can only narrow, never gain a wrong row. Mirrors the
+        # filter list_eligible_expenses already uses.
+        q = _expenses_ref.where(
+            filter=fa_firestore.FieldFilter(
+                "payment_method", "==", PaymentMethod.CASH)
+        )
         rows = []
         for snap in q.stream():
             d = snap.to_dict() or {}
@@ -456,6 +507,7 @@ def list_undeposited_cash_refunds(
     if _payments_ref is None:
         return []
     try:
+        period_start = _floor_start(period_start)
         q = _payments_ref.where(
             filter=fa_firestore.FieldFilter(PAY_METHOD, "==",
                                             PaymentMethod.CASH)
@@ -528,29 +580,46 @@ def cash_on_hand_paise(*, property_id: str = "",
         if cached is not None:
             return cached
     try:
-        cash_in = sum_paise(
-            list_eligible_payments(property_id=property_id),
-            key=PAY_AMOUNT_PAISE,
-        )
-        cash_out = sum_paise(
-            list_eligible_expenses(property_id=property_id),
-            key=EXP_AMOUNT_PAISE,
-        )
-        cash_refunds = _undeposited_cash_refunds_paise(
-            property_id=property_id,
-        )
-        # Adjustments (signed) without a deposit
-        adj_total = 0
-        for snap in _adjustments_ref.stream():
-            d = snap.to_dict() or {}
-            if d.get("cash_deposit_id"):
-                continue
-            if property_id and d.get("property_id", "") != property_id:
-                continue
-            try:
-                adj_total += int(d.get("amount_paise") or 0)
-            except (TypeError, ValueError):
-                pass
+        # cash_in, cash_out, cash_refunds and the adjustments scan are
+        # four independent Firestore reads. Run them concurrently so a
+        # cold cash-on-hand recompute (e.g. the first New Deposit open
+        # after the 30s cache expires) costs the slowest single read,
+        # not the sum of all four. Each task only reads; the admin SDK
+        # is thread-safe.
+        _adj_cutoff = _banking_cutoff()
+
+        def _adjustments_total() -> int:
+            # Adjustments (signed) without a deposit. Pre-cutoff
+            # adjustments are excluded so COH matches the deposit
+            # picker's adjustments.
+            total = 0
+            for snap in _adjustments_ref.stream():
+                d = snap.to_dict() or {}
+                if d.get("cash_deposit_id"):
+                    continue
+                if property_id and d.get("property_id", "") != property_id:
+                    continue
+                if _adj_cutoff and (d.get("adjustment_date") or "")[:10] \
+                        < _adj_cutoff.isoformat():
+                    continue
+                try:
+                    total += int(d.get("amount_paise") or 0)
+                except (TypeError, ValueError):
+                    pass
+            return total
+
+        with ThreadPoolExecutor(max_workers=4) as _ex:
+            _f_in = _ex.submit(list_eligible_payments,
+                               property_id=property_id)
+            _f_out = _ex.submit(list_eligible_expenses,
+                                property_id=property_id)
+            _f_ref = _ex.submit(_undeposited_cash_refunds_paise,
+                                property_id=property_id)
+            _f_adj = _ex.submit(_adjustments_total)
+        cash_in = sum_paise(_f_in.result(), key=PAY_AMOUNT_PAISE)
+        cash_out = sum_paise(_f_out.result(), key=EXP_AMOUNT_PAISE)
+        cash_refunds = _f_ref.result()
+        adj_total = _f_adj.result()
         result = cash_in - cash_out - cash_refunds + adj_total
         _coh_cache_set(property_id, result)
         return result

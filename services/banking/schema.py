@@ -187,6 +187,14 @@ BANKING_PERMISSIONS = frozenset({
 # does not block writes.
 DEFAULT_UNDEPOSITED_THRESHOLD_PAISE: Final[int] = 25_000 * 100  # ₹25,000
 
+# Banking epoch. Cash payments, expenses, refunds and adjustments dated
+# BEFORE this date are excluded from every Banking view -- Cash on Hand,
+# the New Deposit picker, and the Unofficial tab. This lets Banking start
+# from a clean slate WITHOUT deleting historical records: they stay in
+# Firestore untouched; move this date earlier to surface them again.
+# ISO format "YYYY-MM-DD". Set to "" to disable the cutoff entirely.
+BANKING_START_DATE: Final[str] = "2026-05-22"
+
 # Format: RV/FY26-27/00001
 RECEIPT_NO_FORMAT: Final[str] = "{prefix}/FY{fy_short}/{serial}"
 RECEIPT_SERIAL_PAD: Final[int] = 5

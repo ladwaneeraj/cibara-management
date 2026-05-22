@@ -25,6 +25,7 @@ Outputs:
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime
 from flask import Blueprint, jsonify, request, g
 
@@ -110,23 +111,37 @@ def eligible_rows():
         period_end   = _parse_iso_date(request.args.get("period_end"))
         property_id  = request.args.get("property_id", "") or ""
 
-        pays = cash_deposits.list_eligible_payments(
-            period_start=period_start, period_end=period_end,
-            property_id=property_id,
-        )
-        exps = cash_deposits.list_eligible_expenses(
-            period_start=period_start, period_end=period_end,
-            property_id=property_id,
-        )
-        adjs = cash_adjustments.list_undeposited(property_id=property_id)
-        # Cash refunds in the period — informational, not selectable.
-        # Already subtracted from cash-on-hand automatically; we surface
-        # the list so the operator can SEE what cash left the drawer
-        # before they go to the bank.
-        refs = cash_deposits.list_undeposited_cash_refunds(
-            period_start=period_start, period_end=period_end,
-            property_id=property_id,
-        )
+        # The four reads below are independent Firestore queries; run
+        # them concurrently so wall time is the slowest single query
+        # rather than their sum. The Firestore admin SDK is thread-
+        # safe and each helper only reads, so there is no shared-state
+        # hazard. Refunds are informational (not selectable, already
+        # subtracted from cash-on-hand); we surface the list so the
+        # operator can SEE what cash left the drawer before the bank run.
+        with ThreadPoolExecutor(max_workers=4) as _ex:
+            _f_pays = _ex.submit(
+                cash_deposits.list_eligible_payments,
+                period_start=period_start, period_end=period_end,
+                property_id=property_id,
+            )
+            _f_exps = _ex.submit(
+                cash_deposits.list_eligible_expenses,
+                period_start=period_start, period_end=period_end,
+                property_id=property_id,
+            )
+            _f_adjs = _ex.submit(
+                cash_adjustments.list_undeposited,
+                property_id=property_id,
+            )
+            _f_refs = _ex.submit(
+                cash_deposits.list_undeposited_cash_refunds,
+                period_start=period_start, period_end=period_end,
+                property_id=property_id,
+            )
+        pays = _f_pays.result()
+        exps = _f_exps.result()
+        adjs = _f_adjs.result()
+        refs = _f_refs.result()
         return _ok(payments=pays, expenses=exps,
                    adjustments=adjs, refunds=refs)
     except Exception as e:
@@ -386,16 +401,23 @@ def unofficial_route():
         property_id = request.args.get("property_id", "") or ""
         period_start = _parse_iso_date(request.args.get("period_start"))
         period_end   = _parse_iso_date(request.args.get("period_end"))
-        rows = cash_deposits.list_unofficial_payments(
-            limit=min(limit, 1000), property_id=property_id,
-            period_start=period_start, period_end=period_end,
-        )
-        # Report-type cash expenses — same logical pool as the unofficial
-        # payments. Operator paid these out of off-deposit cash.
-        exps = cash_deposits.list_unofficial_cash_expenses(
-            limit=min(limit, 1000), property_id=property_id,
-            period_start=period_start, period_end=period_end,
-        )
+        # Two independent Firestore reads — run them concurrently so
+        # wall time is the slower of the two, not their sum. Report-
+        # type cash expenses are the same logical pool as the
+        # unofficial payments: paid out of off-deposit cash.
+        with ThreadPoolExecutor(max_workers=2) as _ex:
+            _f_rows = _ex.submit(
+                cash_deposits.list_unofficial_payments,
+                limit=min(limit, 1000), property_id=property_id,
+                period_start=period_start, period_end=period_end,
+            )
+            _f_exps = _ex.submit(
+                cash_deposits.list_unofficial_cash_expenses,
+                limit=min(limit, 1000), property_id=property_id,
+                period_start=period_start, period_end=period_end,
+            )
+        rows = _f_rows.result()
+        exps = _f_exps.result()
         # Aggregate for the header summary. Payments are inflows;
         # expenses are outflows. Net unofficial cash held = inflows − outflows.
         total_in = 0

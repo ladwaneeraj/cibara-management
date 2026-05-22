@@ -36,7 +36,7 @@ from services.audit_log import write_log, attribution_create
 
 from .money import rupees_to_paise
 from .schema import (
-    COL_CASH_ADJUSTMENTS, AdjustmentReason,
+    COL_CASH_ADJUSTMENTS, AdjustmentReason, BANKING_START_DATE,
 )
 
 logger = logging.getLogger(__name__)
@@ -55,6 +55,25 @@ def init(db) -> None:
 
 def _ist_now_iso() -> str:
     return datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _banking_cutoff() -> Optional[date]:
+    """
+    Banking epoch (schema.BANKING_START_DATE) as a date, or None when
+    the cutoff is disabled. Adjustments dated before it are excluded
+    from cash-on-hand and the deposit picker, matching cash_deposits.
+    """
+    raw = (BANKING_START_DATE or "").strip()[:10]
+    if not raw:
+        return None
+    try:
+        return date.fromisoformat(raw)
+    except ValueError:
+        logger.warning(
+            f"BANKING_START_DATE {raw!r} is not a valid ISO date; "
+            f"banking cutoff disabled"
+        )
+        return None
 
 
 # ───────────────────────── Write ────────────────────────────────────
@@ -209,12 +228,16 @@ def list_undeposited(*, property_id: str = "") -> list[dict]:
     if _adjustments_ref is None:
         return []
     try:
+        cutoff = _banking_cutoff()
         rows = []
         for snap in _adjustments_ref.stream():
             d = snap.to_dict() or {}
             if d.get("voided_at") or d.get("cash_deposit_id"):
                 continue
             if property_id and d.get("property_id", "") != property_id:
+                continue
+            if cutoff and (d.get("adjustment_date") or "")[:10] \
+                    < cutoff.isoformat():
                 continue
             d["id"] = snap.id
             rows.append(d)

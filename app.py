@@ -236,4 +236,9 @@ threading.Thread(target=initialize_data, daemon=True).start()
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
+    # threaded=True: the Werkzeug dev server handles ONE request at a
+    # time by default, so the ~8 API calls a page fires queue single
+    # file — a trivial endpoint then "takes" 9s because it spent 9s
+    # waiting, not working. threaded=True serves them concurrently.
+    # Local dev only; production is served by gunicorn (gunicorn_config.py).
+    app.run(host="0.0.0.0", port=port, threaded=True)

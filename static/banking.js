@@ -51,6 +51,7 @@
     adjustments: [],
     unofficial: [],
     loading: {},
+    renderSeq: 0,        // bumped on every render; stale async work checks it
     draft: null,         // current draft deposit being assembled
     // Single source of truth for the period filter across all subtabs.
     // Defaults to "this month". Tabs read from these on render and
@@ -62,11 +63,16 @@
   // Compute the default period (1st-of-month → today) once, lazily.
   function _defaultPeriod() {
     if (!state.periodStart || !state.periodEnd) {
-      const now = new Date();
-      const first = new Date(now.getFullYear(), now.getMonth(), 1)
-        .toISOString().slice(0, 10);
-      state.periodStart = first;
-      state.periodEnd = todayISO();
+      // Delegate to the "This month" preset so the default range is
+      // identical to the quick-button. The previous implementation built
+      // the 1st-of-month via `new Date(...).toISOString()`, which converts
+      // local midnight to UTC — in any UTC+ timezone (e.g. IST) that
+      // shifts the date back a day, so "this month" started on the last
+      // day of the *previous* month and pulled its rows (expenses,
+      // refunds) into the deposit draft, skewing "Net to deposit".
+      const [start, end] = _presetRange("month");
+      state.periodStart = start;
+      state.periodEnd = end;
     }
     return { start: state.periodStart, end: state.periodEnd };
   }
@@ -353,13 +359,32 @@
     if (pane) pane.innerHTML = html;
   }
 
+  // ----- Stale-render guard --------------------------------------------
+  // Every subtab renderer is async: it paints a spinner, awaits one or
+  // more network calls, then paints the result. If the operator switches
+  // tabs (or hits refresh / changes the period) while a fetch is still
+  // in flight, the older renderer would resolve later and overwrite the
+  // now-active tab with the WRONG tab's data.
+  //
+  // Each renderer calls _claimRender() synchronously at its top. That
+  // bumps a counter and returns a predicate; after every await the
+  // renderer checks the predicate and bails -- touching neither state
+  // nor the DOM -- if a newer render has since started. Tab switching is
+  // then deterministic regardless of which fetch finishes first.
+  function _claimRender() {
+    const mine = ++state.renderSeq;
+    return () => mine === state.renderSeq;
+  }
+
   // ====================================================================
   // Subtab: Cash on Hand
   // ====================================================================
   async function renderCashOnHand() {
+    const live = _claimRender();
     setPane(`<div class="bk-empty"><span class="bk-spinner"></span> Loading cash on hand...</div>`);
     try {
       const r = await api("/banking/cash_on_hand");
+      if (!live()) return;
       state.cashOnHand = r;
       // Also pull last deposit
       let last = null;
@@ -369,6 +394,7 @@
       } catch (_) {}
       const breached = r.threshold_breached;
       const amountClass = (r.amount_paise || 0) < 0 ? "bk-neg" : "";
+      if (!live()) return;
       setPane(`
 <div class="bk-coh-card">
   <div class="bk-coh-label">Cash on hand (official, undeposited)</div>
@@ -405,6 +431,7 @@ ${breached ? `
         _appendBackfillPanel();
       }
     } catch (e) {
+      if (!live()) return;
       setPane(`<div class="bk-empty">Failed to load: ${esc(e.message)}</div>`);
     }
   }
@@ -472,6 +499,7 @@ ${breached ? `
   // Subtab: New Deposit
   // ====================================================================
   async function renderNewDeposit() {
+    const live = _claimRender();
     if (!userCan("banking.deposit.create")) {
       setPane(`<div class="bk-empty">You don't have permission to create deposits.</div>`);
       return;
@@ -484,21 +512,23 @@ ${breached ? `
     state.selectedAdjustments.clear();
     state.draft = null;
 
-    // Use the global Banking-wide period.
-    const _gp = _defaultPeriod();
-    const periodStart = _gp.start;
-    const periodEnd = _gp.end;
-
     try {
       // Parallel fetch: eligible rows + bank accounts + cash-on-hand
       // summary all kick off at once. cash_on_hand and last-deposit are
       // best-effort; if either fails the screen still renders.
+      //
+      // A deposit empties the cash drawer, so eligible rows are fetched
+      // WITHOUT a period filter: every undeposited eligible payment,
+      // expense and refund -- the exact set Cash on Hand sums. That keeps
+      // "Net to deposit" (all rows selected) equal to "Cash on hand", so
+      // the reconciliation warning only fires on a real un-tick.
       const [eligible, accts, coh, lastDep] = await Promise.all([
-        api(`/banking/eligible_rows?period_start=${periodStart}&period_end=${periodEnd}`),
+        api("/banking/eligible_rows"),
         api("/banking/bank_accounts"),
         api("/banking/cash_on_hand").catch(() => null),
         api("/banking/deposit/history?limit=1").catch(() => null),
       ]);
+      if (!live()) return;
       state.eligible = {
         payments: eligible.payments || [],
         expenses: eligible.expenses || [],
@@ -524,10 +554,11 @@ ${breached ? `
       state.eligible.expenses.forEach((x) => state.selectedExpenses.add(x.id));
       state.eligible.adjustments.forEach((x) => state.selectedAdjustments.add(x.id));
 
-      setPane(_cohBannerHTML(coh, lastDeposit) + _newDepHTML(periodStart, periodEnd));
+      setPane(_cohBannerHTML(coh, lastDeposit) + _newDepHTML());
       _wireNewDep();
       _renderSummary();
     } catch (e) {
+      if (!live()) return;
       setPane(`<div class="bk-empty">Failed to load: ${esc(e.message)}</div>`);
     }
   }
@@ -574,7 +605,7 @@ ${breached ? `
 `;
   }
 
-  function _newDepHTML(periodStart, periodEnd) {
+  function _newDepHTML() {
     const accts = state.bankAccounts;
     return `
 <div class="bk-filter-bar">
@@ -588,10 +619,7 @@ ${breached ? `
           `<option value="${esc(a.id)}" ${a.is_default ? "selected" : ""}>${esc(a.name)} &middot; ${esc(a.bank)} &middot; XX${esc(a.account_no_last4 || "")}</option>`,
         ).join("")}
   </select>
-  <label>Period</label>
-  <input type="date" id="bk-period-start" value="${periodStart}">
-  <span>&rarr;</span>
-  <input type="date" id="bk-period-end" value="${periodEnd}">
+  <span class="bk-muted" style="font-size:0.78rem; align-self:center;">Whole drawer &middot; all undeposited cash</span>
   <button class="bk-cta-btn bk-secondary" id="bk-reload-eligible"
           style="height:30px; padding:0 0.7rem; max-width:90px; margin-top:0; font-size:0.78rem;">
     <i class="fas fa-sync-alt"></i> Reload
@@ -602,35 +630,39 @@ ${breached ? `
   <div class="bk-newdep-left">
 
     <section>
-      <div class="bk-section-title">
+      <div class="bk-section-title bk-sec-toggle" data-target="bk-sec-pay" style="cursor:pointer;">
+        <i class="fas fa-chevron-down bk-sec-caret" style="margin-right:0.4rem; font-size:0.8rem;"></i>
         Eligible cash collections
         <span class="bk-sub" id="bk-pay-sub">0 selected of ${state.eligible.payments.length}</span>
       </div>
-      ${_paymentsTable()}
+      <div class="bk-sec-body" id="bk-sec-pay">${_paymentsTable()}</div>
     </section>
 
     <section>
-      <div class="bk-section-title">
+      <div class="bk-section-title bk-sec-toggle" data-target="bk-sec-exp" style="cursor:pointer;">
+        <i class="fas fa-chevron-down bk-sec-caret" style="margin-right:0.4rem; font-size:0.8rem;"></i>
         Cash expenses
         <span class="bk-sub" id="bk-exp-sub">0 selected of ${state.eligible.expenses.length}</span>
       </div>
-      ${_expensesTable()}
+      <div class="bk-sec-body" id="bk-sec-exp">${_expensesTable()}</div>
     </section>
 
     <section>
-      <div class="bk-section-title">
+      <div class="bk-section-title bk-sec-toggle" data-target="bk-sec-adj" style="cursor:pointer;">
+        <i class="fas fa-chevron-down bk-sec-caret" style="margin-right:0.4rem; font-size:0.8rem;"></i>
         Cash adjustments
         <span class="bk-sub" id="bk-adj-sub">0 selected of ${state.eligible.adjustments.length}</span>
       </div>
-      ${_adjsTable()}
+      <div class="bk-sec-body" id="bk-sec-adj">${_adjsTable()}</div>
     </section>
 
     <section>
-      <div class="bk-section-title">
-        Cash refunds in period
+      <div class="bk-section-title bk-sec-toggle" data-target="bk-sec-ref" style="cursor:pointer;">
+        <i class="fas fa-chevron-down bk-sec-caret" style="margin-right:0.4rem; font-size:0.8rem;"></i>
+        Cash refunds
         <span class="bk-sub">${state.eligible.refunds.length} entr${state.eligible.refunds.length === 1 ? "y" : "ies"} &middot; auto-deducted</span>
       </div>
-      ${_refundsTable()}
+      <div class="bk-sec-body" id="bk-sec-ref">${_refundsTable()}</div>
     </section>
   </div>
 
@@ -696,7 +728,7 @@ ${breached ? `
   function _paymentsTable() {
     const rows = state.eligible.payments;
     if (rows.length === 0) {
-      return `<div class="bk-empty">No eligible cash payments in this period.</div>`;
+      return `<div class="bk-empty">No eligible cash payments.</div>`;
     }
     let payTotal = 0;
     rows.forEach((p) => {
@@ -795,7 +827,7 @@ ${breached ? `
   function _refundsTable() {
     const rows = state.eligible.refunds;
     if (rows.length === 0) {
-      return `<div class="bk-empty">No undeposited cash refunds in this period.</div>`;
+      return `<div class="bk-empty">No undeposited cash refunds.</div>`;
     }
     let total = 0;
     rows.forEach((r) => {
@@ -939,6 +971,23 @@ ${breached ? `
     if (saveDraft) saveDraft.addEventListener("click", () => _submitDeposit(false));
     const saveCommit = dom("bk-save-confirm");
     if (saveCommit) saveCommit.addEventListener("click", () => _submitDeposit(true));
+
+    // Collapsible sections: clicking a section header hides/shows its
+    // table. Pure DOM toggle, no CSS dependency; the caret flips to show
+    // state. Sections start expanded.
+    $$("#banking-tab .bk-sec-toggle").forEach((header) => {
+      header.addEventListener("click", () => {
+        const body = dom(header.dataset.target);
+        if (!body) return;
+        const isHidden = body.style.display === "none";
+        body.style.display = isHidden ? "" : "none";
+        const caret = header.querySelector(".bk-sec-caret");
+        if (caret) {
+          caret.classList.toggle("fa-chevron-down", isHidden);
+          caret.classList.toggle("fa-chevron-right", !isHidden);
+        }
+      });
+    });
   }
 
   function _selectedTotals() {
@@ -1027,8 +1076,6 @@ ${breached ? `
     const acctEl = dom("bk-bank-account");
     const slipEl = dom("bk-slip-number");
     const notesEl = dom("bk-notes");
-    const ps = dom("bk-period-start");
-    const pe = dom("bk-period-end");
     if (!acctEl || !acctEl.value) {
       toast("Pick a bank account first", "error");
       return;
@@ -1041,8 +1088,8 @@ ${breached ? `
       adjustment_ids:  Array.from(state.selectedAdjustments),
       slip_number:     (slipEl && slipEl.value) || "",
       notes:           (notesEl && notesEl.value) || "",
-      period_start:    (ps && ps.value) || null,
-      period_end:      (pe && pe.value) || null,
+      period_start:    null,
+      period_end:      null,
     };
     try {
       const drafted = await api("/banking/deposit/draft", {
@@ -1072,12 +1119,21 @@ ${breached ? `
   // Subtab: Deposit History
   // ====================================================================
   async function renderHistory(periodStart, periodEnd) {
+    const live = _claimRender();
     setPane(`<div class="bk-empty"><span class="bk-spinner"></span> Loading history...</div>`);
     // Use the global period selector at the top of Banking. Per-tab
     // overrides (passed as args) win if supplied.
     const _gp = _defaultPeriod();
     if (!periodStart) periodStart = _gp.start;
     if (!periodEnd)   periodEnd   = _gp.end;
+    // Kick the deposit fetch off NOW, before the user-directory wait
+    // below, so the network round-trip overlaps that wait instead of
+    // running strictly after it -- saves up to ~800 ms of perceived load.
+    const _histFetch = api(
+      "/banking/deposit/history?limit=500"
+      + "&period_start=" + encodeURIComponent(periodStart)
+      + "&period_end="   + encodeURIComponent(periodEnd),
+    );
     // Wait for the shared user directory once so the "Drafted by" /
     // "Confirmed by" columns can resolve userIds to names instead of
     // showing raw IDs. Best-effort — if it's already loaded, ready()
@@ -1093,11 +1149,8 @@ ${breached ? `
     } catch (_) { /* ignore */ }
 
     try {
-      const r = await api(
-        "/banking/deposit/history?limit=500"
-        + "&period_start=" + encodeURIComponent(periodStart)
-        + "&period_end="   + encodeURIComponent(periodEnd),
-      );
+      const r = await _histFetch;
+      if (!live()) return;
       state.deposits = r.deposits || [];
       const rows = state.deposits;
       const totals = r.totals || { count: 0, gross_paise: 0, expenses_paise: 0, net_paise: 0 };
@@ -1181,6 +1234,7 @@ ${breached ? `
       $$("#banking-tab [data-reverse]").forEach((b) =>
         b.addEventListener("click", () => _reverse(b.dataset.reverse)));
     } catch (e) {
+      if (!live()) return;
       setPane(`<div class="bk-empty">Failed to load: ${esc(e.message)}</div>`);
     }
   }
@@ -1281,6 +1335,7 @@ ${breached ? `
   // Cash payments from stays that closed without a bill number. Backend
   // endpoint /banking/unofficial returns them; this view is read-only.
   async function renderUnofficial(periodStart, periodEnd) {
+    const live = _claimRender();
     setPane(`<div class="bk-empty"><span class="bk-spinner"></span> Loading unofficial cash...</div>`);
     // Use the global period selector at the top of Banking.
     const _gp = _defaultPeriod();
@@ -1292,12 +1347,19 @@ ${breached ? `
         + "&period_start=" + encodeURIComponent(periodStart)
         + "&period_end="   + encodeURIComponent(periodEnd),
       );
+      if (!live()) return;
       state.unofficial = r.payments || [];
       state.unofficialExpenses = r.expenses || [];
       const rows = state.unofficial;
       const exps = state.unofficialExpenses;
-      const inflows  = Number(r.inflows_paise  || r.total_paise || 0);
-      const outflows = Number(r.outflows_paise || 0);
+      // Use nullish coalescing, NOT `||`: inflows_paise is legitimately 0
+      // when there are no unofficial payments. With `||`, a 0 inflow fell
+      // through to total_paise (the net in − out), which double-counted
+      // every expense — e.g. one ₹20,000 expense showed Net -₹40,000.
+      // `?? r.total_paise` is kept only as a fallback for an older API
+      // response shape that returned just total_paise.
+      const inflows  = Number(r.inflows_paise  ?? r.total_paise ?? 0);
+      const outflows = Number(r.outflows_paise ?? 0);
       const total    = inflows - outflows;
       const uniqueStays = new Set(rows.map((p) => p.stay_id)).size;
 
@@ -1392,6 +1454,7 @@ ${breached ? `
 `;
       setPane(filterBar + headerCard + paymentsTable + expensesTable);
     } catch (e) {
+      if (!live()) return;
       setPane(`<div class="bk-empty">Failed to load: ${esc(e.message)}</div>`);
     }
   }
@@ -1411,9 +1474,11 @@ ${breached ? `
   // Subtab: Adjustments
   // ====================================================================
   async function renderAdjustments() {
+    const live = _claimRender();
     setPane(`<div class="bk-empty"><span class="bk-spinner"></span> Loading adjustments...</div>`);
     try {
       const r = await api("/banking/adjustment/list?limit=200");
+      if (!live()) return;
       state.adjustments = r.adjustments || [];
       const rows = state.adjustments;
       const canCreate = userCan("banking.adjustment.create");
@@ -1457,6 +1522,7 @@ ${rows.length === 0 ? `<div class="bk-empty">No adjustments recorded.</div>` : `
       const n = dom("bk-new-adj");
       if (n) n.addEventListener("click", _openAdjModal);
     } catch (e) {
+      if (!live()) return;
       setPane(`<div class="bk-empty">Failed to load: ${esc(e.message)}</div>`);
     }
   }
@@ -1515,9 +1581,11 @@ ${rows.length === 0 ? `<div class="bk-empty">No adjustments recorded.</div>` : `
   // Subtab: Bank Accounts
   // ====================================================================
   async function renderBankAccounts() {
+    const live = _claimRender();
     setPane(`<div class="bk-empty"><span class="bk-spinner"></span> Loading accounts...</div>`);
     try {
       const r = await api("/banking/bank_accounts");
+      if (!live()) return;
       state.bankAccounts = r.accounts || [];
       const rows = state.bankAccounts;
       const canManage = userCan("banking.account.manage");
@@ -1565,6 +1633,7 @@ ${rows.length === 0 ? `<div class="bk-empty">No bank accounts configured.</div>`
       $$("#banking-tab [data-arch]").forEach((b) =>
         b.addEventListener("click", () => _archiveAcct(b.dataset.arch)));
     } catch (e) {
+      if (!live()) return;
       setPane(`<div class="bk-empty">Failed to load: ${esc(e.message)}</div>`);
     }
   }

@@ -513,7 +513,9 @@
   .b-pay-section .b-tbl td { padding: .55mm .8mm !important; }
   .b-sig        { margin-top: 2mm !important; padding: 0 !important; }
   .b-sig td     { padding-top: 1mm !important; }
-  .b-sig-line   { margin-top: 2mm !important; width: 30mm !important;
+  /* margin-top here is the blank signing gap printed ABOVE the rule line.
+     Bumped from 2mm so there is real room to sign by hand. */
+  .b-sig-line   { margin-top: 12mm !important; width: 30mm !important;
                   font-size: 6pt !important; padding-top: 1mm !important; }
   .b-footer     { margin: 1mm 0 0 0 !important; padding: 1mm 0 0 0 !important;
                   font-size: 5.5pt !important;
@@ -716,13 +718,39 @@
 .rp-edit-btn:hover { background: var(--primary,#3f51b5); color: #fff; }
 .rp-edit-row { background: #eef2ff !important; }
 .rp-edit-row td { padding: .55rem .5rem !important; }
-.rp-edit-form { display: flex; gap: .45rem; align-items: center; flex-wrap: wrap; }
-.rp-edit-form input[type="date"], .rp-edit-form select {
-  padding: .3rem .45rem; border: 1px solid #d0d0d0;
-  border-radius: 5px; font-size: .8rem;
+.rp-edit-form {
+  display: flex; gap: .6rem; align-items: flex-end; flex-wrap: wrap;
+  padding: .15rem 0;
 }
-.rp-edit-form input[type="date"]:focus,
-.rp-edit-form select:focus { outline: none; border-color: var(--primary,#3f51b5); }
+/* Each control sits in a labelled field group so Date / Time / Mode /
+   Amount read clearly instead of as a cramped inline row. */
+.rp-edit-field { display: flex; flex-direction: column; gap: .22rem; }
+.rp-edit-field label {
+  font-size: .66rem; font-weight: 700; color: #5b6275;
+  text-transform: uppercase; letter-spacing: .03em;
+}
+.rp-edit-form input[type="date"],
+.rp-edit-form input[type="time"],
+.rp-edit-form input[type="text"],
+.rp-edit-form input[type="number"],
+.rp-edit-form select {
+  padding: .4rem .55rem; border: 1px solid #cbd2e0;
+  border-radius: 6px; font-size: .83rem; min-height: 36px;
+  background: #fff; color: #1f2330; box-sizing: border-box;
+}
+/* Combined Date & time field — wide enough for the prettified value
+   flatpickr shows, e.g. "18 May 2026 · 12:08 PM". */
+.rp-edit-form .rp-edit-dt-input { min-width: 190px; }
+.rp-edit-form input:focus,
+.rp-edit-form select:focus {
+  outline: none; border-color: var(--primary,#3f51b5);
+  box-shadow: 0 0 0 2px rgba(63,81,181,.15);
+}
+.rp-edit-actions { display: flex; gap: .4rem; align-items: center; }
+.rp-edit-refund-note {
+  font-size: .72rem; color: #888;
+  align-self: flex-end; padding-bottom: .55rem;
+}
 .rp-save-btn {
   padding: .28rem .65rem; background: #28a745; color: #fff;
   border: none; border-radius: 4px; cursor: pointer; font-size: .76rem;
@@ -1432,6 +1460,49 @@
       const rf = !refundCash && !refundOnline ? `<tr><td>Refund Given</td><td class="b-tr" style="color:#c00;">− ₹ ${fix2(refunds)}</td></tr>` : "";
       return rc + ro + rf + `<tr class="b-subtotal"><td>Net Collected</td><td class="b-tr">₹ ${fix2(netCollected)}</td></tr>`;
     })() : "";
+
+    // ── Recipient (B2B / B2CL) details ───────────────────────────────────────
+    // Drives the "Bill To" block and the Place-of-Supply line. Mirrors the
+    // bills.js renderer field-for-field so the on-screen bill, the Print
+    // output, and the saved PDF are identical for tax invoices. Without this
+    // block a B2B invoice rendered fine on the PDF but lost the registered
+    // recipient's details on screen and on Print.
+    const invoiceType   = b.invoice_type || "B2C";
+    const rcptGstin     = (b.recipient_gstin || "").trim();
+    const rcptLegalName = (b.recipient_legal_name || "").trim();
+    const rcptTradeName = (b.recipient_trade_name || "").trim();
+    const rcptAddress   = (b.recipient_address || "").trim();
+    const rcptStateName = b.recipient_state || "Karnataka";
+    const rcptStateCode = (b.recipient_state_code || "29").trim() || "29";
+    const isInterState  = rcptStateCode !== "29";
+    const recipientBlock = (() => {
+      if (invoiceType === "B2B" && rcptGstin) {
+        return `
+  <table class="b-info-outer" style="margin-top:6px;">
+    <tr><td class="b-info-col" colspan="2" style="background:#f8f9fc;">
+      <div class="b-row" style="font-weight:bold;color:#1a1a1a;">BILL TO (Recipient — Registered)</div>
+      <div class="b-row"><span class="b-lbl">Legal Name:</span> ${rcptLegalName}</div>
+      ${rcptTradeName ? `<div class="b-row"><span class="b-lbl">Trade Name:</span> ${rcptTradeName}</div>` : ""}
+      <div class="b-row"><span class="b-lbl">GSTIN:</span> ${rcptGstin}</div>
+      ${rcptAddress ? `<div class="b-row"><span class="b-lbl">Address:</span> ${rcptAddress.replace(/\n/g, ", ")}</div>` : ""}
+      <div class="b-row"><span class="b-lbl">State:</span> ${rcptStateName} (${rcptStateCode})</div>
+      <div class="b-row" style="font-size:8.5pt;color:#666;margin-top:4px;">GST payable on reverse charge: No</div>
+    </td></tr>
+  </table>`;
+      }
+      if (invoiceType === "B2CL" && (rcptAddress || rcptStateName)) {
+        return `
+  <table class="b-info-outer" style="margin-top:6px;">
+    <tr><td class="b-info-col" colspan="2" style="background:#f8f9fc;">
+      <div class="b-row" style="font-weight:bold;color:#1a1a1a;">BILL TO (Recipient — Unregistered, Inter-State)</div>
+      ${rcptAddress ? `<div class="b-row"><span class="b-lbl">Address:</span> ${rcptAddress.replace(/\n/g, ", ")}</div>` : ""}
+      <div class="b-row"><span class="b-lbl">State:</span> ${rcptStateName} (${rcptStateCode})</div>
+    </td></tr>
+  </table>`;
+      }
+      return "";
+    })();
+
     return `<div class="b-bill-wrap">
   <div class="b-header-block">
     <div class="b-lodge-name">CIBARA COMFORTS</div>
@@ -1454,10 +1525,11 @@
       <div class="b-row"><span class="b-lbl">Check-out:</span> ${fmtBillDT(b.checkout_time)}</div>
       <div class="b-row"><span class="b-lbl">Days Stayed:</span> ${days}</div>
       <div class="b-row"><span class="b-lbl">Bill Date:</span> ${billDate}</div>
-      <div class="b-row"><span class="b-lbl">Place of Supply:</span> Karnataka (KA – 29)</div>
+      <div class="b-row"><span class="b-lbl">Place of Supply:</span> ${rcptStateName} (${rcptStateCode}) − ${isInterState ? "IGST" : "CGST+SGST"}</div>
       <div class="b-row"><span class="b-lbl">Reverse Charge:</span> No</div>
     </td>
   </tr></table>
+  ${recipientBlock}
   <table class="b-tbl">
     <thead><tr>
       <th>Description</th><th class="b-tr">Qty</th>
@@ -2922,8 +2994,41 @@
     return map[method] || (method ? method.charAt(0).toUpperCase() + method.slice(1) : "-");
   }
 
+  // ── Edit-row Date & time picker (flatpickr) ───────────────────────────────
+  // One flatpickr instance backs the edit row's combined "Date & time"
+  // field. It is destroyed before each table re-render and recreated only
+  // while an edit row is on screen, so at most one picker is ever live —
+  // any stray instance left by a closed modal is cleaned up on the next
+  // render.
+  let _rpDateTimeFp = null;
+
+  function _rpDestroyDateTimePicker() {
+    if (_rpDateTimeFp) {
+      try { _rpDateTimeFp.destroy(); } catch (e) { /* already detached */ }
+      _rpDateTimeFp = null;
+    }
+  }
+
+  function _rpInitDateTimePicker() {
+    if (!pmState.editId || !window.flatpickr) return;
+    const input = dom(`rp-edit-datetime-${pmState.editId}`);
+    if (!input) return;
+    _rpDateTimeFp = window.flatpickr(input, {
+      enableTime:      true,
+      dateFormat:      "Y-m-d H:i",
+      altInput:        true,
+      altFormat:       "d M Y  ·  h:i K",
+      minuteIncrement: 1,
+      defaultDate:     input.value || undefined,
+      disableMobile:   true,
+    });
+  }
+
   function _renderPaymentsTable(container) {
     if (!container) return;
+    // Tear down the previous render's picker before its input node is
+    // replaced by the innerHTML assignment below.
+    _rpDestroyDateTimePicker();
     // Show ALL records returned by backend (backend already excludes expense/discount).
     // Only hide records with 0 amount and a non-payment internal type.
     const REFUND_TYPES    = new Set(["refund", "checkout_refund", "manual_refund", "booking_cancel_refund"]);
@@ -2953,21 +3058,31 @@
         <tr class="rp-edit-row" data-pid="${p.id}">
           <td colspan="6">
             <div class="rp-edit-form">
-              <label style="font-size:.75rem;font-weight:600;color:#555;white-space:nowrap;">Date:</label>
-              <input type="date" id="rp-edit-date-${p.id}" value="${p.date || ''}" />
-              <label style="font-size:.75rem;font-weight:600;color:#555;white-space:nowrap;">Mode:</label>
-              <select id="rp-edit-mode-${p.id}">
-                <option value="cash"   ${p.method === "cash"   ? "selected" : ""}>Cash</option>
-                <option value="online" ${p.method === "online" ? "selected" : ""}>Online</option>
-                <option value="upi"    ${p.method === "upi"    ? "selected" : ""}>UPI</option>
-                <option value="ota"    ${p.method === "ota"    ? "selected" : ""}>OTA</option>
-              </select>
+              <div class="rp-edit-field">
+                <label for="rp-edit-datetime-${p.id}">Date &amp; time</label>
+                <input type="text" id="rp-edit-datetime-${p.id}" class="rp-edit-dt-input"
+                       value="${p.date || ''}${p.time ? ' ' + (p.time || '').slice(0, 5) : ''}"
+                       placeholder="Select date &amp; time" />
+              </div>
+              <div class="rp-edit-field">
+                <label for="rp-edit-mode-${p.id}">Mode</label>
+                <select id="rp-edit-mode-${p.id}">
+                  <option value="cash"   ${p.method === "cash"   ? "selected" : ""}>Cash</option>
+                  <option value="online" ${p.method === "online" ? "selected" : ""}>Online</option>
+                  <option value="upi"    ${p.method === "upi"    ? "selected" : ""}>UPI</option>
+                  <option value="ota"    ${p.method === "ota"    ? "selected" : ""}>OTA</option>
+                </select>
+              </div>
               ${!isRefund ? `
-              <label style="font-size:.75rem;font-weight:600;color:#555;white-space:nowrap;">Amount (₹):</label>
-              <input type="number" id="rp-edit-amount-${p.id}" value="${p.amount || 0}" min="1" style="width:80px;" />
-              ` : `<span style="font-size:.72rem;color:#888;align-self:center;">(refund — amount locked)</span>`}
-              <button class="rp-save-btn"        onclick="_rpSave('${p.id}')">Save</button>
-              <button class="rp-cancel-edit-btn" onclick="_rpCancelEdit()">Cancel</button>
+              <div class="rp-edit-field">
+                <label for="rp-edit-amount-${p.id}">Amount (₹)</label>
+                <input type="number" id="rp-edit-amount-${p.id}" value="${p.amount || 0}" min="1" style="width:110px;" />
+              </div>
+              ` : `<span class="rp-edit-refund-note">Refund — amount locked</span>`}
+              <div class="rp-edit-actions">
+                <button class="rp-save-btn"        onclick="_rpSave('${p.id}')">Save</button>
+                <button class="rp-cancel-edit-btn" onclick="_rpCancelEdit()">Cancel</button>
+              </div>
             </div>
           </td>
         </tr>`;
@@ -3002,16 +3117,17 @@
         </thead>
         <tbody>${rows}</tbody>
       </table>`;
+
+    // Upgrade the edit row's Date & time field to a flatpickr calendar +
+    // time picker — styled, consistent with the app's other date pickers,
+    // and clearer than the native browser controls.
+    _rpInitDateTimePicker();
   }
 
   // Called by onclick attributes in the rendered table
   window._rpStartEdit = function(payId) {
     pmState.editId = payId;
-    const container = dom("rp-content");
-    _renderPaymentsTable(container);
-    // Focus the date input
-    const dateInput = dom(`rp-edit-date-${payId}`);
-    if (dateInput) dateInput.focus();
+    _renderPaymentsTable(dom("rp-content"));
   };
 
   window._rpCancelEdit = function() {
@@ -3020,13 +3136,19 @@
   };
 
   window._rpSave = async function(payId) {
-    const dateInput   = dom(`rp-edit-date-${payId}`);
+    const dtInput     = dom(`rp-edit-datetime-${payId}`);
     const modeInput   = dom(`rp-edit-mode-${payId}`);
     const amountInput = dom(`rp-edit-amount-${payId}`);
     const saveBtn     = document.querySelector(`.rp-edit-row[data-pid="${payId}"] .rp-save-btn`);
 
-    const newDate   = dateInput   ? dateInput.value.trim()  : "";
-    const newMethod = modeInput   ? modeInput.value.trim()  : "";
+    // The Date & time field carries a single "YYYY-MM-DD HH:MM" machine
+    // value (flatpickr keeps that on the input; the prettified text lives
+    // on flatpickr's altInput). Split it for the API, which takes date
+    // and time as separate fields.
+    const dtParts   = (dtInput ? dtInput.value.trim() : "").split(/[ T]/);
+    const newDate   = (dtParts[0] || "").trim();
+    const newTime   = (dtParts[1] || "").slice(0, 5).trim();
+    const newMethod = modeInput ? modeInput.value.trim() : "";
     const newAmountStr = amountInput ? amountInput.value.trim() : "";
 
     if (!newDate || !newMethod) {
@@ -3053,6 +3175,9 @@
         method:     newMethod,
         date:       newDate,
       };
+      // Time is optional — the backend preserves the original when it is
+      // omitted, so only send it when the operator actually set one.
+      if (newTime) payload.time = newTime;
       if (newAmount !== null) payload.amount = newAmount;
 
       const res = await apiFetch("/update_stay_payment", {
@@ -3078,6 +3203,7 @@
       if (p) {
         p.method = newMethod;
         p.date   = newDate;
+        if (newTime) p.time = newTime;
         if (newAmount !== null) p.amount = newAmount;
       }
 

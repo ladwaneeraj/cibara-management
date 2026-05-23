@@ -80,7 +80,7 @@
   // ----- API helper ----------------------------------------------------
   // All routes return JSON {success: bool, ...}. We unwrap into either
   // the data or an Error. Auth token is attached upstream by auth.js.
-  async function api(path, init) {
+  async function _apiRaw(path, init) {
     const resp = await fetch(path, Object.assign({}, init || {}, {
       headers: Object.assign(
         { "Content-Type": "application/json" },
@@ -97,6 +97,29 @@
       throw err;
     }
     return body;
+  }
+
+  // In-flight GET de-duplication. If two renders (or a render plus the
+  // refresh button) request the same GET endpoint before the first
+  // response arrives, they share the single in-flight promise instead
+  // of issuing a second identical network request. Only GETs are
+  // coalesced — POST/PATCH/etc. mutate state and must each run. The map
+  // entry is removed the moment the request settles, so this is a
+  // concurrency optimisation only, never a stale-response cache.
+  const _inflightGets = new Map();
+
+  function api(path, init) {
+    const method = ((init && init.method) || "GET").toUpperCase();
+    if (method !== "GET") {
+      return _apiRaw(path, init);
+    }
+    const existing = _inflightGets.get(path);
+    if (existing) return existing;
+    const p = _apiRaw(path, init).finally(() => {
+      _inflightGets.delete(path);
+    });
+    _inflightGets.set(path, p);
+    return p;
   }
 
   // ----- Toasts --------------------------------------------------------
@@ -305,7 +328,18 @@
       });
     });
 
-    renderActive();
+    // Lazy first render. At app boot the Banking tab is hidden — it is
+    // reached via the quick-action button, whose handler calls
+    // renderActive(true) when the tab is opened. Rendering here as well
+    // would fire every /banking/* endpoint for a tab the user has not
+    // opened, and then a SECOND time on open — which is exactly the
+    // duplicate-request load seen in the network trace. Only render now
+    // if the tab already happens to be on-screen; otherwise defer to the
+    // open handler so each endpoint is fetched exactly once.
+    const _bkTab = dom("banking-tab");
+    if (_bkTab && !_bkTab.classList.contains("hidden")) {
+      renderActive();
+    }
   }
 
   // Compute a date pair for the named preset. Returns [startISO, endISO].

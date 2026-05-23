@@ -260,10 +260,23 @@ class TransactionLogManager {
     );
     // For cached global logs, filter to transaction-type expenses only.
     // For server-fetched logsOverride, expenses are already pre-filtered by the backend.
-    const recentExpenseLogs = (src.expenses || []).filter(
-      (log) =>
-        inRange(log.date) &&
-        (logsOverride || log.expense_type === "transaction"),
+    // Expense scope (admin Daily/Report toggle). Daily = drawer expenses
+    // (expense_type "transaction" or legacy rows with none); Report =
+    // expense_type "report"; All = both. The backend now sends every
+    // expense, so this client-side filter is the single source of truth
+    // for which ones the Transactions tab shows.
+    const _expScope =
+      typeof txnExpenseScope === "string" ? txnExpenseScope : "daily";
+    const recentExpenseLogs = (src.expenses || []).filter((log) => {
+      if (!inRange(log.date)) return false;
+      const isReport = log.expense_type === "report";
+      if (_expScope === "report") return isReport;
+      if (_expScope === "all") return true;
+      return !isReport; // "daily"
+    });
+    // Settle-later checkouts (guest left with the balance deferred).
+    const recentSettlementLogs = (src.settlements || []).filter((log) =>
+      inRange(log.date),
     );
 
     // Always compute analytics from the full unfiltered set for the date range
@@ -285,12 +298,17 @@ class TransactionLogManager {
       typeFilter === "all" || typeFilter === "expenses"
         ? recentExpenseLogs
         : [];
+    let settlementForList =
+      typeFilter === "all" || typeFilter === "settlements"
+        ? recentSettlementLogs
+        : [];
 
     const allRecentLogs = [
       ...cashForList.map((log) => ({ ...log, logType: "cash" })),
       ...onlineForList.map((log) => ({ ...log, logType: "online" })),
       ...refundForList.map((log) => ({ ...log, logType: "refunds" })),
       ...expenseForList.map((log) => ({ ...log, logType: "expenses" })),
+      ...settlementForList.map((log) => ({ ...log, logType: "settlement" })),
     ].sort((a, b) => {
       if (a.date !== b.date) {
         return new Date(b.date) - new Date(a.date);
@@ -361,14 +379,38 @@ class TransactionLogManager {
           dateDisplay = "Yesterday — " + dateDisplay;
 
         const dayTotal = logsByDate[date].reduce((sum, l) => {
-          if (l.logType === "refunds" || l.logType === "expenses") return sum;
+          if (
+            l.logType === "refunds" ||
+            l.logType === "expenses" ||
+            l.logType === "settlement"
+          ) {
+            return sum;
+          }
           return sum + (l.amount || 0);
         }, 0);
 
         logsHTML += `<div class="log-date-header">${dateDisplay}<span class="log-date-total">₹${dayTotal.toLocaleString("en-IN")}</span></div>`;
 
+        // Per-day serial numbers, derived fresh from the data on every
+        // render: serial-eligible rows are numbered 1..N by ascending
+        // time, so #1 is the day's first check-in. Numbering is scoped
+        // to each date group, so switching the date filter — or editing
+        // another day — never shifts a given day's run.
+        const _serialOf = new Map();
+        logsByDate[date]
+          .filter((l) => this._isSerialEligible(l))
+          .slice()
+          .sort((a, b) =>
+            String(a.time || "").localeCompare(String(b.time || "")),
+          )
+          .forEach((l, i) => _serialOf.set(l, i + 1));
+
         logsByDate[date].forEach((log) => {
-          logsHTML += this.renderEnhancedLogItem(log, log.logType);
+          logsHTML += this.renderEnhancedLogItem(
+            log,
+            log.logType,
+            _serialOf.get(log) || 0,
+          );
         });
       });
 
@@ -394,9 +436,15 @@ class TransactionLogManager {
     set("txn-card-expense", fmt(expenseSum));
   }
 
-  renderEnhancedLogItem(log, logType) {
+  renderEnhancedLogItem(log, logType, serialOverride) {
     const tags = this.getTransactionTags(log, logType);
-    const serialNumber = this.getLogSerialNumber(log);
+    // The main dated list passes an explicit serial — a number, or 0 for
+    // rows that get none — so its numbering is fully derived per day.
+    // Other callers omit it and fall back to the stored value.
+    const serialNumber =
+      serialOverride !== undefined
+        ? serialOverride || null
+        : this.getLogSerialNumber(log);
 
     let type = "Unknown";
     let color = "";
@@ -424,6 +472,8 @@ class TransactionLogManager {
       }
     } else if (logType === "online") {
       type = "";
+    } else if (logType === "settlement") {
+      type = "";  // SETTLE LATER badge already conveys it
     }
 
     let tagsHtml = "";
@@ -434,6 +484,33 @@ class TransactionLogManager {
             `<span class="${tag.class}" style="background-color: ${tag.color}">${tag.text}</span>`,
         )
         .join(" ");
+    }
+
+    // Cash / Online payment-mode pill. Shown on every row where real
+    // money moved so the mode is visible at a glance. For cash/online
+    // payments the logType is authoritative; refund and expense rows
+    // fall back to the row's own method field. Pay-later rows move no
+    // money, so they get no pill (the PAY LATER tag already says so).
+    let modeHtml = "";
+    const _isPayLaterRow =
+      log.payment_method === "pay_later" ||
+      (log.amount === 0 && log.is_fresh_checkin);
+    if (!_isPayLaterRow) {
+      let _mode = "";
+      if (logType === "cash") {
+        _mode = "cash";
+      } else if (logType === "online") {
+        _mode = "online";
+      } else {
+        const _m = String(log.method || log.payment_method || "").toLowerCase();
+        if (_m === "cash") _mode = "cash";
+        else if (_m === "online" || _m === "upi" || _m === "card") _mode = "online";
+      }
+      if (_mode === "cash") {
+        modeHtml = `<span class="transaction-tag cash-tag">Cash</span>`;
+      } else if (_mode === "online") {
+        modeHtml = `<span class="transaction-tag online-tag">Online</span>`;
+      }
     }
 
     let serialHtml = "";
@@ -454,6 +531,11 @@ class TransactionLogManager {
       color = 'style="color: var(--warning)"';
     } else if (logType === "expenses") {
       amountDisplay = `<strong>₹${log.amount}</strong>`;
+    } else if (logType === "settlement") {
+      // Stored as a negative offsetting entry; show the plain amount
+      // the guest still owes — the SETTLE LATER tag conveys the rest.
+      amountDisplay = `₹${Math.abs(log.amount || 0)}`;
+      color = "style=\"color: #0369a1\"";
     }
 
     let titleContent = "";
@@ -534,7 +616,7 @@ class TransactionLogManager {
             ${shiftInfo}
           </div>
           <div class="log-subtitle">
-            ${tagsHtml}${tagsHtml ? " " : ""}${subtitleTime}
+            ${modeHtml}${tagsHtml}${subtitleTime}
           </div>
         </div>
         <div class="log-amount" ${color}>${amountDisplay}</div>
@@ -544,6 +626,24 @@ class TransactionLogManager {
 
   getTransactionTags(log, logType) {
     const tags = [];
+
+    // Settle-later — either the checkout where the guest left with the
+    // balance deferred (type "settlement"), or the later payment that
+    // clears that deferred balance (type "settlement_payment"). Both
+    // carry the SETTLE LATER tag; neither gets a serial number.
+    if (
+      log.transaction_type === "settlement" ||
+      log.type === "settlement" ||
+      log.transaction_type === "settlement_payment" ||
+      log.type === "settlement_payment"
+    ) {
+      tags.push({
+        text: "SETTLE LATER",
+        class: "transaction-tag settle-later-tag",
+        color: "#0ea5e9",
+      });
+      return tags;
+    }
 
     if (
       logType === "refunds" ||
@@ -647,20 +747,21 @@ class TransactionLogManager {
     return tags;
   }
 
-  getLogSerialNumber(log) {
-    const isEligibleCheckin =
+  // Predicate: is this row the kind that carries a serial number?
+  // Serial numbers are for fresh check-in events only — a room being
+  // freshly occupied, whether a walk-in fresh check-in or a booking
+  // converted to a check-in. Settle-later checkouts and settle-later
+  // payments, add-ons, refunds, renewals and plain payments never get
+  // a serial. Pay-later check-ins DO — they are still a check-in event.
+  _isSerialEligible(log) {
+    const isFreshCheckin =
       log.is_fresh_checkin ||
       log.transaction_type === "fresh_checkin" ||
       log.transaction_type === "booking_conversion" ||
       log.is_booking_conversion;
 
-    // Settlement payments carry the original check-in serial number forward
-    const isSettlement =
-      log.transaction_type === "settlement_payment" ||
-      log.type === "settlement_payment";
-
-    if (!isEligibleCheckin && !isSettlement) {
-      return null;
+    if (!isFreshCheckin) {
+      return false;
     }
 
     if (
@@ -670,15 +771,22 @@ class TransactionLogManager {
       log.is_renewal ||
       log.transaction_type === "renewal_payment"
     ) {
-      return null;
+      return false;
     }
 
-    // First try the serial number stored in the log itself (from Firebase)
+    return true;
+  }
+
+  // Fallback serial lookup, for callers that do not supply a derived
+  // per-day number (the preview and category-filtered views). The main
+  // dated list numbers rows dynamically instead — see the render loop.
+  getLogSerialNumber(log) {
+    if (!this._isSerialEligible(log)) {
+      return null;
+    }
     if (log.serial_number) {
       return log.serial_number;
     }
-
-    // Fallback: look up from localStorage using date + room
     if (log.date && log.room && window.transactionTracker) {
       const stored = window.transactionTracker.getSerialNumberForDate(
         log.date,
@@ -686,7 +794,6 @@ class TransactionLogManager {
       );
       if (stored) return stored;
     }
-
     return null;
   }
 
@@ -710,7 +817,7 @@ class TransactionLogManager {
     const cacheKey = `${roomNumber}:${roomInfo.checkin_time || ""}`;
     const cached = _payCache[cacheKey];
     if (cached && Date.now() - cached.ts < _PAY_CACHE_TTL) {
-      this._renderPaymentData(paymentLogsContainer, cached.data);
+      this._renderPaymentData(paymentLogsContainer, cached.data, roomNumber);
       return;
     }
 
@@ -727,7 +834,7 @@ class TransactionLogManager {
             '<div class="log-item">No payments recorded</div>';
           return;
         }
-        this._renderPaymentData(paymentLogsContainer, data);
+        this._renderPaymentData(paymentLogsContainer, data, roomNumber);
       })
       .catch((err) => {
         console.error("Error loading payment history:", err);
@@ -736,7 +843,12 @@ class TransactionLogManager {
       });
   }
 
-  _renderPaymentData(container, data) {
+  _renderPaymentData(container, data, roomNumber) {
+    // The Edit-payments button lives in the Payment History header
+    // (#checkout-payment-edit-slot); render it first so it shows
+    // regardless of whether the log body below has any rows.
+    this._renderPaymentEditButton(roomNumber);
+
     if (!data.success) {
       container.innerHTML =
         '<div class="log-item">Could not load payment history</div>';
@@ -852,6 +964,83 @@ class TransactionLogManager {
 
     container.innerHTML = logsHtml;
   }
+
+  // Renders the admin-only "Edit payments" button into the Payment
+  // History header slot (#checkout-payment-edit-slot in the checkout
+  // modal). Reuses the Register tab's payments modal
+  // (window.openRegisterPaymentsModal) so editing behaves identically
+  // wherever it is launched from — same modal, same RBAC, same backend.
+  // Gated on the payment.edit permission the modal itself enforces;
+  // the slot is cleared for anyone without it or when there is no
+  // active stay to edit.
+  _renderPaymentEditButton(roomNumber) {
+    // Resolve the header slot. index.html ships a
+    // #checkout-payment-edit-slot span in the Payment History header;
+    // if the loaded page HTML predates that span (stale cache / not yet
+    // redeployed), build the slot from the heading so the button still
+    // appears. Idempotent — reuses the slot/row on later renders.
+    let slot = document.getElementById("checkout-payment-edit-slot");
+    if (!slot) {
+      const logs = document.getElementById("checkout-payment-logs");
+      const wrap = logs ? logs.parentElement : null;
+      const heading = wrap ? wrap.querySelector("h3") : null;
+      if (wrap && heading) {
+        let headerRow = wrap.querySelector(".checkout-pay-header-row");
+        if (!headerRow) {
+          headerRow = document.createElement("div");
+          headerRow.className = "checkout-pay-header-row";
+          headerRow.style.cssText =
+            "display:flex;justify-content:space-between;align-items:center;gap:0.5rem;";
+          heading.parentNode.insertBefore(headerRow, heading);
+          headerRow.appendChild(heading);
+          heading.style.margin = "0";
+        }
+        slot = document.createElement("span");
+        slot.id = "checkout-payment-edit-slot";
+        headerRow.appendChild(slot);
+      }
+    }
+    if (!slot) return;
+    const roomInfo =
+      typeof rooms !== "undefined" && roomNumber != null
+        ? rooms[roomNumber]
+        : null;
+    const stayId = roomInfo && roomInfo.active_bill_id;
+    const canEdit = !!(
+      window.CibaraAuth &&
+      window.CibaraAuth.userCan &&
+      window.CibaraAuth.userCan("payment.edit")
+    );
+    if (!canEdit || !stayId) {
+      slot.innerHTML = "";
+      return;
+    }
+    slot.innerHTML = `
+      <button type="button" class="txn-edit-payments-btn"
+        style="display:inline-flex;align-items:center;gap:5px;padding:5px 11px;
+               font-size:0.75rem;font-weight:600;color:#3f51b5;background:#eef2ff;
+               border:1px solid #c7d2fe;border-radius:6px;cursor:pointer;">
+        <i class="fas fa-pen"></i> Edit payments
+      </button>`;
+    const btn = slot.querySelector(".txn-edit-payments-btn");
+    if (btn) {
+      btn.addEventListener("click", () => {
+        if (typeof window.openRegisterPaymentsModal !== "function") {
+          alert(
+            "Payment editor isn't ready yet — open the Register tab once, then try again.",
+          );
+          return;
+        }
+        window.openRegisterPaymentsModal({
+          id: stayId,
+          stay_id: stayId,
+          room: roomNumber,
+          guest_name: (roomInfo.guest && roomInfo.guest.name) || "",
+          checkin_time: roomInfo.checkin_time || "",
+        });
+      });
+    }
+  }
 }
 
 const transactionTrackingStyles = `
@@ -899,6 +1088,22 @@ const transactionTrackingStyles = `
 
     .pay-later-tag {
         background-color: #fd7e14;
+    }
+
+    .settle-later-tag {
+        background-color: #0ea5e9;
+    }
+
+    /* Cash / Online payment-mode pills. Green = cash, blue = online —
+       matches the row tint and the service-payment-badge colours. These
+       reuse .transaction-tag, so they inherit the same size, shape and
+       the mobile shrink rule below — a normal inline pill, never sticky. */
+    .cash-tag {
+        background-color: #27ae60;
+    }
+
+    .online-tag {
+        background-color: #007bff;
     }
 
     .serial-number {
@@ -1360,6 +1565,10 @@ class TransactionFilterManager {
 // ─── Filter state ────────────────────────────────────────────────────────────
 let txnActiveDateRange = { fromDate: null, toDate: null };
 let txnActiveType = "all"; // "all" | "cash" | "online" | "refunds" | "expenses"
+// Expense sub-scope for the admin Daily/Report toggle on the Expense
+// view. "daily" = drawer expenses (default — matches the non-admin
+// view); "report" = report expenses; "all" = both.
+let txnExpenseScope = "daily";
 let txnDateUnlocked = false; // true after manager password verified
 let txnExtendedLogs = null; // cached logs from /get_transactions_range for current range
 
@@ -1389,6 +1598,80 @@ function _renderWithLogs(fromDate, toDate, logsObj) {
       logsObj || null,
     );
   }
+}
+
+// ── Expense Daily/Report/All sub-filter (admin only) ──────────────────────
+// The toggle is shown only to admins, and only while the Expense type
+// filter is active. txnExpenseScope drives which expenses
+// renderEnhancedLogs keeps (see recentExpenseLogs above).
+function _txnIsAdmin() {
+  return !!(
+    window.CibaraAuth &&
+    window.CibaraAuth.isAdmin &&
+    window.CibaraAuth.isAdmin()
+  );
+}
+
+function _setExpenseScopeActive(scope) {
+  document
+    .querySelectorAll("#txn-expense-scope .txn-scope-btn")
+    .forEach((b) => {
+      const on = b.dataset.scope === scope;
+      b.style.background = on ? "#3f51b5" : "#fff";
+      b.style.color = on ? "#fff" : "#475569";
+      b.style.borderColor = on ? "#3f51b5" : "#c7d2fe";
+    });
+}
+
+// Returns the #txn-expense-scope toggle, building it if the loaded page
+// HTML predates it (stale cache / not yet redeployed). Buttons are
+// wired exactly once — tracked via the data-wired attribute — so this
+// is safe to call on every render.
+function _ensureExpenseScopeEl() {
+  let el = document.getElementById("txn-expense-scope");
+  if (!el) {
+    const anchor = document.querySelector(".txn-type-filter");
+    if (!anchor || !anchor.parentNode) return null;
+    el = document.createElement("div");
+    el.id = "txn-expense-scope";
+    el.className = "txn-expense-scope";
+    el.style.cssText =
+      "display:none; gap:0.4rem; margin:0 0 0.6rem; flex-wrap:wrap;";
+    el.innerHTML = [
+      ["daily", "Daily"],
+      ["report", "Report"],
+      ["all", "All"],
+    ]
+      .map(
+        (o) =>
+          `<button type="button" class="txn-scope-btn" data-scope="${o[0]}" ` +
+          `style="padding:4px 13px;border:1px solid #c7d2fe;border-radius:6px;` +
+          `font-size:0.78rem;font-weight:600;cursor:pointer;` +
+          `background:#fff;color:#475569;">${o[1]}</button>`,
+      )
+      .join("");
+    anchor.parentNode.insertBefore(el, anchor.nextSibling);
+  }
+  if (!el.dataset.wired) {
+    el.dataset.wired = "1";
+    el.querySelectorAll(".txn-scope-btn").forEach((btn) => {
+      btn.addEventListener("click", function () {
+        txnExpenseScope = this.dataset.scope || "daily";
+        _setExpenseScopeActive(txnExpenseScope);
+        const { fromDate, toDate } = txnActiveDateRange;
+        _triggerRender(fromDate, toDate);
+      });
+    });
+    _setExpenseScopeActive(txnExpenseScope);
+  }
+  return el;
+}
+
+function _syncExpenseScopeVisibility() {
+  const el = _ensureExpenseScopeEl();
+  if (!el) return;
+  el.style.display =
+    _txnIsAdmin() && txnActiveType === "expenses" ? "flex" : "none";
 }
 
 async function _triggerRender(fromDate, toDate) {
@@ -1576,10 +1859,16 @@ function initTxnDateFilter() {
         .forEach((b) => b.classList.remove("active"));
       this.classList.add("active");
       txnActiveType = this.dataset.type;
+      _syncExpenseScopeVisibility();
       const { fromDate, toDate } = txnActiveDateRange;
       _triggerRender(fromDate, toDate);
     });
   });
+
+  // ── Expense Daily/Report/All sub-filter (admin only) ──────────────────────
+  // _syncExpenseScopeVisibility builds + wires the toggle on first call,
+  // so it works even if the loaded index.html predates the control.
+  _syncExpenseScopeVisibility();
 
   // ── Re-lock button ────────────────────────────────────────────────────────
   const relockBtn = document.getElementById("txn-relock-btn");

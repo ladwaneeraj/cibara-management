@@ -503,17 +503,34 @@ def list_undeposited_cash_refunds(
     cash-on-hand via `cash_on_hand_paise`.
 
     Newest first. Optional date range filter on payment `date`.
+
+    Performance
+    -----------
+    Pushes the refund-`type` filter into Firestore so the wire carries
+    only refund-class cash payments instead of EVERY cash payment ever
+    recorded. Refunds are a small fraction of all payments, so this
+    turns a full-collection scan into a small targeted read — the main
+    reason the New Deposit / Cash-on-Hand screens were slow to load.
+
+    `payment_method == cash` plus `type in [...]` is served by
+    Firestore's automatic single-field indexes (the `in` is expanded
+    into a disjunction of equality queries) and needs no composite
+    index. The except branch still falls back to the legacy full scan
+    if Firestore ever rejects the query, so the numbers stay correct.
     """
     if _payments_ref is None:
         return []
-    try:
-        period_start = _floor_start(period_start)
-        q = _payments_ref.where(
-            filter=fa_firestore.FieldFilter(PAY_METHOD, "==",
-                                            PaymentMethod.CASH)
-        )
-        rows = []
-        for snap in q.stream():
+
+    period_start = _floor_start(period_start)
+    refund_types = list(_CASH_REFUND_TYPES)
+
+    def _post_filter(snap_iter):
+        # Identical client-side filtering for both the indexed and the
+        # fallback paths. The `type` re-check is kept as defence — with
+        # the indexed query every row already matches, but it also makes
+        # the full-scan fallback correct.
+        out = []
+        for snap in snap_iter:
             d = snap.to_dict() or {}
             if d.get(PAY_VOIDED_AT):
                 continue
@@ -530,17 +547,43 @@ def list_undeposited_cash_refunds(
             if period_end and dt and dt > period_end.isoformat():
                 continue
             d["id"] = snap.id
-            rows.append(d)
-            if len(rows) >= limit:
+            out.append(d)
+            if len(out) >= limit:
                 break
-        rows.sort(
+        out.sort(
             key=lambda r: (r.get("date") or "", r.get("id") or ""),
             reverse=True,
         )
-        return rows
+        return out
+
+    # ---- Indexed path: only refund-class cash payments cross the wire.
+    try:
+        q = (
+            _payments_ref
+            .where(filter=fa_firestore.FieldFilter(
+                PAY_METHOD, "==", PaymentMethod.CASH))
+            .where(filter=fa_firestore.FieldFilter(
+                "type", "in", refund_types))
+        )
+        return _post_filter(q.stream())
     except Exception as e:
-        logger.warning(f"list_undeposited_cash_refunds failed: {e}")
-        return []
+        # FailedPrecondition (missing index) or any other query-time
+        # error → fall back to the legacy full cash-payment scan so the
+        # result stays correct even if slower.
+        logger.warning(
+            f"list_undeposited_cash_refunds indexed query failed ({e}); "
+            f"falling back to full scan."
+        )
+        try:
+            q = _payments_ref.where(
+                filter=fa_firestore.FieldFilter(PAY_METHOD, "==",
+                                                PaymentMethod.CASH)
+            )
+            return _post_filter(q.stream())
+        except Exception as e2:
+            logger.warning(
+                f"list_undeposited_cash_refunds fallback failed: {e2}")
+            return []
 
 
 def _undeposited_cash_refunds_paise(*, property_id: str = "") -> int:

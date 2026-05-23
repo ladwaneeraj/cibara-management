@@ -1723,12 +1723,19 @@ def update_checkin_time():
             # Update transaction metadata
             store_transaction_metadata(room, new_date, new_serial, "date_correction")
 
-            # --- Update payments collection: move checkin payment to new date ---
+        # Move the first check-in payment onto the new check-in date/time.
+        # Runs on ANY edit — a date change OR a time-only correction —
+        # because the Transactions tab derives each day's serial order
+        # from the payment's date/time, so the check-in row only
+        # re-sorts once its payment carries the new time. A stay with no
+        # payment row simply has nothing to update.
+        if guest_name:
             try:
                 from firebase_admin import firestore as _fs
                 from google.cloud.firestore_v1.base_query import FieldFilter as _FF
                 payments_ref = db.collection("payments")
-                # Find the checkin payment(s) for this room on the old date
+                # The check-in payment is dated on the OLD check-in date
+                # (which equals new_date for a time-only edit).
                 pq = (
                     payments_ref
                     .where(filter=_FF("room", "==", str(room)))
@@ -1738,25 +1745,31 @@ def update_checkin_time():
                 old_payment_serial = None
                 for pdoc in pq.stream():
                     pdata = pdoc.to_dict()
-                    # Only update the first checkin/booking_conversion payment
+                    # Only the first checkin / booking-conversion payment.
                     if (pdata.get("name") == guest_name and
                             pdata.get("transaction_type") in
                             ("fresh_checkin", "booking_conversion")):
                         old_payment_serial = pdata.get("serial_number")
-                        pdoc.reference.update({
+                        _pay_update = {
                             "date": new_date,
                             "time": new_time_str,
-                            "serial_number": new_serial,
-                            "original_date": old_date,
-                        })
-                        logger.info(f"Updated payments doc {pdoc.id}: date {old_date} -> {new_date}, time -> {new_time_str}, serial #{new_serial}")
+                        }
+                        if new_serial is not None:
+                            _pay_update["serial_number"] = new_serial
+                        if date_changed:
+                            _pay_update["original_date"] = old_date
+                        pdoc.reference.update(_pay_update)
+                        logger.info(
+                            f"Updated payments doc {pdoc.id}: date {old_date} -> "
+                            f"{new_date}, time -> {new_time_str}"
+                        )
 
-                # Fix 3: release the old date's counter slot only if it was the
-                # last serial issued that day.  This lets the next check-in on
-                # old_date reuse the number instead of skipping it.
-                # If it was NOT the last (other guests checked in after), we leave
-                # the counter alone to avoid creating a duplicate serial.
-                if old_payment_serial is not None:
+                # On a DATE change, release the old date's counter slot if
+                # this was the last serial issued that day, so the next
+                # check-in there can reuse the number instead of skipping
+                # it. If it was NOT the last, the counter is left alone to
+                # avoid creating a duplicate serial.
+                if date_changed and old_payment_serial is not None:
                     old_counter_ref = counters_ref.document(old_date)
 
                     @firestore.transactional
@@ -1782,7 +1795,7 @@ def update_checkin_time():
                         )
 
             except Exception as e:
-                logger.warning(f"Failed to update payments collection for date change: {e}")
+                logger.warning(f"Failed to update check-in payment date/time: {e}")
 
         # Build update payload — only reset renewal cycle if the DATE changed.
         # A time-only correction (same calendar day) should NOT wipe out
@@ -2405,6 +2418,12 @@ def get_data():
                        and p.get("type") not in ("expense", "discount")]
         refund_logs = [p for p in recent_payments
                        if p.get("type") in _refund_types]
+        # Settle-later checkouts — written at checkout when the guest
+        # leaves with the balance deferred to a pending settlement.
+        # Surfaced in the Transactions tab (SETTLE LATER tag); kept out
+        # of the cash/online/refund buckets so day totals stay correct.
+        settlement_logs = [p for p in recent_payments
+                           if p.get("type") == "settlement"]
         # expense_logs already fetched from expenses collection above
 
         renewals_for_frontend = []
@@ -2427,6 +2446,7 @@ def get_data():
             "balance": [],
             "add_ons": [],
             "refunds": refund_logs,
+            "settlements": settlement_logs,
             "renewals": renewals_for_frontend,
             "booking_payments": [],
             "discounts": [],
@@ -2691,9 +2711,15 @@ def get_transactions_range():
                          and p.get("type") not in _refund_types
                          and p.get("type") not in _hidden_types],
             "refunds":  [p for p in payments if p.get("type") in _refund_types],
-            # Only transaction-type expenses from the expenses collection
-            "expenses": [e for e in all_expenses
-                         if e.get("expense_type") == "transaction"],
+            # Settle-later checkouts — guest left with the balance
+            # deferred. Shown in the Transactions tab with a SETTLE LATER
+            # tag; a separate bucket so totals are not distorted.
+            "settlements": [p for p in payments
+                            if p.get("type") == "settlement"],
+            # All expenses (daily + report). The Transactions tab filters
+            # by expense_type client-side via the admin Daily/Report
+            # sub-filter; non-admins still see daily expenses only.
+            "expenses": all_expenses,
         }
         return jsonify(success=True, logs=logs)
     except Exception as e:

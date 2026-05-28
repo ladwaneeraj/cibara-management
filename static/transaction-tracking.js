@@ -547,7 +547,13 @@ class TransactionLogManager {
         .charAt(0).toUpperCase() +
         (log.category || "others").slice(1).replace(/_/g, " ");
 
-      // Photo icon or attach button
+      // Photo icon or attach button. Categories that never carry an
+      // invoice photo (mirrors NO_PHOTO_CATEGORIES in expense.js — keep
+      // the two lists in sync) get NO "Photo" attach button here. An
+      // already-attached photo is still shown, in case category data
+      // changed after the fact.
+      const NO_PHOTO_CATS = ["salary", "rent", "petty_cash"];
+      const _expCat = (log.category || "").toLowerCase();
       let photoHtml = "";
       if (log.invoice_photo_url) {
         photoHtml = `<a href="${log.invoice_photo_url}" target="_blank" rel="noopener"
@@ -555,7 +561,7 @@ class TransactionLogManager {
           style="margin-left:5px;color:#3182ce;font-size:0.78rem;text-decoration:none;">
           <i class="fas fa-file-image"></i>
         </a>`;
-      } else if (log._doc_id) {
+      } else if (log._doc_id && !NO_PHOTO_CATS.includes(_expCat)) {
         photoHtml = `<button type="button"
           class="txn-attach-photo-btn"
           data-doc-id="${log._doc_id}"
@@ -569,9 +575,44 @@ class TransactionLogManager {
         ? `<span style="font-size:0.68rem;background:#e8f5e9;color:#2e7d32;border-radius:4px;padding:1px 5px;margin-left:4px;">GST ₹${log.gst_amount || 0}</span>`
         : "";
 
+      // Admin-only inline edit / delete buttons. Visible only when the
+      // log has a _doc_id (so we can target the right Firestore doc)
+      // and the current user has the expense.manage permission. Wired
+      // via event delegation in the DOMContentLoaded block below.
+      let adminActionsHtml = "";
+      const _canManage = window.CibaraAuth
+        && typeof window.CibaraAuth.userCan === "function"
+        && window.CibaraAuth.userCan("expense.manage");
+      if (_canManage && log._doc_id) {
+        // Escape ALL HTML-significant characters in attribute values —
+        // descriptions are operator-entered free text and may contain
+        // any of <, >, &, ", '.
+        const _attrEsc = (v) => String(v == null ? "" : v)
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")
+          .replace(/"/g, "&quot;")
+          .replace(/'/g, "&#39;");
+        adminActionsHtml = `
+          <button type="button" class="txn-exp-edit-btn"
+            data-doc-id="${_attrEsc(log._doc_id)}"
+            title="Edit expense"
+            style="margin-left:5px;background:none;border:1px solid #cbd5e0;border-radius:5px;padding:1px 7px;font-size:0.7rem;color:#3182ce;cursor:pointer;line-height:1.6;">
+            <i class="fas fa-pen"></i>
+          </button>
+          <button type="button" class="txn-exp-delete-btn"
+            data-doc-id="${_attrEsc(log._doc_id)}"
+            data-amount="${_attrEsc(log.amount || 0)}"
+            data-description="${_attrEsc(log.description || '')}"
+            title="Delete expense"
+            style="margin-left:3px;background:none;border:1px solid #fecaca;border-radius:5px;padding:1px 7px;font-size:0.7rem;color:#c53030;cursor:pointer;line-height:1.6;">
+            <i class="fas fa-trash"></i>
+          </button>`;
+      }
+
       titleContent = `<strong>${expenseLabel}</strong>
         <span style="font-size:0.7rem;background:#fed7d7;color:#c53030;border-radius:4px;padding:1px 6px;margin-left:4px;font-weight:500;">${catDisplay}</span>
-        ${gstBadge}${photoHtml}`;
+        ${gstBadge}${photoHtml}${adminActionsHtml}`;
     } else {
       titleContent = `Room ${log.room} - ${log.name}`;
     }
@@ -607,8 +648,14 @@ class TransactionLogManager {
     // Build subtitle: tags first, then time
     const subtitleTime = type ? `${type}${additionalInfo} at ${log.time || "N/A"}` : `at ${log.time || "N/A"}`;
 
+    // Mark expense rows with a stable data attribute so the admin
+    // search filter in transaction-tracking can target them
+    // regardless of whether the edit/delete buttons are present
+    // (older docs without _doc_id, or non-admin view).
+    const rowDataAttrs = (logType === "expenses") ? ' data-expense-row="1"' : "";
+
     return `
-      <div class="log-item" ${rowBg}>
+      <div class="log-item"${rowDataAttrs} ${rowBg}>
         <div class="log-details">
           <div class="log-title">
             ${serialHtml}
@@ -1242,6 +1289,261 @@ document.addEventListener("DOMContentLoaded", function () {
     if (!btn) return;
     _pendingAttachDocId = btn.getAttribute("data-doc-id");
     if (_pendingAttachDocId && txnPhotoFile) txnPhotoFile.click();
+  });
+
+  // ── Admin-only: edit / delete an existing expense ──────────────────────────
+  // Both buttons live inside expense rows in the transaction log and are
+  // only rendered for users with expense.manage. We rely on the permission
+  // check inside renderEnhancedLogItem for visibility; the handlers below
+  // are a thin safety net.
+  function _findLogByDocId(docId) {
+    if (!docId || typeof logs === "undefined" || !logs.expenses) return null;
+    return logs.expenses.find((l) => l._doc_id === docId) || null;
+  }
+
+  document.addEventListener("click", function (e) {
+    // Edit
+    const editBtn = e.target.closest(".txn-exp-edit-btn");
+    if (editBtn) {
+      e.preventDefault();
+      e.stopPropagation();
+      const docId = editBtn.getAttribute("data-doc-id");
+      const log = _findLogByDocId(docId);
+      if (!log) {
+        if (typeof showNotification === "function") {
+          showNotification("Could not find expense to edit. Refresh and retry.", "error");
+        }
+        return;
+      }
+      if (typeof window.openExpenseEditModal === "function") {
+        window.openExpenseEditModal(log);
+      } else {
+        console.warn("openExpenseEditModal not loaded yet");
+      }
+      return;
+    }
+
+    // Delete
+    const delBtn = e.target.closest(".txn-exp-delete-btn");
+    if (delBtn) {
+      e.preventDefault();
+      e.stopPropagation();
+      const docId = delBtn.getAttribute("data-doc-id");
+      const amt   = delBtn.getAttribute("data-amount") || "?";
+      const desc  = delBtn.getAttribute("data-description") || "this expense";
+      if (!docId) return;
+      if (!confirm(`Delete "${desc}" (₹${amt})?\n\nThis cannot be undone.`)) return;
+
+      // Defensive admin check before firing the request.
+      const canManage = window.CibaraAuth
+        && typeof window.CibaraAuth.userCan === "function"
+        && window.CibaraAuth.userCan("expense.manage");
+      if (!canManage) {
+        if (typeof showNotification === "function") {
+          showNotification("Only admins can delete expenses", "error");
+        }
+        return;
+      }
+
+      delBtn.disabled = true;
+      apiFetch("/expense/" + encodeURIComponent(docId), { method: "DELETE" })
+        .then((r) => r.json())
+        .then((data) => {
+          if (data && data.success) {
+            if (typeof showNotification === "function") {
+              showNotification("Expense deleted", "success");
+            }
+            if (typeof debouncedFetchData === "function") debouncedFetchData();
+          } else {
+            if (typeof showNotification === "function") {
+              showNotification((data && data.message) || "Delete failed", "error");
+            }
+            delBtn.disabled = false;
+          }
+        })
+        .catch((err) => {
+          console.error("delete expense error:", err);
+          if (typeof showNotification === "function") {
+            showNotification("Error: " + err.message, "error");
+          }
+          delBtn.disabled = false;
+        });
+    }
+  });
+
+  // ── Admin-only: live search across rendered expense rows ───────────────────
+  // The search input is created lazily so that this file doesn't need to
+  // know the exact DOM order in templates/index.html. It sits just above
+  // the transaction log and filters expense rows by description, category,
+  // paid_to, vendor_name and invoice_number — case-insensitive substring.
+  // Non-expense rows are untouched.
+  // True iff the user is currently looking at the Expense filter on the
+  // Transaction tab. The search bar only makes sense in this view —
+  // outside it the bar is hidden, the query is cleared and any hidden
+  // rows are reset to visible.
+  function _isExpenseFilterActive() {
+    // txnActiveType is declared at module top level (let). When this
+    // file hasn't initialised yet (race during boot) we default to false
+    // so the bar stays hidden rather than appearing in the wrong view.
+    try {
+      return typeof txnActiveType !== "undefined" && txnActiveType === "expenses";
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function _ensureExpenseSearchEl() {
+    const isAdmin = window.CibaraAuth
+      && typeof window.CibaraAuth.userCan === "function"
+      && window.CibaraAuth.userCan("expense.manage");
+    const wantVisible = isAdmin && _isExpenseFilterActive();
+
+    let el = document.getElementById("txn-expense-search-wrap");
+
+    // Hide / reset path — element exists but we don't want it shown
+    // (filter switched away, or user is non-admin).
+    if (el && !wantVisible) {
+      el.style.display = "none";
+      // Clear any active query so rows aren't left hidden when admin
+      // switches back to "All" / "Cash" / etc.
+      const input = el.querySelector("#txn-expense-search");
+      if (input && input.value) {
+        input.value = "";
+        // Force a reset of any row visibility we previously toggled.
+        document.querySelectorAll('#transaction-log .log-item').forEach((r) => {
+          r.style.display = "";
+        });
+      }
+      return null;
+    }
+
+    if (!wantVisible) return null;
+    if (el) { el.style.display = "flex"; return el; }
+
+    const log = document.getElementById("transaction-log");
+    if (!log || !log.parentNode) return null;
+
+    el = document.createElement("div");
+    el.id = "txn-expense-search-wrap";
+    el.style.cssText =
+      "display:flex;align-items:center;gap:0.4rem;margin:0 0 0.55rem;";
+    el.innerHTML = `
+      <div style="position:relative;flex:1;">
+        <i class="fas fa-search"
+           style="position:absolute;left:0.55rem;top:50%;transform:translateY(-50%);color:#94a3b8;font-size:0.78rem;"></i>
+        <input type="text" id="txn-expense-search"
+          placeholder="Search expenses (description, vendor, paid to, invoice no.)…"
+          style="width:100%;padding:0.42rem 0.6rem 0.42rem 1.8rem;font-size:0.85rem;
+                 border:1.5px solid #e2e8f0;border-radius:8px;outline:none;
+                 transition:border-color .15s;" />
+      </div>
+      <button type="button" id="txn-expense-search-clear"
+        style="background:#f1f5f9;border:1px solid #e2e8f0;border-radius:8px;
+               padding:0.4rem 0.65rem;cursor:pointer;font-size:0.75rem;color:#475569;
+               display:none;">
+        Clear
+      </button>
+      <span id="txn-expense-search-count"
+        style="font-size:0.72rem;color:#718096;min-width:60px;text-align:right;"></span>
+    `;
+    log.parentNode.insertBefore(el, log);
+    return el;
+  }
+
+  function _applyExpenseSearch() {
+    const input = document.getElementById("txn-expense-search");
+    const clearBtn = document.getElementById("txn-expense-search-clear");
+    const countEl  = document.getElementById("txn-expense-search-count");
+    if (!input) return;
+
+    const q = (input.value || "").trim().toLowerCase();
+    if (clearBtn) clearBtn.style.display = q ? "inline-block" : "none";
+
+    // Only act on rows that look like expense rows. We identify them by
+    // the presence of an edit OR delete button OR by the category badge
+    // — the rendering inserts the .txn-exp-edit-btn or .txn-exp-delete-btn
+    // only for admins. To stay robust for the non-admin case too, we
+    // fall back to looking for an expense-only background ("#fdecea" is
+    // shared with refunds — so we additionally check for the strong tag
+    // pattern which expenses always have).
+    const rows = document.querySelectorAll("#transaction-log .log-item");
+    let visible = 0;
+    let totalExpenseRows = 0;
+
+    rows.forEach((row) => {
+      const hasExpBtn = row.querySelector(".txn-exp-edit-btn, .txn-exp-delete-btn, .txn-attach-photo-btn");
+      // Identify expense rows: either admin edit/delete buttons present,
+      // OR a "Photo" attach button (only rendered on expenses), OR the
+      // category badge red pill style used solely for expenses.
+      const isExpense = !!hasExpBtn || row.dataset.expenseRow === "1";
+      if (!isExpense) return; // non-expense rows untouched
+
+      totalExpenseRows++;
+
+      if (!q) {
+        row.style.display = "";
+        visible++;
+        return;
+      }
+
+      const haystack = (row.textContent || "").toLowerCase();
+      const match = haystack.indexOf(q) !== -1;
+      row.style.display = match ? "" : "none";
+      if (match) visible++;
+    });
+
+    if (countEl) {
+      countEl.textContent = q
+        ? `${visible}/${totalExpenseRows} match`
+        : "";
+    }
+  }
+
+  // The transaction log is repopulated by several different code paths
+  // (renderEnhancedLogs, filterAndDisplayLogs, _renderWithLogs, etc.).
+  // Rather than try to patch each entry point, watch the container for
+  // childList mutations and re-create the search bar + re-apply the
+  // active filter whenever the log redraws. This is O(redraws) and the
+  // observer never runs during the same redraw twice (guarded by a
+  // re-entrancy flag).
+  let _reapplyInFlight = false;
+  function _ensureSearchBarAndReapply() {
+    if (_reapplyInFlight) return;
+    _reapplyInFlight = true;
+    try {
+      _ensureExpenseSearchEl();
+      _applyExpenseSearch();
+    } finally {
+      _reapplyInFlight = false;
+    }
+  }
+
+  const _logContainer = document.getElementById("transaction-log");
+  if (_logContainer && typeof MutationObserver !== "undefined") {
+    const _obs = new MutationObserver(function () {
+      // Defer so DOM-batched mutations settle before we measure / hide.
+      setTimeout(_ensureSearchBarAndReapply, 0);
+    });
+    _obs.observe(_logContainer, { childList: true, subtree: false });
+  }
+  // Initial setup (in case log was already populated before observer attached).
+  setTimeout(_ensureSearchBarAndReapply, 0);
+
+  // Wire the search input (created lazily — use delegation on the body)
+  document.addEventListener("input", function (e) {
+    if (e.target && e.target.id === "txn-expense-search") {
+      _applyExpenseSearch();
+    }
+  });
+  document.addEventListener("click", function (e) {
+    if (e.target && e.target.closest && e.target.closest("#txn-expense-search-clear")) {
+      const input = document.getElementById("txn-expense-search");
+      if (input) {
+        input.value = "";
+        _applyExpenseSearch();
+        input.focus();
+      }
+    }
   });
 
   if (txnPhotoFile) {

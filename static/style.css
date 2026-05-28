@@ -3868,3 +3868,114 @@ input:checked + .toggle-slider:before {
 
 /* toast warning variant */
 .cm-toast.cm-toast-warning { background: #d97706; }
+
+/* OCR inline status pill — soft pulse while reading the bill */
+@keyframes expense-ocr-pulse {
+  0%, 100% { opacity: 1;    box-shadow: 0 0 0 0   rgba(66, 153, 225, 0.35); }
+  50%      { opacity: 0.78; box-shadow: 0 0 0 4px rgba(66, 153, 225, 0.08); }
+}
+
+/* ───────────────────────────────────────────────────────────────────────────
+ * Expense preset tiles
+ *
+ * Tiles render below the category select in the expense modal. Clicking
+ * a tile fills the description (or paid-to for salary) and, if the
+ * preset carries a default_amount, also fills the amount input.
+ * The grid scrolls vertically once the list exceeds two rows.
+ * ─────────────────────────────────────────────────────────────────────── */
+.exp-preset-tile {
+  display: inline-flex; align-items: center; gap: 0.35rem;
+  padding: 0.42rem 0.7rem;
+  border-radius: 999px;
+  border: 1.5px solid #e2e8f0;
+  background: #fff;
+  font-size: 0.82rem; font-weight: 500;
+  color: #2d3748;
+  cursor: pointer;
+  transition: background .15s, border-color .15s, color .15s;
+  /* prevent the tile from being wider than ~70% of modal so long
+     labels wrap to the next line as a separate chip instead of
+     stretching the row */
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.exp-preset-tile:hover {
+  background: #fef2f2;
+  border-color: #fca5a5;
+  color: #b91c1c;
+}
+.exp-preset-tile.is-selected {
+  background: #e53e3e;
+  border-color: #c0392b;
+  color: #fff;
+}
+.exp-preset-tile .exp-preset-amt {
+  font-size: 0.72rem;
+  font-weight: 600;
+  opacity: 0.7;
+  margin-left: 0.15rem;
+}
+.exp-preset-tile.is-selected .exp-preset-amt {
+  opacity: 0.9;
+}
+.exp-preset-empty {
+  font-size: 0.78rem; color: #718096; font-style: italic;
+  padding: 0.4rem 0;
+}
+
+/* Admin preset manager (inside settings modal) */
+.exp-preset-mgr-category {
+  border: 1px solid #e2e8f0; border-radius: 10px;
+  padding: 0.75rem; margin-bottom: 0.65rem;
+  background: #fafbfc;
+}
+.exp-preset-mgr-category h4 {
+  margin: 0 0 0.5rem; font-size: 0.88rem; color: #2d3748;
+  display: flex; justify-content: space-between; align-items: center;
+}
+.exp-preset-mgr-list {
+  display: flex; flex-direction: column; gap: 0.35rem;
+  margin-bottom: 0.55rem;
+}
+.exp-preset-mgr-row {
+  display: flex; align-items: center; gap: 0.5rem;
+  background: #fff; border: 1px solid #edf2f7; border-radius: 7px;
+  padding: 0.35rem 0.55rem;
+}
+.exp-preset-mgr-row .name {
+  flex: 1; font-size: 0.85rem; color: #2d3748;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.exp-preset-mgr-row .amt {
+  font-size: 0.78rem; color: #718096;
+}
+.exp-preset-mgr-row .row-actions {
+  display: flex; gap: 0.25rem;
+}
+.exp-preset-mgr-row .row-actions button {
+  background: transparent; border: none; cursor: pointer;
+  color: #718096; padding: 0.2rem 0.35rem; font-size: 0.85rem;
+  border-radius: 4px;
+}
+.exp-preset-mgr-row .row-actions button:hover { color: #2d3748; background: #f1f5f9; }
+.exp-preset-mgr-row .row-actions .del:hover  { color: #c53030; background: #fef2f2; }
+
+.exp-preset-mgr-add {
+  display: flex; gap: 0.4rem; align-items: stretch;
+}
+.exp-preset-mgr-add input {
+  font-size: 0.85rem; padding: 0.38rem 0.55rem;
+  border: 1px solid #cbd5e0; border-radius: 6px; min-width: 0;
+}
+.exp-preset-mgr-add input.name-input { flex: 2; }
+.exp-preset-mgr-add input.amt-input  { flex: 1; }
+.exp-preset-mgr-add button {
+  background: #3182ce; color: #fff; border: none;
+  padding: 0.38rem 0.7rem; border-radius: 6px;
+  font-size: 0.82rem; font-weight: 600; cursor: pointer;
+  white-space: nowrap;
+}
+.exp-preset-mgr-add button:hover { background: #2c5282; }
+.exp-preset-mgr-add button:disabled { opacity: 0.55; cursor: not-allowed; }

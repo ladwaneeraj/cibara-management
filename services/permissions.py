@@ -91,6 +91,14 @@ PERMISSIONS = frozenset(
         "banking.deposit.reverse",
         "banking.adjustment.create",
         "banking.account.manage",
+        # Expense presets — admin-curated quick-pick tiles per category.
+        # Read is open to every authenticated user (so operators can render
+        # tiles in the expense modal); editing requires this permission.
+        "expense.presets.manage",
+        # Editing / deleting an existing expense. Distinct from "creating"
+        # an expense (everyone with banking.adjustment.create / write
+        # access to the transaction tab can create). Admin-only by default.
+        "expense.manage",
     }
 )
 

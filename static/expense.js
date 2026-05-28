@@ -44,6 +44,69 @@ let _invoicePhotoUrl = "";
 let _invoiceUploadInProgress = false;
 let _pendingInvoiceFile = null;   // File object selected by user — uploaded on submit
 
+// ─── Edit-mode state ─────────────────────────────────────────────────────────
+// When admin clicks the pencil icon on an existing expense row, the modal
+// opens in edit mode: pre-filled with the existing values, submit hits
+// PATCH /expense/<doc_id> instead of POST /add_expense. State is reset
+// on every modal open (showExpenseModal) and after a successful submit.
+let _expenseEditMode = false;
+let _expenseEditDocId = null;
+
+// ─── OCR state ───────────────────────────────────────────────────────────────
+// Cached availability check from /ocr/status. We probe once on page boot;
+// the UI hides all auto-fill affordances when OCR is disabled server-side.
+let _ocrEnabled = null;        // null = unknown, true/false once probed
+let _ocrInflight = false;       // re-entry guard so a slow scan can't pile up
+
+async function _checkOcrEnabled() {
+  if (_ocrEnabled !== null) return _ocrEnabled;
+  try {
+    const res = await apiFetch("/ocr/status", { method: "GET" });
+    if (!res.ok) { _ocrEnabled = false; return false; }
+    const data = await res.json();
+    _ocrEnabled = !!(data && data.enabled);
+  } catch (_) {
+    _ocrEnabled = false;
+  }
+  return _ocrEnabled;
+}
+
+// ─── Preset tiles cache ──────────────────────────────────────────────────────
+// Shape: { <category>: [ { id, name, default_amount } ] }
+// Populated lazily on first modal open and refreshed when admin edits
+// the list. A "stale" flag triggers a re-fetch on next modal open.
+let _expensePresetsCache = null;
+let _expensePresetsCacheStale = true;
+
+async function _loadExpensePresets(force) {
+  if (!force && _expensePresetsCache && !_expensePresetsCacheStale) {
+    return _expensePresetsCache;
+  }
+  try {
+    const res = await apiFetch("/expense_presets", { method: "GET" });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const data = await res.json();
+    if (data && data.success) {
+      _expensePresetsCache = data.presets || {};
+      _expensePresetsCacheStale = false;
+    } else {
+      _expensePresetsCache = _expensePresetsCache || {};
+    }
+  } catch (e) {
+    console.warn("expense presets load failed (non-fatal):", e);
+    // Don't block the modal — operators can still type free-text.
+    _expensePresetsCache = _expensePresetsCache || {};
+  }
+  return _expensePresetsCache;
+}
+
+// Called by the admin preset manager after a write so the next modal
+// open re-fetches. Exposed on window for cross-script access.
+function invalidateExpensePresetsCache() {
+  _expensePresetsCacheStale = true;
+}
+window.invalidateExpensePresetsCache = invalidateExpensePresetsCache;
+
 // ─── Initialize ──────────────────────────────────────────────────────────────
 function initializeExpense() {
   const addExpenseBtn = document.getElementById("add-expense-btn");
@@ -125,6 +188,19 @@ function initializeExpense() {
 
   _initInvoiceUpload();
 
+  // "Manage list" inside the expense modal — opens the admin-only
+  // preset manager. The button itself is hidden for non-admins in
+  // showExpenseModal, so this click handler is defensive only.
+  const manageBtn = document.getElementById("expense-preset-manage-btn");
+  if (manageBtn) {
+    manageBtn.addEventListener("click", () => {
+      if (typeof window.openExpensePresetManager === "function") {
+        const currentCat = document.getElementById("expense-category")?.value || "";
+        window.openExpensePresetManager(currentCat);
+      }
+    });
+  }
+
   const closeBtn = document.querySelector("#expense-modal .close-btn");
   if (closeBtn) closeBtn.addEventListener("click", () => document.getElementById("expense-modal")?.classList.remove("show"));
 }
@@ -137,10 +213,109 @@ function initializeExpense() {
 //   - petty_cash → small everyday items, no bill expected
 const NO_PHOTO_CATEGORIES = ["salary", "rent", "petty_cash"];
 
+// ─── Preset tile rendering ────────────────────────────────────────────────────
+// Render the admin-configured quick-pick tiles for the current category.
+// Clicking a tile fills the target field (description, or paid-to for
+// salary) and the amount input if the preset has a default_amount.
+function _renderPresetTiles(category) {
+  const wrapper = document.getElementById("expense-preset-tiles-wrapper");
+  const tilesEl = document.getElementById("expense-preset-tiles");
+  const countEl = document.getElementById("expense-preset-tiles-count");
+  if (!wrapper || !tilesEl) return;
+
+  // Always reset selection state on category change
+  tilesEl.innerHTML = "";
+  if (!category) {
+    wrapper.style.display = "none";
+    return;
+  }
+
+  const items = (_expensePresetsCache && _expensePresetsCache[category]) || [];
+  if (items.length === 0) {
+    // Hide the wrapper unless the user is an admin — admin should
+    // still see the "Manage list" affordance to seed the list.
+    const isAdmin = window.CibaraAuth
+      && typeof window.CibaraAuth.userCan === "function"
+      && window.CibaraAuth.userCan("expense.presets.manage");
+    if (!isAdmin) {
+      wrapper.style.display = "none";
+      return;
+    }
+    wrapper.style.display = "block";
+    if (countEl) countEl.textContent = "(none yet)";
+    const empty = document.createElement("div");
+    empty.className = "exp-preset-empty";
+    empty.textContent = "No presets configured for this category. Click \"Manage list\" to add some.";
+    tilesEl.appendChild(empty);
+    return;
+  }
+
+  wrapper.style.display = "block";
+  if (countEl) countEl.textContent = `(${items.length})`;
+
+  // Target field depends on category — salary fills the staff-name
+  // "Paid To" field, every other category fills the description.
+  const targetId = category === "salary"
+    ? "expense-paid-to"
+    : "expense-description";
+
+  items.forEach((it) => {
+    const tile = document.createElement("button");
+    tile.type = "button";
+    tile.className = "exp-preset-tile";
+    tile.dataset.presetId = it.id || "";
+    const amt = (it.default_amount != null && it.default_amount > 0)
+      ? `<span class="exp-preset-amt">₹${it.default_amount}</span>`
+      : "";
+    tile.innerHTML = `<span>${_escHtml(it.name || "")}</span>${amt}`;
+
+    tile.addEventListener("click", () => {
+      // Toggle the visual selection within the row
+      tilesEl.querySelectorAll(".exp-preset-tile.is-selected")
+        .forEach((t) => t.classList.remove("is-selected"));
+      tile.classList.add("is-selected");
+
+      // Fill the target field. For salary, this also triggers the
+      // existing paid-to → description sync listener attached in
+      // _onCategoryChange below, so we just need to dispatch input.
+      const targetEl = document.getElementById(targetId);
+      if (targetEl) {
+        targetEl.value = it.name || "";
+        targetEl.dispatchEvent(new Event("input", { bubbles: true }));
+      }
+
+      // Fill amount if a default is provided and the field is editable.
+      if (it.default_amount != null && it.default_amount > 0) {
+        const amountInput = document.getElementById("expense-amount");
+        if (amountInput && !amountInput.readOnly) {
+          amountInput.value = it.default_amount;
+        }
+      }
+    });
+
+    tilesEl.appendChild(tile);
+  });
+}
+
+// Small HTML escape — preset names are admin-entered, but we still
+// escape to keep XSS surface area at zero.
+function _escHtml(s) {
+  return String(s)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 // ─── Category change ──────────────────────────────────────────────────────────
 function _onCategoryChange() {
   const category = document.getElementById("expense-category")?.value || "";
   const tier = CATEGORY_TIER[category] || "tier2";
+
+  // Render quick-pick tiles for the new category. Uses the cached
+  // preset map populated when the modal opens.
+  _renderPresetTiles(category);
 
   _setDisplay("salary-fields", false);
   _setDisplay("has-bill-group", false);
@@ -285,6 +460,291 @@ function _onInvoiceFileSelected(e) {
   if (statusEl) statusEl.innerHTML =
     `<i class="fas fa-paperclip" style="color:#3182ce;"></i> ${shortName} <span style="font-size:0.7rem;color:#718096;">(will upload on save)</span>`;
   if (removeBtn) removeBtn.style.display = "inline-block";
+
+  // Fire OCR in the background. Only images (not PDFs) trigger auto-fill
+  // here — Gemini can also read PDFs but the UX is less obvious; admin
+  // can still hit "Re-scan" manually if they want.
+  if (file.type && file.type.startsWith("image/")) {
+    _runInvoiceOcr(file);
+  }
+}
+
+// ─── OCR — extract & pre-fill from invoice photo ─────────────────────────────
+// Strategy:
+//   • Only fills FIELDS THAT ARE CURRENTLY EMPTY. We never overwrite a
+//     value the user has typed. If they want to overwrite, they clear
+//     the field then click "Re-scan".
+//   • If has_gst comes back true we tick the bill + GST checkboxes so
+//     the GST sub-form unfolds and the additional fields can be filled.
+//   • Failures are silent: no banner, no popup — just leaves the form
+//     for manual entry. We log to console for debugging.
+async function _runInvoiceOcr(file) {
+  if (_ocrInflight) return;
+  const enabled = await _checkOcrEnabled();
+  if (!enabled) return;     // server has no GEMINI_API_KEY — no UI noise.
+
+  _ocrInflight = true;
+  const statusEl = document.getElementById("invoice-attach-status");
+
+  // Build the base "📎 filename (will upload on save)" label from scratch
+  // each time. This avoids duplicating the OCR summary or Re-scan button
+  // on repeated scans.
+  const shortName = file.name.length > 28
+    ? file.name.substring(0, 25) + "…"
+    : file.name;
+  const baseLabel =
+    `<i class="fas fa-paperclip" style="color:#3182ce;"></i> ${shortName} ` +
+    `<span style="font-size:0.7rem;color:#718096;">(will upload on save)</span>`;
+
+  if (statusEl) {
+    statusEl.innerHTML = baseLabel +
+      ' <span style="font-size:0.78rem;color:#3182ce;margin-left:6px;">' +
+      '<i class="fas fa-spinner fa-spin"></i> Reading bill…</span>';
+  }
+
+  // Inline status pill right under the Attach Invoice button. The
+  // operator's eye is already on this section because they just tapped
+  // the button, so it's the most natural place to surface progress —
+  // no toast, no banner that crowds the form.
+  _setOcrInlineStatus("loading", "Reading bill — extracting fields…");
+
+  try {
+    const formData = new FormData();
+    formData.append("file", file);
+    const res = await apiFetch("/ocr/expense_invoice", {
+      method: "POST",
+      body: formData,
+    });
+    const data = await res.json();
+
+    // Always log the response so you can see what Gemini extracted.
+    // Helpful for debugging "why didn't field X fill in?" — most often
+    // the model returned null for that field due to image quality.
+    console.log("[OCR] response:", data);
+
+    if (!data || !data.success) {
+      // ocr_disabled / ocr_error / bad_request
+      if (statusEl) statusEl.innerHTML = baseLabel;
+      if (data && data.reason && data.reason !== "ocr_disabled") {
+        console.warn("OCR failed:", data.reason, data.message);
+        _setOcrInlineStatus("error", "Could not read bill — please type manually");
+      } else {
+        // ocr_disabled — no UI noise (admin hasn't configured OCR).
+        _setOcrInlineStatus("hidden");
+      }
+      return;
+    }
+
+    const filled = _applyOcrFields(data.fields || {});
+    if (statusEl) {
+      const ocrSummary = filled.length
+        ? ` <span style="font-size:0.7rem;color:#2f855a;">✓ ${filled.length} field${filled.length > 1 ? "s" : ""} auto-filled — please verify</span>`
+        : ` <span style="font-size:0.7rem;color:#718096;">(no fields detected — type manually)</span>`;
+      const rescanBtn = ` <button type="button" id="invoice-rescan-btn"
+        style="background:none;border:1px solid #cbd5e0;border-radius:5px;
+               padding:1px 7px;font-size:0.7rem;color:#3182ce;cursor:pointer;
+               margin-left:6px;line-height:1.6;">
+        <i class="fas fa-redo"></i> Re-scan
+      </button>`;
+      statusEl.innerHTML = baseLabel + ocrSummary + rescanBtn;
+
+      const rb = document.getElementById("invoice-rescan-btn");
+      if (rb) rb.addEventListener("click", (ev) => {
+        ev.preventDefault();
+        if (_pendingInvoiceFile) _runInvoiceOcr(_pendingInvoiceFile);
+      });
+    }
+
+    // Inline pill — green on success (auto-fades), amber on empty result.
+    if (filled.length > 0) {
+      _setOcrInlineStatus(
+        "success",
+        `✓ ${filled.length} field${filled.length > 1 ? "s" : ""} filled — please verify`,
+        4000  // fade out after 4s
+      );
+    } else {
+      _setOcrInlineStatus(
+        "warn",
+        "No fields could be read — please type manually"
+      );
+    }
+  } catch (err) {
+    console.warn("OCR network error:", err);
+    if (statusEl) statusEl.innerHTML = baseLabel;
+    _setOcrInlineStatus("error", "Network error reading bill — type manually");
+  } finally {
+    _ocrInflight = false;
+  }
+}
+
+// ─── OCR inline status pill ──────────────────────────────────────────────────
+// Single source of truth for the OCR feedback shown inside the modal.
+// Renders as a coloured pill directly below the Attach Invoice button
+// so the indicator sits where the operator's eye already is.
+//
+// States:
+//   "loading" — blue, animated spinner + gentle pulse
+//   "success" — green, checkmark, auto-fades after autoHideMs
+//   "warn"    — amber, sticks (operator needs to know to type manually)
+//   "error"   — red,   sticks
+//   "hidden"  — removes from view
+//
+// The pill is created lazily and reused across scans within the same
+// modal session. showExpenseModal calls _setOcrInlineStatus("hidden")
+// on every fresh open so state never bleeds between two entries.
+function _setOcrInlineStatus(state, message, autoHideMs) {
+  // Anchor: place the pill immediately after the attach-button row,
+  // inside #invoice-photo-section. Mounting it there ensures the pill
+  // hides automatically when the section is hidden for salary / rent /
+  // petty_cash (categories that disable invoice attach).
+  const section = document.getElementById("invoice-photo-section");
+  if (!section) return;
+
+  let pill = document.getElementById("invoice-ocr-status");
+  if (!pill) {
+    pill = document.createElement("div");
+    pill.id = "invoice-ocr-status";
+    pill.style.cssText = [
+      "display:none",
+      "align-items:center",
+      "gap:0.45rem",
+      "padding:0.5rem 0.75rem",
+      "margin-top:0.55rem",
+      "border-radius:8px",
+      "border:1px solid transparent",
+      "font-size:0.82rem",
+      "font-weight:500",
+      "line-height:1.25",
+      "transition:opacity 0.25s",
+    ].join(";");
+    section.appendChild(pill);
+  }
+
+  // Clear any pending auto-hide from a prior state transition.
+  if (pill._hideTimer) {
+    clearTimeout(pill._hideTimer);
+    pill._hideTimer = null;
+  }
+
+  if (state === "hidden") {
+    pill.style.display = "none";
+    pill.style.opacity = "1";
+    pill.style.animation = "";
+    pill.innerHTML = "";
+    return;
+  }
+
+  const palette = {
+    loading: {
+      bg: "#ebf5ff", border: "#90cdf4", color: "#2c5282",
+      icon: '<i class="fas fa-spinner fa-spin"></i>',
+      pulse: true,
+    },
+    success: {
+      bg: "#f0fdf4", border: "#86efac", color: "#15803d",
+      icon: '<i class="fas fa-check-circle"></i>',
+    },
+    warn: {
+      bg: "#fffbeb", border: "#fcd34d", color: "#92400e",
+      icon: '<i class="fas fa-exclamation-circle"></i>',
+    },
+    error: {
+      bg: "#fef2f2", border: "#fca5a5", color: "#991b1b",
+      icon: '<i class="fas fa-times-circle"></i>',
+    },
+  };
+  const p = palette[state] || palette.loading;
+
+  pill.style.background  = p.bg;
+  pill.style.borderColor = p.border;
+  pill.style.color       = p.color;
+  pill.style.display     = "flex";
+  pill.style.opacity     = "1";
+  pill.style.animation   = p.pulse ? "expense-ocr-pulse 1.6s ease-in-out infinite" : "";
+  pill.innerHTML         = `${p.icon}<span>${message}</span>`;
+
+  if (autoHideMs && autoHideMs > 0) {
+    pill._hideTimer = setTimeout(() => {
+      pill.style.opacity = "0";
+      setTimeout(() => {
+        // Re-check display in case another state took over mid-fade.
+        if (pill.style.opacity === "0") pill.style.display = "none";
+      }, 260);
+    }, autoHideMs);
+  }
+}
+
+// Apply extracted fields to the form. Only writes to inputs that are
+// currently empty so we don't trample on what the operator already
+// typed. Returns the list of field labels that were actually filled —
+// used to build the user-facing summary message.
+function _applyOcrFields(fields) {
+  const filled = [];
+
+  const fillIfEmpty = (id, value, label) => {
+    if (value == null || value === "") return;
+    const el = document.getElementById(id);
+    if (!el) return;
+    if (el.value && el.value.trim() !== "") return;  // user typed already
+    el.value = value;
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+    _flashField(el);
+    filled.push(label);
+  };
+
+  // Description doesn't require bill/GST sub-forms to be open.
+  fillIfEmpty("expense-description", fields.description, "description");
+
+  // Total amount is high-value: fill the primary amount field.
+  fillIfEmpty("expense-amount", fields.amount, "amount");
+
+  // ── Bill block ─────────────────────────────────────────────────────────
+  // If the OCR found an invoice number we need the bill sub-form open.
+  // Same for GST. We tick the checkboxes (and fire their change handlers)
+  // only when the OCR signals the data exists AND the checkboxes are
+  // currently off — never tear down sub-forms the user has already set up.
+  const hasBillChk = document.getElementById("expense-has-bill");
+  const wantsBill  = !!(fields.invoice_number || fields.invoice_date || fields.has_gst);
+  if (wantsBill && hasBillChk && !hasBillChk.checked) {
+    hasBillChk.checked = true;
+    if (typeof _onHasBillChange === "function") _onHasBillChange();
+  }
+  fillIfEmpty("expense-invoice-number", fields.invoice_number, "invoice no.");
+  fillIfEmpty("expense-invoice-date",   fields.invoice_date,   "invoice date");
+
+  // ── GST block ──────────────────────────────────────────────────────────
+  if (fields.has_gst) {
+    const hasGstChk = document.getElementById("expense-has-gst");
+    if (hasGstChk && !hasGstChk.checked) {
+      hasGstChk.checked = true;
+      if (typeof _onHasGstChange === "function") _onHasGstChange();
+    }
+    fillIfEmpty("expense-vendor-name",    fields.vendor_name,    "vendor");
+    fillIfEmpty("expense-vendor-gstin",   fields.vendor_gstin,   "GSTIN");
+    fillIfEmpty("expense-taxable-amount", fields.taxable_amount, "taxable amount");
+    fillIfEmpty("expense-gst-rate",       fields.gst_rate,       "GST rate");
+    fillIfEmpty("expense-gst-amount",     fields.gst_amount,     "GST amount");
+  } else {
+    // Even when there's no GST block on the bill, the vendor name is
+    // still useful context for the description field. Skip if the form
+    // doesn't have a separate vendor input shown.
+    fillIfEmpty("expense-vendor-name", fields.vendor_name, "vendor");
+  }
+
+  return filled;
+}
+
+// Brief visual cue (1.5s amber outline) when a field is auto-populated
+// so the operator's eye is drawn to the spots they need to verify.
+function _flashField(el) {
+  if (!el || !el.style) return;
+  const original = el.style.boxShadow;
+  el.style.boxShadow = "0 0 0 3px rgba(251, 191, 36, 0.55)";
+  setTimeout(() => {
+    if (el.style.boxShadow.includes("rgba(251, 191, 36")) {
+      el.style.boxShadow = original;
+    }
+  }, 1500);
 }
 
 function _clearInvoiceUpload() {
@@ -304,12 +764,176 @@ function _resetUploadStatus() {
   if (removeBtn) removeBtn.style.display = "none";
 }
 
+// ─── Edit-mode entry point ───────────────────────────────────────────────────
+// Called from the transaction-tab pencil icon. Opens the existing expense
+// modal pre-populated with the log's values and flips internal state so
+// submit dispatches a PATCH instead of a POST.
+function openExpenseEditModal(log) {
+  if (!log || !log._doc_id) {
+    if (typeof showNotification === "function") {
+      showNotification("Cannot edit — missing document id", "error");
+    }
+    return;
+  }
+
+  // Hard gate — UI is admin-only but defend the function entry too.
+  const isAdmin = window.CibaraAuth
+    && typeof window.CibaraAuth.userCan === "function"
+    && window.CibaraAuth.userCan("expense.manage");
+  if (!isAdmin) {
+    if (typeof showNotification === "function") {
+      showNotification("Only admins can edit expenses", "error");
+    }
+    return;
+  }
+
+  // Open the modal in the normal way so the standard reset path runs,
+  // then flip into edit mode + populate. allowTypeToggle=true so admin
+  // can move an expense between Daily and From-Account.
+  const baseType = log.expense_type || "transaction";
+  showExpenseModal(baseType, { allowTypeToggle: true });
+
+  _expenseEditMode = true;
+  _expenseEditDocId = log._doc_id;
+
+  // Title + submit button reflect edit mode
+  const title = document.getElementById("expense-modal-title");
+  if (title) title.innerHTML = '<i class="fas fa-pen"></i> Edit Expense';
+  const submitBtn = document.querySelector("#expense-form button[type=submit]");
+  if (submitBtn) submitBtn.innerHTML = '<i class="fas fa-check"></i> Update Expense';
+
+  // ── Populate fields ─────────────────────────────────────────────────────
+  const set = (id, val) => {
+    const el = document.getElementById(id);
+    if (el != null && val != null) el.value = val;
+  };
+  const check = (id, on) => {
+    const el = document.getElementById(id);
+    if (el) el.checked = !!on;
+  };
+
+  set("expense-date", log.date || "");
+
+  // Setting category programmatically and dispatching change triggers
+  // _onCategoryChange which morphs the form (salary/tier1/tier2/tier3/
+  // commission) so we don't have to duplicate that logic here.
+  const catEl = document.getElementById("expense-category");
+  if (catEl) {
+    catEl.value = log.category || "";
+    catEl.dispatchEvent(new Event("change", { bubbles: true }));
+  }
+
+  set("expense-description", log.description || "");
+  set("expense-amount", log.amount || "");
+
+  // Payment method buttons
+  const pm = (log.payment_method || "cash").toLowerCase();
+  document.querySelectorAll("#expense-form .payment-btn").forEach((b) => {
+    const matches = b.getAttribute("data-payment") === pm;
+    b.classList.toggle("active", matches);
+  });
+  const pmInput = document.getElementById("expense-payment-method");
+  if (pmInput) pmInput.value = pm;
+
+  // Expense type buttons (Daily / From Account)
+  document.querySelectorAll("#expense-form .exp-type-btn").forEach((b) => {
+    const matches = b.getAttribute("data-type") === baseType;
+    b.classList.toggle("active", matches);
+    b.style.background = matches ? "#e53e3e" : "transparent";
+    b.style.color      = matches ? "#fff"    : "";
+  });
+  const typeInput = document.getElementById("expense-type");
+  if (typeInput) typeInput.value = baseType;
+  expenseType = baseType;
+
+  // Salary
+  if (log.category === "salary") {
+    set("expense-paid-to", log.paid_to || "");
+  }
+
+  // Bill / GST
+  if (log.has_bill) {
+    check("expense-has-bill", true);
+    _onHasBillChange();
+    set("expense-invoice-number", log.invoice_number || "");
+    set("expense-invoice-date", log.invoice_date || "");
+  }
+  if (log.has_gst) {
+    check("expense-has-gst", true);
+    _onHasGstChange();
+    set("expense-vendor-name", log.vendor_name || "");
+    set("expense-vendor-gstin", log.vendor_gstin || "");
+    set("expense-taxable-amount", log.taxable_amount || "");
+    set("expense-gst-rate", log.gst_rate || "");
+    set("expense-gst-amount", log.gst_amount || "");
+  }
+
+  // Commission
+  if (log.category === "booking_commission") {
+    set("commission-platform", log.commission_platform || "booking.com");
+    set("commission-amount", log.commission_amount || "");
+    set("commission-gst", log.commission_gst || "");
+    set("commission-invoice-number", log.commission_invoice_number || "");
+    set("commission-invoice-date", log.commission_invoice_date || "");
+    set("commission-payment-status", log.commission_payment_status || "pending");
+    set("commission-payment-date", log.commission_payment_date || "");
+    if (log.commission_payment_status === "paid") {
+      _setDisplay("commission-payment-date-group", true);
+    }
+  }
+
+  // Existing invoice photo URL — kept hidden but stored so PATCH doesn't drop it
+  set("expense-invoice-photo-url", log.invoice_photo_url || "");
+  if (log.invoice_photo_url) {
+    const statusEl = document.getElementById("invoice-attach-status");
+    if (statusEl) {
+      statusEl.innerHTML =
+        '<i class="fas fa-check-circle" style="color:#38a169;"></i> Invoice attached ' +
+        `<a href="${log.invoice_photo_url}" target="_blank" rel="noopener" style="margin-left:4px;color:#3182ce;">view</a>`;
+    }
+  }
+}
+window.openExpenseEditModal = openExpenseEditModal;
+
+
 // ─── Show modal ───────────────────────────────────────────────────────────────
 function showExpenseModal(type, options) {
   const modal = document.getElementById("expense-modal");
   if (!modal) return;
 
+  // Reset edit-mode flags on every fresh open. openExpenseEditModal
+  // re-sets them AFTER calling this function so the pre-fill path works.
+  _expenseEditMode = false;
+  _expenseEditDocId = null;
+
+  // Clear any stale OCR status from a previous expense entry.
+  _setOcrInlineStatus("hidden");
+
   document.getElementById("expense-form")?.reset();
+
+  // Load presets in the background — never block opening the modal.
+  // If the cache is fresh and a category is selected, _onCategoryChange
+  // already rendered tiles synchronously; this just keeps the cache warm.
+  _loadExpensePresets(false).then(() => {
+    const cat = document.getElementById("expense-category")?.value || "";
+    if (cat) _renderPresetTiles(cat);
+  });
+
+  // Reset tiles UI to its empty state — they'll repopulate when a
+  // category is chosen.
+  const tilesWrap = document.getElementById("expense-preset-tiles-wrapper");
+  if (tilesWrap) tilesWrap.style.display = "none";
+  const tilesEl = document.getElementById("expense-preset-tiles");
+  if (tilesEl) tilesEl.innerHTML = "";
+
+  // Show the "Manage list" admin button only to users with the perm.
+  const manageBtn = document.getElementById("expense-preset-manage-btn");
+  if (manageBtn) {
+    const isAdmin = window.CibaraAuth
+      && typeof window.CibaraAuth.userCan === "function"
+      && window.CibaraAuth.userCan("expense.presets.manage");
+    manageBtn.style.display = isAdmin ? "inline-flex" : "none";
+  }
 
   _setDisplay("salary-fields", false);
   _setDisplay("has-bill-group", false);
@@ -546,19 +1170,42 @@ async function submitExpense(e) {
       payload.commission_payment_date   = document.getElementById("commission-payment-date")?.value          || "";
     }
 
-    console.log("Submitting expense:", payload);
+    console.log("Submitting expense:", payload, "editMode:", _expenseEditMode);
 
-    const response = await apiFetch("/add_expense", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
+    // ── Edit mode → PATCH /expense/<doc_id> ─────────────────────────────────
+    // When editing, we send the same payload shape but to the PATCH
+    // endpoint. The server's _EDITABLE_FIELDS whitelist filters anything
+    // unexpected. has_bill / has_gst are sent as booleans so the server
+    // can clear them when admin un-checks the box during edit; the
+    // associated fields default to "" so they get blanked too.
+    let response;
+    if (_expenseEditMode && _expenseEditDocId) {
+      // Force-include the toggles so unchecking actually clears them
+      payload.has_bill = !!document.getElementById("expense-has-bill")?.checked;
+      payload.has_gst  = !!document.getElementById("expense-has-gst")?.checked;
+      response = await apiFetch("/expense/" + encodeURIComponent(_expenseEditDocId), {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+    } else {
+      response = await apiFetch("/add_expense", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+    }
 
     if (!response.ok) throw new Error(`Server error: ${response.status}`);
     const result = await response.json();
 
     if (result.success) {
       document.getElementById("expense-modal")?.classList.remove("show");
+      // Clear edit-mode now that submit succeeded
+      const wasEdit = _expenseEditMode;
+      _expenseEditMode = false;
+      _expenseEditDocId = null;
+
       debouncedFetchData();
 
       if (type === "report" &&
@@ -567,9 +1214,12 @@ async function submitExpense(e) {
         generateReport();
       }
 
-      showNotification(result.message || "Expense added", "success");
+      showNotification(
+        result.message || (wasEdit ? "Expense updated" : "Expense added"),
+        "success"
+      );
     } else {
-      showNotification(result.message || "Error adding expense", "error");
+      showNotification(result.message || "Error saving expense", "error");
     }
   } catch (error) {
     console.error("Expense submit error:", error);

@@ -15,8 +15,60 @@ from config import (
     invalidate_rooms_and_totals, get_all_rooms,
 )
 from services import payment_service, expense_service
+from services.auth_service import requires_permission
 
 reports_bp = Blueprint('reports', __name__)
+
+# Permission required to edit or delete an existing expense. Admin only
+# by default (granted via the wildcard in services/permissions.py).
+_EXPENSE_MANAGE_PERM = "expense.manage"
+
+
+# ---------------------------------------------------------------------------
+# Helpers — totals-counter delta for edit / delete.
+#
+# /add_expense increments totals/current_totals.expenses by `amount` only
+# for expense_type == "transaction". So when we edit or delete a doc we
+# need to mirror that increment with the right sign so the day-cash
+# arithmetic on the home tab stays correct.
+# ---------------------------------------------------------------------------
+
+def _totals_delta_for_edit(old: dict, new_amount: int, new_type: str) -> int:
+    """
+    Calculate the counter delta required when an expense is updated.
+
+    Cases:
+      transaction → transaction : delta = new - old
+      transaction → report      : delta = -old              (refund counter)
+      report      → transaction : delta = +new              (move into counter)
+      report      → report      : delta = 0
+    """
+    old_amt   = int(old.get("amount", 0) or 0)
+    old_type  = old.get("expense_type", "transaction")
+    was_txn   = (old_type == "transaction")
+    will_txn  = (new_type == "transaction")
+
+    if was_txn and will_txn:
+        return int(new_amount) - old_amt
+    if was_txn and not will_txn:
+        return -old_amt
+    if not was_txn and will_txn:
+        return int(new_amount)
+    return 0
+
+
+def _apply_totals_delta(delta: int) -> None:
+    """Increment totals/current_totals.expenses by delta (signed)."""
+    if delta == 0:
+        return
+    try:
+        batch = db.batch()
+        batch.update(totals_ref.document('current_totals'), {
+            "expenses": firestore.Increment(delta),
+        })
+        batch.commit()
+    except Exception as e:
+        logger.error(f"_apply_totals_delta({delta}) failed: {e}")
 
 
 @reports_bp.route("/reports", methods=["POST"])
@@ -241,6 +293,169 @@ def update_expense_photo():
     except Exception as e:
         logger.error(f"Error updating expense photo: {str(e)}")
         return jsonify(success=False, message=f"Error: {str(e)}")
+
+
+# ---------------------------------------------------------------------------
+# Admin-only edit / delete of an existing expense.
+# ---------------------------------------------------------------------------
+# Fields the admin is allowed to mutate on an existing expense. Anything
+# not in this set is silently ignored. Locking the list down keeps the
+# audit story straightforward — server-generated fields (date stamps,
+# doc_id) cannot be rewritten by a client request.
+_EDITABLE_FIELDS = frozenset({
+    "date", "category", "description", "amount", "payment_method",
+    "expense_type", "paid_to",
+    "has_bill", "invoice_number", "invoice_date",
+    "has_gst", "vendor_name", "vendor_gstin",
+    "taxable_amount", "gst_rate", "gst_amount",
+    "invoice_photo_url",
+    # Booking-commission specific
+    "commission_platform", "commission_amount", "commission_gst",
+    "commission_invoice_number", "commission_invoice_date",
+    "commission_payment_status", "commission_payment_date",
+})
+
+
+@reports_bp.route("/expense/<doc_id>", methods=["PATCH"])
+@requires_permission(_EXPENSE_MANAGE_PERM)
+def edit_expense(doc_id):
+    """
+    Update an existing expense document. Admin-only.
+
+    The route adjusts totals/current_totals.expenses by the signed delta
+    so the home-tab cash arithmetic remains consistent after an edit.
+    """
+    try:
+        if not doc_id:
+            return jsonify(success=False, message="doc_id is required"), 400
+
+        body = request.get_json(silent=True) or {}
+        # Restrict to the whitelisted field set
+        fields = {k: v for k, v in body.items() if k in _EDITABLE_FIELDS}
+        if not fields:
+            return jsonify(success=False, message="No editable fields supplied"), 400
+
+        old = expense_service.get_expense(doc_id)
+        if not old:
+            return jsonify(success=False, message="Expense not found"), 404
+
+        # Validate amount if it was supplied
+        if "amount" in fields:
+            try:
+                amt = int(fields["amount"])
+            except (TypeError, ValueError):
+                return jsonify(success=False, message="Invalid amount"), 400
+            if amt <= 0:
+                return jsonify(success=False, message="Amount must be positive"), 400
+            fields["amount"] = amt
+
+        # Sanity-check expense_type if supplied
+        if "expense_type" in fields and fields["expense_type"] not in ("transaction", "report"):
+            return jsonify(success=False, message="Invalid expense_type"), 400
+
+        # Compute totals delta BEFORE writing so we always have the old amount
+        new_amount = int(fields.get("amount", old.get("amount", 0) or 0))
+        new_type   = fields.get("expense_type", old.get("expense_type", "transaction"))
+        delta      = _totals_delta_for_edit(old, new_amount, new_type)
+
+        # ── Conditional-field reconciliation ────────────────────────────────
+        # When admin unchecks "Has bill" or "Has GST", or changes category
+        # away from salary / booking_commission, the fields that no longer
+        # apply must be cleared in the document — otherwise stale values
+        # carry forward and show up in reports, search results, and the
+        # edit form on the next open.
+        #
+        # We resolve the FINAL state of the document (= the patch on top of
+        # the old doc) and then explicitly blank out any sub-field that
+        # doesn't belong in that state. The result is a single consistent
+        # write, regardless of what the client did or didn't send.
+        new_has_bill = fields.get("has_bill", old.get("has_bill", False))
+        new_has_gst  = fields.get("has_gst",  old.get("has_gst",  False))
+        new_category = fields.get("category", old.get("category", ""))
+
+        if not new_has_bill:
+            for f in ("invoice_number", "invoice_date"):
+                fields[f] = ""
+            # has_bill itself must be present in the write so the doc's
+            # boolean flips even if it was set to True before.
+            fields["has_bill"] = False
+
+        if not new_has_gst:
+            for f in ("vendor_name", "vendor_gstin"):
+                fields[f] = ""
+            for f in ("taxable_amount", "gst_amount", "gst_rate"):
+                fields[f] = 0
+            fields["has_gst"] = False
+
+        if new_category != "salary":
+            fields["paid_to"] = ""
+
+        if new_category != "booking_commission":
+            for f in (
+                "commission_platform", "commission_invoice_number",
+                "commission_invoice_date", "commission_payment_status",
+                "commission_payment_date",
+            ):
+                fields[f] = ""
+            for f in ("commission_amount", "commission_gst"):
+                fields[f] = 0
+
+        ok = expense_service.update_expense(doc_id, fields)
+        if not ok:
+            return jsonify(success=False, message="Update failed"), 500
+
+        # Counter adjustment only matters if delta != 0; helper short-circuits.
+        _apply_totals_delta(delta)
+
+        invalidate_rooms_and_totals()
+        logger.info(
+            "Expense edited: id=%s delta=%s old_amt=%s new_amt=%s "
+            "old_type=%s new_type=%s",
+            doc_id, delta, old.get("amount"), new_amount,
+            old.get("expense_type"), new_type,
+        )
+        return jsonify(success=True, message="Expense updated")
+
+    except Exception as e:
+        logger.error(f"edit_expense failed: {e}")
+        return jsonify(success=False, message=f"Error: {str(e)}"), 500
+
+
+@reports_bp.route("/expense/<doc_id>", methods=["DELETE"])
+@requires_permission(_EXPENSE_MANAGE_PERM)
+def delete_expense_route(doc_id):
+    """
+    Hard-delete an expense document. Admin-only.
+
+    Decrements totals/current_totals.expenses by the deleted amount
+    iff the doc was expense_type == "transaction" — matching the add
+    path so the counter stays consistent.
+    """
+    try:
+        if not doc_id:
+            return jsonify(success=False, message="doc_id is required"), 400
+
+        old = expense_service.get_expense(doc_id)
+        if not old:
+            return jsonify(success=False, message="Expense not found"), 404
+
+        ok = expense_service.delete_expense(doc_id)
+        if not ok:
+            return jsonify(success=False, message="Delete failed"), 500
+
+        if old.get("expense_type") == "transaction":
+            _apply_totals_delta(-int(old.get("amount", 0) or 0))
+
+        invalidate_rooms_and_totals()
+        logger.info(
+            "Expense deleted: id=%s amount=%s type=%s",
+            doc_id, old.get("amount"), old.get("expense_type"),
+        )
+        return jsonify(success=True, message="Expense deleted")
+
+    except Exception as e:
+        logger.error(f"delete_expense failed: {e}")
+        return jsonify(success=False, message=f"Error: {str(e)}"), 500
 
 
 @reports_bp.route("/upload_expense_invoice", methods=["POST"])

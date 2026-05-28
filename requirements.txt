@@ -5,3 +5,7 @@ werkzeug==3.0.1
 gunicorn==21.2.0
 flask-compress==1.15
 xhtml2pdf==0.2.16
+# Gemini SDK — used by services/ocr_service.py for invoice/bill OCR.
+# Pinned. If GEMINI_API_KEY is not set the service degrades gracefully
+# and the OCR endpoint returns "ocr disabled" instead of crashing.
+google-generativeai==0.8.3

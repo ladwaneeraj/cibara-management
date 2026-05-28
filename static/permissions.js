@@ -46,7 +46,9 @@
       // logs.view, user.manage, quick_actions.use,
       // banking.deposit.confirm, banking.deposit.reconcile,
       // banking.deposit.reverse, banking.adjustment.create,
-      // banking.account.manage.
+      // banking.account.manage,
+      // expense.presets.manage,
+      // expense.manage.
     ]),
     [ROLE_HOUSEKEEPING]: Object.freeze([
       "app.access",

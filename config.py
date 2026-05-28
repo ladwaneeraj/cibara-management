@@ -15,7 +15,7 @@ import threading
 import pytz
 import base64
 
-from services import payment_service, customer_service, pdf_service, expense_service, bills_service
+from services import payment_service, customer_service, pdf_service, expense_service, bills_service, expense_presets_service, ocr_service
 from services.banking import init_banking
 
 # Configure logging
@@ -195,6 +195,11 @@ try:
     customer_service.init(db)
     pdf_service.init(db)
     expense_service.init(db)
+    expense_presets_service.init(db)
+    # OCR — Gemini client. init() reads GEMINI_API_KEY from env; if it's
+    # absent the service stays disabled and the /ocr endpoints return
+    # {"success": False, "reason": "ocr_disabled"} instead of crashing.
+    ocr_service.init()
     # Phase 1 of the stay_id migration — adds the bills/stay-document helper.
     # Additive, no behaviour change. See docs/STAY_DOC_CONTRACT.md.
     bills_service.init(db)

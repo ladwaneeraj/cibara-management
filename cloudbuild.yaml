@@ -13,8 +13,8 @@ steps:
       # Run without it (safety guard so we never silently boot into the
       # wrong Firebase project). This file targets the cibara-software-61512
       # project, which is PROD per the ENVIRONMENTS map in config.py.
-      - "--update-env-vars=CIBARA_ENV=PROD,FIREBASE_CREDENTIALS=$$FIREBASE_CREDS,FIREBASE_STORAGE_BUCKET=cibara-software-61512.firebasestorage.app,MANAGER_PASSWORD=$$MANAGER_PASS,API_KEY=$$API_KEY_VAL,LODGE_PIN=$$LODGE_PIN"
-    secretEnv: ["FIREBASE_CREDS", "MANAGER_PASS", "API_KEY_VAL", "LODGE_PIN"]
+      - "--update-env-vars=CIBARA_ENV=PROD,FIREBASE_CREDENTIALS=$$FIREBASE_CREDS,FIREBASE_STORAGE_BUCKET=cibara-software-61512.firebasestorage.app,MANAGER_PASSWORD=$$MANAGER_PASS,API_KEY=$$API_KEY_VAL,LODGE_PIN=$$LODGE_PIN,GEMINI_API_KEY=$$GEMINI_KEY"
+    secretEnv: ["FIREBASE_CREDS", "MANAGER_PASS", "API_KEY_VAL", "LODGE_PIN", "GEMINI_KEY"]
 
 availableSecrets:
   secretManager:
@@ -26,5 +26,10 @@ availableSecrets:
       env: "API_KEY_VAL"
     - versionName: projects/$PROJECT_ID/secrets/lodge-pin/versions/latest
       env: "LODGE_PIN"
+    # OCR — Gemini API key for invoice/bill auto-fill. Set the secret value
+    # to the API key you generated at https://aistudio.google.com/app/apikey
+    # If this secret is missing the app still boots; OCR is just disabled.
+    - versionName: projects/$PROJECT_ID/secrets/gemini-api-key/versions/latest
+      env: "GEMINI_KEY"
 
 timeout: "1200s"

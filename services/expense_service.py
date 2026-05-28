@@ -151,6 +151,74 @@ def update_photo(doc_id: str, photo_url: str) -> bool:
         return False
 
 
+def get_expense(doc_id: str) -> dict | None:
+    """
+    Fetch a single expense document by id. Returns None if the doc
+    doesn't exist or the service hasn't been initialised. The returned
+    dict includes '_doc_id' so callers can pass it back into update /
+    delete without juggling parallel state.
+    """
+    if _expenses_ref is None or not doc_id:
+        return None
+    try:
+        snap = _expenses_ref.document(doc_id).get()
+        if not snap.exists:
+            return None
+        data = snap.to_dict() or {}
+        data["_doc_id"] = snap.id
+        return data
+    except Exception as e:
+        logger.error(f"ExpenseService get_expense({doc_id}) failed: {e}")
+        return None
+
+
+def update_expense(doc_id: str, fields: dict) -> bool:
+    """
+    Partial update of an expense document. Caller is responsible for
+    sanitising / validating the field set before calling — this function
+    is intentionally a thin wrapper so the route can run business logic
+    (counter adjustment, audit trail) alongside the write.
+
+    Returns True on success, False on any failure.
+    """
+    if _expenses_ref is None or not doc_id or not isinstance(fields, dict):
+        return False
+    try:
+        # Re-normalise numeric fields so the stored document is consistent
+        # regardless of how the client sent them. This mirrors _normalise()
+        # used on create.
+        clean = dict(fields)
+        if "amount" in clean:
+            try:
+                clean["amount"] = int(clean["amount"])
+            except (ValueError, TypeError):
+                return False
+        for f in ("taxable_amount", "gst_amount", "gst_rate"):
+            if f in clean:
+                try:
+                    clean[f] = float(clean[f])
+                except (ValueError, TypeError):
+                    clean[f] = 0.0
+        clean["updated_at"] = datetime.now(timezone.utc).isoformat()
+        _expenses_ref.document(doc_id).update(clean)
+        return True
+    except Exception as e:
+        logger.error(f"ExpenseService update_expense({doc_id}) failed: {e}")
+        return False
+
+
+def delete_expense(doc_id: str) -> bool:
+    """Hard-delete an expense document by id."""
+    if _expenses_ref is None or not doc_id:
+        return False
+    try:
+        _expenses_ref.document(doc_id).delete()
+        return True
+    except Exception as e:
+        logger.error(f"ExpenseService delete_expense({doc_id}) failed: {e}")
+        return False
+
+
 def check_duplicate(description: str, amount: int, date: str, time_str: str) -> bool:
     """
     Check if an identical expense already exists (migration idempotency).

@@ -227,6 +227,12 @@ def get_register_data():
                 "balance": room_data_item.get("balance", 0),
                 "status": "active",
                 "serial_number": serial,
+                # OTA / booking source — surfaced so the Register tab shows
+                # the MMT badge for a live (checked-in, not-yet-checked-out)
+                # MMT stay. Read off the room doc, stamped at check-in by
+                # convert_booking_to_checkin. Walk-ins default to "normal".
+                "booking_source": room_data_item.get("booking_source", "normal"),
+                "payment_source": room_data_item.get("payment_source", "hotel"),
                 # Include add_ons so the payment modal can display services
                 "services": room_data_item.get("add_ons", []),
                 "guest_count": guest.get("guests", 1),
@@ -1137,18 +1143,27 @@ def recalculate_bill():
             p.get("amount", 0) for p in stay_payments
             if p.get("method") == "online" and p.get("type") not in _exclude
         )
+        # OTA-settled (MMT prepaid room). Not a drawer receipt, but it does
+        # settle the guest's liability, so it must be subtracted from the
+        # balance — mirrors create_bill_record. Without this, recalculating an
+        # MMT bill would show the full tariff as "balance due".
+        payment_ota = sum(
+            p.get("amount", 0) for p in stay_payments
+            if p.get("method") == "ota" and p.get("type") not in _exclude
+        )
         total_refunds = sum(
             p.get("amount", 0) for p in stay_payments
             if p.get("type") in _refund_types
         )
 
         total_amount = bill_data.get("total_amount", 0)
-        new_balance  = total_amount - payment_cash - payment_online + total_refunds
+        new_balance  = total_amount - payment_cash - payment_online - payment_ota + total_refunds
 
         _rb_attr = attribution_update()
         bills_ref.document(bill_id).update({
             "payment_cash":   payment_cash,
             "payment_online": payment_online,
+            "payment_ota":    payment_ota,
             "balance":        new_balance,
             "lastEditedBy":   _rb_attr.get("lastModifiedBy"),
             "lastEditedAt":   _rb_attr.get("lastModifiedAt"),
@@ -1160,6 +1175,7 @@ def recalculate_bill():
         updated_bill.update({
             "payment_cash":   payment_cash,
             "payment_online": payment_online,
+            "payment_ota":    payment_ota,
             "balance":        new_balance,
         })
         import threading as _thr

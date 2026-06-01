@@ -1185,10 +1185,11 @@
       ? b.total_amount : roomCharges + svcTotalAll - discounts;
     const cashPaid = b.payment_cash || 0;
     const onlinePaid = b.payment_online || 0;
+    const otaPaid = b.payment_ota || 0;  // MMT prepaid room (settles to bank later)
     const refunds = b.refunds || 0;
     const refundCash = b.refund_cash || 0;
     const refundOnline = b.refund_online || 0;
-    const totalPaid = cashPaid + onlinePaid;
+    const totalPaid = cashPaid + onlinePaid + otaPaid;
     const netCollected = totalPaid - refunds;
     const balance = b.balance || 0;
     const displayBillNo = b.bill_number || "N/A";
@@ -1551,6 +1552,7 @@
     <table class="b-tbl"><tbody>
       <tr><td>Cash Paid</td><td class="b-tr">₹ ${fix2(cashPaid)}</td></tr>
       <tr><td>Online / UPI Paid</td><td class="b-tr">₹ ${fix2(onlinePaid)}</td></tr>
+      ${otaPaid > 0 ? `<tr><td>Paid via MMT (OTA)</td><td class="b-tr">₹ ${fix2(otaPaid)}</td></tr>` : ""}
       <tr class="b-subtotal"><td>Total Paid</td><td class="b-tr">₹ ${fix2(totalPaid)}</td></tr>
       ${refundRows}
       ${balance > 0 ? `<tr><td style="font-weight:800;color:#c62828;">Balance Due</td><td class="b-tr" style="font-weight:800;color:#c62828;">₹ ${fix2(balance)}</td></tr>` : ""}

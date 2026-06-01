@@ -582,3 +582,245 @@ def revenue_report():
         logger.error(f"revenue_report error: {e}", exc_info=True)
         return jsonify(success=False, message=str(e)), 500
 
+
+@reports_bp.route("/reports/gstr1_summary", methods=["POST"])
+def gstr1_summary():
+    """
+    GSTR-1 outward-supply summary for a filing period (checkout basis).
+
+    Buckets every invoiced bill (invoice_generated == True AND a real
+    bill_number) into the GSTR-1 sections the hotel actually files:
+
+        b2b   — recipient has a valid GSTIN (registered customer; e.g. an
+                MMT MyBiz corporate booking). Listed per-invoice so the
+                values can be keyed into GSTR-1 Table 4A.
+        b2cl  — large inter-state B2C invoice (> Rs.1,00,000, non-KA).
+        b2cs  — all remaining B2C, summarised by rate + place of supply.
+
+    Also returns:
+        rate_summary  — taxable / CGST / SGST / IGST grouped by GST rate,
+                        the cross-check used when filing.
+        ota_commission_itc — total GST charged by the OTA on commission for
+                        the period (input tax credit the hotel can claim;
+                        the actual claim happens in GSTR-3B against the OTA's
+                        own invoice — this is a reconciliation aid only).
+        credit_notes  — Section-34 cancellation / revert documents, listed
+                        so output tax reversals are visible.
+
+    Request JSON: {"month": "YYYY-MM"}  OR  {"start_date","end_date"} (YYYY-MM-DD).
+    Read-only — never mutates anything.
+    """
+    try:
+        data_json = request.json or {}
+        month = (data_json.get("month") or "").strip()
+        if month:
+            period_start = datetime.strptime(month + "-01", "%Y-%m-%d")
+            # First day of next month.
+            if period_start.month == 12:
+                period_end = period_start.replace(year=period_start.year + 1, month=1)
+            else:
+                period_end = period_start.replace(month=period_start.month + 1)
+            start_date = period_start.strftime("%Y-%m-%d")
+            end_date = (period_end - timedelta(days=1)).strftime("%Y-%m-%d")
+        else:
+            start_date = data_json.get("start_date")
+            end_date = data_json.get("end_date")
+            if not start_date or not end_date:
+                return jsonify(success=False,
+                               message="Provide 'month' (YYYY-MM) or start_date/end_date"), 400
+            period_start = datetime.strptime(start_date, "%Y-%m-%d")
+            period_end = datetime.strptime(end_date, "%Y-%m-%d") + timedelta(days=1)
+
+        start_str = period_start.strftime("%Y-%m-%d %H:%M")
+        end_str = period_end.strftime("%Y-%m-%d %H:%M")
+
+        bills_q = (
+            bills_ref
+            .where(filter=FieldFilter("checkout_time", ">=", start_str))
+            .where(filter=FieldFilter("checkout_time", "<", end_str))
+            .order_by("checkout_time")
+        )
+
+        b2b, b2cl, credit_notes = [], [], []
+        b2cs = {}          # key: (rate, state_code) -> aggregates
+        rate_summary = {}   # key: rate -> aggregates
+        hsn_summary = {}    # key: (hsn, rate) -> aggregates (GSTR-1 Table 12)
+        ota_commission_itc = 0.0
+        ota_commission_count = 0
+        totals = {"taxable": 0.0, "cgst": 0.0, "sgst": 0.0, "igst": 0.0,
+                  "invoice_value": 0.0, "invoices": 0}
+
+        def _acc(bucket, b, rate, taxable, cgst, sgst, igst, value):
+            bucket["taxable"] = bucket.get("taxable", 0.0) + taxable
+            bucket["cgst"] = bucket.get("cgst", 0.0) + cgst
+            bucket["sgst"] = bucket.get("sgst", 0.0) + sgst
+            bucket["igst"] = bucket.get("igst", 0.0) + igst
+            bucket["invoice_value"] = bucket.get("invoice_value", 0.0) + value
+            bucket["count"] = bucket.get("count", 0) + 1
+
+        def _hsn(hsn, rate, taxable, cgst, sgst, igst):
+            if taxable <= 0 and cgst <= 0 and sgst <= 0 and igst <= 0:
+                return
+            k = f"{hsn}|{rate}"
+            h = hsn_summary.setdefault(k, {"hsn": hsn, "gst_rate": rate})
+            h["taxable"] = h.get("taxable", 0.0) + taxable
+            h["cgst"] = h.get("cgst", 0.0) + cgst
+            h["sgst"] = h.get("sgst", 0.0) + sgst
+            h["igst"] = h.get("igst", 0.0) + igst
+
+        def _rate_add(rate, taxable, cgst, sgst, igst):
+            """Fold a (rate, tax) line into the period rate_summary."""
+            rb = rate_summary.setdefault(rate, {})
+            rb["taxable"] = rb.get("taxable", 0.0) + taxable
+            rb["cgst"] = rb.get("cgst", 0.0) + cgst
+            rb["sgst"] = rb.get("sgst", 0.0) + sgst
+            rb["igst"] = rb.get("igst", 0.0) + igst
+
+        def _water_goods(b):
+            """
+            Water/goods sold at 5% MRP-inclusive (HSN 2201) — the hotel's
+            outward supply of GOODS, reported separately from accommodation.
+            Returns (taxable, gst, gross). Non-water misc services are treated
+            as non-taxable here and excluded (matches the bill renderer's
+            water-vs-other split).
+            """
+            gross = 0.0
+            for s in (b.get("services") or []):
+                if s.get("accommodation_charge"):
+                    continue
+                if "water" in (s.get("item") or "").lower():
+                    gross += float(s.get("price", 0) or 0)
+            if gross <= 0:
+                return (0.0, 0.0, 0.0)
+            taxable = round(gross / 1.05, 2)
+            return (taxable, round(gross - taxable, 2), round(gross, 2))
+
+        for doc in bills_q.stream():
+            b = doc.to_dict()
+
+            # OTA commission ITC accrues whether or not the room itself is
+            # hotel-invoiced — it's the GST MMT charged us on commission.
+            cg = float(b.get("ota_commission_gst", 0) or 0)
+            if cg:
+                ota_commission_itc += cg
+                ota_commission_count += 1
+
+            # Only invoiced supplies are reportable in GSTR-1.
+            bill_no = b.get("bill_number")
+            if not b.get("invoice_generated") or not bill_no or bill_no == "-":
+                continue
+
+            # ── Accommodation (SAC 9963) — the primary supply ───────────────
+            a_taxable = float(b.get("accommodation_taxable", 0) or 0)
+            a_cgst = float(b.get("cgst_amount", 0) or 0)
+            a_sgst = float(b.get("sgst_amount", 0) or 0)
+            a_igst = float(b.get("igst_amount", 0) or 0)
+            value = float(b.get("total_amount", 0) or 0)
+            a_rate = int(b.get("gst_rate", 0) or 0)
+            inv_type = (b.get("invoice_type") or "B2C").upper()
+            state_code = (b.get("recipient_state_code") or "29").strip() or "29"
+            is_inter = state_code != "29"
+
+            # ── Goods (water, HSN 2201 @ 5%) — separate outward supply ──────
+            # The backend stores water under non_accommodation and does NOT
+            # split its GST (it's MRP-inclusive), so we derive it here at 5%
+            # and split by the same place of supply. This makes the invoice
+            # value reconcile (room + water + GST) and populates HSN Table 12.
+            g_taxable, g_gst, _g_gross = _water_goods(b)
+            g_rate = 5 if g_taxable > 0 else 0
+            g_cgst = g_sgst = g_igst = 0.0
+            if g_gst > 0:
+                if is_inter:
+                    g_igst = g_gst
+                else:
+                    g_cgst = round(g_gst / 2, 2)
+                    g_sgst = round(g_gst - g_cgst, 2)
+
+            # Combined per-invoice taxable + tax (across both supplies).
+            taxable = round(a_taxable + g_taxable, 2)
+            cgst = round(a_cgst + g_cgst, 2)
+            sgst = round(a_sgst + g_sgst, 2)
+            igst = round(a_igst + g_igst, 2)
+
+            row = {
+                "bill_number": bill_no,
+                "invoice_date": (b.get("checkout_time") or "")[:10],
+                "recipient_gstin": b.get("recipient_gstin", ""),
+                "recipient_name": b.get("recipient_legal_name")
+                or b.get("recipient_trade_name") or b.get("guest_name", ""),
+                "place_of_supply": f"{b.get('recipient_state', 'Karnataka')} ({state_code})",
+                "gst_rate": a_rate,
+                "taxable": taxable,
+                "cgst": cgst,
+                "sgst": sgst,
+                "igst": igst,
+                "invoice_value": round(value, 2),
+                # Per-supply breakdown so multi-rate invoices can be keyed
+                # into GSTR-1 line by line.
+                "accommodation": {"sac": "9963", "rate": a_rate,
+                                  "taxable": round(a_taxable, 2),
+                                  "cgst": round(a_cgst, 2), "sgst": round(a_sgst, 2),
+                                  "igst": round(a_igst, 2)},
+                "goods": {"hsn": "2201", "rate": g_rate,
+                          "taxable": g_taxable, "cgst": g_cgst,
+                          "sgst": g_sgst, "igst": g_igst} if g_taxable > 0 else None,
+                "sac_or_hsn": b.get("sac_or_hsn", "9963"),
+                "booking_source": b.get("booking_source", "normal"),
+                "is_cancellation_charge": bool(b.get("is_cancellation_charge")),
+            }
+
+            # Section-34 documents (revert-cancelled / superseded) are listed
+            # separately so reversals aren't double-counted as fresh supplies.
+            if b.get("cancelled_by_revert") or b.get("superseded_by_revert"):
+                credit_notes.append(row)
+                continue
+
+            totals["taxable"] += taxable
+            totals["cgst"] += cgst
+            totals["sgst"] += sgst
+            totals["igst"] += igst
+            totals["invoice_value"] += value
+            totals["invoices"] += 1
+
+            # Period rate + HSN summaries — each supply folded at its OWN rate.
+            _rate_add(a_rate, a_taxable, a_cgst, a_sgst, a_igst)
+            _hsn("9963", a_rate, a_taxable, a_cgst, a_sgst, a_igst)
+            if g_taxable > 0:
+                _rate_add(g_rate, g_taxable, g_cgst, g_sgst, g_igst)
+                _hsn("2201", g_rate, g_taxable, g_cgst, g_sgst, g_igst)
+
+            if inv_type == "B2B":
+                b2b.append(row)
+            elif inv_type == "B2CL":
+                b2cl.append(row)
+            else:
+                key = f"{a_rate}|{state_code}"
+                bucket = b2cs.setdefault(key, {
+                    "gst_rate": a_rate, "state_code": state_code,
+                    "place_of_supply": row["place_of_supply"],
+                })
+                _acc(bucket, b, a_rate, taxable, cgst, sgst, igst, value)
+
+        def _round_bucket(d):
+            for k in ("taxable", "cgst", "sgst", "igst", "invoice_value"):
+                if k in d:
+                    d[k] = round(d[k], 2)
+            return d
+
+        return jsonify(
+            success=True,
+            period={"start": start_date, "end": end_date},
+            b2b=b2b,
+            b2cl=b2cl,
+            b2cs=[_round_bucket(v) for v in b2cs.values()],
+            credit_notes=credit_notes,
+            rate_summary={str(k): _round_bucket(v) for k, v in rate_summary.items()},
+            hsn_summary=[_round_bucket(v) for v in hsn_summary.values()],
+            ota_commission_itc=round(ota_commission_itc, 2),
+            ota_commission_count=ota_commission_count,
+            totals=_round_bucket(totals),
+        )
+    except Exception as e:
+        logger.error(f"gstr1_summary error: {e}", exc_info=True)
+        return jsonify(success=False, message=str(e)), 500
+

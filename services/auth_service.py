@@ -72,7 +72,14 @@ import time as _time
 
 # Maximum clock skew (seconds) we'll tolerate before giving up.
 # Beyond this, the user really does need to fix their clock.
-_MAX_CLOCK_SKEW_SEC = 10
+#
+# In PROD we keep this tight (10s) — a real prod server's clock is NTP-synced,
+# and a large skew would mask genuine token-replay/expiry issues. In non-prod
+# (local dev / UAT) we allow a much larger window so a developer's unsynced
+# Windows clock doesn't block login; the retry just sleeps a bit longer. This
+# is gated on CIBARA_ENV so it can NEVER loosen production auth.
+import os as _os
+_MAX_CLOCK_SKEW_SEC = 10 if (_os.environ.get("CIBARA_ENV", "").upper() == "PROD") else 120
 _SKEW_RE = _re.compile(r'(\d+)\s*<\s*(\d+)')
 
 

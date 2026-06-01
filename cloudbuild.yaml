@@ -9,27 +9,14 @@ steps:
       - "--platform=managed"
       - "--allow-unauthenticated"
       - "--clear-base-image"
-      # CIBARA_ENV=PROD is REQUIRED — config.py refuses to start on Cloud
-      # Run without it (safety guard so we never silently boot into the
-      # wrong Firebase project). This file targets the cibara-software-61512
-      # project, which is PROD per the ENVIRONMENTS map in config.py.
-      - "--update-env-vars=CIBARA_ENV=PROD,FIREBASE_CREDENTIALS=$$FIREBASE_CREDS,FIREBASE_STORAGE_BUCKET=cibara-software-61512.firebasestorage.app,MANAGER_PASSWORD=$$MANAGER_PASS,API_KEY=$$API_KEY_VAL,LODGE_PIN=$$LODGE_PIN,GEMINI_API_KEY=$$GEMINI_KEY"
-    secretEnv: ["FIREBASE_CREDS", "MANAGER_PASS", "API_KEY_VAL", "LODGE_PIN", "GEMINI_KEY"]
-
-availableSecrets:
-  secretManager:
-    - versionName: projects/$PROJECT_ID/secrets/firebase-credentials/versions/latest
-      env: "FIREBASE_CREDS"
-    - versionName: projects/$PROJECT_ID/secrets/manager-password/versions/latest
-      env: "MANAGER_PASS"
-    - versionName: projects/$PROJECT_ID/secrets/api-key/versions/latest
-      env: "API_KEY_VAL"
-    - versionName: projects/$PROJECT_ID/secrets/lodge-pin/versions/latest
-      env: "LODGE_PIN"
-    # OCR — Gemini API key for invoice/bill auto-fill. Set the secret value
-    # to the API key you generated at https://aistudio.google.com/app/apikey
-    # If this secret is missing the app still boots; OCR is just disabled.
-    - versionName: projects/$PROJECT_ID/secrets/gemini-api-key/versions/latest
-      env: "GEMINI_KEY"
+      # ── Environment is managed in the Cloud Run CONSOLE, not here ─────────
+      # This deploy intentionally does NOT set any env vars or secrets.
+      # Cloud Run merges revisions: anything you've bound in the console
+      # (Edit & Deploy New Revision → Variables & Secrets) is PRESERVED on
+      # every triggered build. So bind all secrets once in the console and
+      # every future commit-triggered revision keeps them automatically.
+      #
+      # (Do NOT add --update-env-vars / --set-secrets back here, or it will
+      # override the console-managed values.)
 
 timeout: "1200s"

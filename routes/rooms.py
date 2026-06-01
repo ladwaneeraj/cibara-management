@@ -2714,8 +2714,13 @@ def get_transactions_range():
             # Settle-later checkouts — guest left with the balance
             # deferred. Shown in the Transactions tab with a SETTLE LATER
             # tag; a separate bucket so totals are not distorted.
+            # Also includes OTA bank settlements (type="bank_settlement",
+            # written by /mark_ota_settlement) so the MMT payout actually
+            # appears in the Transactions tab. These are bank receipts, not
+            # drawer cash/online, so the settlements bucket (excluded from the
+            # cash/online analytics totals) is the right home for them.
             "settlements": [p for p in payments
-                            if p.get("type") == "settlement"],
+                            if p.get("type") in ("settlement", "bank_settlement")],
             # All expenses (daily + report). The Transactions tab filters
             # by expense_type client-side via the admin Daily/Report
             # sub-filter; non-admins still see daily expenses only.

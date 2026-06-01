@@ -17,6 +17,7 @@ from routes.utils import utils_bp
 from routes.laundry import laundry_bp
 from routes.users import users_bp
 from routes.banking import banking_bp
+from routes.mmt_ingest import mmt_ingest_bp
 from services.auth_service import load_current_user
 from flask import g
 import os
@@ -38,7 +39,7 @@ Compress(app)
 # ---------------------------------------------------------------------------
 for _var in ["API_KEY"]:
     if not os.environ.get(_var):
-        logger.warning(f"⚠️  Env var {_var} not set — running in dev mode for this feature")
+        logger.warning(f"[WARN] Env var {_var} not set - running in dev mode for this feature")
 
 # ---------------------------------------------------------------------------
 # Auth: anything not in these lists requires either a valid Firebase ID
@@ -81,6 +82,18 @@ def require_auth():
         return None
     if any(path.startswith(p) for p in _PUBLIC_PREFIXES):
         return None
+
+    # 1b. MMT ingestion endpoint — Cloud Scheduler calls this without a
+    # Firebase token. Authenticate via a shared secret header instead, so we
+    # don't have to mint tokens for an automated job. Only valid when the
+    # secret is configured AND matches; otherwise we fall through to the
+    # normal auth paths (a logged-in operator can still trigger it manually).
+    if path in ("/mmt/ingest", "/mmt/create_test_booking"):
+        _ingest_secret = os.environ.get("MMT_INGEST_SECRET", "")
+        if _ingest_secret:
+            _provided = request.headers.get("X-Ingest-Secret", "")
+            if _provided == _ingest_secret:
+                return None
 
     # 2. Firebase ID token
     user = load_current_user()
@@ -220,6 +233,7 @@ app.register_blueprint(utils_bp,       url_prefix="")
 app.register_blueprint(laundry_bp,    url_prefix="")
 app.register_blueprint(users_bp,      url_prefix="")
 app.register_blueprint(banking_bp)    # /banking/* — owns its url_prefix
+app.register_blueprint(mmt_ingest_bp, url_prefix="")  # /mmt/ingest, /mmt/ingest_status
 
 # ---------------------------------------------------------------------------
 # Error handlers

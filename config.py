@@ -319,6 +319,27 @@ _BILLING_CONFIG_DEFAULTS = {
     # if they explicitly want the legacy "cash-only stays don't get a
     # numbered bill" behaviour, but the safe default is True.
     "always_generate_bill": True,
+
+    # mmt_hotel_issues_invoice (bool, default True):
+    #   Controls whether the HOTEL issues its own GST tax invoice for the
+    #   ROOM portion of a pure MMT (OTA) stay.
+    #
+    #   True (default): the property's GSTIN is registered on MMT, so the
+    #          hotel is the supplier of the accommodation and declares the
+    #          room supply in its own GSTR-1. MMT room stays get a sequential
+    #          bill number + invoice_generated=True, the room is taxed at the
+    #          normal 5% accommodation slab (NOT exempt), and the invoice is
+    #          B2B when the guest company's GSTIN is on the voucher, else B2C.
+    #          The room money is collected by MMT and settles to the bank
+    #          later, so it is recorded as an "ota"-method payment on the
+    #          stay (zeroing the bill balance) rather than as a front-desk
+    #          cash/online receipt. The MMT commission is booked as a
+    #          (report-type) expense when the settlement is marked received.
+    #
+    #   False: legacy behaviour — MMT handles the room invoice; the hotel
+    #          issues no room invoice (invoice_generated=False, bill_number
+    #          "-"). Use only if you revert your MMT GST registration.
+    "mmt_hotel_issues_invoice": True,
 }
 
 
@@ -654,7 +675,32 @@ def create_bill_record(room, room_data, checkout_time, batch=None,
             return None
 
         def _fetch_booking_doc():
-            """Return the raw booking dict (or None) for OTA / source fields."""
+            """Return the raw booking dict (or None) for OTA / source fields.
+
+            Primary lookup is by stay_id (the canonical FK stamped on the
+            booking at conversion) — robust even when the guest checked in on a
+            different calendar date than the booking's check_in_date (which is
+            exactly when the legacy (room, guest, check_in_date) query missed
+            and the bill fell back to booking_source='normal' for MMT stays).
+            Falls back to the heuristic query for legacy bookings with no
+            stay_id.
+            """
+            _sid = room_data.get("active_bill_id")
+            if _sid:
+                try:
+                    bq = (
+                        bookings_ref
+                        .where("stay_id", "==", _sid)
+                        .limit(1)
+                        .stream()
+                    )
+                    for bdoc in bq:
+                        return bdoc.to_dict()
+                except Exception as _be:
+                    logger.warning(
+                        f"create_bill_record: booking lookup by stay_id "
+                        f"{_sid} failed: {_be}; trying heuristic"
+                    )
             try:
                 bq = (
                     bookings_ref
@@ -700,6 +746,16 @@ def create_bill_record(room, room_data, checkout_time, batch=None,
         payment_online = sum(
             p.get("amount", 0) for p in stay_payments
             if p.get("method") == "online" and p.get("type") not in _exclude
+        )
+        # OTA-settled amount (method="ota"): the room money MMT collected up
+        # front and settles to the bank later. It is NOT a front-desk receipt
+        # — it never counts in the cash/online drawer tallies — but it DOES
+        # settle the guest's liability, so it must be subtracted from the
+        # bill balance (otherwise an MMT room invoice shows the full tariff as
+        # "balance due" even though the guest owes the hotel nothing).
+        payment_ota = sum(
+            p.get("amount", 0) for p in stay_payments
+            if p.get("method") == "ota" and p.get("type") not in _exclude
         )
 
         services = []
@@ -778,7 +834,7 @@ def create_bill_record(room, room_data, checkout_time, batch=None,
         # ────────────────────────────────────────────────────────────────────────
 
         total_amount = room_charges_total + services_total - total_discounts
-        balance = total_amount - payment_cash - payment_online + total_refunds
+        balance = total_amount - payment_cash - payment_online - payment_ota + total_refunds
 
         # ── GST Calculation (SAC 9963 — Accommodation Services) ─────────────────
         # GST slab is determined by the declared room tariff per night.
@@ -887,21 +943,49 @@ def create_bill_record(room, room_data, checkout_time, batch=None,
         bill_number = None
 
         # ── Booking source / OTA fields (from parallel-fetched booking_doc) ──
-        booking_source    = "normal"
-        payment_source    = "hotel"
+        # Seed from the room doc (stamped at check-in by convert_booking_to_checkin)
+        # so the source is correct even if the booking_doc lookup fails — then
+        # let booking_doc override with the authoritative value when present.
+        booking_source    = room_data.get("booking_source", "normal") or "normal"
+        payment_source    = room_data.get("payment_source", "hotel") or "hotel"
         ota_total_amount  = 0
         ota_commission    = 0.0
         ota_commission_gst = 0.0
         net_receivable    = 0
         settlement_status = None
+        # B2B recipient details carried on the booking (e.g. an MMT MyBiz
+        # corporate booking ingested with the customer GSTIN). These default
+        # to blank/B2C and are only populated when the booking actually
+        # carries a recipient GSTIN. Pulling them through here means an MMT
+        # B2B stay is correctly classified for GSTR-1 at checkout WITHOUT the
+        # operator re-keying the GST modal. /update_bill_gst can still
+        # override post-checkout.
+        bk_recipient_gstin      = ""
+        bk_recipient_legal_name = ""
+        bk_recipient_trade_name = ""
+        bk_recipient_address    = ""
+        bk_recipient_state      = "Karnataka"
+        bk_recipient_state_code = "29"
+        bk_invoice_type         = "B2C"
         if booking_doc:
-            booking_source     = booking_doc.get("booking_source", "normal")
-            payment_source     = booking_doc.get("payment_source", "hotel")
+            # Default to the room-seeded value (not a hardcoded "normal") so a
+            # booking_doc that happens to omit the field can't downgrade it.
+            booking_source     = booking_doc.get("booking_source", booking_source)
+            payment_source     = booking_doc.get("payment_source", payment_source)
             ota_total_amount   = booking_doc.get("ota_total_amount", 0)
             ota_commission     = booking_doc.get("ota_commission", 0.0)
             ota_commission_gst = booking_doc.get("ota_commission_gst", 0.0)
             net_receivable     = booking_doc.get("net_receivable", 0)
             settlement_status  = booking_doc.get("settlement_status")
+            _bk_gstin = (booking_doc.get("recipient_gstin") or "").strip().upper()
+            if validate_gstin(_bk_gstin):
+                bk_recipient_gstin      = _bk_gstin
+                bk_recipient_legal_name = booking_doc.get("recipient_legal_name", "") or booking_doc.get("recipient_trade_name", "")
+                bk_recipient_trade_name = booking_doc.get("recipient_trade_name", "") or booking_doc.get("recipient_legal_name", "")
+                bk_recipient_address    = booking_doc.get("recipient_address", "")
+                _st_name, _st_code = derive_state_from_gstin(_bk_gstin)
+                bk_recipient_state      = booking_doc.get("recipient_state") or _st_name or "Karnataka"
+                bk_recipient_state_code = booking_doc.get("recipient_state_code") or _st_code or "29"
 
         # ── Invoice flag logic ────────────────────────────────────────────────────
         # invoice_generated = True when this bill qualifies as a formal GST tax invoice.
@@ -917,7 +1001,11 @@ def create_bill_record(room, room_data, checkout_time, batch=None,
         is_booking_com = (booking_source == "booking.com")
         # MMT service-only bill: room rent is billed by MMT, hotel issues an
         # invoice for the in-hotel service/addon portion only (cash or UPI).
-        mmt_service_only = is_mmt_ota and any_addon
+        # This ONLY applies in the legacy model where the hotel does not issue
+        # the room invoice. When mmt_hotel_issues_invoice is on, the hotel
+        # bills the room itself at 5% (room charges are NOT zeroed), so a
+        # service-taken MMT stay is a normal room+service invoice.
+        mmt_service_only = is_mmt_ota and any_addon and not mmt_hotel_issues_invoice
 
         # ── Determine whether this checkout qualifies for a bill + invoice ──
         # The Settings → Bill Generation toggle controls the cash-only skip:
@@ -938,6 +1026,9 @@ def create_bill_record(room, room_data, checkout_time, batch=None,
                            f"using defaults: {_cfg_err}")
             _billing_cfg = dict(_BILLING_CONFIG_DEFAULTS)
         always_generate_bill = bool(_billing_cfg.get("always_generate_bill", False))
+        # When the property's own GSTIN is registered on MMT, the hotel issues
+        # the room tax invoice itself (see _BILLING_CONFIG_DEFAULTS note).
+        mmt_hotel_issues_invoice = bool(_billing_cfg.get("mmt_hotel_issues_invoice", False))
 
         if always_generate_bill:
             is_no_bill = False
@@ -951,6 +1042,13 @@ def create_bill_record(room, room_data, checkout_time, batch=None,
         if mmt_service_only:
             # MMT room (no hotel invoice for room) BUT guest took a service →
             # generate a hotel invoice for the addon portion only
+            invoice_generated = True
+        elif is_mmt_ota and mmt_hotel_issues_invoice:
+            # Property is GST-registered on MMT → the hotel issues the room
+            # tax invoice itself and reports the supply in its own GSTR-1
+            # (B2B/B2C decided by the recipient details carried on the
+            # booking). The room money is collected by MMT and settles later,
+            # so payment columns stay zero — this is an invoice, not a receipt.
             invoice_generated = True
         elif is_mmt_ota:
             # OTA billing fully handled by MMT — no hotel-issued invoice
@@ -988,8 +1086,11 @@ def create_bill_record(room, room_data, checkout_time, batch=None,
         # the toggle.
         if is_no_bill:
             bill_number = "-"
-        elif is_mmt_ota and not mmt_service_only:
-            # Pure MMT room stay (no service) — no hotel bill
+        elif is_mmt_ota and not mmt_service_only and not mmt_hotel_issues_invoice:
+            # Pure MMT room stay (no service) and the hotel does NOT issue the
+            # room invoice → no hotel bill number. When mmt_hotel_issues_invoice
+            # is enabled this branch is skipped and a sequential number is
+            # minted below so the room supply is reportable in GSTR-1.
             bill_number = "-"
         else:
             bill_number = generate_sequential_bill_number(checkout_dt)
@@ -1043,7 +1144,7 @@ def create_bill_record(room, room_data, checkout_time, batch=None,
             # the folio is empty and we fall back to flat math on services.
             daily_folio = []
             total_amount = services_total - total_discounts
-            balance = total_amount - payment_cash - payment_online + total_refunds
+            balance = total_amount - payment_cash - payment_online - payment_ota + total_refunds
             if accommodation_addons_total > 0 and gst_rate > 0:
                 _divisor = 100 + gst_rate
                 gst_amount = round(accommodation_addons_total * gst_rate / _divisor, 2)
@@ -1057,6 +1158,23 @@ def create_bill_record(room, room_data, checkout_time, batch=None,
                 gst_amount, recipient_state_code="29"
             )
         # ─────────────────────────────────────────────────────────────────────
+
+        # ── Resolve B2B classification + place-of-supply split ────────────
+        # Now that total_amount and gst_amount are known, finalise the
+        # recipient classification. classify_invoice_type promotes to B2B
+        # when a valid recipient GSTIN is present (else B2CL for large
+        # inter-state B2C, else B2C). When the recipient is inter-state we
+        # re-split the GST as IGST. For intra-state (Karnataka, code 29) the
+        # earlier CGST/SGST split already stands. This makes an ingested MMT
+        # B2B stay file correctly without the operator re-keying the GST modal.
+        if bk_recipient_gstin:
+            bk_invoice_type = classify_invoice_type(
+                bk_recipient_gstin, total_amount, bk_recipient_state_code
+            )
+            if bk_recipient_state_code and bk_recipient_state_code != "29":
+                bill_cgst_amount, bill_sgst_amount, bill_igst_amount = compute_gst_split(
+                    gst_amount, recipient_state_code=bk_recipient_state_code
+                )
 
         bill_record = {
             "bill_number": bill_number,
@@ -1079,6 +1197,7 @@ def create_bill_record(room, room_data, checkout_time, batch=None,
             "total_amount": total_amount,
             "payment_cash": payment_cash,
             "payment_online": payment_online,
+            "payment_ota": payment_ota,
             "balance": balance,
             "status": "pending_settlement" if settle_later else "completed",
             "created_at": checkout_time,
@@ -1144,13 +1263,13 @@ def create_bill_record(room, room_data, checkout_time, batch=None,
             # info. Filled in via /update_bill_gst (Bills tab "GST" icon).
             # invoice_type defaults to "B2C"; classify_invoice_type recomputes
             # whenever recipient details change.
-            "recipient_gstin":      "",
-            "recipient_legal_name": "",
-            "recipient_trade_name": "",
-            "recipient_address":    "",
-            "recipient_state":      "Karnataka",
-            "recipient_state_code": "29",
-            "invoice_type":         "B2C",
+            "recipient_gstin":      bk_recipient_gstin,
+            "recipient_legal_name": bk_recipient_legal_name,
+            "recipient_trade_name": bk_recipient_trade_name,
+            "recipient_address":    bk_recipient_address,
+            "recipient_state":      bk_recipient_state,
+            "recipient_state_code": bk_recipient_state_code,
+            "invoice_type":         bk_invoice_type,
             # Linked credit notes — populated by create_credit_note.
             "linked_credit_note_ids": [],
             "linked_credit_note_id":  None,

@@ -143,6 +143,7 @@
 }
 .bl-src-normal    { background: #e8f5e9; color: #2e7d32; }
 .bl-src-bookingcom { background: #e3f2fd; color: #1565c0; }
+.bl-src-mmt       { background: #fff3e0; color: #e65100; }
 
 .bl-bill-btn {
   width: 28px; height: 28px; padding: 0;
@@ -2592,9 +2593,10 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
 
     // Source badge
     const src = e.booking_source || "normal";
-    const srcLabel = src === "booking.com" ? "Booking.com" : "Normal";
-    const srcCls =
-      src === "booking.com" ? "bl-src-bookingcom" : "bl-src-normal";
+    const _srcLabels = { "booking.com": "Booking.com", "mmt": "MMT", "normal": "Normal" };
+    const _srcClasses = { "booking.com": "bl-src-bookingcom", "mmt": "bl-src-mmt", "normal": "bl-src-normal" };
+    const srcLabel = _srcLabels[src] || (src.charAt(0).toUpperCase() + src.slice(1));
+    const srcCls = _srcClasses[src] || "bl-src-normal";
     const srcBadge = `<span class="bl-src-badge ${srcCls}">${srcLabel}</span>`;
 
     // Any bill with outstanding balance — new (pending_settlement) or old (completed but balance > 0)
@@ -3261,10 +3263,14 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
     // Payment
     const cashPaid = b.payment_cash || 0;
     const onlinePaid = b.payment_online || 0;
+    // OTA-settled (MMT prepaid the room; settles to the bank later). Counted
+    // as paid against the invoice so Total Paid reconciles with the grand
+    // total and the balance reads zero — but it is NOT a front-desk receipt.
+    const otaPaid = b.payment_ota || 0;
     const refunds = b.refunds || 0;
     const refundCash = b.refund_cash || 0;
     const refundOnline = b.refund_online || 0;
-    const totalPaid = cashPaid + onlinePaid;
+    const totalPaid = cashPaid + onlinePaid + otaPaid;
     const netCollected = totalPaid - refunds;
     const balance = b.balance || 0;
 
@@ -3638,6 +3644,7 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
       <tbody>
         <tr><td>Cash Paid</td><td class="b-tr">₹ ${fix2(cashPaid)}</td></tr>
         <tr><td>Online / UPI Paid</td><td class="b-tr">₹ ${fix2(onlinePaid)}</td></tr>
+        ${otaPaid > 0 ? `<tr><td>Paid via MMT (OTA)</td><td class="b-tr">₹ ${fix2(otaPaid)}</td></tr>` : ""}
         <tr class="b-subtotal"><td>Total Paid</td><td class="b-tr">₹ ${fix2(totalPaid)}</td></tr>
         ${
           refunds > 0

@@ -473,7 +473,14 @@ class TransactionLogManager {
     } else if (logType === "online") {
       type = "";
     } else if (logType === "settlement") {
-      type = "";  // SETTLE LATER badge already conveys it
+      // OTA bank settlements (MMT payout) vs hotel-side settle-later.
+      if (log.type === "bank_settlement" || log.platform === "mmt") {
+        type = log.label || "MMT Settlement";
+        color = 'style="color: var(--success)"';
+        additionalInfo = log.utr ? ` (UTR ${log.utr})` : "";
+      } else {
+        type = "";  // SETTLE LATER badge already conveys it
+      }
     }
 
     let tagsHtml = "";

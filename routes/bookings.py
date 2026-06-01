@@ -10,7 +10,7 @@ from config import (
     settlements_ref, ota_settlements_ref,  # logs_ref kept for whatsapp_messages only
     create_cancellation_charge_bill,
 )
-from services import payment_service, customer_service, bills_service
+from services import payment_service, customer_service, bills_service, expense_service
 from services.auth_service import requires_permission
 from services.audit_log import write_log, attribution_create, attribution_update, _safe_user
 
@@ -142,6 +142,78 @@ def get_upcoming_bookings():
         return jsonify(success=True, upcoming=upcoming, count=len(upcoming))
     except Exception as e:
         logger.error(f"get_upcoming_bookings error: {e}", exc_info=True)
+        return jsonify(success=False, message=str(e)), 500
+
+
+@bookings_bp.route("/get_upcoming_bookings_list", methods=["GET"])
+def get_upcoming_bookings_list():
+    """
+    Return CONFIRMED bookings whose check-in is today or later (IST),
+    sorted soonest-first. Unlike /get_upcoming_bookings (a 24h room-keyed
+    map for the room-grid arrival dots), this is a full list — today's
+    arrivals plus all future ones — for the Bookings "Upcoming" view and for
+    quick terminal checks.
+
+    Response: {success, count, bookings:[...]} where each booking includes
+    booking_source so MMT arrivals are identifiable.
+    """
+    try:
+        debug = request.args.get("debug")
+        # ?include_cancelled=1 shows cancelled/checked-out too (for verifying
+        # what's in the DB); default hides them.
+        include_cancelled = request.args.get("include_cancelled")
+        today = datetime.now(IST).strftime("%Y-%m-%d")
+
+        def _norm_date(v):
+            """Normalise a stored check_in_date to 'YYYY-MM-DD' for comparison.
+            Handles plain ISO strings, datetime/Timestamp objects, and a few
+            common alternate formats so a today booking is never missed on a
+            format quirk."""
+            if not v:
+                return ""
+            if hasattr(v, "strftime"):           # datetime / Firestore Timestamp
+                try:
+                    return v.strftime("%Y-%m-%d")
+                except Exception:
+                    return ""
+            s = str(v).strip()
+            if len(s) >= 10 and s[4] == "-" and s[7] == "-":
+                return s[:10]                     # already ISO 'YYYY-MM-DD...'
+            for fmt in ("%d/%m/%Y", "%d-%m-%Y", "%d %b %Y", "%d %b '%y"):
+                try:
+                    return datetime.strptime(s, fmt).strftime("%Y-%m-%d")
+                except ValueError:
+                    continue
+            return s  # last resort — compared as-is
+
+        # Stream the whole collection and filter in Python. This is bulletproof
+        # against a today booking being missed because its date was stored in a
+        # non-ISO form or its status differs in case. The bookings collection
+        # for a lodge is small; if it ever grows large, swap to a bounded
+        # check_in_date range query.
+        EXCLUDED = {"cancelled", "checked_out", "no_show"}
+        out, status_breakdown = [], {}
+        for d in bookings_ref.stream():
+            b = d.to_dict() or {}
+            ci = _norm_date(b.get("check_in_date"))
+            if not ci or ci < today:             # today or future only
+                continue
+            status = (b.get("status") or "").strip().lower()
+            status_breakdown[status] = status_breakdown.get(status, 0) + 1
+            if status in EXCLUDED and not include_cancelled:  # hide cancelled / finished
+                continue
+            b["booking_id"] = d.id
+            b["check_in_date"] = ci
+            out.append(b)
+
+        out.sort(key=lambda x: (x.get("check_in_date", ""),
+                                x.get("check_in_time", "")))
+        resp = {"success": True, "count": len(out), "today": today, "bookings": out}
+        if debug:
+            resp["status_breakdown"] = status_breakdown
+        return jsonify(**resp)
+    except Exception as e:
+        logger.error(f"get_upcoming_bookings_list error: {e}", exc_info=True)
         return jsonify(success=False, message=str(e)), 500
 
 
@@ -551,17 +623,23 @@ def convert_booking_to_checkin():
             totals_update[payment_method] = firestore.Increment(remaining_payment)
 
         # Resolve PER-NIGHT room price. The booking doc stores `total_amount`
-        # for the whole stay (e.g. ₹1,800 for 2 nights @ ₹900) and, when the
-        # frontend supplied it, a separate `rate_per_night`. The previous
-        # default — `booking["total_amount"]` — pushed the multi-night total
-        # in as the per-night rate, inflating room charges and pushing some
-        # stays into the wrong GST slab. Resolution order:
-        #   1. explicit `room_price` in the request (frontend override)
-        #   2. `booking.rate_per_night` if stored at booking time
-        #   3. total_amount / nights between check_in_date and check_out_date
-        #   4. final fallback: total_amount (one-night stay or unknown dates)
-        # Always compute nights up-front — we need it for renewal_count below,
-        # and previously it was only computed inside the rate-fallback branch.
+        # for the WHOLE stay (e.g. ₹1,400 for 2 nights @ ₹700). The per-night
+        # rate the room is charged at = total_amount ÷ nights.
+        #
+        # We derive it from total ÷ nights as the PRIMARY source rather than a
+        # stored `rate_per_night`, because a mis-captured rate_per_night (e.g.
+        # the whole-stay ₹1,400 saved into the nightly field) would otherwise
+        # be charged as ONE night's rent — the reported bug where a 2-night
+        # ₹700 booking checked in at ₹1,400/night (balance 400 at check-in,
+        # 1,800 after one renewal). total ÷ nights is always the true nightly
+        # value and also correctly spreads any whole-stay discount across
+        # nights. rate_per_night / total are only fallbacks when total or
+        # nights are unusable. Resolution order:
+        #   1. explicit `room_price` in the request (front-desk override)
+        #   2. total_amount ÷ nights  (the per-night price — primary)
+        #   3. booking.rate_per_night (if total/nights unusable)
+        #   4. total_amount (last resort)
+        # Nights is computed up-front — also needed for renewal_count below.
         _nights = 1
         try:
             _ci = datetime.strptime(booking["check_in_date"], "%Y-%m-%d")
@@ -577,12 +655,14 @@ def convert_booking_to_checkin():
         if _override_price is not None:
             room_price = int(_override_price)
         else:
+            _total = int(booking.get("total_amount") or 0)
             _stored_rate = booking.get("rate_per_night")
-            if _stored_rate and int(_stored_rate) > 0:
+            if _total > 0 and _nights > 0:
+                room_price = int(round(_total / _nights))     # per-night price
+            elif _stored_rate and int(_stored_rate) > 0:
                 room_price = int(_stored_rate)
             else:
-                _total = int(booking.get("total_amount") or 0)
-                room_price = int(round(_total / _nights)) if _nights else _total
+                room_price = _total
         is_ac = False
 
         # Rooms 200-206 support AC; use stored booking flag or frontend override
@@ -623,6 +703,25 @@ def convert_booking_to_checkin():
         # Negative balance is a legitimate credit — preserve the sign so the
         # operator can see it and the refund flow can act on it. The old
         # code clamped at zero, which silently lost the overpayment signal.
+
+        # ── MMT (OTA) prepaid override ──────────────────────────────────────
+        # MakeMyTrip collects the FULL stay tariff up front, so an MMT stay is
+        # not a day-by-day walk-in: the hotel bills the whole stay now and the
+        # room carries a zero balance (the guest owes the hotel nothing). We
+        # pre-charge all nights (renewal_count = nights-1) so the checkout
+        # bill computes the full room_charges_total, and record the tariff as
+        # an "ota" payment after commit so the invoice nets to a zero balance.
+        # MMT settles the net amount to the bank later (marked via
+        # /mark_ota_settlement), which is when the commission expense is booked.
+        _is_mmt = booking.get("booking_source") == "mmt"
+        _renewal_count_at_checkin = 0
+        _ota_prepaid = 0
+        if _is_mmt:
+            _ota_prepaid = int(
+                booking.get("ota_total_amount") or booking.get("total_amount") or 0
+            )
+            _renewal_count_at_checkin = max(_nights - 1, 0)
+            _room_balance_at_checkin = 0
 
         guest = {
             "name": booking["guest_name"],
@@ -673,11 +772,19 @@ def convert_booking_to_checkin():
             "checkin_time": checkin_datetime_str,
             "balance": _room_balance_at_checkin,
             "add_ons": [],
+            # Carry the booking source onto the live room so the Register tab
+            # shows "MMT" the moment the guest is checked in (the active-stay
+            # rows are built from the room doc, not the not-yet-existent
+            # completed bill). Defaults keep walk-ins as "normal"/"hotel".
+            "booking_source": booking.get("booking_source", "normal"),
+            "payment_source": booking.get("payment_source", "hotel"),
             # Walk-in pattern: start on Day 1; operator renews each
             # subsequent day manually. Booked nights N>1 are NOT
             # pre-charged. See the long comment above the `guest` dict
-            # for the rationale.
-            "renewal_count": 0,
+            # for the rationale. EXCEPTION: MMT stays are fully prepaid via
+            # the OTA, so all nights are pre-charged here (nights-1) and the
+            # bill reflects the whole stay at once.
+            "renewal_count": _renewal_count_at_checkin,
             "last_renewal_date": "",
             "last_renewal_time": None,
             # Pointer to the draft so /checkout finalizes it instead of
@@ -904,6 +1011,26 @@ def convert_booking_to_checkin():
 
         # (advance relink is now handled inside the batch above — B2)
 
+        # ── MMT prepaid room payment ────────────────────────────────────────
+        # Record the full OTA tariff as an "ota"-method payment on the stay.
+        # This is NOT a front-desk receipt (it never counts in the cash/online
+        # drawer tallies), but create_bill_record subtracts method="ota"
+        # payments from the bill balance so the MMT room invoice nets to zero
+        # — the guest owes the hotel nothing; MMT settles the net to the bank
+        # later. Method "ota" is already whitelisted in VALID_PAYMENT_METHODS.
+        if _is_mmt and _ota_prepaid > 0:
+            payment_service.write_payment_with_stay(stay_id, {
+                "room": room_number, "name": booking["guest_name"],
+                "amount": _ota_prepaid, "method": "ota",
+                "type": "ota_prepaid",
+                "date": current_date, "time": current_time,
+                "serial_number": serial_number, "booking_id": booking_id,
+                "stay_room_key": stay_key,
+                "transaction_type": "ota_prepaid",
+                "mobile": booking["guest_mobile"],
+                "platform": "mmt",
+            })
+
         # Fix 7: sync=True so errors surface in logs rather than dying silently
         customer_service.upsert_customer({
             "name": booking["guest_name"],
@@ -1082,33 +1209,49 @@ Thank you for choosing us! 🙏"""
         return jsonify(success=False, message=f"Error sending confirmation: {str(e)}")
 
 
-@bookings_bp.route("/mark_ota_settlement", methods=["POST"])
-def mark_ota_settlement():
-    """Mark an MMT booking's settlement as received."""
-    try:
-        data = request.json
-        booking_id = data.get("booking_id")
-        settlement_date = data.get("settlement_date")
-        settlement_amount = float(data.get("settlement_amount", 0))
+def apply_ota_settlement(booking_id, settlement_date, settlement_amount, *,
+                         utr="", source="manual"):
+    """
+    Mark an MMT booking's settlement as received and record the money trail.
 
+    Shared by the manual /mark_ota_settlement route and the automatic
+    settlement-email ingestion, so both produce identical records. Performs
+    its own validation + idempotency check, then writes:
+      • booking.settlement_status = "received"
+      • an ota_settlements doc
+      • a bank_settlement payment (shows in the Transactions tab)
+      • a booking_commission expense (commission + GST as ITC)
+
+    Returns a dict: {ok, already, message, settlement_amount}. Never raises.
+    `source` is stamped for audit ("manual" | "email"); `utr` is the bank
+    transaction reference from the settlement email (HDFC CMS NEFT ref).
+    """
+    try:
+        settlement_amount = float(settlement_amount or 0)
         if not booking_id or not settlement_date or settlement_amount <= 0:
-            return jsonify(success=False, message="booking_id, settlement_date and settlement_amount are required")
+            return {"ok": False, "already": False,
+                    "message": "booking_id, settlement_date and a positive amount are required"}
 
         booking_doc = bookings_ref.document(booking_id).get()
         if not booking_doc.exists:
-            return jsonify(success=False, message="Booking not found")
+            return {"ok": False, "already": False, "message": "Booking not found"}
 
         booking = booking_doc.to_dict()
         if booking.get("booking_source") != "mmt":
-            return jsonify(success=False, message="Settlement is only applicable to MMT bookings")
+            return {"ok": False, "already": False,
+                    "message": "Settlement is only applicable to MMT bookings"}
         if booking.get("settlement_status") == "received":
-            return jsonify(success=False, message="Settlement already marked as received")
+            return {"ok": True, "already": True,
+                    "message": "Settlement already marked as received",
+                    "settlement_amount": booking.get("settlement_amount")}
 
         # Update booking doc
         bookings_ref.document(booking_id).update({
             "settlement_status": "received",
             "settlement_date": settlement_date,
             "settlement_amount": settlement_amount,
+            "settlement_utr": utr,
+            "settlement_source": source,
         })
 
         # Write to ota_settlements collection (separate from hotel-side settle-later)
@@ -1121,6 +1264,8 @@ def mark_ota_settlement():
             "net_receivable": booking.get("net_receivable", 0),
             "settlement_amount": settlement_amount,
             "settlement_date": settlement_date,
+            "utr": utr,
+            "source": source,
             "created_at": datetime.now(IST).strftime("%Y-%m-%d %H:%M"),
         }
         ota_settlements_ref.add(settlement_entry)
@@ -1140,6 +1285,10 @@ def mark_ota_settlement():
             "booking_id": booking_id,
             "transaction_type": "bank_settlement",
             "platform": "mmt",
+            "utr": utr,
+            # Label surfaced in the Transactions tab so the row reads
+            # "MMT Settlement" rather than a generic settlement.
+            "label": "MMT Settlement",
         }
         _booking_stay_id = booking.get("stay_id")
         if _booking_stay_id:
@@ -1147,9 +1296,80 @@ def mark_ota_settlement():
         else:
             payment_service.write_payment(_ota_payload)
 
-        logger.info(f"OTA settlement received for booking {booking_id}: ₹{settlement_amount} on {settlement_date}")
-        return jsonify(success=True, message=f"Settlement of ₹{settlement_amount} marked as received")
+        # ── Book the MMT commission as an expense ───────────────────────────
+        # MMT keeps a commission (+18% GST) out of the tariff before paying
+        # the hotel. That commission is a real cost, and its GST is claimable
+        # input tax credit, so we record it as a booking_commission expense
+        # when the settlement is confirmed. expense_type="report" → it is a
+        # non-cash accrual (MMT deducted it; nothing left the cash drawer), so
+        # it does NOT touch the daily cash counter — it only surfaces in
+        # reports / GST. TCS (u/s 52) and TDS (u/s 194-O) are captured for
+        # reference; they are tax credits, not part of the expense amount.
+        # Guarded so a failure here never blocks the settlement.
+        try:
+            _comm = float(booking.get("ota_commission", 0) or 0)
+            _comm_gst = float(booking.get("ota_commission_gst", 0) or 0)
+            _comm_total = round(_comm + _comm_gst, 2)
+            if _comm_total > 0:
+                expense_service.write_expense({
+                    "date": settlement_date,
+                    "time": datetime.now(IST).strftime("%H:%M"),
+                    "category": "booking_commission",
+                    "description": (
+                        f"MMT commission — {booking.get('guest_name', '')} "
+                        f"(booking {str(booking_id)[:8]})"
+                    ),
+                    "amount": int(round(_comm_total)),
+                    "payment_method": "bank_settlement",
+                    "expense_type": "report",          # non-cash accrual
+                    "has_gst": True,
+                    "vendor_name": "MakeMyTrip / Go-MMT",
+                    "vendor_gstin": "",
+                    "taxable_amount": _comm,
+                    "gst_rate": 18.0,
+                    "gst_amount": _comm_gst,
+                    "commission_platform": "mmt",
+                    "commission_amount": _comm,
+                    "commission_gst": _comm_gst,
+                    "commission_payment_status": "paid",
+                    "commission_payment_date": settlement_date,
+                    "tcs_amount": float(booking.get("tcs_amount", 0) or 0),
+                    "tds_amount": float(booking.get("tds_amount", 0) or 0),
+                    "booking_id": booking_id,
+                }, sync=True)
+        except Exception as _ce:
+            logger.warning(
+                f"apply_ota_settlement: commission expense write failed for "
+                f"booking {booking_id}: {_ce}"
+            )
 
+        logger.info(
+            f"OTA settlement [{source}] for booking {booking_id}: "
+            f"₹{settlement_amount} on {settlement_date} (UTR {utr or '-'})"
+        )
+        return {"ok": True, "already": False,
+                "message": f"Settlement of ₹{settlement_amount} recorded",
+                "settlement_amount": settlement_amount}
+
+    except Exception as e:
+        logger.error(f"apply_ota_settlement error for {booking_id}: {e}", exc_info=True)
+        return {"ok": False, "already": False, "message": f"Error: {e}"}
+
+
+@bookings_bp.route("/mark_ota_settlement", methods=["POST"])
+def mark_ota_settlement():
+    """Manually mark an MMT booking's settlement as received (thin wrapper
+    over apply_ota_settlement; the email ingestion uses the same core)."""
+    try:
+        data = request.json or {}
+        res = apply_ota_settlement(
+            data.get("booking_id"),
+            data.get("settlement_date"),
+            data.get("settlement_amount", 0),
+            utr=data.get("utr", ""),
+            source="manual",
+        )
+        return jsonify(success=bool(res.get("ok")), message=res.get("message"))
     except Exception as e:
         logger.error(f"Error marking OTA settlement: {str(e)}")
         return jsonify(success=False, message=f"Error: {str(e)}")

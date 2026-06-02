@@ -95,6 +95,10 @@ def load_config() -> dict:
         "folder":    os.environ.get("MMT_IMAP_FOLDER", "INBOX").strip(),
         "senders":   [s.strip().lower() for s in senders.split(",") if s.strip()],
         "lookback_days": int(os.environ.get("MMT_INGEST_LOOKBACK_DAYS", "14") or 14),
+        # Go-live floor: never scan emails dated before this (YYYY-MM-DD).
+        # Stops the first fetch / a force_days sweep from churning pre-go-live
+        # mail. Defaults to 2026-06-01; override with MMT_INGEST_SINCE.
+        "since_floor": os.environ.get("MMT_INGEST_SINCE", "2026-06-01").strip(),
     }
 
 
@@ -947,7 +951,7 @@ def ingest(*, dry_run: bool = False, force_days: int | None = None) -> dict:
     cfg = load_config()
     summary = {
         "configured": is_configured(cfg),
-        "created": 0, "skipped_existing": 0, "needs_review": 0,
+        "created": 0, "skipped_existing": 0, "skipped_past": 0, "needs_review": 0,
         "errors": 0, "scanned": 0, "created_ids": [], "messages": [],
         # Settlement-email outcomes (separate from booking creation).
         "settled": 0, "settle_skipped": 0, "settle_unmatched": 0,
@@ -981,6 +985,20 @@ def ingest(*, dry_run: bool = False, force_days: int | None = None) -> dict:
             since_dt = since_dt - timedelta(days=1)
         except Exception:
             since_dt = None
+
+    # Clamp the scan window to the go-live floor (default 2026-06-01): never
+    # look at mail older than this, so pre-go-live emails are ignored entirely
+    # (no old vouchers/settlements churned). Applies to first-run lookback AND
+    # a force_days sweep.
+    _floor = cfg.get("since_floor")
+    if _floor:
+        try:
+            _floor_dt = datetime.strptime(_floor, "%Y-%m-%d")
+            if since_dt is None or since_dt < _floor_dt:
+                since_dt = _floor_dt
+            summary["messages"].append(f"Scan floor: {_floor} (pre-go-live mail ignored)")
+        except ValueError:
+            pass
 
     try:
         vouchers = fetch_vouchers(cfg, since_dt=since_dt)
@@ -1032,6 +1050,18 @@ def ingest(*, dry_run: bool = False, force_days: int | None = None) -> dict:
                 continue
 
             booking = build_booking_from_voucher(parsed, now=datetime.now(IST))
+
+            # Only ingest CURRENT/FUTURE bookings — skip vouchers whose
+            # check-in is already in the past (today is included). A voucher
+            # for a stay that already happened shouldn't become an "upcoming"
+            # booking; this also stops a force_days backlog sweep from pulling
+            # in historical test/old vouchers. Bookings with an unparsable
+            # date (check_in_date == "") are NOT skipped — they're let through
+            # flagged so nothing is silently dropped.
+            _ci = booking.get("check_in_date") or ""
+            if _ci and _ci < today_str:
+                summary["skipped_past"] += 1
+                continue
 
             # Auto-assign a physical room from the type's pool (Premium /
             # Premium AC → 200–206) based on availability for the stay dates.
@@ -1107,9 +1137,9 @@ def ingest(*, dry_run: bool = False, force_days: int | None = None) -> dict:
                 "last_run_at": datetime.now(IST).isoformat(),
                 "last_run_summary": {
                     k: summary[k] for k in
-                    ("created", "skipped_existing", "needs_review", "errors",
-                     "scanned", "settled", "settle_skipped", "settle_unmatched",
-                     "settle_errors")
+                    ("created", "skipped_existing", "skipped_past", "needs_review",
+                     "errors", "scanned", "settled", "settle_skipped",
+                     "settle_unmatched", "settle_errors")
                 },
             }, merge=True)
         except Exception as e:

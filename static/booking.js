@@ -43,6 +43,14 @@ document.addEventListener("DOMContentLoaded", function () {
     mmtSettlementsBtn.addEventListener("click", showMmtSettlementsModal);
   }
 
+  // Fetch-from-MMT button — manually pull new voucher/settlement emails on
+  // demand (instead of waiting for a scheduled poll). Calls /mmt/ingest with
+  // the logged-in user's auth, then reloads the bookings list.
+  const fetchMmtBtn = document.getElementById("fetch-mmt-btn");
+  if (fetchMmtBtn) {
+    fetchMmtBtn.addEventListener("click", fetchFromMmt);
+  }
+
   // Close MMT Settlements Modal
   const closeMmtSettlementsBtn = document.getElementById("close-mmt-settlements-btn");
   if (closeMmtSettlementsBtn) {
@@ -569,6 +577,57 @@ async function createBooking(event) {
     // Re-enable submit button
     submitBtn.disabled = false;
     submitBtn.innerHTML = originalContent;
+  }
+}
+
+// Manually fetch new MMT/Goibibo bookings from email, then refresh the list.
+// Uses the logged-in user's auth (apiFetch attaches the Firebase token), so
+// no ingest secret is needed from the browser.
+async function fetchFromMmt() {
+  const btn = document.getElementById("fetch-mmt-btn");
+  const original = btn ? btn.innerHTML : "";
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fas fa-sync-alt fa-spin"></i> Fetching...';
+  }
+  try {
+    const response = await apiFetch("/mmt/ingest", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok || result.success === false) {
+      throw new Error(result.message || `HTTP ${response.status}`);
+    }
+    const created = result.created || 0;
+    const settled = result.settled || 0;
+    const skipped = result.skipped_existing || 0;
+    const review = result.needs_review || 0;
+    if (created > 0 || settled > 0) {
+      let msg = "";
+      if (created > 0) msg += `${created} new booking${created !== 1 ? "s" : ""}`;
+      if (settled > 0) msg += `${msg ? ", " : ""}${settled} settled`;
+      if (review > 0) msg += ` (${review} need review)`;
+      showNotification(`MMT: ${msg}`, "success");
+    } else {
+      showNotification(
+        skipped > 0
+          ? "MMT: no new bookings (already up to date)"
+          : "MMT: no new emails found",
+        "info",
+      );
+    }
+    // Reload the bookings list so newly-created ones appear.
+    await fetchBookings();
+  } catch (error) {
+    console.error("Error fetching from MMT:", error);
+    showNotification(`MMT fetch failed: ${error.message}`, "error");
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = original;
+    }
   }
 }
 

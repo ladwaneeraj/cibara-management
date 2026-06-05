@@ -744,6 +744,51 @@ def _premium_pool() -> list[str]:
     return [r.strip() for r in raw.split(",") if r.strip()]
 
 
+# Guest-count-based room preference. Doubles (<=2 guests) are steered to one
+# set of rooms, triples-and-larger (>=3) to another, so families/groups land
+# in the bigger rooms and couples in the smaller ones. Both are overridable by
+# env so the numbering can change without a code edit:
+#   $env:MMT_DOUBLE_ROOMS = "200,201,206"
+#   $env:MMT_TRIPLE_ROOMS = "203,204,205"
+# Any pool room not listed in the matching set (e.g. 202) is still usable — it
+# just comes AFTER the preferred set, as overflow ("think and assign").
+_TRIPLE_GUEST_THRESHOLD = 3
+
+
+def _preferred_rooms(guest_count) -> list[str]:
+    try:
+        gc = int(guest_count or 0)
+    except (TypeError, ValueError):
+        gc = 0
+    if gc >= _TRIPLE_GUEST_THRESHOLD:
+        raw = os.environ.get("MMT_TRIPLE_ROOMS", "203,204,205")
+    else:
+        # <=2 guests (and unknown/1) are treated as a double.
+        raw = os.environ.get("MMT_DOUBLE_ROOMS", "200,201,206")
+    return [r.strip() for r in raw.split(",") if r.strip()]
+
+
+def _ordered_candidates(pool: list[str], guest_count) -> list[str]:
+    """
+    Reorder the room pool by guest-count preference: the preferred rooms first
+    (in their configured order), then every other pool room as overflow. Only
+    rooms actually present in `pool` are returned, so a stale preference entry
+    can never invent a non-existent room.
+    """
+    pref = _preferred_rooms(guest_count)
+    ordered: list[str] = []
+    seen: set[str] = set()
+    for r in pref:
+        if r in pool and r not in seen:
+            ordered.append(r)
+            seen.add(r)
+    for r in pool:                      # remaining pool rooms = overflow
+        if r not in seen:
+            ordered.append(r)
+            seen.add(r)
+    return ordered
+
+
 def _pool_and_ac_for_type(room_type: str):
     """
     Return (pool, is_ac) for a voucher room type, or ([], False).
@@ -763,9 +808,15 @@ def _pool_and_ac_for_type(room_type: str):
 
 
 def _assign_room(bookings_ref, rooms_ref, check_in_date, check_out_date,
-                 room_type, today_str):
+                 room_type, today_str, guest_count=1):
     """
     Pick an available physical room for an MMT booking from its type's pool.
+
+    Rooms are tried in guest-count preference order (see _ordered_candidates):
+    doubles (<=2 guests) prefer 200/201/206, triples-and-up (>=3) prefer
+    203/204/205, then any remaining pool room as overflow. So a group lands in
+    a larger room when one is free, but the booking is still auto-assigned from
+    the overflow rather than left unassigned when the preferred set is full.
 
     Returns (room, is_ac, reason). `room` is "" when nothing could be
     assigned (no pool for the type, missing/invalid dates, or the whole pool
@@ -819,7 +870,7 @@ def _assign_room(bookings_ref, rooms_ref, check_in_date, check_out_date,
             except Exception:
                 pass
 
-    for room in pool:
+    for room in _ordered_candidates(pool, guest_count):
         if room not in booked:
             return (room, is_ac, "")
     return ("", is_ac, f"no {'Premium AC' if is_ac else 'Premium'} room free "
@@ -1070,6 +1121,7 @@ def ingest(*, dry_run: bool = False, force_days: int | None = None) -> dict:
                 bookings_ref, rooms_ref,
                 booking.get("check_in_date"), booking.get("check_out_date"),
                 booking.get("room_type", ""), today_str,
+                booking.get("guest_count", 1),
             )
             if room:
                 booking["room"] = room

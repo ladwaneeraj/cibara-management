@@ -5,6 +5,7 @@ READ  → expenses collection (primary, via expense_service)
 WRITE → expenses collection (primary) + minimal stub in payments (backward-compat)
 """
 
+import os
 from flask import Blueprint, request, jsonify
 from datetime import datetime, timedelta
 from firebase_admin import firestore
@@ -18,6 +19,44 @@ from services import payment_service, expense_service
 from services.auth_service import requires_permission
 
 reports_bp = Blueprint('reports', __name__)
+
+# ── Invoice bill-link security for the GST/ITC report ────────────────────────
+# Bills are stored as Firebase Storage URLs with a permanent token (openable by
+# anyone with the link). For the GST report we share with an external CA, we
+# instead hand out short-lived V4 SIGNED URLs that expire. Google caps V4
+# signed-URL lifetime at 7 days, so that's the default (and hard max).
+_GST_LINK_EXPIRY_DAYS = max(1, min(int(os.environ.get("GST_LINK_EXPIRY_DAYS", "7") or 7), 7))
+
+
+def _sign_invoice_url(url: str, expiry_days: int = _GST_LINK_EXPIRY_DAYS) -> str:
+    """
+    Convert a stored Firebase Storage invoice URL into a short-lived V4 signed
+    URL so it can be emailed to a CA and then expire.
+
+    Returns the original url UNCHANGED when it can't or shouldn't be signed:
+      • empty, or a legacy local /uploads path (no cloud blob to sign),
+      • not a Firebase Storage URL,
+      • signing fails (e.g. runtime credentials lack a private key) — the
+        report must never break over a link, so we fall back to the token URL
+        and log a warning.
+    """
+    if not url or not url.startswith("https://firebasestorage.googleapis.com"):
+        return url
+    try:
+        import urllib.parse
+        from firebase_admin import storage as _storage
+        path_encoded = url.split("/o/")[1].split("?")[0]
+        blob_path = urllib.parse.unquote(path_encoded)
+        blob = _storage.bucket().blob(blob_path)
+        return blob.generate_signed_url(
+            version="v4",
+            expiration=timedelta(days=max(1, min(expiry_days, 7))),
+            method="GET",
+        )
+    except Exception as e:
+        logger.warning(f"GST report: could not sign invoice URL ({type(e).__name__}); "
+                       f"falling back to token URL: {e}")
+        return url
 
 # Permission required to edit or delete an existing expense. Admin only
 # by default (granted via the wildcard in services/permissions.py).
@@ -264,6 +303,75 @@ def add_expense():
     except Exception as e:
         logger.error(f"Error adding expense: {str(e)}")
         return jsonify(success=False, message=f"Error adding expense: {str(e)}")
+
+
+@reports_bp.route("/expenses_gst", methods=["POST"])
+@requires_permission("data.export")
+def expenses_gst():
+    """
+    Return ONLY the expenses that carry GST within a date range — used by the
+    GST workbook's "Expenses (ITC)" sheet so a CA can claim input tax credit.
+
+    Body : { "start_date": "YYYY-MM-DD", "end_date": "YYYY-MM-DD" }  (inclusive)
+    Auth : data.export (admin / manager) — enforced server-side via the
+           @requires_permission decorator. This is the real security boundary;
+           the frontend gate is only cosmetic.
+
+    Each returned expense includes the full GST breakdown (vendor, GSTIN,
+    taxable value, rate, tax amount), the invoice metadata, and the public
+    invoice photo URL so the sheet can link straight to the bill.
+    """
+    try:
+        data = request.json or {}
+        start_date = (data.get("start_date") or "").strip()
+        end_date = (data.get("end_date") or "").strip()
+        if not start_date or not end_date:
+            return jsonify(success=False, message="start_date and end_date are required."), 400
+
+        # Validate the date strings and convert the inclusive end_date into the
+        # exclusive upper bound the query expects.
+        try:
+            datetime.strptime(start_date, "%Y-%m-%d")
+            _end_dt = datetime.strptime(end_date, "%Y-%m-%d")
+        except ValueError:
+            return jsonify(success=False, message="Dates must be YYYY-MM-DD."), 400
+        end_exclusive = (_end_dt + timedelta(days=1)).strftime("%Y-%m-%d")
+
+        all_expenses = expense_service.query_expenses_by_date_range(start_date, end_exclusive) or []
+
+        def _carries_gst(e):
+            # A GST bill is flagged has_gst; booking.com commission carries GST
+            # under commission_gst even when has_gst isn't set. Treat a positive
+            # tax amount as authoritative either way.
+            if e.get("has_gst") is True:
+                return True
+            try:
+                return (float(e.get("gst_amount", 0) or 0) > 0
+                        or float(e.get("commission_gst", 0) or 0) > 0)
+            except (TypeError, ValueError):
+                return False
+
+        gst_expenses = [e for e in all_expenses if _carries_gst(e)]
+        # Stable, auditable order: by date then time.
+        gst_expenses.sort(key=lambda e: (str(e.get("date", "")), str(e.get("time", ""))))
+
+        # Replace each permanent bill URL with a short-lived signed link so the
+        # report shared with the CA exposes expiring links, not the permanent
+        # public token URLs. Falls back to the original URL if signing isn't
+        # available. Mutates only the in-memory response copy, never Firestore.
+        for e in gst_expenses:
+            if e.get("invoice_photo_url"):
+                e["invoice_photo_url"] = _sign_invoice_url(e["invoice_photo_url"])
+
+        return jsonify(
+            success=True,
+            expenses=gst_expenses,
+            count=len(gst_expenses),
+            link_expiry_days=_GST_LINK_EXPIRY_DAYS,
+        )
+    except Exception as e:
+        logger.error(f"expenses_gst error: {e}", exc_info=True)
+        return jsonify(success=False, message=str(e)), 500
 
 
 @reports_bp.route("/update_expense_photo", methods=["PATCH"])

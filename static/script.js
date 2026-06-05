@@ -348,7 +348,7 @@ function renderRooms() {
 
     if (
       currentFilter === "balances" &&
-      (info.status !== "occupied" || info.balance <= 0)
+      (info.status !== "occupied" || info.balance <= 0 || _isMmtPrepaidRoom(info))
     ) {
       return;
     }
@@ -1282,6 +1282,14 @@ async function fetchData() {
   }
 }
 
+// MMT/OTA rooms are prepaid (settled with the OTA later), so any non-zero
+// `balance` on them is not money owed by the guest and must be excluded from
+// the Balances filter, its count, and the total. Matches the room-card badge
+// logic, which already hides the balance badge for these rooms.
+function _isMmtPrepaidRoom(room) {
+  return !!(room && room.guest && room.guest.payment === "ota");
+}
+
 function updateFilterCounts() {
   let counts = { vacant: 0, occupied: 0, cleaning: 0, balances: 0 };
   let balanceTotal = 0;
@@ -1297,7 +1305,7 @@ function updateFilterCounts() {
       if (sc.room || sc.bathroom) counts.cleaning++;
     }
 
-    if (room.status === "occupied" && room.balance > 0) {
+    if (room.status === "occupied" && room.balance > 0 && !_isMmtPrepaidRoom(room)) {
       counts.balances++;
       balanceTotal += room.balance;
     }
@@ -1324,7 +1332,7 @@ function updateStats() {
     if (room.status === "vacant") counts.vacant++;
     else if (room.status === "occupied") {
       counts.occupied++;
-      if (room.balance > 0) { counts.balances++; balanceTotal += room.balance; }
+      if (room.balance > 0 && !_isMmtPrepaidRoom(room)) { counts.balances++; balanceTotal += room.balance; }
       // Count occupied rooms with active HK requests in cleaning badge
       const sc = room.service_cleaning || {};
       if (sc.room || sc.bathroom) counts.cleaning++;
@@ -1772,6 +1780,18 @@ function updateCheckoutModal(roomNumber) {
   const checkoutGuestMobile = document.getElementById("checkout-guest-mobile");
   if (checkoutGuestMobile) {
     checkoutGuestMobile.href = `tel:${roomInfo.guest.mobile || ""}`;
+  }
+
+  // ── Edit-mobile button (admin / manager) ────────────────────────────────
+  // OTA/MMT stays often arrive with no phone (shows "N/A"); let staff capture
+  // or correct it right here in the checkout view.
+  const checkoutEditMobileBtn = document.getElementById("checkout-edit-mobile");
+  if (checkoutEditMobileBtn) {
+    const _canEdit = _canEditGuestMobile() && _isOtaStay(roomInfo);
+    checkoutEditMobileBtn.style.display = _canEdit ? "" : "none";
+    checkoutEditMobileBtn.onclick = _canEdit
+      ? () => startEditCheckoutMobile(roomNumber)
+      : null;
   }
 
   const checkoutCheckinTime = document.getElementById("checkout-checkin-time");
@@ -2759,6 +2779,220 @@ function showEditTimeModal(roomNumber, currentCheckInTime, options) {
 }
 
 // Show detailed room info modal
+// ── Guest mobile editing (room details modal) ───────────────────────────────
+// OTA bookings (esp. MakeMyTrip) arrive with the guest phone masked, so an
+// auto-ingested stay checks in with an empty mobile. These helpers let an
+// admin / manager capture or correct the number after check-in. The backend
+// (/update_guest_mobile) re-validates the role and the 10-digit format.
+function _canEditGuestMobile() {
+  const a = window.CibaraAuth;
+  return !!(
+    a &&
+    ((a.isAdmin && a.isAdmin()) || (a.isManager && a.isManager()))
+  );
+}
+
+// The mobile-edit option is offered ONLY for OTA stays (MakeMyTrip and
+// Booking.com), because those vouchers mask the guest phone. Walk-ins capture
+// the number at check-in, so they don't get the edit affordance.
+// `guest.payment === "ota"` is MMT-only, so we key off booking_source, which
+// is carried onto the room for both OTA sources.
+function _isOtaStay(roomInfo) {
+  const src = roomInfo && roomInfo.booking_source;
+  return src === "mmt" || src === "booking.com";
+}
+
+function _renderMobileCell(roomNumber, mobile) {
+  const canEdit = _canEditGuestMobile() && _isOtaStay(rooms[roomNumber]);
+  const hasMobile = mobile && String(mobile).trim();
+
+  if (hasMobile) {
+    const editBtn = canEdit
+      ? `<button type="button" class="rd-mobile-edit-btn" title="Edit mobile number"
+           onclick="startEditGuestMobile('${roomNumber}')"
+           style="background:none;border:none;color:var(--primary);cursor:pointer;margin-left:6px;font-size:0.85rem;">
+           <i class="fas fa-pen"></i></button>`
+      : "";
+    return `<a href="tel:${mobile}" class="call-link"><i class="fas fa-phone"></i> ${mobile}</a>${editBtn}`;
+  }
+
+  // No number on file — typical for MMT / OTA bookings.
+  if (canEdit) {
+    return `<button type="button" class="rd-mobile-edit-btn"
+        onclick="startEditGuestMobile('${roomNumber}')"
+        style="background:none;border:1px solid var(--primary);color:var(--primary);border-radius:6px;padding:2px 8px;cursor:pointer;font-size:0.8rem;">
+        <i class="fas fa-plus"></i> Add number</button>`;
+  }
+  return `<span style="color:var(--gray);">Not provided</span>`;
+}
+
+function startEditGuestMobile(roomNumber) {
+  const cell = document.getElementById("rd-mobile-cell");
+  if (!cell) return;
+  const current =
+    (rooms[roomNumber] && rooms[roomNumber].guest && rooms[roomNumber].guest.mobile) || "";
+  cell.innerHTML = `
+    <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+      <input type="tel" id="rd-mobile-input" value="${current}" maxlength="10" inputmode="numeric"
+        placeholder="10-digit mobile"
+        style="padding:4px 8px;border:1px solid var(--border,#ccc);border-radius:6px;width:140px;font-size:0.9rem;" />
+      <button type="button" onclick="saveGuestMobile('${roomNumber}')"
+        style="background:var(--primary);color:#fff;border:none;border-radius:6px;padding:4px 10px;cursor:pointer;font-size:0.8rem;">Save</button>
+      <button type="button" onclick="showRoomDetailsModal('${roomNumber}')"
+        style="background:none;border:1px solid var(--gray,#999);color:var(--gray,#666);border-radius:6px;padding:4px 10px;cursor:pointer;font-size:0.8rem;">Cancel</button>
+    </div>`;
+  const input = document.getElementById("rd-mobile-input");
+  if (input) {
+    input.focus();
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") { e.preventDefault(); saveGuestMobile(roomNumber); }
+    });
+  }
+}
+
+async function saveGuestMobile(roomNumber) {
+  const input = document.getElementById("rd-mobile-input");
+  if (!input) return;
+  // Normalise: digits only, drop a leading 91 country code if 12 digits.
+  let digits = (input.value || "").replace(/\D/g, "");
+  if (digits.length === 12 && digits.startsWith("91")) digits = digits.slice(2);
+
+  if (digits.length !== 10) {
+    if (typeof showNotification === "function")
+      showNotification("Enter a valid 10-digit mobile number.", "error");
+    input.focus();
+    return;
+  }
+
+  try {
+    const res = await apiFetch("/update_guest_mobile", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ room: roomNumber, mobile: digits }),
+    });
+    const data = await res.json();
+    if (data && data.success) {
+      if (rooms[roomNumber] && rooms[roomNumber].guest) {
+        rooms[roomNumber].guest.mobile = data.mobile || digits;
+      }
+      if (typeof showNotification === "function")
+        showNotification("Mobile number updated.", "success");
+      showRoomDetailsModal(roomNumber); // re-render the modal with the new value
+    } else {
+      if (typeof showNotification === "function")
+        showNotification((data && data.message) || "Could not update mobile.", "error");
+    }
+  } catch (e) {
+    if (typeof showNotification === "function")
+      showNotification("Network error updating mobile.", "error");
+  }
+}
+
+// Expose for the inline onclick handlers in the modal markup.
+window.startEditGuestMobile = startEditGuestMobile;
+window.saveGuestMobile = saveGuestMobile;
+
+// ── Same capability inside the Checkout modal ───────────────────────────────
+// The checkout modal has its own static Mobile row (#checkout-mobile-cell with
+// the #checkout-guest-mobile link). Rather than tear down those elements (which
+// updateCheckoutModal repopulates), we hide them and append a temporary input
+// group, then restore on save/cancel.
+function startEditCheckoutMobile(roomNumber) {
+  const cell = document.getElementById("checkout-mobile-cell");
+  if (!cell) return;
+
+  const link = document.getElementById("checkout-guest-mobile");
+  const editBtn = document.getElementById("checkout-edit-mobile");
+  if (link) link.style.display = "none";
+  if (editBtn) editBtn.style.display = "none";
+
+  // Drop any leftover edit group from a previous open.
+  const prior = document.getElementById("checkout-mobile-edit-group");
+  if (prior) prior.remove();
+
+  const current =
+    (rooms[roomNumber] && rooms[roomNumber].guest && rooms[roomNumber].guest.mobile) || "";
+  const group = document.createElement("div");
+  group.id = "checkout-mobile-edit-group";
+  group.style.cssText = "display:flex;align-items:center;gap:6px;flex-wrap:wrap;";
+  group.innerHTML =
+    `<input type="tel" id="checkout-mobile-input" value="${current}" maxlength="10" inputmode="numeric"
+        placeholder="10-digit mobile"
+        style="padding:4px 8px;border:1px solid var(--border,#ccc);border-radius:6px;width:140px;font-size:0.9rem;" />` +
+    `<button type="button" id="checkout-mobile-save"
+        style="background:var(--primary);color:#fff;border:none;border-radius:6px;padding:4px 10px;cursor:pointer;font-size:0.8rem;">Save</button>` +
+    `<button type="button" id="checkout-mobile-cancel"
+        style="background:none;border:1px solid var(--gray,#999);color:var(--gray,#666);border-radius:6px;padding:4px 10px;cursor:pointer;font-size:0.8rem;">Cancel</button>`;
+  cell.appendChild(group);
+
+  const input = document.getElementById("checkout-mobile-input");
+  const saveBtn = document.getElementById("checkout-mobile-save");
+  const cancelBtn = document.getElementById("checkout-mobile-cancel");
+  if (cancelBtn) cancelBtn.onclick = _closeCheckoutMobileEdit;
+  if (saveBtn) saveBtn.onclick = () => saveCheckoutMobile(roomNumber);
+  if (input) {
+    input.focus();
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") { e.preventDefault(); saveCheckoutMobile(roomNumber); }
+    });
+  }
+}
+
+function _closeCheckoutMobileEdit() {
+  const group = document.getElementById("checkout-mobile-edit-group");
+  if (group) group.remove();
+  const link = document.getElementById("checkout-guest-mobile");
+  const editBtn = document.getElementById("checkout-edit-mobile");
+  if (link) link.style.display = "";
+  if (editBtn) editBtn.style.display = "";
+}
+
+async function saveCheckoutMobile(roomNumber) {
+  const input = document.getElementById("checkout-mobile-input");
+  if (!input) return;
+  let digits = (input.value || "").replace(/\D/g, "");
+  if (digits.length === 12 && digits.startsWith("91")) digits = digits.slice(2);
+
+  if (digits.length !== 10) {
+    if (typeof showNotification === "function")
+      showNotification("Enter a valid 10-digit mobile number.", "error");
+    input.focus();
+    return;
+  }
+
+  try {
+    const res = await apiFetch("/update_guest_mobile", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ room: roomNumber, mobile: digits }),
+    });
+    const data = await res.json();
+    if (data && data.success) {
+      const newMobile = data.mobile || digits;
+      if (rooms[roomNumber] && rooms[roomNumber].guest) {
+        rooms[roomNumber].guest.mobile = newMobile;
+      }
+      _closeCheckoutMobileEdit();
+      // Update the static display in place.
+      const span = document.getElementById("checkout-mobile-number");
+      const link = document.getElementById("checkout-guest-mobile");
+      if (span) span.textContent = newMobile || "N/A";
+      if (link) link.href = `tel:${newMobile}`;
+      if (typeof showNotification === "function")
+        showNotification("Mobile number updated.", "success");
+    } else {
+      if (typeof showNotification === "function")
+        showNotification((data && data.message) || "Could not update mobile.", "error");
+    }
+  } catch (e) {
+    if (typeof showNotification === "function")
+      showNotification("Network error updating mobile.", "error");
+  }
+}
+
+window.startEditCheckoutMobile = startEditCheckoutMobile;
+window.saveCheckoutMobile = saveCheckoutMobile;
+
 function showRoomDetailsModal(roomNumber) {
   if (!roomDetailsModal) {
     debugLog("Room details modal not found");
@@ -2840,10 +3074,8 @@ function showRoomDetailsModal(roomNumber) {
           </div>
           <div class="summary-row">
             <div class="summary-label">Mobile</div>
-            <div class="summary-value">
-              <a href="tel:${info.guest.mobile}" class="call-link">
-                <i class="fas fa-phone"></i> ${info.guest.mobile}
-              </a>
+            <div class="summary-value" id="rd-mobile-cell">
+              ${_renderMobileCell(roomNumber, info.guest.mobile)}
             </div>
           </div>
           <div class="summary-row">

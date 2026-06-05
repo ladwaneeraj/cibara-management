@@ -1206,7 +1206,14 @@ async function submitExpense(e) {
       _expenseEditMode = false;
       _expenseEditDocId = null;
 
-      debouncedFetchData();
+      // Extended-range aware refresh so an edit/add to a PAST day (Last 3 days /
+      // custom range) re-pulls from the server instead of leaving the stale row
+      // on screen. Falls back to debouncedFetchData (Today view / older bundle).
+      if (typeof window.refreshTransactionsView === "function") {
+        window.refreshTransactionsView();
+      } else {
+        debouncedFetchData();
+      }
 
       if (type === "report" &&
           document.getElementById("reports-tab") &&

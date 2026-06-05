@@ -1384,6 +1384,7 @@
                     <th>Sr. No</th>
                     <th>Bill No</th>
                     <th>Guest Name</th>
+                    <th>Persons</th>
                     <th>Contact</th>
                     <th>Room</th>
                     <th>Check-in</th>
@@ -2755,11 +2756,17 @@
           </div>
           <div class="detail-row">
             <div class="detail-label">Mobile</div>
-            <div class="detail-value">
+            <div class="detail-value" id="checkout-mobile-cell" style="display: flex; align-items: center">
               <a href="tel:" id="checkout-guest-mobile" class="call-link">
                 <i class="fas fa-phone"></i>
                 <span id="checkout-mobile-number"></span>
               </a>
+              <button id="checkout-edit-mobile" type="button"
+                      style="margin-left: 8px; background: none; border: none; color: var(--primary); cursor: pointer; display: none;"
+                      aria-label="Edit mobile number"
+                      title="Edit mobile number">
+                <i class="fas fa-edit"></i>
+              </button>
             </div>
           </div>
           <div class="detail-row">
@@ -4590,7 +4597,6 @@
               class="form-control"
               id="update-guest-mobile"
               placeholder="10-digit mobile number"
-              required
               pattern="[0-9]{10}"
               title="Please enter a valid 10-digit mobile number"
             />
@@ -4735,6 +4741,13 @@
       src="https://cdnjs.cloudflare.com/ajax/libs/flatpickr/4.6.13/flatpickr.min.js"
     ></script>
     <script defer src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- Leaflet + heat layer — guest footfall heatmap (Analytics tab) -->
+    <link
+      rel="stylesheet"
+      href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css"
+    />
+    <script defer src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
+    <script defer src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.heat/0.2.0/leaflet-heat.js"></script>
     <script
       defer
       src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"

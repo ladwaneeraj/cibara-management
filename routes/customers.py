@@ -4,10 +4,13 @@ Reads from the `customers` collection (managed by customer_service).
 """
 
 import uuid
+import threading
 from datetime import datetime
 from flask import Blueprint, request, jsonify
 from config import logger
 from services import customer_service
+from services import ocr_service
+from services import pincode_geo
 from services.customer_service import search_by_mobile_prefix
 from services.auth_service import requires_permission
 
@@ -144,10 +147,15 @@ def upload_customer_document():
                 )
 
         image_bytes = file.read()
+        mime = (file.mimetype or "image/jpeg").lower()
         filename = f"doc_{uuid.uuid4().hex[:10]}_{datetime.now().strftime('%Y%m%d%H%M%S')}.jpg"
 
         url = customer_service.upload_document(mobile, image_bytes, filename)
         if url:
+            # Best-effort demographics extraction (pincode + DOB) in the
+            # background — never blocks the upload response, never fails it.
+            # Gated by the ID-OCR kill-switch inside ocr_service.
+            _maybe_extract_demographics(mobile, image_bytes, mime, url)
             return jsonify(success=True, url=url, message="Document uploaded successfully")
         return jsonify(success=False, message="Failed to store document — check server logs")
 
@@ -388,4 +396,83 @@ def batch_check_customer_docs():
         return jsonify(success=True, mobiles_with_docs=mobiles_with_docs)
     except Exception as e:
         logger.error(f"batch_check_customer_docs error: {e}")
+        return jsonify(success=False, message=str(e)), 500
+
+
+# ---------------------------------------------------------------------------
+# DEMOGRAPHICS — ID-OCR extraction + analytics aggregate
+# ---------------------------------------------------------------------------
+
+def _maybe_extract_demographics(mobile: str, image_bytes: bytes,
+                                mime: str, source_url: str) -> None:
+    """
+    Fire-and-forget: OCR the ID image for pincode + DOB and merge the result
+    into the customer's demographics. Swallows all errors — this is an
+    analytics nicety, never allowed to affect the upload itself.
+    """
+    if not ocr_service.id_ocr_enabled():
+        return
+
+    def _worker():
+        try:
+            res = ocr_service.extract_id_fields(image_bytes, mime)
+            if res.get("success") and res.get("fields"):
+                customer_service.apply_id_extraction(
+                    mobile, res["fields"], source_url=source_url, sync=True
+                )
+        except Exception as e:
+            logger.warning(f"demographics extraction skipped for {mobile}: {e}")
+
+    threading.Thread(target=_worker, daemon=True).start()
+
+
+@customers_bp.route("/customer_analytics", methods=["GET"])
+@requires_permission("customer.manage")
+def customer_analytics_route():
+    """
+    Aggregated guest demographics for the analytics dashboard:
+    age distribution + average age, and footfall per pincode.
+
+    Query params:
+        refresh – "1" to bypass the 5-minute cache and rescan.
+
+    Returns: { success, age:{...}, pincodes:[...], totals:{...},
+               ocr_enabled: bool }
+    """
+    try:
+        force = request.args.get("refresh", "") in ("1", "true", "yes")
+        agg = customer_service.get_demographics_aggregate(force=force)
+
+        # Attach map coordinates to each pincode (best-effort, offline lookup).
+        # Rows whose PIN can't be resolved are still returned (for the bar
+        # chart) but omitted from geo_points (the map).
+        geo_points = []
+        resolved = 0
+        for row in agg["pincodes"]:
+            loc = pincode_geo.resolve(row["pincode"])
+            if loc:
+                resolved += 1
+                geo_points.append({
+                    "pincode": row["pincode"],
+                    "guests":  row["guests"],
+                    "visits":  row["visits"],
+                    "lat":     loc["lat"],
+                    "lon":     loc["lon"],
+                    "place":   loc.get("place", ""),
+                    "state":   loc.get("state", ""),
+                })
+
+        return jsonify(
+            success=True,
+            age=agg["age"],
+            pincodes=agg["pincodes"],
+            totals=agg["totals"],
+            ocr_enabled=ocr_service.id_ocr_enabled(),
+            geo_points=geo_points,
+            geo_available=pincode_geo.is_available(),
+            geo_resolved=resolved,
+            geo_total=len(agg["pincodes"]),
+        )
+    except Exception as e:
+        logger.error(f"customer_analytics error: {e}")
         return jsonify(success=False, message=str(e)), 500

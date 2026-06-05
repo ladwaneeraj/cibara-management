@@ -1,9 +1,24 @@
 // transaction-tracking.js - Enhanced Transaction Tracking System with Unified Styling
 
+// Format a Date using LOCAL calendar components. This deployment runs in IST
+// and the backend stores each transaction's `date` as the IST calendar day
+// (datetime.now(IST)). Using `.toISOString().split("T")[0]` here would convert
+// to UTC first, shifting the date back by one day for any IST time between
+// 00:00 and 05:30 — and for flatpickr's local-midnight range values it shifts
+// back a full day on every pick. That mismatch is what made the date-range
+// filter (e.g. Jun 1–Jun 2) return the previous day's data (May 31).
+function _localYMD(d) {
+  d = d || new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
 class TransactionTracker {
   constructor() {
     this.dailyCounters = this.loadDailyCounters();
-    this.todayDate = new Date().toISOString().split("T")[0];
+    this.todayDate = _localYMD();
     this.initializeTodayCounter();
   }
 
@@ -75,7 +90,7 @@ class TransactionTracker {
     }
 
     // 3. Assign a new serial for the new date (only if it is today)
-    const todayStr = new Date().toISOString().split("T")[0];
+    const todayStr = _localYMD();
     if (newDate === todayStr) {
       if (!this.dailyCounters[newDate]) {
         this.dailyCounters[newDate] = 0;
@@ -94,7 +109,7 @@ class TransactionTracker {
   cleanupOldCounters() {
     const thirtyDaysAgo = new Date();
     thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-    const cutoffDate = thirtyDaysAgo.toISOString().split("T")[0];
+    const cutoffDate = _localYMD(thirtyDaysAgo);
 
     for (const date in this.dailyCounters) {
       if (date < cutoffDate) {
@@ -238,12 +253,12 @@ class TransactionLogManager {
     }
 
     // Default: last 3 days if no range supplied
-    const todayStr = new Date().toISOString().split("T")[0];
+    const todayStr = _localYMD();
     if (!fromDate || !toDate) {
       toDate = todayStr;
       const d = new Date();
       d.setDate(d.getDate() - 2);
-      fromDate = d.toISOString().split("T")[0];
+      fromDate = _localYMD(d);
     }
     typeFilter = typeFilter || "all";
 
@@ -357,11 +372,11 @@ class TransactionLogManager {
 
     let logsHTML = "";
 
-    const _today = new Date().toISOString().split("T")[0];
+    const _today = _localYMD();
     const _yesterday = (() => {
       const d = new Date();
       d.setDate(d.getDate() - 1);
-      return d.toISOString().split("T")[0];
+      return _localYMD(d);
     })();
 
     function formatDate(dateStr) {
@@ -1304,8 +1319,19 @@ document.addEventListener("DOMContentLoaded", function () {
   // check inside renderEnhancedLogItem for visibility; the handlers below
   // are a thin safety net.
   function _findLogByDocId(docId) {
-    if (!docId || typeof logs === "undefined" || !logs.expenses) return null;
-    return logs.expenses.find((l) => l._doc_id === docId) || null;
+    if (!docId) return null;
+    // The "Last 3 days" / custom-range views render expenses from the
+    // server-fetched txnExtendedLogs, NOT the today-only global `logs` cache.
+    // Search the extended result first so editing a past-day expense works;
+    // fall back to the global cache for the Today view.
+    const sources = [];
+    if (txnExtendedLogs && txnExtendedLogs.expenses) sources.push(txnExtendedLogs.expenses);
+    if (typeof logs !== "undefined" && logs && logs.expenses) sources.push(logs.expenses);
+    for (const arr of sources) {
+      const hit = arr.find((l) => l._doc_id === docId);
+      if (hit) return hit;
+    }
+    return null;
   }
 
   document.addEventListener("click", function (e) {
@@ -1360,7 +1386,12 @@ document.addEventListener("DOMContentLoaded", function () {
             if (typeof showNotification === "function") {
               showNotification("Expense deleted", "success");
             }
-            if (typeof debouncedFetchData === "function") debouncedFetchData();
+            // Extended-range aware refresh (Today → cache; past range → re-fetch).
+            if (typeof window.refreshTransactionsView === "function") {
+              window.refreshTransactionsView();
+            } else if (typeof debouncedFetchData === "function") {
+              debouncedFetchData();
+            }
           } else {
             if (typeof showNotification === "function") {
               showNotification((data && data.message) || "Delete failed", "error");
@@ -1726,7 +1757,7 @@ class TransactionFilterManager {
   isSameDayAsCheckin(logDate, checkinTime) {
     try {
       if (!checkinTime) return false;
-      const checkinDate = new Date(checkinTime).toISOString().split("T")[0];
+      const checkinDate = _localYMD(new Date(checkinTime));
       return checkinDate === logDate;
     } catch (error) {
       return false;
@@ -1758,7 +1789,7 @@ class TransactionFilterManager {
   }
 
   getAllCategorizedTransactions() {
-    const today = new Date().toISOString().split("T")[0];
+    const today = _localYMD();
     const todayLogs = { fresh: [], continue: [], service: [], expense: [] };
 
     (logs.cash || [])
@@ -1884,14 +1915,14 @@ let txnExtendedLogs = null; // cached logs from /get_transactions_range for curr
 function _getDateOffset(days) {
   const d = new Date();
   d.setDate(d.getDate() - days);
-  return d.toISOString().split("T")[0];
+  return _localYMD(d);
 }
 
 // Is fromDate covered by the /get_data cache?
 // /get_data now fetches TODAY only — so only "today" is in the cache.
 // Any range that starts before today must be fetched from /get_transactions_range.
 function _isWithinCache(fromDate) {
-  const today = new Date().toISOString().split("T")[0];
+  const today = _localYMD();
   return fromDate === today;
 }
 
@@ -2062,7 +2093,7 @@ function _relockDatePicker() {
   if (lockBtn) lockBtn.style.display = "none";
 
   // Snap back to Today
-  const today = new Date().toISOString().split("T")[0];
+  const today = _localYMD();
   if (window._txnPicker) window._txnPicker.setDate([today, today]);
   document
     .querySelectorAll(".txn-quick-btn")
@@ -2106,7 +2137,7 @@ async function _submitTxnPassword() {
 }
 
 function initTxnDateFilter() {
-  const todayStr = new Date().toISOString().split("T")[0];
+  const todayStr = _localYMD();
   const defaultFrom = todayStr; // today only
 
   // ── RBAC: only admin gets the date-range picker ──────────────────────────
@@ -2128,8 +2159,8 @@ function initTxnDateFilter() {
       disableMobile: true,
       onChange: function (selectedDates) {
         if (selectedDates.length === 2) {
-          const from = selectedDates[0].toISOString().split("T")[0];
-          const to = selectedDates[1].toISOString().split("T")[0];
+          const from = _localYMD(selectedDates[0]);
+          const to = _localYMD(selectedDates[1]);
           document
             .querySelectorAll(".txn-quick-btn")
             .forEach((b) => b.classList.remove("active"));
@@ -2151,7 +2182,7 @@ function initTxnDateFilter() {
       this.classList.add("active");
 
       const range = this.dataset.range;
-      const today = new Date().toISOString().split("T")[0];
+      const today = _localYMD();
       // "today" → same day; "3" → last 3 days (today + 2 days back)
       const from =
         range === "today" ? today : _getDateOffset(parseInt(range, 10) - 1);
@@ -2215,6 +2246,21 @@ window.renderEnhancedLogs = function () {
   _renderWithLogs(fromDate || null, toDate || null, txnExtendedLogs || null);
 };
 
+// Refresh the Transactions view after a LOCAL add / edit / delete. For an
+// extended (past) date range the server result must be re-fetched —
+// debouncedFetchData only refreshes today's cache, so the displayed list (read
+// from txnExtendedLogs) would otherwise keep showing the pre-edit data.
+// Exposed globally so expense.js (add/edit) and the delete handler both use it.
+window.refreshTransactionsView = function () {
+  const r = txnActiveDateRange || {};
+  if (r.fromDate && !_isWithinCache(r.fromDate)) {
+    txnExtendedLogs = null;            // force a fresh server pull
+    _triggerRender(r.fromDate, r.toDate);
+  } else if (typeof debouncedFetchData === "function") {
+    debouncedFetchData();              // Today view — refresh the cache
+  }
+};
+
 // ─── Real-time payment / expense sync ─────────────────────────────────────
 // When Firestore pushes a new payment or expense to this browser,
 // refresh the transactions view so it stays current without a manual reload.
@@ -2225,6 +2271,9 @@ window.renderEnhancedLogs = function () {
     return dateStr >= fromDate && dateStr <= (toDate || fromDate);
   }
 
+  // Lightweight refresh — used for remote payment *adds*, where google_sync.js
+  // has already patched the in-memory `logs` cache (_patchLocalLogs) and
+  // smooth-inserted the row. We only need to re-render from that patched cache.
   function _refreshTxnView(dateStr) {
     const txnTab = document.getElementById("transaction-tab");
     const tabVisible = txnTab && !txnTab.classList.contains("hidden");
@@ -2249,14 +2298,48 @@ window.renderEnhancedLogs = function () {
     }
   }
 
+  // Full refresh — used for remote *edits/deletes* (cibaraTransactionRevised)
+  // and remote *expense adds*. The in-memory `logs` cache can't be patched
+  // reliably for these (expenses aren't tracked by _patchLocalLogs, and we
+  // don't have the pre-edit row to remove), so re-pull authoritative data from
+  // the server for the active range.
+  function _refreshTxnViewFull(dateStr) {
+    if (dateStr && !_isDateInRange(dateStr)) return;
+    const { fromDate, toDate } = txnActiveDateRange;
+    if (!fromDate) return;
+
+    // Always invalidate the extended-range cache so the next view re-fetches,
+    // even if the tab is currently hidden.
+    txnExtendedLogs = null;
+
+    if (_isWithinCache(fromDate)) {
+      // "Today" view renders from the global `logs` cache — refresh it from the
+      // server. fetchData() re-renders the transactions list when it finishes.
+      if (typeof debouncedFetchData === "function") debouncedFetchData(300);
+      else if (typeof fetchData === "function") fetchData();
+    } else {
+      const txnTab = document.getElementById("transaction-tab");
+      const tabVisible = txnTab && !txnTab.classList.contains("hidden");
+      if (tabVisible) _triggerRender(fromDate, toDate);
+    }
+  }
+
   window.addEventListener("cibaraPaymentAdded", (e) => {
     const p = e.detail || {};
     if (p.date) _refreshTxnView(p.date);
   });
 
+  // Expense adds need the full path — the lightweight cache patch doesn't
+  // cover the `expenses` bucket, so a cache-only re-render would miss them.
   window.addEventListener("cibaraExpenseAdded", (e) => {
     const exp = e.detail || {};
-    if (exp.date) _refreshTxnView(exp.date);
+    if (exp.date) _refreshTxnViewFull(exp.date);
+  });
+
+  // Remote edits and deletes to payments/expenses (from another device).
+  window.addEventListener("cibaraTransactionRevised", (e) => {
+    const d = e.detail || {};
+    _refreshTxnViewFull(d.date || null);
   });
 })();
 

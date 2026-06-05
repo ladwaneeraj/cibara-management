@@ -1,4 +1,22 @@
 // Enhanced Quick Room Transfer Functionality
+
+// Resolve a room's rate-slab category via the canonical roomPricing map
+// (defined in script.js). Returns the category string, or null if the helper
+// isn't loaded yet — callers treat null as "can't determine, don't block".
+function _roomCategoryOf(roomNumber) {
+  if (
+    typeof roomPricing === "undefined" ||
+    typeof roomPricing.getRoomCategory !== "function"
+  ) {
+    return null;
+  }
+  try {
+    return roomPricing.getRoomCategory(roomNumber).category;
+  } catch (e) {
+    return null;
+  }
+}
+
 function initQuickTransferButton() {
   const quickTransferBtn = document.getElementById("quick-transfer-btn");
   if (!quickTransferBtn) {
@@ -68,49 +86,20 @@ function showQuickTransferModal() {
   if (acToggleSection) acToggleSection.style.display = "none";
 
   // Populate source room dropdown.
-  // Eligibility rules for quick transfer:
+  // Eligibility rule for quick transfer:
   //   1. Room must be occupied.
-  //   2. Check-in must be within the last 24 hours (rolling window).
   //
-  // Rationale: quick transfer is meant for early-stay corrections (wrong room
-  // assigned, AC issue, etc.). Once a stay is more than a day old it has
-  // accumulated services/payments and should go through the full transfer
-  // flow rather than the streamlined "quick" one.
-  //
-  // Implementation notes:
-  //   - checkin_time is stored as "YYYY-MM-DD HH:MM" (IST, no timezone suffix).
-  //     `new Date(...)` parses this in the browser's local zone, which matches
-  //     the rest of the codebase (see script.js:1021). If your devices are
-  //     ever in a different timezone than the property, this comparison will
-  //     drift — out of scope for this change.
-  //   - If checkin_time is missing or unparseable, the room is hidden out of
-  //     caution. This is consistent with the other guards in the codebase
-  //     (e.g. script.js:1003 returns early on the same condition).
-  const QUICK_TRANSFER_WINDOW_MS = 24 * 60 * 60 * 1000;
-  const _nowMs = Date.now();
-
+  // NOTE: the previous 24-hour "early-stay only" window has been removed at
+  // the operator's request, so long-staying guests (staying many days) can be
+  // transferred from here too. This is safe: the backend /transfer_room
+  // snapshots pre-transfer charges and carries a transfer_day_offset, so a
+  // multi-day stay is billed correctly across the move and the tariff is
+  // never re-rated on transfer.
   sourceRoomSelect.innerHTML = '<option value="">Select source room</option>';
   let occupiedRoomCount = 0;
-  let hiddenStaleCount  = 0;
 
   Object.entries(rooms).forEach(([roomNum, info]) => {
     if (info.status !== "occupied") return;
-
-    // Apply the 24-hour eligibility window.
-    const ci = info.checkin_time;
-    if (!ci) {
-      hiddenStaleCount++;
-      return;
-    }
-    const ciMs = new Date(ci).getTime();
-    if (Number.isNaN(ciMs)) {
-      hiddenStaleCount++;
-      return;
-    }
-    if (_nowMs - ciMs > QUICK_TRANSFER_WINDOW_MS) {
-      hiddenStaleCount++;
-      return;
-    }
 
     const option = document.createElement("option");
     option.value = roomNum;
@@ -122,10 +111,7 @@ function showQuickTransferModal() {
   if (occupiedRoomCount === 0) {
     const option = document.createElement("option");
     option.disabled = true;
-    // Distinguish the two empty states so staff understand why the list is empty.
-    option.textContent = hiddenStaleCount > 0
-      ? "No rooms eligible — all stays are older than 24 hrs"
-      : "No occupied rooms available";
+    option.textContent = "No occupied rooms available";
     sourceRoomSelect.appendChild(option);
   }
 
@@ -173,31 +159,42 @@ function showQuickTransferModal() {
       quickBalanceInfo.style.display = "block";
     }
 
-    // Populate destination room dropdown (only vacant rooms)
+    // Populate destination room dropdown — only VACANT rooms in the SAME
+    // category as the source room. A transfer must not change the room's rate
+    // slab; otherwise the stay's billing shifts mid-stay (refund/excess). Genuine
+    // upgrades/downgrades are a different operation (check out + fresh check-in).
     destRoomSelect.innerHTML =
       '<option value="">Select destination room</option>';
     destRoomSelect.disabled = false;
 
+    const _srcCat = _roomCategoryOf(selectedRoom);
+
     let vacantRoomCount = 0;
 
     Object.entries(rooms).forEach(([roomNum, info]) => {
-      if (roomNum !== selectedRoom && info.status === "vacant") {
-        const option = document.createElement("option");
-        option.value = roomNum;
-        option.textContent = `Room ${roomNum}`;
-        destRoomSelect.appendChild(option);
-        vacantRoomCount++;
-      }
+      if (roomNum === selectedRoom || info.status !== "vacant") return;
+      // Same-category gate. If the category helper isn't available (load order),
+      // fall back to allowing all vacant rooms rather than blocking transfers.
+      if (_srcCat !== null && _roomCategoryOf(roomNum) !== _srcCat) return;
+
+      const option = document.createElement("option");
+      option.value = roomNum;
+      option.textContent = `Room ${roomNum}`;
+      destRoomSelect.appendChild(option);
+      vacantRoomCount++;
     });
 
     if (vacantRoomCount === 0) {
       const option = document.createElement("option");
       option.disabled = true;
-      option.textContent = "No vacant rooms available";
+      option.textContent = "No vacant rooms in the same category";
       destRoomSelect.appendChild(option);
       destRoomSelect.disabled = true;
 
-      showNotification("No vacant rooms available for transfer", "warning");
+      showNotification(
+        "No vacant rooms available in the same category for transfer",
+        "warning",
+      );
     }
   };
 
@@ -208,6 +205,14 @@ function showQuickTransferModal() {
 
     const roomData = rooms[sourceRoom];
     if (!roomData) { hintEl.style.display = "none"; return; }
+
+    // MMT / OTA stays are prepaid and settled with the OTA later — the guest is
+    // never charged or refunded at the desk for a room change, so don't show an
+    // upgrade-balance / downgrade-refund hint for them.
+    if (roomData.guest && roomData.guest.payment === "ota") {
+      hintEl.style.display = "none";
+      return;
+    }
 
     // Only relevant when guest hasn't completed a full 24-hr cycle yet
     // (renewal_count == 0 means no full cycle has been manually renewed)
@@ -243,66 +248,14 @@ function showQuickTransferModal() {
   // across repeated modal opens — this was the cause of the intermittent
   // AC-toggle-missing bug.
   destRoomSelect.onchange = function () {
-    const destRoom = destRoomSelect.value;
-    const sourceRoom = sourceRoomSelect.value;
-
-    // Hide hint when selection is cleared
+    // A transfer never changes the tariff — the guest's existing price carries
+    // over to the new room. There is therefore no editable price field, AC
+    // toggle, or upgrade/refund hint to show; keep them all hidden.
+    if (roomPriceSection) roomPriceSection.style.display = "none";
+    if (acToggleSection) acToggleSection.style.display = "none";
     const hintEl = document.getElementById("transfer-balance-hint");
-    if (!destRoom || !sourceRoom) {
-      if (roomPriceSection) roomPriceSection.style.display = "none";
-      if (acToggleSection) acToggleSection.style.display = "none";
-      if (hintEl) hintEl.style.display = "none";
-      return;
-    }
-
-    // Calculate suggested room price based on destination room
-    const guestCount = rooms[sourceRoom].guest.guests || 1;
-    // calculatePrice() returns the NON-AC base (matches check-in modal logic):
-    //   rooms 200-207: 1200 base, +600 if AC enabled = 1800
-    const basePrice = roomPricing.calculatePrice(destRoom, guestCount);
-    const acPrice   = basePrice + 600;
-
-    // Show AC toggle for premium AC rooms (200-206) BEFORE setting price.
-    // This matches the room-card AC indicator and the mid-stay "Add AC"
-    // button ranges. Coerce to number — destRoom is a <select> value
-    // (string) and lexical comparison is brittle for anything outside
-    // 3-digit rooms.
-    if (acToggleSection && newRoomAcToggle) {
-      const destNum = parseInt(destRoom, 10);
-      if (destNum >= 200 && destNum <= 206) {
-        // Default: non-AC (toggle unchecked), price = basePrice
-        newRoomAcToggle.checked = false;
-        acToggleSection.style.display = "block";
-
-        // AC ON → base + 600; AC OFF → base (same logic as check-in modal).
-        // .onchange replaces any prior closure so stale basePrice/acPrice
-        // values from a previous destination selection can't leak through.
-        newRoomAcToggle.onchange = function () {
-          const price = newRoomAcToggle.checked ? acPrice : basePrice;
-          if (newRoomPriceInput) {
-            newRoomPriceInput.value = price;
-          }
-          updateTransferBalanceHint(sourceRoom, price);
-        };
-      } else {
-        acToggleSection.style.display = "none";
-        // Clear any handler from a prior AC-room selection so it can't
-        // fire against the wrong destination later.
-        newRoomAcToggle.onchange = null;
-      }
-    }
-
-    // Initial price shown: basePrice (non-AC) for AC rooms since toggle starts off
-    const suggestedPrice = basePrice;
-
-    // Show room price section
-    if (roomPriceSection && newRoomPriceInput) {
-      newRoomPriceInput.value = suggestedPrice;
-      roomPriceSection.style.display = "block";
-    }
-
-    // Show balance/refund hint for same-cycle transfers
-    updateTransferBalanceHint(sourceRoom, suggestedPrice);
+    if (hintEl) hintEl.style.display = "none";
+    if (newRoomAcToggle) newRoomAcToggle.onchange = null;
   };
 
   // Set up form submission
@@ -313,10 +266,6 @@ function showQuickTransferModal() {
 
       const oldRoom = sourceRoomSelect.value;
       const newRoom = destRoomSelect.value;
-      const newPrice = newRoomPriceInput
-        ? parseInt(newRoomPriceInput.value)
-        : null;
-      const isAC = newRoomAcToggle ? newRoomAcToggle.checked : false;
 
       if (!oldRoom || !newRoom) {
         showNotification(
@@ -326,36 +275,29 @@ function showQuickTransferModal() {
         return;
       }
 
-      if (newPrice && newPrice <= 0) {
-        showNotification("Please enter a valid room price", "error");
-        return;
-      }
-
-      // Re-validate the 24-hour window at submit time. The dropdown was
-      // filtered when the modal opened, so this only matters if the modal
-      // was left open across the threshold — but it's cheap and prevents
-      // a stale UI from triggering a transfer that should no longer be
-      // allowed via the quick path.
-      const _src = rooms[oldRoom];
-      const _ci  = _src && _src.checkin_time;
-      const _ciMs = _ci ? new Date(_ci).getTime() : NaN;
-      if (
-        !_ci ||
-        Number.isNaN(_ciMs) ||
-        Date.now() - _ciMs > 24 * 60 * 60 * 1000
-      ) {
+      // Same-category guard at submit time (defends against a stale dropdown
+      // left open before this rule shipped, or manual DOM tampering).
+      const _oldCat = _roomCategoryOf(oldRoom);
+      const _newCat = _roomCategoryOf(newRoom);
+      if (_oldCat !== null && _newCat !== null && _oldCat !== _newCat) {
         showNotification(
-          "Quick transfer is only allowed within 24 hours of check-in. Use the regular transfer flow.",
-          "error"
+          "Room transfer is allowed only within the same room category.",
+          "error",
         );
         return;
       }
 
+      // (24-hour quick-transfer window removed — long-staying guests can be
+      // transferred via the quick path too. The backend bills multi-day stays
+      // correctly across the move.)
+
+      // Price/AC are never changed by a transfer — the server carries the
+      // guest's existing tariff over, so we send no new price or AC flag.
       processEnhancedRoomTransfer(
         oldRoom,
         newRoom,
-        newPrice,
-        isAC,
+        null,
+        false,
         quickTransferModal
       );
     };
@@ -519,3 +461,4 @@ if (typeof originalFetchData === "function") {
     return result;
   };
 }
+// end of shift.js

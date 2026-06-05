@@ -132,6 +132,32 @@
 }
 .register-table tbody tr:hover { background: #f7f9fc; }
 
+/* Pin the Action column (₹ / history / Doc icons) to the right edge so it stays
+   visible even when this wide table overflows horizontally. Without this the
+   icons scroll off-screen on narrower desktops and the horizontal scrollbar —
+   sitting at the bottom of a tall table — is hard to reach. Scoped to data rows
+   (.date-group-row) and the header; the collapsible date-group header spans all
+   columns via colspan and must NOT be pinned. */
+.register-table thead th:last-child,
+.register-table tr.date-group-row td:last-child {
+  position: sticky;
+  right: 0;
+}
+.register-table tr.date-group-row td:last-child {
+  background: #fff;
+  z-index: 5;
+  box-shadow: -6px 0 6px -5px rgba(0,0,0,0.18);
+}
+.register-table tbody tr.date-group-row:hover td:last-child {
+  background: #f7f9fc; /* match the row hover so the pinned cell blends in */
+}
+.register-table thead th:last-child {
+  /* Above both the sticky thead (z-index:10) and the pinned body cells. */
+  background: var(--primary, #3f51b5);
+  z-index: 12;
+  box-shadow: -6px 0 6px -5px rgba(0,0,0,0.18);
+}
+
 .date-group-header { background: #eef2f7; cursor: pointer; user-select: none; }
 .date-group-header td {
   padding: 0.42rem 0.7rem; font-weight: 700;

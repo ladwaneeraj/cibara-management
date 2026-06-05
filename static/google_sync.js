@@ -27,14 +27,27 @@ const firebaseConfig = (typeof window !== "undefined" && window.FIREBASE_CONFIG)
 const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);
 
+// Format a Date using LOCAL (IST) calendar components. The backend stores each
+// document's `date` as the IST calendar day, so the date-filtered listener
+// queries below must compare against the IST day too. `.toISOString()` would
+// convert to UTC first and, between 00:00 and 05:30 IST, point the listeners at
+// the previous day — silently dropping the current day's live updates.
+function _localYMD(d) {
+  d = d || new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
 // Today's date string (YYYY-MM-DD) — computed once at load time.
 // All date-filtered listeners use this so they all share the same boundary.
-const _todayStr = new Date().toISOString().split("T")[0];
+const _todayStr = _localYMD();
 
 // Tomorrow's date string (used by bookings listener)
 const _tomorrowDate = new Date();
 _tomorrowDate.setDate(_tomorrowDate.getDate() + 1);
-const _tomorrowStr = _tomorrowDate.toISOString().split("T")[0];
+const _tomorrowStr = _localYMD(_tomorrowDate);
 
 // ─── Rooms listener ────────────────────────────────────────────────────────
 // Skip the first snapshot (page already loaded via fetchData on startup).
@@ -150,9 +163,25 @@ onSnapshot(
     if (snapshot.metadata.hasPendingWrites || snapshot.metadata.fromCache) return;
 
     snapshot.docChanges().forEach((change) => {
-      if (change.type !== "added") return;   // edits/deletes handled by room sync
       const p = change.doc.data();
       if (!p || !p.date) return;
+
+      // Edits and deletes made on another device. The in-memory `logs` cache
+      // can't be surgically patched safely for these, so signal the
+      // Transaction tab to re-pull the affected range. Previously these were
+      // assumed to be "handled by room sync", but room sync re-renders rooms,
+      // not the transactions list — so remote edits/deletes never showed up
+      // on other devices.
+      if (change.type === "modified" || change.type === "removed") {
+        console.log("⚡ Remote payment " + change.type + " — refreshing transactions");
+        window.dispatchEvent(
+          new CustomEvent("cibaraTransactionRevised", { detail: { date: p.date } }),
+        );
+        showSyncToast("✏️ Transaction Updated");
+        return;
+      }
+
+      if (change.type !== "added") return;
 
       console.log("⚡ Remote payment added — patching transactions");
 
@@ -261,8 +290,19 @@ onSnapshot(
     if (snapshot.metadata.hasPendingWrites || snapshot.metadata.fromCache) return;
 
     snapshot.docChanges().forEach((change) => {
-      if (change.type !== "added") return;
       const exp = change.doc.data();
+      if (!exp) return;
+
+      if (change.type === "modified" || change.type === "removed") {
+        console.log("⚡ Remote expense " + change.type + " — refreshing transactions");
+        window.dispatchEvent(
+          new CustomEvent("cibaraTransactionRevised", { detail: { date: exp.date } }),
+        );
+        showSyncToast("✏️ Expense Updated");
+        return;
+      }
+
+      if (change.type !== "added") return;
       console.log("⚡ Remote expense added — notifying transactions");
       window.dispatchEvent(new CustomEvent("cibaraExpenseAdded", { detail: exp }));
       showSyncToast("🧾 Expense Added");
@@ -345,9 +385,9 @@ function _smoothInsertPaymentRow(p) {
 
   if (!dateHeader) {
     // Date group doesn't exist yet — prepend a new one at the top
-    const todayStr  = new Date().toISOString().split("T")[0];
+    const todayStr  = _localYMD();
     const yest      = new Date(); yest.setDate(yest.getDate() - 1);
-    const yesterStr = yest.toISOString().split("T")[0];
+    const yesterStr = _localYMD(yest);
     const dateObj   = new Date(p.date + "T00:00:00");
     const label     = dateObj.toLocaleDateString("en-IN", { weekday: "long", month: "short", day: "numeric" });
     const prefix    = p.date === todayStr ? "Today — " : p.date === yesterStr ? "Yesterday — " : "";

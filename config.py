@@ -29,6 +29,55 @@ logger = logging.getLogger(__name__)
 # Initialize Indian Timezone
 IST = pytz.timezone('Asia/Kolkata')
 
+# ══════════════════════════════════════════════════════════════════════════
+# ROOM CATEGORY MAP
+# ══════════════════════════════════════════════════════════════════════════
+# Server-side mirror of `_ROOM_CATEGORY_MAP` in static/script.js. Used to
+# enforce the "transfer only within the same category" rule on the backend.
+# KEEP IN SYNC with the JS map — if a room is recategorised there, update it
+# here too. AC is a price toggle within the "premium" category, not a separate
+# category, so 200–206 are all "premium" (matches the JS source of truth).
+def _build_room_category_map():
+    m = {}
+    # First-floor: Single Non-Attach (1–5, 13–20)
+    for n in [1, 2, 3, 4, 5]:
+        m[str(n)] = "single-non-attach"
+    for n in range(13, 21):
+        m[str(n)] = "single-non-attach"
+    # First-floor: Double Non-Attach (23–27)
+    for n in range(23, 28):
+        m[str(n)] = "double-non-attach"
+    # Second-floor: Premium (200–206 — AC toggle handled separately)
+    for n in range(200, 207):
+        m[str(n)] = "premium"
+    # Second-floor: Regular (207, 208–211, 215, 220–222)
+    m["207"] = "regular"
+    for n in range(208, 212):
+        m[str(n)] = "regular"
+    m["215"] = "regular"
+    for n in range(220, 223):
+        m[str(n)] = "regular"
+    # Second-floor: Deluxe (223–227)
+    for n in range(223, 228):
+        m[str(n)] = "deluxe"
+    # Second-floor: Single Attach (212–214, 216–219)
+    for n in range(212, 215):
+        m[str(n)] = "single-attach"
+    for n in range(216, 220):
+        m[str(n)] = "single-attach"
+    # Party Hall (228)
+    m["228"] = "party-hall"
+    return m
+
+
+_ROOM_CATEGORY_MAP = _build_room_category_map()
+
+
+def room_category(room_number):
+    """Return the rate-slab category for a room number (str/int). Unmapped
+    rooms fall back to "other" — matching the JS helper."""
+    return _ROOM_CATEGORY_MAP.get(str(room_number), "other")
+
 # Global cache for frequently accessed data
 _cache = {}
 _cache_lock = threading.Lock()

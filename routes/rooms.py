@@ -7,6 +7,7 @@ get_history, get_totals_only
 from flask import Blueprint, request, jsonify
 from datetime import datetime, timedelta
 import logging
+import re
 import uuid
 import time as _time
 
@@ -20,7 +21,7 @@ from config import (
     get_totals, is_log_from_current_stay, get_next_serial_number,
     store_transaction_metadata, create_bill_record,
     find_serial_number_for_checkin, _build_active_entry_fast, _find_serial_fast,
-    _batch_fill_serials
+    _batch_fill_serials, room_category
 )
 from services import payment_service, customer_service, expense_service, bills_service
 from services.auth_service import requires_permission, login_required
@@ -128,6 +129,15 @@ def checkin():
                 "last_renewal_time": None,
                 "last_renewal_date": None,
                 "checkin_time_edit_count": 0,
+                # Walk-in / direct check-in → this is a NORMAL hotel stay.
+                # The room doc is reused across stays, so if the previous
+                # occupant was an MMT/OTA booking these fields would still
+                # read "mmt"/"ota" and the new bill would inherit the wrong
+                # source tag at checkout (billing.py copies booking_source
+                # from the room). Reset them explicitly here so a direct
+                # check-in is never mislabelled as MMT.
+                "booking_source": "normal",
+                "payment_source": "hotel",
                 # Pointer to the draft stay doc so /checkout can finalize
                 # the existing record instead of creating a new bill.
                 "active_bill_id": stay_id,
@@ -1845,6 +1855,97 @@ def update_checkin_time():
         logger.error(f"Error updating check-in time: {str(e)}")
         return jsonify(success=False, message=f"Error updating check-in time: {str(e)}")
 
+
+@rooms_bp.route("/update_guest_mobile", methods=["POST"])
+def update_guest_mobile():
+    """
+    Set / correct the guest mobile number on an OCCUPIED room.
+
+    Body: { room: "101", mobile: "9876543210" }
+
+    Primary use case: MMT (and other OTA) vouchers mask the guest phone, so an
+    auto-ingested booking checks in with an empty mobile. Staff need to capture
+    the real number after check-in so checkout, the call link, and any later
+    follow-up have it.
+
+    Auth: admin or manager (same room-edit tier as /update_checkin_time).
+    Housekeeping and unknown roles are rejected.
+    """
+    try:
+        data_json = request.json or {}
+        room = data_json.get("room")
+        # Keep digits only — strip spaces, dashes, a leading +91, etc.
+        raw_mobile = str(data_json.get("mobile", "")).strip()
+        mobile = re.sub(r"\D", "", raw_mobile)
+        # Drop a leading country code (91) if the result is 12 digits.
+        if len(mobile) == 12 and mobile.startswith("91"):
+            mobile = mobile[2:]
+
+        if not room:
+            return jsonify(success=False, message="Room is required."), 400
+
+        if len(mobile) != 10:
+            return jsonify(
+                success=False,
+                message="Enter a valid 10-digit mobile number.",
+            ), 400
+
+        room_doc = rooms_ref.document(room).get()
+        if not room_doc.exists:
+            return jsonify(success=False, message="Room not found."), 404
+
+        room_data = room_doc.to_dict()
+        if room_data.get("status") != "occupied" or not room_data.get("guest"):
+            return jsonify(success=False, message="Room is not occupied."), 400
+
+        # ── RBAC: admin or manager only (mirrors /update_checkin_time) ────────
+        from flask import g as _g
+        _user = getattr(_g, "current_user", None) or {}
+        _role = _user.get("role")
+        if _role and _role not in ("admin", "manager"):
+            return jsonify(success=False, message="Forbidden"), 403
+
+        old_mobile = (room_data.get("guest") or {}).get("mobile", "")
+
+        _ed_user = (_safe_user() or {}).get("userId") or "system"
+        _ed_now = datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S")
+
+        # Nested-field update — leaves the rest of the guest object intact.
+        rooms_ref.document(room).update({
+            "guest.mobile": mobile,
+            "lastModifiedBy": _ed_user,
+            "lastModifiedAt": _ed_now,
+        })
+
+        # Keep the draft stay/bill doc's guest_mobile in sync so checkout and
+        # the generated invoice show the corrected number.
+        _abid = room_data.get("active_bill_id")
+        if _abid:
+            try:
+                bills_service.update(_abid, {"guest_mobile": mobile})
+            except Exception as _e:
+                logger.warning(
+                    f"update_guest_mobile: failed to sync draft bill "
+                    f"{_abid} for room {room}: {_e}"
+                )
+
+        invalidate_rooms_and_totals()
+
+        logger.info(
+            f"Guest mobile updated for room {room}: {old_mobile!r} -> {mobile!r}"
+        )
+        write_log(
+            "room.guest_mobile_update",
+            target_collection="rooms",
+            target_id=str(room),
+            metadata={"old_mobile": old_mobile, "new_mobile": mobile},
+        )
+        return jsonify(success=True, message="Mobile number updated.", mobile=mobile)
+    except Exception as e:
+        logger.error(f"Error updating guest mobile: {str(e)}", exc_info=True)
+        return jsonify(success=False, message=f"Error updating guest mobile: {str(e)}"), 500
+
+
 @rooms_bp.route("/add_room", methods=["POST"])
 def add_room():
     try:
@@ -1979,6 +2080,23 @@ def transfer_room():
         if rooms_dict[new_room]["status"] != "vacant":
             return jsonify(success=False, message="Destination room is not vacant.")
 
+        # ── Same-category guard ──────────────────────────────────────────────
+        # A transfer must stay within the same rate-slab category so the stay's
+        # billing doesn't change mid-stay. Cross-category moves (genuine
+        # upgrade/downgrade) are a different operation and are blocked here as
+        # defense-in-depth behind the filtered dropdown in shift.js.
+        _old_cat = room_category(old_room)
+        _new_cat = room_category(new_room)
+        if _old_cat != _new_cat:
+            return jsonify(
+                success=False,
+                message=(
+                    f"Transfer not allowed: Room {old_room} ({_old_cat}) and "
+                    f"Room {new_room} ({_new_cat}) are different categories. "
+                    "Transfers are only permitted within the same category."
+                ),
+            ), 400
+
         guest_name = rooms_dict[old_room]["guest"]["name"]
         guest_mobile = rooms_dict[old_room]["guest"]["mobile"]
         checkin_time = rooms_dict[old_room]["checkin_time"]
@@ -2023,36 +2141,25 @@ def transfer_room():
         # renewal_count carries over unchanged — still used for non-transfer stays
         # ────────────────────────────────────────────────────────────────────────
 
-        # ── Same-cycle upgrade/downgrade: adjust room balance ───────────────────
-        # When old_days == 0 the guest hasn't completed a full 24-hr cycle in the
-        # old room, so they already paid for it at the OLD rate. We adjust the
-        # balance by the price difference so the room card instantly shows what
-        # the guest still owes (upgrade) or is owed back (downgrade).
-        # e.g. paid ₹700 for Rm 211, moving to ₹1800 Rm 204 → balance += ₹1100
+        # ── A transfer NEVER re-rates the stay ──────────────────────────────────
+        # Policy: shifting changes only the physical room, never the tariff. The
+        # guest's existing price carries over unchanged (new_room_data is a copy
+        # of the old room, so guest["price"] is already correct), so there is no
+        # price difference and the room balance is never adjusted on transfer.
+        # Same-category enforcement above guarantees the destination is on the
+        # same rate slab anyway. Any client-supplied new_price / is_ac is
+        # intentionally ignored — the server is authoritative here.
         balance_adjustment = 0
-        if old_days == 0 and new_price:
-            balance_adjustment = int(new_price) - old_price
-            new_room_data["balance"] = (new_room_data.get("balance") or 0) + balance_adjustment
-        # ────────────────────────────────────────────────────────────────────────
 
-        if new_price:
-            new_room_data["guest"]["price"] = int(new_price)
-
-        # AC handling for the destination room.
-        # Premium AC range is 200-206 — must match shift.js toggle visibility
-        # and the room-card AC indicator. Use int comparison (string ">="
-        # comparison breaks for any room number outside the 3-digit window).
+        # isAC carries over unchanged. Defensive only: if the destination is
+        # somehow not AC-capable (cannot happen under same-category, since AC
+        # lives within the "premium" category), drop a stale AC flag so the
+        # room card doesn't show a phantom AC indicator.
         try:
             _new_room_num = int(new_room)
         except (TypeError, ValueError):
             _new_room_num = -1
-        if 200 <= _new_room_num <= 206:
-            new_room_data["guest"]["isAC"] = bool(is_ac)
-        else:
-            # Destination is NOT AC-capable. Clear any isAC flag carried
-            # over from the source room so we don't end up with a phantom
-            # AC indicator on a non-premium room (e.g. transferring an AC
-            # guest from 204 → 211 must drop the flag).
+        if not (200 <= _new_room_num <= 206):
             new_room_data["guest"]["isAC"] = False
 
         batch = db.batch()

@@ -689,6 +689,280 @@ def _store_image(mobile_clean: str, filename: str, image_bytes: bytes) -> str:
 # HELPERS
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# GUEST DEMOGRAPHICS — pincode + DOB extracted from ID documents
+# ---------------------------------------------------------------------------
+#
+# Storage model (per customer doc):
+#   guest_demographics : [ {source_url, name, dob, birth_year, pincode,
+#                           extracted_at}, ... ]   one entry per ID document
+#   pincode, dob       : convenience top-level copies of the FIRST known value,
+#                        set only when blank so manual edits are never clobbered.
+#
+# Age is deliberately NEVER stored — it is computed from dob / birth_year at
+# read time so it can't go stale.
+
+def apply_id_extraction(mobile: str, extraction: dict, source_url: str = "",
+                        *, sync: bool = False):
+    """
+    Merge an ID-OCR extraction into a customer's demographics.
+
+    `extraction` is the dict returned by ocr_service.extract_id_fields()['fields']:
+        {name, dob, birth_year, pincode, doc_kind}
+
+    Idempotent: re-extracting the same source_url replaces that entry instead
+    of appending a duplicate (so the backfill script can be re-run safely).
+
+    Fire-and-forget by default; pass sync=True to block (used by the backfill
+    script so failures surface).
+    """
+    if _customers_ref is None:
+        return
+    clean = _clean_mobile(mobile)
+    if not clean:
+        return
+    if not isinstance(extraction, dict):
+        return
+    # Nothing useful extracted → skip the write entirely.
+    if not (extraction.get("dob") or extraction.get("birth_year")
+            or extraction.get("pincode")):
+        return
+
+    if sync:
+        _apply_id_extraction(clean, extraction, source_url)
+    else:
+        threading.Thread(
+            target=_apply_id_extraction,
+            args=(clean, extraction, source_url),
+            daemon=True,
+        ).start()
+
+
+def _apply_id_extraction(mobile: str, extraction: dict, source_url: str):
+    try:
+        entry = {
+            "source_url":   source_url or "",
+            "name":         extraction.get("name") or "",
+            "dob":          extraction.get("dob"),          # "YYYY-MM-DD" | None
+            "birth_year":   extraction.get("birth_year"),   # int | None
+            "pincode":      extraction.get("pincode"),      # "6-digit" | None
+            "doc_kind":     extraction.get("doc_kind") or "",
+            "extracted_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+        doc_ref = _customers_ref.document(mobile)
+
+        @_fs.transactional
+        def _txn(transaction, d_ref):
+            snap = d_ref.get(transaction=transaction)
+            data = snap.to_dict() if snap.exists else {}
+            demographics = list(data.get("guest_demographics", []) or [])
+
+            # Replace an entry with the same source_url (idempotent), else append.
+            replaced = False
+            if source_url:
+                for i, e in enumerate(demographics):
+                    if e.get("source_url") == source_url:
+                        demographics[i] = entry
+                        replaced = True
+                        break
+            if not replaced:
+                demographics.append(entry)
+
+            updates = {"guest_demographics": demographics}
+
+            # Set top-level convenience copies only when currently blank.
+            if entry["pincode"] and not data.get("pincode"):
+                updates["pincode"] = entry["pincode"]
+            if entry["dob"] and not data.get("dob"):
+                updates["dob"] = entry["dob"]
+
+            if snap.exists:
+                transaction.update(d_ref, updates)
+            else:
+                # Minimal stub so a demographics-only write doesn't create a
+                # half-formed customer; check-in enriches the rest later.
+                base = {
+                    "mobile": mobile, "name": entry["name"], "address": "",
+                    "id_doc_urls": [source_url] if source_url else [],
+                    "total_stays": 0, "total_spent": 0,
+                    "first_visit": entry["extracted_at"], "last_stay_date": "",
+                }
+                base.update(updates)
+                transaction.set(d_ref, base)
+
+        _txn(_db.transaction(), doc_ref)
+        logger.info(f"CustomerService: demographics applied for {mobile} "
+                    f"(pincode={entry['pincode']}, dob={entry['dob']}, "
+                    f"birth_year={entry['birth_year']})")
+    except Exception as e:
+        logger.error(f"CustomerService apply_id_extraction failed for {mobile}: {e}")
+
+
+# ── Age helpers ─────────────────────────────────────────────────────────────
+
+def _age_from(dob, birth_year, today):
+    """
+    Compute age in whole years. Prefers a precise dob; falls back to
+    birth_year. Returns an int in [0, 120], or None if neither is usable.
+    """
+    if dob:
+        try:
+            d = datetime.strptime(str(dob), "%Y-%m-%d").date()
+            age = today.year - d.year - ((today.month, today.day) < (d.month, d.day))
+            if 0 <= age <= 120:
+                return age
+        except (ValueError, TypeError):
+            pass
+    if birth_year:
+        try:
+            age = today.year - int(birth_year)
+            if 0 <= age <= 120:
+                return age
+        except (TypeError, ValueError):
+            pass
+    return None
+
+
+# Age buckets, in display order. (label, lower_inclusive, upper_inclusive)
+_AGE_BUCKETS = [
+    ("<18", 0, 17), ("18-25", 18, 25), ("26-35", 26, 35),
+    ("36-45", 36, 45), ("46-55", 46, 55), ("56-65", 56, 65),
+    ("65+", 66, 120),
+]
+
+
+def _bucket_for(age: int) -> str:
+    for label, lo, hi in _AGE_BUCKETS:
+        if lo <= age <= hi:
+            return label
+    return "65+"
+
+
+# Module-level TTL cache for the aggregate — a full collection scan is the
+# expensive part, and analytics is read far more often than demographics change.
+_AGG_CACHE = {"data": None, "ts": 0.0}
+_AGG_TTL_SECONDS = 300  # 5 minutes
+
+
+def get_demographics_aggregate(force: bool = False) -> dict:
+    """
+    Scan the customers collection and aggregate guest demographics for the
+    analytics dashboard.
+
+    Returns:
+        {
+          "age": {
+            "buckets":   [{"label": "26-35", "count": N}, ...],
+            "average":   float | None,
+            "count":     int,          # guests with a known age
+          },
+          "pincodes": [
+            {"pincode": "560001", "guests": N, "visits": M}, ...  # sorted desc
+          ],
+          "totals": {
+            "customers_scanned": int,
+            "with_demographics": int,
+            "generated_at":      iso8601,
+          }
+        }
+
+    A 5-minute in-process cache avoids rescanning on every dashboard load.
+    """
+    import time as _time
+    now_ts = _time.time()
+    if (not force and _AGG_CACHE["data"] is not None
+            and (now_ts - _AGG_CACHE["ts"]) < _AGG_TTL_SECONDS):
+        return _AGG_CACHE["data"]
+
+    empty = {
+        "age": {"buckets": [{"label": l, "count": 0} for l, _, _ in _AGE_BUCKETS],
+                "average": None, "count": 0},
+        "pincodes": [],
+        "totals": {"customers_scanned": 0, "with_demographics": 0,
+                   "generated_at": datetime.now(timezone.utc).isoformat()},
+    }
+    if _customers_ref is None:
+        return empty
+
+    try:
+        today = datetime.now(timezone.utc).date()
+        bucket_counts = {label: 0 for label, _, _ in _AGE_BUCKETS}
+        age_sum = 0
+        age_n = 0
+        pin_guests = {}   # pincode -> guest count (per demographic entry)
+        pin_visits = {}   # pincode -> visit count (total_stays, once per customer)
+        scanned = 0
+        with_demo = 0
+
+        # Pull only the fields we need (saves bandwidth; read count is the same).
+        query = _customers_ref.select(
+            ["guest_demographics", "pincode", "dob", "total_stays"]
+        )
+        for snap in query.stream():
+            scanned += 1
+            d = snap.to_dict() or {}
+            entries = list(d.get("guest_demographics", []) or [])
+
+            # Back-compat: if no list yet but a top-level pincode/dob exists,
+            # treat that as a single implicit entry.
+            if not entries and (d.get("pincode") or d.get("dob")):
+                entries = [{"pincode": d.get("pincode"), "dob": d.get("dob"),
+                            "birth_year": None}]
+
+            if not entries:
+                continue
+            with_demo += 1
+
+            stays = d.get("total_stays") or 0
+            primary_pin_done = False
+            for e in entries:
+                # Age → buckets + running average
+                age = _age_from(e.get("dob"), e.get("birth_year"), today)
+                if age is not None:
+                    bucket_counts[_bucket_for(age)] += 1
+                    age_sum += age
+                    age_n += 1
+                # Pincode → guest count (each entry) + visit weight (once)
+                pin = e.get("pincode")
+                if pin:
+                    pin_guests[pin] = pin_guests.get(pin, 0) + 1
+                    if not primary_pin_done:
+                        pin_visits[pin] = pin_visits.get(pin, 0) + max(stays, 1)
+                        primary_pin_done = True
+
+        pincodes = sorted(
+            ({"pincode": p, "guests": g, "visits": pin_visits.get(p, g)}
+             for p, g in pin_guests.items()),
+            key=lambda x: (-x["guests"], -x["visits"], x["pincode"]),
+        )
+
+        result = {
+            "age": {
+                "buckets": [{"label": l, "count": bucket_counts[l]}
+                            for l, _, _ in _AGE_BUCKETS],
+                "average": round(age_sum / age_n, 1) if age_n else None,
+                "count": age_n,
+            },
+            "pincodes": pincodes,
+            "totals": {
+                "customers_scanned": scanned,
+                "with_demographics": with_demo,
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+            },
+        }
+        _AGG_CACHE["data"] = result
+        _AGG_CACHE["ts"] = now_ts
+        return result
+    except Exception as e:
+        logger.error(f"CustomerService get_demographics_aggregate failed: {e}")
+        return empty
+
+
+# ---------------------------------------------------------------------------
+# HELPERS
+# ---------------------------------------------------------------------------
+
 def _clean_mobile(raw: str) -> str:
     """
     Normalise a mobile number:

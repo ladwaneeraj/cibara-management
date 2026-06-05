@@ -149,7 +149,8 @@ def mmt_create_test_booking():
         booking = mmt.build_booking_from_voucher(parsed, now=now)
 
         room, is_ac, reason = mmt._assign_room(
-            bookings_ref, rooms_ref, today, co, room_type, today)
+            bookings_ref, rooms_ref, today, co, room_type, today,
+            booking.get("guest_count", 1))
         if room:
             booking["room"] = room
             booking["is_ac"] = is_ac

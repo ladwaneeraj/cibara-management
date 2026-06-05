@@ -2064,11 +2064,20 @@ function initializeUpdateBookingForm() {
         ? _updateAcToggle.checked
         : false;
 
-    // Validation
+    // Look up the booking first so phone-number validation can be relaxed for
+    // OTA (MMT) bookings, whose vouchers often don't carry a guest phone.
+    const booking = bookings.find((b) => b.booking_id === bookingId);
+    if (!booking) {
+      showNotification("Booking not found", "error");
+      return;
+    }
+    // Validation — guest_mobile is intentionally NOT required on update. The
+    // backend never required it, and MMT/OTA bookings often arrive with no
+    // phone number. (New walk-in booking creation still asks for it in its
+    // own form; this only relaxes the EDIT/update form.)
     if (
       !bookingId ||
       !guestName ||
-      !guestMobile ||
       !checkInDate ||
       !checkInTime ||
       !checkOutDate ||
@@ -2076,12 +2085,6 @@ function initializeUpdateBookingForm() {
       !totalAmount
     ) {
       showNotification("Please fill all required fields", "error");
-      return;
-    }
-
-    const booking = bookings.find((b) => b.booking_id === bookingId);
-    if (!booking) {
-      showNotification("Booking not found", "error");
       return;
     }
 
@@ -3307,6 +3310,13 @@ function sendWhatsAppBookingConfirmation() {
 • Payment already settled via MMT`;
     }
 
+    // Advance is non-refundable — only relevant when the guest actually paid an
+    // advance at the desk (MMT/OTA stays are settled via the OTA, not here).
+    const advanceReminder =
+      (!isMmt && paidAmount > 0)
+        ? "\n• Advance amount paid is non-refundable"
+        : "";
+
     // ── Google Maps ───────────────────────────────────────────────────────
     const mapsLink = "https://maps.app.goo.gl/Mz5rTrvC3ctyMmUt5";
 
@@ -3332,6 +3342,7 @@ ${mapsLink}
 
 🔔 *Important Reminders:*
 • Please carry a valid govt. photo ID (Aadhaar / Passport / DL)
+• Room number is subject to availability and may change on arrival${advanceReminder}
 • We offer *24-hour checkout* — check-out time matches your check-in time
 • Contact us if you need any assistance
 

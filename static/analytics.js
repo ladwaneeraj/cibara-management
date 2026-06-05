@@ -163,6 +163,248 @@ async function generateAnalytics(reportData) {
   // is accurate. If the fetch failed (billsPayload === null) the chart
   // renders an empty state.
   generateRoomTypeRevenueChart(billsPayload);
+
+  // Guest demographics (pincode footfall + age) — all-time, independent of
+  // the date filter, sourced from ID-document OCR. Best-effort: any failure
+  // (no permission, no data, OCR off) just leaves an empty-state card.
+  loadDemographicsCharts();
+}
+
+// ── Guest demographics: footfall by pincode + age distribution ───────────────
+async function loadDemographicsCharts() {
+  const pinCanvas = document.getElementById("pincode-footfall-chart");
+  const ageCanvas = document.getElementById("guest-age-chart");
+  if (!pinCanvas && !ageCanvas) return;
+
+  let agg = null;
+  try {
+    const resp = await apiFetch("/customer_analytics", { method: "GET" });
+    if (resp.ok) {
+      const d = await resp.json();
+      if (d && d.success) agg = d;
+    }
+  } catch (e) {
+    console.warn("Demographics unavailable:", e);
+  }
+
+  if (!agg) {
+    if (pinCanvas) showChartEmpty(pinCanvas, "Guest demographics unavailable");
+    if (ageCanvas) showChartEmpty(ageCanvas, "Guest demographics unavailable");
+    setHeatmapMessage("Guest demographics unavailable");
+    return;
+  }
+  generatePincodeFootfallChart(agg);
+  generateGuestAgeChart(agg);
+  generatePincodeHeatmap(agg);
+}
+
+// Keep one Leaflet map instance + its layers across re-renders.
+let _heatMap = null;
+let _heatLayer = null;
+let _heatMarkers = null;
+
+function setHeatmapMessage(msg) {
+  const el = document.getElementById("pincode-heatmap");
+  if (!el || _heatMap) return; // don't stomp a live map
+  el.innerHTML =
+    `<div style="display:flex;height:100%;align-items:center;justify-content:center;
+      color:#8a8a8a;font-size:0.9rem;text-align:center;padding:1rem">
+      <div><i class="fas fa-map-marked-alt" style="font-size:1.6rem;opacity:0.5"></i>
+      <div style="margin-top:0.5rem">${msg}</div></div></div>`;
+}
+
+function generatePincodeHeatmap(agg) {
+  const el = document.getElementById("pincode-heatmap");
+  if (!el) return;
+
+  if (typeof L === "undefined") {
+    setHeatmapMessage("Map library still loading — click Apply again");
+    return;
+  }
+
+  // The analytics view is rebuilt on each Apply, so the map div may be a new
+  // element. If our cached map is bound to a detached/old node, tear it down.
+  if (_heatMap && _heatMap.getContainer() !== el) {
+    try { _heatMap.remove(); } catch (e) {}
+    _heatMap = null; _heatLayer = null; _heatMarkers = null;
+  }
+
+  const points = (agg.geo_points || []);
+  if (points.length === 0) {
+    const msg = !agg.geo_available
+      ? "PIN-code map data not installed — run scripts/build_pincode_geo.py (a city-level seed is bundled)"
+      : (agg.ocr_enabled
+          ? "No locatable PIN codes yet — upload guest IDs or run the backfill"
+          : "ID-OCR is turned off (set GEMINI_API_KEY / ID_OCR_ENABLED)");
+    setHeatmapMessage(msg);
+    return;
+  }
+
+  // Init the map once.
+  if (!_heatMap) {
+    el.innerHTML = "";
+    _heatMap = L.map(el, { scrollWheelZoom: false, attributionControl: true })
+      .setView([22.5, 80], 4); // centred on India
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      maxZoom: 18,
+      attribution: "&copy; OpenStreetMap",
+    }).addTo(_heatMap);
+  }
+
+  // Clear previous data layers.
+  if (_heatLayer) { _heatMap.removeLayer(_heatLayer); _heatLayer = null; }
+  if (_heatMarkers) { _heatMap.removeLayer(_heatMarkers); _heatMarkers = null; }
+
+  const maxGuests = points.reduce((m, p) => Math.max(m, p.guests), 0) || 1;
+
+  // Heat layer — intensity weighted by guest count (normalised 0..1).
+  if (typeof L.heatLayer === "function") {
+    const heatData = points.map((p) => [p.lat, p.lon, p.guests / maxGuests]);
+    _heatLayer = L.heatLayer(heatData, { radius: 28, blur: 20, maxZoom: 10 })
+      .addTo(_heatMap);
+  }
+
+  // Circle markers for precise hover/click detail (sized by footfall).
+  _heatMarkers = L.layerGroup();
+  points.forEach((p) => {
+    const r = 5 + 18 * Math.sqrt(p.guests / maxGuests);
+    L.circleMarker([p.lat, p.lon], {
+      radius: r, color: "#0369a1", weight: 1,
+      fillColor: "#0ea5e9", fillOpacity: 0.55,
+    })
+      .bindPopup(
+        `<strong>${p.place || p.pincode}</strong><br>PIN ${p.pincode}` +
+        `${p.state ? "<br>" + p.state : ""}` +
+        `<br>${p.guests} guest${p.guests === 1 ? "" : "s"}` +
+        `${p.visits ? " · " + p.visits + " visits" : ""}`
+      )
+      .addTo(_heatMarkers);
+  });
+  _heatMarkers.addTo(_heatMap);
+
+  // Fit to the spread of points, and fix sizing now the container is visible.
+  try {
+    const bounds = L.latLngBounds(points.map((p) => [p.lat, p.lon]));
+    if (bounds.isValid()) _heatMap.fitBounds(bounds.pad(0.2), { maxZoom: 9 });
+  } catch (e) { /* keep default India view */ }
+  setTimeout(() => { try { _heatMap.invalidateSize(); } catch (e) {} }, 200);
+}
+
+function generatePincodeFootfallChart(agg) {
+  const canvas = document.getElementById("pincode-footfall-chart");
+  if (!canvas) return;
+  if (canvas.chart) { canvas.chart.destroy(); canvas.chart = null; }
+
+  const rows = (agg.pincodes || []).slice(0, 15); // top 15 areas
+  if (rows.length === 0) {
+    const hint = agg.ocr_enabled
+      ? "No PIN codes extracted yet — upload guest IDs or run the backfill"
+      : "ID-OCR is turned off (set GEMINI_API_KEY / ID_OCR_ENABLED)";
+    showChartEmpty(canvas, hint);
+    return;
+  }
+
+  const labels = rows.map((r) => r.pincode);
+  const values = rows.map((r) => r.guests);
+
+  const ctx = canvas.getContext("2d");
+  canvas.chart = new Chart(ctx, {
+    type: "bar",
+    data: {
+      labels,
+      datasets: [{
+        label: "Guests",
+        data: values,
+        backgroundColor: "rgba(14, 165, 233, 0.75)",
+        borderColor: "#0ea5e9",
+        borderWidth: 1,
+      }],
+    },
+    options: {
+      indexAxis: "y", // horizontal bars — PIN codes read better stacked
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            label: (c) => {
+              const r = rows[c.dataIndex] || {};
+              return ` ${r.guests} guest${r.guests === 1 ? "" : "s"}` +
+                     (r.visits ? ` · ${r.visits} visits` : "");
+            },
+          },
+        },
+      },
+      scales: {
+        x: { beginAtZero: true, ticks: { precision: 0 } },
+      },
+    },
+  });
+}
+
+function generateGuestAgeChart(agg) {
+  const canvas = document.getElementById("guest-age-chart");
+  if (!canvas) return;
+  if (canvas.chart) { canvas.chart.destroy(); canvas.chart = null; }
+
+  const age = agg.age || {};
+  const buckets = age.buckets || [];
+  const total = age.count || 0;
+
+  // Reflect the average age in the card header.
+  const titleEl = canvas.closest(".chart-card")?.querySelector(".chart-hdr-title");
+  if (titleEl) {
+    titleEl.textContent = age.average != null
+      ? `Guest Age Distribution — avg ${age.average} yrs (${total})`
+      : "Guest Age Distribution";
+  }
+
+  if (total === 0) {
+    const hint = agg.ocr_enabled
+      ? "No ages extracted yet — upload guest IDs or run the backfill"
+      : "ID-OCR is turned off (set GEMINI_API_KEY / ID_OCR_ENABLED)";
+    showChartEmpty(canvas, hint);
+    return;
+  }
+
+  const labels = buckets.map((b) => b.label);
+  const values = buckets.map((b) => b.count);
+
+  const ctx = canvas.getContext("2d");
+  canvas.chart = new Chart(ctx, {
+    type: "bar",
+    data: {
+      labels,
+      datasets: [{
+        label: "Guests",
+        data: values,
+        backgroundColor: "rgba(22, 163, 74, 0.7)",
+        borderColor: "#16a34a",
+        borderWidth: 1,
+      }],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            label: (c) => {
+              const pct = total ? ((c.raw / total) * 100).toFixed(0) : 0;
+              return ` ${c.raw} guests (${pct}%)`;
+            },
+          },
+        },
+      },
+      scales: {
+        y: { beginAtZero: true, ticks: { precision: 0 } },
+      },
+    },
+  });
 }
 
 // ── 8-card KPI grid ──────────────────────────────────────────────────────────
@@ -1202,6 +1444,25 @@ function initializeAnalyticsView() {
     <div class="chart-row chart-row-2">
       ${chartCard("top-services-chart","#f59e0b","fas fa-concierge-bell","Top Add-on Services", 280)}
       ${chartCard("room-type-revenue-chart","#8b5cf6","fas fa-th-large","Revenue by Room Type", 280)}
+    </div>
+
+    <!-- Row 5a: Guest footfall heatmap (geographic, all-time). -->
+    <div class="chart-card" style="height:440px">
+      <div class="chart-hdr">
+        <i class="chart-hdr-icon fas fa-map-marked-alt" style="color:#0ea5e9"></i>
+        <span class="chart-hdr-title">Guest Footfall Heatmap</span>
+      </div>
+      <div class="chart-body" style="position:relative;padding:0">
+        <div id="pincode-heatmap" style="position:absolute;inset:0;border-radius:8px;overflow:hidden"></div>
+      </div>
+    </div>
+
+    <!-- Row 5b: Guest demographics (from ID documents — all-time, not
+         date-filtered). Footfall by area + age profile for marketing /
+         pricing decisions. -->
+    <div class="chart-row chart-row-2">
+      ${chartCard("pincode-footfall-chart","#0ea5e9","fas fa-map-marker-alt","Footfall by Area (PIN code)", 320)}
+      ${chartCard("guest-age-chart","#16a34a","fas fa-users","Guest Age Distribution", 320)}
     </div>
 
     <!-- Billing analytics strip (hidden until /revenue_report loads) -->

@@ -3756,6 +3756,43 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
       console.warn("[Bills] export: list_advances failed", err);
     }
 
+    // Pull GST-bearing expenses (input tax credit) for the same period. The
+    // backend enforces the data.export permission, so this is admin/manager
+    // only. Best-effort — a failure just yields an empty ITC sheet.
+    let gstExpenses = [];
+    try {
+      const expRes = await apiFetch("/expenses_gst", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          start_date: state.dateRange.start,
+          end_date:   state.dateRange.end,
+        }),
+      });
+      if (!expRes.ok) {
+        // Surface the real reason instead of silently shipping an empty sheet —
+        // 403 = no data.export permission, 404 = endpoint not deployed yet,
+        // 5xx = server error. This turns "the expenses just don't show" into a
+        // diagnosable message.
+        const _why = expRes.status === 403
+          ? "you don't have export permission (admin only)"
+          : expRes.status === 404
+            ? "the expenses endpoint isn't deployed yet — redeploy the server"
+            : `server error ${expRes.status}`;
+        console.warn("[Bills] expenses_gst HTTP", expRes.status);
+        alert(`Note: the GST Expenses (ITC) sheet could not be loaded — ${_why}. The rest of the workbook will still export.`);
+      } else {
+        const expData = await expRes.json();
+        if (expData && expData.success) {
+          gstExpenses = expData.expenses || [];
+        } else {
+          console.warn("[Bills] expenses_gst returned", expData);
+        }
+      }
+    } catch (err) {
+      console.warn("[Bills] export: expenses_gst failed", err);
+    }
+
     // Buckets for B2C summary / HSN sheets
     const b = {
       accom5:     { taxable: 0, cgst: 0, sgst: 0, igst: 0 },
@@ -4244,6 +4281,73 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
       "CGST": 0, "SGST": 0, "IGST": 0, "Method": "",
     }]);
 
+    // ── Expenses (ITC) — purchases carrying GST in the period ─────────────────
+    // Lists ONLY expenses flagged with GST, each with its full tax breakdown
+    // and a clickable link to the uploaded bill, so a CA can claim input tax
+    // credit in GSTR-3B. CGST/SGST vs IGST is inferred from the vendor GSTIN's
+    // state code (29 = Karnataka, the hotel's home state → intra-state
+    // CGST/SGST; any other state → IGST). No GSTIN on file → assume intra-state.
+    const _isIntraState = (gstin) => {
+      const code = String(gstin || "").trim().slice(0, 2);
+      return code === "" || code === "29";
+    };
+    const itcRows = (gstExpenses || []).map((e, i) => {
+      // booking.com commission stores its GST under separate fields; fall back.
+      const taxable = r2(
+        e.taxable_amount != null ? e.taxable_amount
+          : (e.commission_amount != null ? e.commission_amount : 0),
+      );
+      const gstTotal = r2(
+        (e.gst_amount != null && e.gst_amount > 0) ? e.gst_amount
+          : (e.commission_gst || 0),
+      );
+      const intra = _isIntraState(e.vendor_gstin);
+      const cgst = intra ? r2(gstTotal / 2) : 0;
+      const sgst = intra ? r2(gstTotal / 2) : 0;
+      const igst = intra ? 0 : gstTotal;
+      return {
+        "Sr No":           i + 1,
+        "Date":            e.date || "",
+        "Category":        e.category || "",
+        "Description":     e.description || "",
+        "Vendor Name":     e.vendor_name || e.commission_platform || "",
+        "Vendor GSTIN":    e.vendor_gstin || "",
+        "Invoice No":      e.invoice_number || e.commission_invoice_number || "",
+        "Invoice Date":    e.invoice_date || e.commission_invoice_date || "",
+        "Place Of Supply": intra ? "29-Karnataka" : "Other State",
+        "Taxable Value":   taxable,
+        "GST Rate %":      e.gst_rate || 0,
+        "CGST":            cgst,
+        "SGST":            sgst,
+        "IGST":            igst,
+        "GST Total":       r2(cgst + sgst + igst),
+        "Gross Amount":    r2(e.amount != null ? e.amount : (taxable + gstTotal)),
+        "Payment Method":  e.payment_method || "",
+        "Bill Link":       e.invoice_photo_url || "",
+      };
+    });
+    const wsITC = XLSX.utils.json_to_sheet(itcRows.length ? itcRows : [{
+      "Sr No": "(no GST expenses in this period)",
+      "Date": "", "Category": "", "Description": "", "Vendor Name": "",
+      "Vendor GSTIN": "", "Invoice No": "", "Invoice Date": "", "Place Of Supply": "",
+      "Taxable Value": 0, "GST Rate %": 0, "CGST": 0, "SGST": 0, "IGST": 0,
+      "GST Total": 0, "Gross Amount": 0, "Payment Method": "", "Bill Link": "",
+    }]);
+    // Turn the "Bill Link" column into real, clickable hyperlinks.
+    if (itcRows.length) {
+      const linkCol = Object.keys(itcRows[0]).indexOf("Bill Link");
+      for (let row = 0; row < itcRows.length; row++) {
+        const url = itcRows[row]["Bill Link"];
+        if (!url) continue;
+        const addr = XLSX.utils.encode_cell({ r: row + 1, c: linkCol }); // +1 = header row
+        const cell = wsITC[addr];
+        if (cell) {
+          cell.l = { Target: url, Tooltip: "Open bill" };
+          cell.v = "View Bill";
+        }
+      }
+    }
+
     // Hidden _schema sheet — record the GSTN schema version used.
     const schemaSheet = XLSX.utils.json_to_sheet([
       { "Field": "GSTN_GSTR1_SCHEMA_VERSION", "Value": "2.1 (offline utility 4.x format)" },
@@ -4254,7 +4358,8 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
       { "Field": "Place of Supply",           "Value": "Always Karnataka (KA-29) for SAC 9963" },
       { "Field": "Advances Table",            "Value": "Table 11A/B — cross-month advances only; same-month advances net out and are excluded" },
       { "Field": "Cancellation Charges SAC",   "Value": "999794 (agreement to refrain) @ 18% — appears in HSN sheet alongside 9963 / 2201 once issued" },
-      { "Field": "Notes",                     "Value": "ITC/RCM rows in GSTR-3B sheet are placeholders — CA must fill from expense ledger" },
+      { "Field": "Notes",                     "Value": "Input tax credit is itemised in the 'Expenses (ITC)' sheet (GST-bearing expenses with vendor GSTIN, tax split and bill link). RCM rows in GSTR-3B remain CA-reviewed." },
+      { "Field": "ITC Sheet",                 "Value": "Expenses (ITC) — CGST/SGST vs IGST inferred from vendor GSTIN state (29=KA intra-state; else IGST). 'Bill Link' opens the uploaded invoice." },
     ]);
     schemaSheet["!hidden"] = true;
 
@@ -4268,6 +4373,7 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
       XLSX.utils.book_append_sheet(wb, wsCDNR,   "CDNR (B2B CNs)");
       XLSX.utils.book_append_sheet(wb, wsB2CCN,  "B2C Credit Notes");
       XLSX.utils.book_append_sheet(wb, wsAdvances, "Advances (Table 11)");
+      XLSX.utils.book_append_sheet(wb, wsITC,     "Expenses (ITC)");
       XLSX.utils.book_append_sheet(wb, wsGSTR3B, "GSTR-3B Summary");
       XLSX.utils.book_append_sheet(wb, schemaSheet, "_schema");
       // Mark hidden sheet so Excel respects it.

@@ -1048,6 +1048,26 @@ def create_bill_record(room, room_data, checkout_time, batch=None,
         is_same_day = checkin_dt.date() == checkout_dt.date()
         is_mmt_ota = (booking_source == "mmt" and payment_source == "ota")
         is_booking_com = (booking_source == "booking.com")
+        # ── Read billing config FIRST ────────────────────────────────────────
+        # This MUST precede any use of mmt_hotel_issues_invoice / always_generate_bill
+        # below. It previously sat AFTER `mmt_service_only`, which references
+        # mmt_hotel_issues_invoice — so an MMT checkout that included a service
+        # (any_addon True) evaluated the variable before assignment, raising
+        # UnboundLocalError. create_bill_record then returned None and the
+        # checkout flipped the draft to "cancelled" — no invoice was ever minted.
+        # Reordering the read above its first use is the fix.
+        try:
+            _billing_cfg = get_billing_config()
+        except Exception as _cfg_err:
+            # Defensive: never let a settings read break checkout.
+            logger.warning(f"create_bill_record: billing_config read failed, "
+                           f"using defaults: {_cfg_err}")
+            _billing_cfg = dict(_BILLING_CONFIG_DEFAULTS)
+        always_generate_bill = bool(_billing_cfg.get("always_generate_bill", False))
+        # When the property's own GSTIN is registered on MMT, the hotel issues
+        # the room tax invoice itself (see _BILLING_CONFIG_DEFAULTS note).
+        mmt_hotel_issues_invoice = bool(_billing_cfg.get("mmt_hotel_issues_invoice", False))
+
         # MMT service-only bill: room rent is billed by MMT, hotel issues an
         # invoice for the in-hotel service/addon portion only (cash or UPI).
         # This ONLY applies in the legacy model where the hotel does not issue
@@ -1067,17 +1087,6 @@ def create_bill_record(room, room_data, checkout_time, batch=None,
         # OTA branches (pure MMT room stays, Booking.com) are NOT controlled by
         # this toggle — they are evaluated separately further down. The toggle
         # only governs the cash-only skip for non-OTA stays.
-        try:
-            _billing_cfg = get_billing_config()
-        except Exception as _cfg_err:
-            # Defensive: never let a settings read break checkout.
-            logger.warning(f"create_bill_record: billing_config read failed, "
-                           f"using defaults: {_cfg_err}")
-            _billing_cfg = dict(_BILLING_CONFIG_DEFAULTS)
-        always_generate_bill = bool(_billing_cfg.get("always_generate_bill", False))
-        # When the property's own GSTIN is registered on MMT, the hotel issues
-        # the room tax invoice itself (see _BILLING_CONFIG_DEFAULTS note).
-        mmt_hotel_issues_invoice = bool(_billing_cfg.get("mmt_hotel_issues_invoice", False))
 
         if always_generate_bill:
             is_no_bill = False

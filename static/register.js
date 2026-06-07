@@ -605,6 +605,42 @@
   /* Header button: icon only on mobile */
   .reg-customers-label { display: none; }
   .reg-customers-header-btn { padding: 0; width: 32px; justify-content: center; }
+
+  /* ── Mobile: unpin the action column so it SLIDES with the table ──
+     On desktop the last column is sticky/right-pinned so the icons stay
+     visible while the wide table scrolls. On a phone that pin overlaps the
+     adjacent cells and feels stuck; unpinning lets the row scroll naturally
+     so you swipe the table sideways to reveal the action buttons. */
+  .register-table thead th:last-child,
+  .register-table tr.date-group-row td:last-child {
+    position: static;
+    box-shadow: none;
+  }
+
+  /* ── Mobile: bill modal fits the screen ── */
+  .bill-modal.show { padding: 0.4rem; align-items: flex-start; }
+  .bill-content { margin-top: 0.4rem; border-radius: 8px; }
+  #reg-bill-print-area,
+  #bl-bill-print-area { padding: 0.75rem 0.7rem; font-size: 0.74rem; }
+
+  /* The GST tax summary has 8 columns — on a narrow screen it spilled out of
+     the modal's right edge. Let the table scroll horizontally INSIDE its box
+     instead of overflowing the page. */
+  .b-tax-summary {
+    display: block; width: 100%;
+    overflow-x: auto; -webkit-overflow-scrolling: touch;
+    white-space: nowrap; font-size: 0.68rem;
+  }
+
+  /* Compact the footer action buttons — they were full-size and dominated the
+     screen. Two per row, smaller padding/text. */
+  .bill-actions { padding: 0.5rem; gap: 0.4rem; flex-wrap: wrap; }
+  .bill-actions button,
+  .bill-actions .action-btn,
+  .bill-actions .bl-bill-save-btn {
+    flex: 1 1 40%; min-width: 0;
+    padding: 0.5rem 0.55rem; font-size: 0.8rem;
+  }
 }
 
 /* ── Action column wrapper — keeps icons flush right and evenly spaced ── */

@@ -539,7 +539,7 @@ function renderRooms() {
         `;
       }
 
-      if (info.balance > 0 && !isMmtRoom) {
+      if (info.balance > 0 && !_isMmtPrepaidRoom(info)) {
         roomContent += `<div class="badge" style="background-color:#ff9191;">₹${info.balance}</div>`;
       } else if (info.balance < 0) {
         roomContent += `<div class="badge" style="background-color: var(--success);">₹${Math.abs(
@@ -576,12 +576,19 @@ function renderRooms() {
     if (upcoming) {
       const hrs = upcoming.hours_until;
       let dotColor, pulseClass;
-      if (hrs <= 0) {
-        dotColor = "#f44336"; pulseClass = "pulse-red";     // overdue
-      } else if (hrs <= 4) {
-        dotColor = "#ff9800"; pulseClass = "pulse-orange";  // urgent <4hrs
+      // Colour escalates as check-in APPROACHES (countdown), not after it
+      // passes. An overdue arrival (hrs <= 0) stays red — still the most
+      // urgent state — but red now also appears in the final 3-hour window
+      // BEFORE check-in, which is when staff actually need to act.
+      //   blue   : > 6 hrs out (up to the 24-hr backend window)
+      //   yellow : <= 6 hrs out  — arrival approaching
+      //   red    : <= 3 hrs out (incl. overdue) — imminent / now
+      if (hrs <= 3) {
+        dotColor = "#f44336"; pulseClass = "pulse-red";     // <=3 hrs (incl. overdue)
+      } else if (hrs <= 6) {
+        dotColor = "#ffc107"; pulseClass = "pulse-amber";   // <=6 hrs — approaching
       } else {
-        dotColor = "#2196F3"; pulseClass = "pulse-blue";    // normal <24hrs
+        dotColor = "#2196F3"; pulseClass = "pulse-blue";    // <=24 hrs — upcoming
       }
       // Backend returns `name`; tolerate `guest_name` for forward-compat.
       const guestName = upcoming.name || upcoming.guest_name || "Guest";
@@ -1287,7 +1294,15 @@ async function fetchData() {
 // the Balances filter, its count, and the total. Matches the room-card badge
 // logic, which already hides the balance badge for these rooms.
 function _isMmtPrepaidRoom(room) {
-  return !!(room && room.guest && room.guest.payment === "ota");
+  // An MMT/OTA room's ROOM RENT is prepaid, so a zero-balance OTA room shows no
+  // balance. BUT a pay-later service (water, AC, etc.) adds a real balance the
+  // guest owes — in that case the room is NOT fully prepaid and its balance must
+  // surface in the card badge, the Balances filter, and the totals. So only
+  // treat it as prepaid when there is no outstanding balance.
+  return !!(
+    room && room.guest && room.guest.payment === "ota"
+    && (room.balance || 0) <= 0
+  );
 }
 
 function updateFilterCounts() {

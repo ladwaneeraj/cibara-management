@@ -508,25 +508,38 @@ class TransactionLogManager {
         .join(" ");
     }
 
-    // Cash / Online payment-mode pill. Shown on every row where real
-    // money moved so the mode is visible at a glance. For cash/online
-    // payments the logType is authoritative; refund and expense rows
-    // fall back to the row's own method field. Pay-later rows move no
-    // money, so they get no pill (the PAY LATER tag already says so).
+    // Cash / Online payment-mode pill. Shown ONLY on rows where real money
+    // actually moved at the front desk. The row's `method` field is the
+    // authoritative signal — NOT logType, because the backend buckets
+    // several non-drawer methods under `cash` for display purposes:
+    //   - pay_later     : balance deferred at check-in (₹0)
+    //   - already_paid  : booking conversion where the advance covered all
+    //   - ota           : MMT/OTA prepaid (settled to bank, not the drawer)
+    //   - settlement    : settle-later marker (no money collected)
+    //   - balance       : rent accrual, not a receipt
+    // An MMT check-in lands as method="already_paid" in the `cash` bucket,
+    // so the old logType-first logic mislabelled it "Cash". Gate on method
+    // (and amount) instead so only genuine cash/online receipts get a pill.
     let modeHtml = "";
-    const _isPayLaterRow =
-      log.payment_method === "pay_later" ||
+    const _rowMethod = String(log.method || log.payment_method || "").toLowerCase();
+    const _noMoneyMethods = [
+      "pay_later", "already_paid", "ota", "settlement", "bank_settlement", "balance",
+    ];
+    const _noMoneyRow =
+      _noMoneyMethods.includes(_rowMethod) ||
+      log.amount === 0 ||
+      (log.payment_method === "pay_later") ||
       (log.amount === 0 && log.is_fresh_checkin);
-    if (!_isPayLaterRow) {
+    if (!_noMoneyRow) {
       let _mode = "";
-      if (logType === "cash") {
+      if (_rowMethod === "cash") {
         _mode = "cash";
+      } else if (_rowMethod === "online" || _rowMethod === "upi" || _rowMethod === "card") {
+        _mode = "online";
+      } else if (logType === "cash") {
+        _mode = "cash";          // fallback: money moved but method absent
       } else if (logType === "online") {
         _mode = "online";
-      } else {
-        const _m = String(log.method || log.payment_method || "").toLowerCase();
-        if (_m === "cash") _mode = "cash";
-        else if (_m === "online" || _m === "upi" || _m === "card") _mode = "online";
       }
       if (_mode === "cash") {
         modeHtml = `<span class="transaction-tag cash-tag">Cash</span>`;

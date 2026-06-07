@@ -602,7 +602,13 @@ def convert_booking_to_checkin():
         expected_time = booking.get("check_in_time", "14:00")
         expected_datetime_str = f"{current_date} {expected_time}"
         current_datetime = datetime.now(IST)
-        
+        # Initialised up-front so a malformed `check_in_time` (which OTA/MMT
+        # bookings can carry, e.g. "14:00:00" or "") can't leave this name
+        # unbound. It is referenced again far below for `arrival_status`,
+        # which runs AFTER batch.commit() — an unbound name there raised and
+        # made an already-committed check-in return success=False.
+        expected_datetime = None
+
         try:
             expected_datetime = IST.localize(datetime.strptime(expected_datetime_str, "%Y-%m-%d %H:%M"))
 
@@ -1037,7 +1043,11 @@ def convert_booking_to_checkin():
             "mobile": booking["guest_mobile"],
         }, amount_paid=remaining_payment, sync=True)
 
-        arrival_status = "early" if current_datetime < expected_datetime else "on time"
+        arrival_status = (
+            "early"
+            if (expected_datetime is not None and current_datetime < expected_datetime)
+            else "on time"
+        )
 
         logger.info(
             f"Booking {booking_id} converted to check-in for room {room_number} "

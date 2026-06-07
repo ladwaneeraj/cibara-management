@@ -296,10 +296,26 @@ def get_register_data():
                                         "pending_settlement", "")
                         and not _is_revert_cancel):
                     skipped_count += 1
+                    # Diagnostic: a checked-out stay that vanishes from the
+                    # register is almost always a bill left in an unexpected
+                    # status (e.g. "draft" never finalized, or "cancelled").
+                    # Log room/status/serial so the gap is traceable.
+                    logger.info(
+                        f"[REGISTER] skipped bill {bill_doc.id} room="
+                        f"{bill_data.get('room')} status={bill_status!r} "
+                        f"serial={bill_data.get('serial_number')} "
+                        f"source={bill_data.get('booking_source')}"
+                    )
                     continue
 
                 if not checkin_time or not checkout_time:
                     skipped_count += 1
+                    logger.info(
+                        f"[REGISTER] skipped bill {bill_doc.id} room="
+                        f"{bill_data.get('room')} status={bill_status!r} "
+                        f"(missing checkin/checkout time) "
+                        f"source={bill_data.get('booking_source')}"
+                    )
                     continue
 
                 try:
@@ -431,6 +447,120 @@ def get_register_data():
         # ── 3. Batch metadata lookup for entries still missing serials ──
         if metadata_needed:
             _batch_fill_serials(metadata_needed)
+
+        # ── 3b. Serial backfill — guarantee no serial vanishes ───────────────
+        # A stay that consumed a daily serial number must appear in the
+        # register even if its bill is missing or stuck in a status the
+        # sections above exclude (e.g. an MMT booking-conversion whose draft
+        # was never finalised, or a checkout that flipped the bill to
+        # "cancelled"). We reconstruct a minimal entry from the payment rows
+        # that carry that serial. Only serials NOT already represented by an
+        # active-room or completed-bill entry are added, so this never
+        # duplicates a healthy stay — it only recovers the orphans.
+        try:
+            present_serials = set()
+            for e in register_entries:
+                sn = e.get("serial_number")
+                if sn:
+                    try:
+                        present_serials.add(int(sn))
+                    except (TypeError, ValueError):
+                        pass
+
+            by_serial = {}
+            for p in range_payments:
+                sn = p.get("serial_number")
+                if not sn or sn == 0:
+                    continue
+                if p.get("type") in _refund_types:
+                    continue
+                try:
+                    sn = int(sn)
+                except (TypeError, ValueError):
+                    continue
+                by_serial.setdefault(sn, []).append(p)
+
+            recovered = 0
+            for sn, plist in by_serial.items():
+                if sn in present_serials:
+                    continue
+                # Anchor on the check-in / conversion row for identity + time.
+                anchor = next(
+                    (p for p in plist
+                     if p.get("type") in ("fresh_checkin", "booking_conversion")
+                     or p.get("is_fresh_checkin") or p.get("is_booking_conversion")),
+                    plist[0],
+                )
+                guest_name = anchor.get("name", "")
+                room_str = str(anchor.get("room", ""))
+                if not guest_name:
+                    continue
+
+                cash_sum = sum(p.get("amount", 0) for p in plist
+                               if p.get("method") == "cash")
+                online_sum = sum(p.get("amount", 0) for p in plist
+                                 if p.get("method") in ("online", "upi", "card"))
+                ota_sum = sum(p.get("amount", 0) for p in plist
+                              if p.get("method") == "ota")
+                is_mmt = any(
+                    p.get("platform") == "mmt" or p.get("method") == "ota"
+                    or p.get("type") == "ota_prepaid"
+                    for p in plist
+                )
+
+                # Enrich from the bill doc (ANY status) when we can resolve it.
+                stay_id = anchor.get("stay_id")
+                bill = {}
+                if stay_id:
+                    try:
+                        _bd = bills_ref.document(stay_id).get()
+                        if _bd.exists:
+                            bill = _bd.to_dict() or {}
+                    except Exception:
+                        bill = {}
+
+                checkin_time = bill.get("checkin_time") or (
+                    f"{anchor.get('date', '')} {anchor.get('time', '')}".strip()
+                )
+                total_amount = bill.get("total_amount") or (ota_sum + cash_sum + online_sum)
+
+                register_entries.append({
+                    "id": f"recovered_{sn}_{room_str}",
+                    "stay_id": stay_id,
+                    "bill_number": bill.get("bill_number", "-"),
+                    "guest_name": guest_name,
+                    "guest_mobile": anchor.get("mobile", "") or bill.get("guest_mobile", ""),
+                    "room": room_str,
+                    "checkin_time": checkin_time,
+                    "checkout_time": bill.get("checkout_time"),
+                    "days_stayed": bill.get("days_stayed", 1),
+                    "room_rent": bill.get("room_price_per_night", 0),
+                    "room_charges": bill.get("room_charges_total", total_amount),
+                    "services_total": bill.get("services_total", 0),
+                    "total_amount": total_amount,
+                    "payment_cash": cash_sum,
+                    "payment_online": online_sum,
+                    "balance": bill.get("balance", 0),
+                    "status": bill.get("status", "completed"),
+                    "serial_number": sn,
+                    "booking_source": bill.get("booking_source",
+                                               "mmt" if is_mmt else "normal"),
+                    "payment_source": bill.get("payment_source",
+                                               "ota" if is_mmt else "hotel"),
+                    "guest_count": bill.get("guest_count", 1),
+                    "services": bill.get("services", []),
+                    # Marks a payments-reconstructed row (bill was missing or in
+                    # an excluded status). Useful for debugging / UI hinting.
+                    "recovered": True,
+                })
+                present_serials.add(sn)
+                recovered += 1
+
+            if recovered:
+                logger.info(f"[REGISTER] recovered {recovered} orphaned serial(s) "
+                            f"from payments")
+        except Exception as _bf_err:
+            logger.warning(f"[REGISTER] serial backfill failed: {_bf_err}")
 
         # ── 4. Sort: date DESC, serial ASC within each day ──
         register_entries.sort(key=lambda e: e.get("serial_number") or 999999)

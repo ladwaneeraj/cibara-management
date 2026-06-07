@@ -238,8 +238,16 @@
         0%, 100% { box-shadow: 0 0 0 0 rgba(244,67,54,0.6); }
         50%       { box-shadow: 0 0 0 5px rgba(244,67,54,0); }
       }
+      /* Amber = arrival within 6 hrs. Named pulse-amber (not pulse-yellow)
+         to avoid clashing with the unrelated pulse-yellow animation in
+         style.css. */
+      @keyframes pulse-amber {
+        0%, 100% { box-shadow: 0 0 0 0 rgba(255,193,7,0.6); }
+        50%       { box-shadow: 0 0 0 5px rgba(255,193,7,0); }
+      }
       .booking-indicator-dot.pulse-blue   { animation: pulse-blue   1.8s infinite; }
       .booking-indicator-dot.pulse-orange { animation: pulse-orange 1.2s infinite; }
+      .booking-indicator-dot.pulse-amber  { animation: pulse-amber  1.2s infinite; }
       .booking-indicator-dot.pulse-red    { animation: pulse-red    0.9s infinite; }
 
       /* ── Housekeeping icons on room card ── */
@@ -5370,14 +5378,20 @@
               <div class="laundry-form-card-title"><span><i class="fas fa-file-invoice" style="margin-right:0.3rem"></i>Bill Entry</span></div>
               <div class="laundry-form-card-body">
 
+                <div style="font-size:0.68rem;color:#475569;background:#f1f5f9;border:1px solid #e2e8f0;border-radius:6px;padding:0.4rem 0.55rem;margin-bottom:0.6rem;line-height:1.4">
+                  <i class="fas fa-pen" style="margin-right:0.3rem;color:#3182ce"></i>
+                  <b>To fix a month:</b> pick it in the Month selector above, correct the <b>Bill Amount</b>, and press Save — it updates that month's bill. To remove a wrong payment, use the <b>×</b> on its row in Payment History.
+                </div>
+
                 <!-- Bill amount + date -->
                 <div class="lbill-field-grid">
                   <div class="laundry-field-group">
-                    <label>Bill Amount (₹)</label>
+                    <label>Bill Amount (₹) — total charged this month</label>
                     <div style="display:flex;gap:0.4rem;align-items:center">
-                      <input type="number" class="form-control" id="laundry-bill-amount" placeholder="From laundry guy" min="0" style="flex:1;min-width:0" />
+                      <input type="number" class="form-control" id="laundry-bill-amount" placeholder="Total billed by laundry" min="0" style="flex:1;min-width:0" />
                       <button class="laundry-tbl-btn save" id="laundry-use-auto-btn" style="white-space:nowrap;padding:0.3rem 0.55rem;font-size:0.72rem">Auto</button>
                     </div>
+                    <span style="font-size:0.65rem;color:#64748b">The laundry's total for the month — NOT what you're paying. Tap Auto to use the calculated total.</span>
                   </div>
                   <div class="laundry-field-group">
                     <label>Bill Date</label>
@@ -5389,8 +5403,9 @@
                     <span style="font-size:0.65rem;color:#3182ce">Auto from prev month</span>
                   </div>
                   <div class="laundry-field-group">
-                    <label>Paying Now (₹)</label>
-                    <input type="number" class="form-control" id="laundry-paid-amount" placeholder="0" min="0" />
+                    <label style="color:#16a34a;">Paying Now (₹) — today's payment</label>
+                    <input type="number" class="form-control" id="laundry-paid-amount" placeholder="0" min="0" style="border-color:#bbf7d0;" />
+                    <span style="font-size:0.65rem;color:#16a34a">Money you're handing over today. Leave 0 to only save/update the bill.</span>
                   </div>
                 </div>
 

@@ -4321,8 +4321,14 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
         "SGST":            sgst,
         "IGST":            igst,
         "GST Total":       r2(cgst + sgst + igst),
-        "Gross Amount":    r2(e.amount != null ? e.amount : (taxable + gstTotal)),
-        "Payment Method":  e.payment_method || "",
+        // Gross is the FULL invoice value. For a split-paid invoice that is
+        // split_total (each leg only holds a partial payment amount);
+        // otherwise the expense amount, falling back to taxable + GST.
+        "Gross Amount":    r2(
+          (e.split_total != null && e.split_total > 0) ? e.split_total
+            : (e.amount != null ? e.amount : taxable + gstTotal)
+        ),
+        "Payment Method":  e.split_group_id ? "Split" : (e.payment_method || ""),
         "Bill Link":       e.invoice_photo_url || "",
       };
     });

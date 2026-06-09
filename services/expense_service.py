@@ -66,6 +66,77 @@ def _write_async(doc: dict):
     except Exception as e:
         logger.error(f"ExpenseService async-write failed: {e}")
 
+# ---------------------------------------------------------------------------
+# Split-payment support
+#
+# A split-payment expense (part cash from the counter, part UPI from the
+# account) is stored as TWO linked single-method documents rather than one
+# multi-method document. Each leg is a fully-valid expense in its own right:
+#
+#   cash leg : payment_method="cash"   expense_type="transaction"  (counter)
+#   upi  leg : payment_method="online" expense_type="report"       (account)
+#
+# This keeps every existing read path — counter totals, reports, GST/ITC,
+# the transaction log — working unchanged, because each document still has
+# exactly one payment_method and one expense_type. The two legs are joined
+# by a shared `split_group_id` so edit/delete can operate on the group.
+#
+# The helpers below expose the collection at a low level so the route can
+# assemble a single atomic Firestore batch spanning both legs and the
+# counter increment. The route owns the batch because the counter lives in
+# a different collection (totals/current_totals) that this service does not
+# manage.
+# ---------------------------------------------------------------------------
+
+def new_doc_ref():
+    """
+    Return a fresh auto-ID DocumentReference in the `expenses` collection
+    WITHOUT writing anything. Lets a caller stage a multi-document atomic
+    batch (used by split-payment creation). Returns None if uninitialised.
+    """
+    if _expenses_ref is None:
+        return None
+    return _expenses_ref.document()
+
+
+def doc_ref(doc_id: str):
+    """Return the DocumentReference for an existing id (for batched ops)."""
+    if _expenses_ref is None or not doc_id:
+        return None
+    return _expenses_ref.document(doc_id)
+
+
+def normalise(data: dict) -> dict:
+    """
+    Public wrapper over the internal _normalise() so callers assembling
+    their own batch write store documents with the same type coercion and
+    created_at stamp the single-doc write path applies.
+    """
+    return _normalise(data)
+
+
+def query_split_group(group_id: str) -> list:
+    """
+    Return every expense document belonging to a split group, each with its
+    '_doc_id'. Empty list on any failure or unknown group.
+    """
+    if _expenses_ref is None or not group_id:
+        return []
+    try:
+        query = _expenses_ref.where(
+            filter=fa_firestore.FieldFilter("split_group_id", "==", group_id)
+        )
+        results = []
+        for doc in query.stream():
+            d = doc.to_dict()
+            d["_doc_id"] = doc.id
+            results.append(d)
+        return results
+    except Exception as e:
+        logger.error(f"ExpenseService query_split_group({group_id}) failed: {e}")
+        return []
+
+
 
 def _normalise(data: dict) -> dict:
     """Ensure consistent types and add created_at."""

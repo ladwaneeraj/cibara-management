@@ -6,6 +6,7 @@ WRITE → expenses collection (primary) + minimal stub in payments (backward-com
 """
 
 import os
+import uuid
 from flask import Blueprint, request, jsonify
 from datetime import datetime, timedelta
 from firebase_admin import firestore
@@ -15,8 +16,9 @@ from config import (
     db, totals_ref, bills_ref, IST, logger,
     invalidate_rooms_and_totals, get_all_rooms,
 )
-from services import payment_service, expense_service
-from services.auth_service import requires_permission
+from services import payment_service, expense_service, kpi_service
+from services.auth_service import requires_permission, load_current_user
+from services.permissions import role_has_permission
 
 reports_bp = Blueprint('reports', __name__)
 
@@ -108,6 +110,279 @@ def _apply_totals_delta(delta: int) -> None:
         batch.commit()
     except Exception as e:
         logger.error(f"_apply_totals_delta({delta}) failed: {e}")
+
+
+# ---------------------------------------------------------------------------
+# Split-payment expenses — one expense paid from a mix of money sources.
+#
+# Architecture: a split is stored as 2-3 linked single-method expense
+# documents, NOT one multi-method document. See services/expense_service.py
+# for the rationale. The three sources each map to a fully-valid leg:
+#     counter_cash -> transaction + cash   (the ONLY leg that moves the counter)
+#     home_cash    -> report      + cash
+#     account      -> report      + online
+# All legs share a `split_group_id`; only the counter-cash leg touches
+# totals/current_totals.expenses.
+#
+# Capability: ADMIN ONLY. Reuses the existing `expense.manage` permission
+# (admin wildcard). Enforced server-side below — the frontend gate is only UX.
+#
+# Bill / GST: a billed or GST invoice CAN be split. The invoice metadata
+# describes the single invoice (not the payment), so it is recorded ONCE on a
+# designated primary leg — never duplicated — keeping ITC totals correct.
+# Account-level categories (rent, booking.com commission) remain ineligible
+# because a counter-cash leg has no meaning for them.
+# ---------------------------------------------------------------------------
+
+# Categories that are account-level costs, not daily counter-cash operations,
+# and therefore cannot be split. Mirrors the list hidden from the "Daily
+# Expense" (transaction) category dropdown on the frontend.
+_SPLIT_INELIGIBLE_CATEGORIES = frozenset({"rent", "booking_commission"})
+
+
+def validate_split(total_amount, counter_cash, home_cash, account, *,
+                   category=None):
+    """
+    Pure validation for a split-payment request across the three money
+    sources. No I/O — unit-testable.
+
+    Sources:
+      counter_cash  paid in cash out of the daily counter  (transaction+cash)
+      home_cash     paid in cash from home / personal       (report+cash)
+      account       paid from the bank account / online     (report+online)
+
+    Returns (ok, error|None, counter_cash, home_cash, account).
+
+    Invariants:
+      • each part is a non-negative integer,
+      • at least TWO parts are > 0 (one part alone is a normal single
+        payment, not a split),
+      • the parts sum to total_amount exactly (integer rupees),
+      • category is eligible for splitting.
+
+    Note: a bill / GST invoice CAN be split. The invoice metadata is recorded
+    once on a single primary leg (see _build_split_legs) so input-tax-credit
+    is never double-counted; that policy lives in the create path, not here.
+    """
+    try:
+        total = int(total_amount)
+        cc = int(counter_cash)
+        hc = int(home_cash)
+        ac = int(account)
+    except (TypeError, ValueError):
+        return False, "Split amounts must be whole numbers", 0, 0, 0
+
+    if cc < 0 or hc < 0 or ac < 0:
+        return False, "Split amounts cannot be negative", 0, 0, 0
+    positive = sum(1 for x in (cc, hc, ac) if x > 0)
+    if positive < 2:
+        return False, ("A split needs a positive amount in at least two of "
+                       "counter cash / home cash / account. Use a normal "
+                       "single payment otherwise."), 0, 0, 0
+    if cc + hc + ac != total:
+        return False, (f"Split parts (₹{cc} + ₹{hc} + ₹{ac} = ₹{cc + hc + ac}) "
+                       f"must equal the total ₹{total}"), 0, 0, 0
+    if category in _SPLIT_INELIGIBLE_CATEGORIES:
+        return False, f"'{category}' expenses cannot be split", 0, 0, 0
+
+    return True, None, cc, hc, ac
+
+
+# The three split sources, each mapped to a fully-valid single-method leg:
+#   counter_cash -> transaction + cash   (the ONLY leg that moves the counter)
+#   home_cash    -> report      + cash
+#   account      -> report      + online
+# Tuple order is (split_role, expense_type, payment_method). It also defines
+# the priority for which leg becomes the invoice-carrying "primary" leg.
+_SPLIT_SOURCES = (
+    ("counter_cash", "transaction", "cash"),
+    ("home_cash",    "report",      "cash"),
+    ("account",      "report",      "online"),
+)
+
+
+def _build_split_legs(base_entry: dict, group_id: str,
+                      counter_cash: int, home_cash: int, account: int, total: int,
+                      primary_extra: dict | None = None):
+    """
+    Produce one leg document per NON-ZERO source from a shared base. Each leg
+    is a valid single-method expense; per-leg fields (amount, payment_method,
+    expense_type, split_role) are set here so a leg can never inherit a
+    conflicting value. Returns a list of leg dicts (length 2 or 3).
+
+    primary_extra holds invoice-level metadata (bill number, GST breakdown,
+    invoice photo). It describes the ONE invoice — not how it was paid — so it
+    is DENORMALISED onto every leg (so the bill/GST/photo display consistently
+    wherever a leg is shown), but exactly ONE leg is flagged split_primary=True.
+    The GST / ITC report keys off split_primary to count the invoice exactly
+    once at its full gross (split_total); see _dedupe_split_groups.
+    """
+    common_keys = ("date", "time", "category", "description", "paid_to")
+    common = {k: base_entry[k] for k in common_keys if k in base_entry}
+    split_meta = {"split_group_id": group_id, "split_total": int(total)}
+    invoice = dict(primary_extra or {})  # bill / GST / photo — same on each leg
+
+    amounts = {"counter_cash": int(counter_cash),
+               "home_cash": int(home_cash),
+               "account": int(account)}
+
+    legs = []
+    primary_assigned = False
+    for role, etype, method in _SPLIT_SOURCES:
+        amt = amounts[role]
+        if amt <= 0:
+            continue
+        leg = {
+            **common, **invoice, **split_meta,
+            "amount": amt,
+            "payment_method": method,
+            "expense_type": etype,
+            "split_role": role,
+        }
+        if not primary_assigned:
+            leg["split_primary"] = True
+            primary_assigned = True
+        legs.append(leg)
+    return legs
+
+
+def _dedupe_split_groups(expenses: list) -> list:
+    """
+    Collapse the legs of each split group to ONE representative — the leg
+    flagged split_primary (which carries split_total = the full invoice gross)
+    — so an invoice's input-tax-credit is counted exactly once. Non-split
+    expenses pass through unchanged. Order is preserved.
+    """
+    from collections import OrderedDict
+    singles = []
+    groups = OrderedDict()
+    for e in expenses:
+        gid = e.get("split_group_id")
+        if gid:
+            groups.setdefault(gid, []).append(e)
+        else:
+            singles.append(e)
+    collapsed = [
+        next((l for l in legs if l.get("split_primary")), legs[0])
+        for legs in groups.values()
+    ]
+    return singles + collapsed
+
+
+def _collect_invoice_extra(data_json: dict) -> dict:
+    """
+    Pull the invoice-level (bill / GST / photo) fields out of the request so
+    they can be stamped onto the split's primary leg. Mirrors the field set
+    used by the non-split add_expense path. Empty dict when none apply.
+    """
+    extra = {}
+    if data_json.get("has_bill"):
+        extra["has_bill"] = True
+        extra["invoice_number"] = data_json.get("invoice_number", "")
+        extra["invoice_date"] = data_json.get("invoice_date", "")
+    if data_json.get("has_gst"):
+        extra["has_gst"] = True
+        extra["vendor_name"] = data_json.get("vendor_name", "")
+        extra["vendor_gstin"] = data_json.get("vendor_gstin", "")
+        try:
+            extra["taxable_amount"] = float(data_json.get("taxable_amount", 0))
+            extra["gst_rate"] = float(data_json.get("gst_rate", 0))
+            extra["gst_amount"] = float(data_json.get("gst_amount", 0))
+        except (TypeError, ValueError):
+            extra["taxable_amount"] = 0.0
+            extra["gst_rate"] = 0.0
+            extra["gst_amount"] = 0.0
+    photo = data_json.get("invoice_photo_url", "")
+    if photo:
+        extra["invoice_photo_url"] = photo
+    return extra
+
+
+def _create_split_expense(data_json: dict, base_entry: dict, total_amount: int):
+    """
+    Validate + atomically write a split-payment expense (admin only).
+
+    Returns a (json_body, http_status) tuple ready to return from the route.
+    Performs a single Firestore batch commit covering every leg document and
+    the counter increment, so a split can never be left half-written. Only the
+    counter-cash leg moves totals/current_totals.expenses. Any bill/GST invoice
+    metadata is recorded once, on the primary leg.
+    """
+    # ── Admin gate — the real security boundary ──────────────────────────
+    user = load_current_user()
+    if not user:
+        return jsonify(success=False, message="Authentication required"), 401
+    if not role_has_permission(user["role"], _EXPENSE_MANAGE_PERM):
+        logger.info(
+            "split_expense: denied %s (%s) — admin only",
+            user.get("userId"), user.get("role"),
+        )
+        return jsonify(success=False,
+                       message="Split payments are admin-only"), 403
+
+    split = data_json.get("split") or {}
+    # Guard against a stale cached frontend POSTing the old 2-field shape
+    # ({cash_amount, upi_amount}); the keys changed when splits went 3-way.
+    if not any(k in split for k in ("counter_cash", "home_cash", "account")):
+        return jsonify(
+            success=False,
+            message="Outdated form. Please hard-refresh the page "
+                    "(Ctrl+Shift+R) and try again.",
+        ), 400
+    ok, err, counter_cash, home_cash, account = validate_split(
+        total_amount,
+        split.get("counter_cash"),
+        split.get("home_cash"),
+        split.get("account"),
+        category=base_entry.get("category"),
+    )
+    if not ok:
+        logger.info("split rejected (%s): total=%s split=%s category=%s",
+                    err, total_amount, split, base_entry.get("category"))
+        return jsonify(success=False, message=err), 400
+
+    group_id = uuid.uuid4().hex
+    primary_extra = _collect_invoice_extra(data_json)
+    legs = _build_split_legs(
+        base_entry, group_id, counter_cash, home_cash, account, total_amount,
+        primary_extra=primary_extra,
+    )
+
+    refs = [expense_service.new_doc_ref() for _ in legs]
+    if any(r is None for r in refs):
+        return jsonify(success=False, message="Expense store unavailable"), 503
+
+    try:
+        batch = db.batch()
+        for ref, leg in zip(refs, legs):
+            batch.set(ref, expense_service.normalise(leg))
+        # Only the counter-cash leg moves the cash counter.
+        if counter_cash > 0:
+            batch.update(totals_ref.document("current_totals"), {
+                "expenses": firestore.Increment(counter_cash),
+            })
+        batch.commit()
+    except Exception as e:
+        logger.error(f"_create_split_expense batch failed: {e}", exc_info=True)
+        return jsonify(success=False, message=f"Error saving split: {e}"), 500
+
+    invalidate_rooms_and_totals()
+    logger.info(
+        "Split expense added: group=%s total=₹%s counter=₹%s home=₹%s account=₹%s by %s",
+        group_id, total_amount, counter_cash, home_cash, account, user.get("userId"),
+    )
+    parts = []
+    if counter_cash:
+        parts.append(f"₹{counter_cash} counter")
+    if home_cash:
+        parts.append(f"₹{home_cash} home")
+    if account:
+        parts.append(f"₹{account} account")
+    return jsonify(
+        success=True,
+        message="Split expense added: " + " + ".join(parts),
+        split_group_id=group_id,
+    ), 200
 
 
 @reports_bp.route("/reports", methods=["POST"])
@@ -222,7 +497,9 @@ def add_expense():
         date = data_json.get("date")
         category = data_json.get("category")
         description = data_json.get("description")
-        amount = int(data_json.get("amount", 0))
+        # Accept "6600", "6599.69" or numeric — coerce to whole rupees so a
+        # fractional GST total never throws or silently truncates oddly.
+        amount = int(round(float(data_json.get("amount", 0) or 0)))
         payment_method = data_json.get("payment_method", "cash")
         expense_type = data_json.get("type", "transaction")   # transaction | report
 
@@ -245,6 +522,16 @@ def add_expense():
         # Salary: capture paid_to
         if category == "salary":
             expense_entry["paid_to"] = data_json.get("paid_to", "")
+
+        # ── Split payment (part cash counter / part UPI account) ─────────────
+        # Admin-only. Handled entirely by _create_split_expense, which writes
+        # two linked leg documents + the counter increment in one atomic
+        # batch and returns the HTTP response. We branch here — after the
+        # shared base fields (date/time/category/description/paid_to) are set
+        # but before the single-doc write — so the split legs inherit the
+        # same base without the single-method assumptions below.
+        if data_json.get("split"):
+            return _create_split_expense(data_json, expense_entry, amount)
 
         # Tier 2 — Bill without GST: capture invoice number + invoice date
         has_bill = data_json.get("has_bill", False)
@@ -352,6 +639,11 @@ def expenses_gst():
                 return False
 
         gst_expenses = [e for e in all_expenses if _carries_gst(e)]
+        # A split invoice is stored as 2-3 legs, each carrying the SAME GST
+        # metadata. Collapse each split group to its primary leg so the CA's
+        # ITC sheet lists the invoice once at its full gross (split_total),
+        # never 2-3x.
+        gst_expenses = _dedupe_split_groups(gst_expenses)
         # Stable, auditable order: by date then time.
         gst_expenses.sort(key=lambda e: (str(e.get("date", "")), str(e.get("time", ""))))
 
@@ -446,6 +738,19 @@ def edit_expense(doc_id):
         old = expense_service.get_expense(doc_id)
         if not old:
             return jsonify(success=False, message="Expense not found"), 404
+
+        # Split legs are immutable inline. Re-splitting an amount or moving
+        # money between the cash and UPI legs has subtle counter-arithmetic
+        # implications across two documents; rather than risk a drifted
+        # counter we require the admin to delete the split (which removes
+        # both legs atomically) and re-create it. This keeps the edit path
+        # simple and the counter provably correct.
+        if old.get("split_group_id"):
+            return jsonify(
+                success=False,
+                message=("This is a split-payment expense. Delete it and "
+                         "re-create to change the amounts."),
+            ), 409
 
         # Validate amount if it was supplied
         if "amount" in fields:
@@ -547,6 +852,42 @@ def delete_expense_route(doc_id):
         if not old:
             return jsonify(success=False, message="Expense not found"), 404
 
+        # ── Split-group delete ───────────────────────────────────────────
+        # Deleting ANY leg of a split removes the WHOLE group atomically so
+        # the two legs can never become orphaned. The counter is reversed by
+        # the sum of the transaction (cash) legs only — mirroring how the
+        # create path incremented it.
+        group_id = old.get("split_group_id")
+        if group_id:
+            legs = expense_service.query_split_group(group_id)
+            if not legs:  # fall through to single delete if the group vanished
+                legs = [old]
+            cash_reversal = sum(
+                int(l.get("amount", 0) or 0)
+                for l in legs if l.get("expense_type") == "transaction"
+            )
+            try:
+                batch = db.batch()
+                for leg in legs:
+                    ref = expense_service.doc_ref(leg.get("_doc_id"))
+                    if ref is not None:
+                        batch.delete(ref)
+                if cash_reversal:
+                    batch.update(totals_ref.document("current_totals"), {
+                        "expenses": firestore.Increment(-cash_reversal),
+                    })
+                batch.commit()
+            except Exception as e:
+                logger.error(f"split delete batch failed: {e}", exc_info=True)
+                return jsonify(success=False, message=f"Delete failed: {e}"), 500
+
+            invalidate_rooms_and_totals()
+            logger.info(
+                "Split expense deleted: group=%s legs=%s cash_reversal=₹%s",
+                group_id, len(legs), cash_reversal,
+            )
+            return jsonify(success=True, message="Split expense deleted")
+
         ok = expense_service.delete_expense(doc_id)
         if not ok:
             return jsonify(success=False, message="Delete failed"), 500
@@ -642,6 +983,25 @@ def revenue_report():
         for doc in bills_q.stream():
             b = doc.to_dict()
             b["id"] = doc.id
+
+            # ── Exclude non-revenue bills ───────────────────────────────────
+            # Cancelled / voided stays, and bills superseded by a checkout
+            # revert, retain their checkout_time AND total_amount. Without
+            # this guard their GST-inclusive total is added to the revenue
+            # (and embedded GST) for their checkout date — and in the revert
+            # case it is double-counted alongside the replacement stay that
+            # carries the real revenue. gstr1_summary already excludes these;
+            # this brings the revenue/billing strip into agreement.
+            #
+            # We exclude only on EXPLICIT cancellation markers so legacy bills
+            # that predate the status field (status missing/empty) are still
+            # counted as completed revenue.
+            _status = (b.get("status") or "").strip().lower()
+            if (_status in ("cancelled", "voided")
+                    or b.get("superseded_by_revert")
+                    or b.get("cancelled_by_revert")):
+                continue
+
             is_ota = (b.get("payment_source") == "ota")
             grand_total        = b.get("total_amount", 0)
             total_billed       += grand_total

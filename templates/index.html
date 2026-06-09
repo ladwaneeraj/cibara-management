@@ -3659,18 +3659,63 @@
             <input type="hidden" id="expense-invoice-photo-url" value="" />
           </div>
 
-          <!-- Payment Method -->
-          <div class="form-group" style="margin-bottom:0.9rem;">
-            <label class="form-label" style="font-size:0.78rem;">Payment Method</label>
+          <!-- Paid From — shown ONLY for a "From Account / Home" (report)
+               expense. A Daily Expense always leaves the cash counter, so for
+               that mode this block is hidden and the method is forced to cash
+               (see _applyPaymentMethodUI in expense.js). For a report expense:
+               "Home Cash" = personal / home cash, "From Account" = paid from
+               the bank account. -->
+          <div class="form-group" id="expense-payment-method-group" style="margin-bottom:0.9rem;">
+            <label class="form-label" style="font-size:0.78rem;">Paid From</label>
             <div class="payment-options">
               <button type="button" class="payment-btn cash active" data-payment="cash">
-                <i class="fas fa-money-bill"></i> Cash
+                <i class="fas fa-money-bill-wave"></i> Home Cash
               </button>
               <button type="button" class="payment-btn online" data-payment="online">
-                <i class="fas fa-mobile-alt"></i> UPI / Online
+                <i class="fas fa-university"></i> From Account
               </button>
             </div>
             <input type="hidden" id="expense-payment-method" value="cash" />
+          </div>
+
+          <!-- Split payment (admin only) — part cash from counter, part UPI
+               from account. Hidden by default; expense.js reveals the toggle
+               only for admins on an eligible Daily Expense. When enabled it
+               hides the Payment Method block above and records the expense as
+               two linked legs. -->
+          <div id="expense-split-toggle-wrap" style="display:none;margin-bottom:0.6rem;">
+            <label style="display:flex;align-items:center;gap:0.5rem;cursor:pointer;font-size:0.85rem;font-weight:500;">
+              <input type="checkbox" id="expense-split-toggle" style="width:15px;height:15px;accent-color:#e53e3e;" />
+              Split payment across counter cash / home cash / account
+            </label>
+          </div>
+          <div id="expense-split-fields" style="display:none;margin-bottom:0.9rem;background:#fafbfc;border:1px solid #edf2f7;border-radius:8px;padding:0.75rem;">
+            <div style="display:flex;gap:0.6rem;flex-wrap:wrap;">
+              <div style="flex:1;min-width:110px;">
+                <label class="form-label" for="expense-split-counter" style="font-size:0.74rem;">
+                  <i class="fas fa-cash-register" style="color:#e53e3e;"></i> Counter cash (₹)
+                </label>
+                <input type="number" class="form-control" id="expense-split-counter"
+                  placeholder="0" min="0" step="1" style="font-size:0.9rem;padding:0.42rem 0.6rem;" />
+              </div>
+              <div style="flex:1;min-width:110px;">
+                <label class="form-label" for="expense-split-home" style="font-size:0.74rem;">
+                  <i class="fas fa-money-bill-wave" style="color:#38a169;"></i> Home cash (₹)
+                </label>
+                <input type="number" class="form-control" id="expense-split-home"
+                  placeholder="0" min="0" step="1" style="font-size:0.9rem;padding:0.42rem 0.6rem;" />
+              </div>
+              <div style="flex:1;min-width:110px;">
+                <label class="form-label" for="expense-split-account" style="font-size:0.74rem;">
+                  <i class="fas fa-university" style="color:#3182ce;"></i> From account (₹)
+                </label>
+                <input type="number" class="form-control" id="expense-split-account"
+                  placeholder="0" min="0" step="1" style="font-size:0.9rem;padding:0.42rem 0.6rem;" />
+              </div>
+            </div>
+            <div id="expense-split-hint" style="font-size:0.76rem;color:#718096;margin-top:0.5rem;">
+              Allocate the total across any two or more sources.
+            </div>
           </div>
 
           <input type="hidden" id="expense-type" value="transaction" />

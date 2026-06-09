@@ -141,6 +141,8 @@ function initializeExpense() {
       expenseType = type;
       const typeInput = document.getElementById("expense-type");
       if (typeInput) typeInput.value = type;
+      _updateSplitVisibility();
+      _applyPaymentMethodUI();
     });
   });
 
@@ -151,6 +153,20 @@ function initializeExpense() {
       this.classList.add("active");
       document.getElementById("expense-payment-method").value = this.getAttribute("data-payment");
     });
+  });
+
+  // Split-payment toggle + amount linkage (admin only; visibility is
+  // managed by _updateSplitVisibility()).
+  const splitToggle = document.getElementById("expense-split-toggle");
+  if (splitToggle) splitToggle.addEventListener("change", _onSplitToggle);
+  ["expense-split-counter", "expense-split-home", "expense-split-account"].forEach((id) => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener("input", _recalcSplit);
+  });
+  // Changing the total re-checks the running allocation.
+  const amountEl = document.getElementById("expense-amount");
+  if (amountEl) amountEl.addEventListener("input", () => {
+    if (_isSplitEnabled()) _recalcSplit();
   });
 
   // Category change → morph form
@@ -383,6 +399,9 @@ function _onCategoryChange() {
     if (amountInput) amountInput.readOnly = true;
     _recalcCommissionTotal();
   }
+
+  // Category change can make the split toggle (in)eligible.
+  _updateSplitVisibility();
 }
 
 function _onHasBillChange() {
@@ -393,6 +412,8 @@ function _onHasBillChange() {
     const hasGstChk = document.getElementById("expense-has-gst");
     if (hasGstChk) hasGstChk.checked = false;
   }
+  // A bill makes the expense ineligible for splitting (v1).
+  _updateSplitVisibility();
 }
 
 function _onHasGstChange() {
@@ -406,6 +427,8 @@ function _onHasGstChange() {
     const rateEl = document.getElementById("expense-gst-rate");
     if (rateEl) rateEl.value = "";
   }
+  // GST makes the expense ineligible for splitting (v1).
+  _updateSplitVisibility();
 }
 
 // ─── GST auto-calc ────────────────────────────────────────────────────────────
@@ -415,9 +438,10 @@ function _recalcGst() {
   const gst     = Math.round((taxable * rate) / 100);
   const gstInput = document.getElementById("expense-gst-amount");
   if (gstInput) gstInput.value = gst;
-  // Also fill total
+  // Also fill total — round to whole rupees so the amount is always an
+  // integer (fractional totals break split allocation and the int-rupee model).
   const totalInput = document.getElementById("expense-amount");
-  if (totalInput && !totalInput.readOnly) totalInput.value = taxable + gst;
+  if (totalInput && !totalInput.readOnly) totalInput.value = Math.round(taxable + gst);
 }
 
 function _recalcCommissionTotal() {
@@ -787,6 +811,19 @@ function openExpenseEditModal(log) {
     return;
   }
 
+  // Split-payment expenses are immutable inline (the server returns 409).
+  // Guide the admin to delete + re-create instead of opening a form that
+  // can't save.
+  if (log.split_group_id) {
+    if (typeof showNotification === "function") {
+      showNotification(
+        "Split-payment expense — delete it and re-create to change the amounts.",
+        "info"
+      );
+    }
+    return;
+  }
+
   // Open the modal in the normal way so the standard reset path runs,
   // then flip into edit mode + populate. allowTypeToggle=true so admin
   // can move an expense between Daily and From-Account.
@@ -892,6 +929,10 @@ function openExpenseEditModal(log) {
         `<a href="${log.invoice_photo_url}" target="_blank" rel="noopener" style="margin-left:4px;color:#3182ce;">view</a>`;
     }
   }
+
+  // Daily expenses are cash-from-counter only; report expenses keep the
+  // Home Cash / From Account choice. Apply that after the type is set.
+  _applyPaymentMethodUI();
 }
 window.openExpenseEditModal = openExpenseEditModal;
 
@@ -1037,6 +1078,15 @@ function showExpenseModal(type, options) {
     ? '<i class="fas fa-university"></i> From Account / Home'
     : '<i class="fas fa-receipt"></i> Add Daily Expense';
 
+  // Reset + re-evaluate the split toggle for this fresh open. form.reset()
+  // above already cleared the checkbox; this restores the payment-method
+  // block and decides whether the toggle should be offered at all.
+  const splitToggle = document.getElementById("expense-split-toggle");
+  if (splitToggle) splitToggle.checked = false;
+  _onSplitToggle();
+  _updateSplitVisibility();
+  _applyPaymentMethodUI();
+
   modal.classList.add("show");
 }
 
@@ -1059,6 +1109,26 @@ async function submitExpense(e) {
   if (isNaN(amount) || amount <= 0) {
     showNotification("Enter a valid amount", "error");
     return;
+  }
+
+  // Split-payment validation (mirrors validate_split in routes/reports.py —
+  // the server re-validates; this is UX). At least two of the three sources
+  // must be > 0 and all parts must sum to the total.
+  const splitOn = _isSplitEnabled();
+  let splitCounter = 0, splitHome = 0, splitAccount = 0;
+  if (splitOn) {
+    splitCounter = parseInt(document.getElementById("expense-split-counter")?.value) || 0;
+    splitHome    = parseInt(document.getElementById("expense-split-home")?.value) || 0;
+    splitAccount = parseInt(document.getElementById("expense-split-account")?.value) || 0;
+    const positive = [splitCounter, splitHome, splitAccount].filter((x) => x > 0).length;
+    if (positive < 2) {
+      showNotification("A split needs at least two of: counter cash, home cash, account", "error");
+      return;
+    }
+    if (splitCounter + splitHome + splitAccount !== amount) {
+      showNotification(`Split parts must sum to the total ₹${amount}`, "error");
+      return;
+    }
   }
 
   // Validate: if has-bill checked, invoice number should be filled
@@ -1136,6 +1206,17 @@ async function submitExpense(e) {
     const tier = CATEGORY_TIER[category] || "tier2";
     const payload = { date, category, description, amount, payment_method: paymentMethod, type };
 
+    // Split payment → backend writes two linked legs. `type`/payment_method
+    // above are ignored by the split path on the server; the legs are fixed
+    // (cash→transaction, UPI→report). Only sent on create (never edit).
+    if (splitOn && !_expenseEditMode) {
+      payload.split = {
+        counter_cash: splitCounter,
+        home_cash: splitHome,
+        account: splitAccount,
+      };
+    }
+
     if (tier === "salary") {
       payload.paid_to = document.getElementById("expense-paid-to")?.value || "";
     }
@@ -1196,8 +1277,11 @@ async function submitExpense(e) {
       });
     }
 
-    if (!response.ok) throw new Error(`Server error: ${response.status}`);
-    const result = await response.json();
+    // Read the body even on a non-2xx response so the server's specific
+    // message (e.g. a split-validation reason) is shown instead of an opaque
+    // "Server error: 400".
+    const result = await response.json().catch(() => null);
+    if (!result) throw new Error(`Server error: ${response.status}`);
 
     if (result.success) {
       document.getElementById("expense-modal")?.classList.remove("show");
@@ -1243,6 +1327,134 @@ async function submitExpense(e) {
 function _setDisplay(id, show) {
   const el = document.getElementById(id);
   if (el) el.style.display = show ? "block" : "none";
+}
+
+// ─── Split payment (admin only) ─────────────────────────────────────────────
+// A split records part of the expense as cash from the counter (a
+// transaction expense) and the rest as UPI from the account (a report
+// expense). The backend stores this as two linked documents; the frontend
+// only collects the two amounts and a flag.
+
+function _isAdminForSplit() {
+  return !!(window.CibaraAuth
+    && typeof window.CibaraAuth.userCan === "function"
+    && window.CibaraAuth.userCan("expense.manage"));
+}
+
+function _isSplitEnabled() {
+  const t = document.getElementById("expense-split-toggle");
+  const wrap = document.getElementById("expense-split-toggle-wrap");
+  // Only "enabled" if the control is both visible and checked.
+  return !!(t && t.checked && wrap && wrap.style.display !== "none");
+}
+
+// Categories that are account-level (not daily counter cash) — must mirror
+// _SPLIT_INELIGIBLE_CATEGORIES in routes/reports.py.
+const SPLIT_INELIGIBLE_CATEGORIES = ["rent", "booking_commission"];
+
+// Decide whether the split toggle should be offered, given the current
+// form state. Eligible only for: admin, a Daily Expense (transaction),
+// an eligible category, and no GST/bill attached. When not eligible the
+// toggle is hidden AND any active split is torn down.
+function _updateSplitVisibility() {
+  const wrap = document.getElementById("expense-split-toggle-wrap");
+  if (!wrap) return;
+
+  const type = document.getElementById("expense-type")?.value || "transaction";
+  const category = document.getElementById("expense-category")?.value || "";
+
+  // A billed / GST purchase CAN be split — the invoice metadata is recorded
+  // once on the primary leg server-side, so bills no longer block the toggle.
+  const eligible = _isAdminForSplit()
+    && !_expenseEditMode          // split is a create-time feature only
+    && type === "transaction"
+    && !!category
+    && !SPLIT_INELIGIBLE_CATEGORIES.includes(category);
+
+  wrap.style.display = eligible ? "block" : "none";
+  if (!eligible) {
+    const t = document.getElementById("expense-split-toggle");
+    if (t) t.checked = false;
+    _onSplitToggle();  // collapse the fields + restore the payment block
+  }
+}
+
+// Daily Expense (transaction) always leaves the cash counter, so it has NO
+// payment-method choice — it is cash, period. The "Paid From" selector is
+// shown only for a "From Account / Home" (report) expense, where
+// cash = home cash and online = from the bank account. A split also hides it
+// (the split has its own Cash / UPI inputs).
+function _applyPaymentMethodUI() {
+  const type = document.getElementById("expense-type")?.value || "transaction";
+  const splitOn = _isSplitEnabled();
+  const show = (type === "report") && !splitOn;
+  const grp = document.getElementById("expense-payment-method-group");
+  if (grp) grp.style.display = show ? "block" : "none";
+  if (!show && type === "transaction") {
+    // Force cash for any counter (daily / split-cash) expense.
+    const pmInput = document.getElementById("expense-payment-method");
+    if (pmInput) pmInput.value = "cash";
+    document.querySelectorAll("#expense-form .payment-btn").forEach((b) => {
+      b.classList.toggle("active", b.getAttribute("data-payment") === "cash");
+    });
+  }
+}
+
+// Show/hide the split amount fields and the (now redundant) payment-method
+// block based on the toggle state.
+function _onSplitToggle() {
+  const on = _isSplitEnabled();
+  _setDisplay("expense-split-fields", on);
+  _applyPaymentMethodUI();
+  // Always start from a clean slate; the operator allocates the total across
+  // the three source boxes. We do not auto-seed because the split can be any
+  // 2-or-3-way combination.
+  ["expense-split-counter", "expense-split-home", "expense-split-account"].forEach((id) => {
+    const el = document.getElementById(id);
+    if (el) el.value = "";
+  });
+  if (on) _recalcSplit();
+}
+
+// Keep the two legs summing to the total. `source` is whichever field the
+// operator just edited; the OTHER leg is derived so the pair always equals
+// the total. Negative results are clamped to 0.
+// Read the three source boxes and report the running allocation against the
+// total. Does NOT auto-balance (a 3-way split has no single "other" field);
+// it just guides the operator. Returns {counter, home, account, sum}.
+function _splitValues() {
+  const counter = parseInt(document.getElementById("expense-split-counter")?.value) || 0;
+  const home = parseInt(document.getElementById("expense-split-home")?.value) || 0;
+  const account = parseInt(document.getElementById("expense-split-account")?.value) || 0;
+  return { counter, home, account, sum: counter + home + account };
+}
+
+function _recalcSplit() {
+  const total = parseInt(document.getElementById("expense-amount")?.value) || 0;
+  const hint = document.getElementById("expense-split-hint");
+  if (!hint) return;
+
+  const { counter, home, account, sum } = _splitValues();
+  const positive = [counter, home, account].filter((x) => x > 0).length;
+  const remaining = total - sum;
+
+  if (total <= 0) {
+    hint.textContent = "Enter the total amount first.";
+    hint.style.color = "#e53e3e";
+  } else if (positive < 2) {
+    hint.textContent = "Use at least two sources for a split.";
+    hint.style.color = "#e53e3e";
+  } else if (remaining !== 0) {
+    hint.textContent = `Allocated ₹${sum} of ₹${total} · ${remaining > 0 ? "₹" + remaining + " left" : "₹" + (-remaining) + " over"}`;
+    hint.style.color = "#e53e3e";
+  } else {
+    const parts = [];
+    if (counter) parts.push(`₹${counter} counter`);
+    if (home) parts.push(`₹${home} home`);
+    if (account) parts.push(`₹${account} account`);
+    hint.textContent = parts.join(" + ") + ` = ₹${total}`;
+    hint.style.color = "#38a169";
+  }
 }
 
 // ─── Render logs ──────────────────────────────────────────────────────────────
@@ -1313,10 +1525,16 @@ function updateRenderLogs(originalRenderLogs) {
           const gstBadge = log.has_gst
             ? `<span style="font-size:0.72rem;background:#e8f5e9;color:#2e7d32;border-radius:4px;padding:1px 5px;margin-left:4px;">GST ₹${log.gst_amount || 0}</span>`
             : "";
+          // Split badge: this row is the cash (counter) leg of a split.
+          // The matching UPI part is recorded as a report expense (it
+          // doesn't appear in this daily panel by design).
+          const splitBadge = log.split_group_id
+            ? `<span style="font-size:0.72rem;background:#fff3e0;color:#b45309;border-radius:4px;padding:1px 5px;margin-left:4px;" title="Part of a split payment — UPI portion is a report expense">SPLIT · ₹${log.split_total || log.amount} total</span>`
+            : "";
           logsHTML += `
             <div class="log-item transaction-expense">
               <div class="log-details">
-                <div class="log-title">${log.description}<span class="expense-category-badge">${catDisplay}</span>${gstBadge}${photoIcon}</div>
+                <div class="log-title">${log.description}<span class="expense-category-badge">${catDisplay}</span>${gstBadge}${splitBadge}${photoIcon}</div>
                 <div class="log-subtitle">Expense (${log.payment_method}) at ${log.time || "N/A"}</div>
               </div>
               <div class="log-amount" style="color:var(--danger);">₹${log.amount}</div>
@@ -1567,7 +1785,7 @@ function downloadReportCsv() {
   rows.push(["--- EXPENSES ---"]);
   rows.push([
     "Date","Time","Type","Category","Description","Paid To",
-    "Amount","Payment Method",
+    "Amount","Payment Method","Split Source","Split Total",
     "Invoice No","Invoice Date","Has GST","Vendor","GSTIN",
     "Taxable Amount","GST Rate %","GST Amount",
     "Invoice Photo URL",
@@ -1583,6 +1801,8 @@ function downloadReportCsv() {
       e.paid_to || "",
       e.amount || 0,
       e.payment_method || "",
+      ({counter_cash:"Counter cash",home_cash:"Home cash",account:"Account"})[e.split_role] || (e.split_role || ""),
+      e.split_total || "",
       e.invoice_number || "",
       e.invoice_date || "",
       e.has_gst ? "Yes" : "No",

@@ -159,6 +159,25 @@ async function generateAnalytics(reportData) {
     }
   }
 
+  // Performance KPIs (Occupancy / ADR / RevPAR) — separate endpoint because
+  // these are measured by night of stay, not by checkout. Best-effort: any
+  // failure (no permission, no data) just leaves the strip hidden.
+  if (startDate && endDate) {
+    try {
+      const kResp = await apiFetch("/performance_kpis", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ start_date: startDate, end_date: endDate }),
+      });
+      if (kResp.ok) {
+        const kd = await kResp.json();
+        if (kd.success && kd.kpis) updatePerformanceStrip(kd.kpis);
+      }
+    } catch (e) {
+      console.warn("Performance KPIs unavailable:", e);
+    }
+  }
+
   // Revenue by Room Type — runs after the bills fetch so AC attribution
   // is accurate. If the fetch failed (billsPayload === null) the chart
   // renders an empty state.
@@ -576,6 +595,59 @@ function generateInsightsSection(data, dayCount) {
       ${cell("#f3e8ff","#7c3aed","fas fa-fire","Busiest Day of Week",busiestStr)}
       ${cell("#e0f2fe","#0369a1","fas fa-percentage","Expense Ratio",`${expRatio}% of Revenue`)}
     </div>`;
+}
+
+// ── Performance strip (populated after /performance_kpis API call) ───────────
+// Occupancy %, ADR and RevPAR are measured by NIGHT OF STAY, not by checkout,
+// so they differ from the Billing Analytics strip by design.
+function updatePerformanceStrip(kpis) {
+  const panel = document.getElementById("performance-panel");
+  const strip = document.getElementById("performance-strip");
+  if (!panel || !strip || !kpis) return;
+
+  const fmtMoney = (n) => Math.round(n || 0).toLocaleString("en-IN");
+  const fmtNum = (n) => (n || 0).toLocaleString("en-IN");
+
+  function bk(iconBg, iconColor, icon, lbl, val) {
+    return `<div class="billing-kpi">
+      <div class="billing-icon" style="background:${iconBg};color:${iconColor}">
+        <i class="${icon}"></i>
+      </div>
+      <div>
+        <div class="billing-lbl">${lbl}</div>
+        <div class="billing-val">${val}</div>
+      </div>
+    </div>`;
+  }
+
+  // Warn (not block) when occupancy > 100% — almost always a wrong room count.
+  const occColor = kpis.occupancy_over_100 ? "#dc2626" : "#1e293b";
+  const occCard = `<div class="billing-kpi">
+      <div class="billing-icon" style="background:#dbeafe;color:#1d4ed8">
+        <i class="fas fa-bed"></i>
+      </div>
+      <div>
+        <div class="billing-lbl">Occupancy</div>
+        <div class="billing-val" style="color:${occColor}">${(kpis.occupancy_pct || 0)}%</div>
+      </div>
+    </div>`;
+
+  strip.innerHTML =
+    occCard +
+    bk("#dcfce7","#166534","fas fa-rupee-sign","ADR",`₹${fmtMoney(kpis.adr)}`) +
+    bk("#f3e8ff","#6b21a8","fas fa-chart-line","RevPAR",`₹${fmtMoney(kpis.revpar)}`) +
+    bk("#fef9c3","#854d0e","fas fa-moon","Room Nights Sold", fmtNum(kpis.occupied_room_nights)) +
+    bk("#e0f2fe","#0369a1","fas fa-door-open","Available Nights", fmtNum(kpis.available_room_nights)) +
+    bk("#fef3c7","#92400e","fas fa-hotel","Room Revenue",`₹${fmtMoney(kpis.room_revenue)}`);
+
+  panel.style.display = "block";
+
+  if (kpis.occupancy_over_100) {
+    console.warn(
+      "Occupancy > 100% — room_count (" + kpis.room_count + ") is likely lower " +
+      "than the rooms that were actually sold. Set the correct inventory."
+    );
+  }
 }
 
 // ── Billing strip (populated after /revenue_report API call) ─────────────────
@@ -1405,6 +1477,24 @@ function initializeAnalyticsView() {
       </div>
     </div>
 
+    <!-- Performance strip (hidden until /performance_kpis loads) -->
+    <div class="billing-panel" id="performance-panel" style="display:none">
+      <div class="billing-hdr">
+        <i class="fas fa-gauge-high"></i> Performance
+        <span>(occupancy / ADR / RevPAR, by night of stay)</span>
+      </div>
+      <div class="billing-strip" id="performance-strip"></div>
+    </div>
+
+    <!-- Billing analytics strip (hidden until /revenue_report loads) -->
+    <div class="billing-panel" id="billing-panel" style="display:none">
+      <div class="billing-hdr">
+        <i class="fas fa-file-invoice-dollar"></i> Billing Analytics
+        <span>(based on guest checkouts)</span>
+      </div>
+      <div class="billing-strip" id="billing-strip"></div>
+    </div>
+
     <!-- Row 1: Revenue vs Expenses + Daily Revenue -->
     <div class="chart-row chart-row-2">
       ${chartCard("revenue-expense-chart","#4361ee","fas fa-chart-area","Revenue vs Expenses", 280)}
@@ -1463,15 +1553,6 @@ function initializeAnalyticsView() {
     <div class="chart-row chart-row-2">
       ${chartCard("pincode-footfall-chart","#0ea5e9","fas fa-map-marker-alt","Footfall by Area (PIN code)", 320)}
       ${chartCard("guest-age-chart","#16a34a","fas fa-users","Guest Age Distribution", 320)}
-    </div>
-
-    <!-- Billing analytics strip (hidden until /revenue_report loads) -->
-    <div class="billing-panel" id="billing-panel" style="display:none">
-      <div class="billing-hdr">
-        <i class="fas fa-file-invoice-dollar"></i> Billing Analytics
-        <span>(based on guest checkouts)</span>
-      </div>
-      <div class="billing-strip" id="billing-strip"></div>
     </div>
   `;
 }

@@ -14,7 +14,7 @@ from firebase_admin import firestore
 from config import (
     db, rooms_ref, bills_ref, logs_ref, totals_ref, counters_ref,
     metadata_ref, IST, logger, settlements_ref, settings_ref,
-    credit_notes_ref,
+    credit_notes_ref, bookings_ref,
     _build_active_entry_fast, _find_serial_fast, _batch_fill_serials,
     get_all_rooms, invalidate_rooms_and_totals,
     get_billing_config, invalidate_billing_config_cache,
@@ -24,11 +24,38 @@ from config import (
     create_credit_note, compute_credit_components, CN_REASONS,
 )
 from services import payment_service, pdf_service, expense_service
+from services import system_alerts
+from services import gst_lock_service
 from services.auth_service import requires_permission
 from services.audit_log import write_log, attribution_update, _safe_user
 from services.role_filters import clamp_date_range
 
 billing_bp = Blueprint('billing', __name__)
+
+
+def _month_lock_response(bill, action):
+    """
+    Return a (response, status) tuple if the bill's GST month is locked,
+    else None. Single chokepoint so every mutating bill route states the
+    same policy and message. The relevant period is the month of the
+    bill's checkout_time (= the GSTR-1 period the invoice was reported in).
+    """
+    period = gst_lock_service.normalize_period(bill.get("checkout_time") or "")
+    if period and gst_lock_service.is_month_locked(period):
+        return (
+            jsonify(
+                success=False,
+                month_locked=True,
+                message=(
+                    f"GST period {period} is locked (GSTR-1 filed) — "
+                    f"{action} is not allowed. Issue a credit note "
+                    f"(Section 34) for corrections, or ask an admin to "
+                    f"unlock the month in the Bills tab."
+                ),
+            ),
+            409,
+        )
+    return None
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -958,6 +985,10 @@ def add_bill_payment():
         # Section 34 CN for the discount amount.
         discount_type   = (data_json.get("discount_type") or "financial").lower()
         discount_reason = (data_json.get("discount_reason") or "").strip()
+        # Optional client flag marking a financial discount as a bad-debt
+        # write-off. Previously referenced but never parsed — any discount
+        # payment write raised NameError. Defaults to False.
+        is_bad_debt = bool(data_json.get("is_bad_debt", False))
         if discount_type not in ("financial", "credit_note"):
             return jsonify(success=False,
                            message="discount_type must be 'financial' or 'credit_note'")
@@ -978,6 +1009,17 @@ def add_bill_payment():
 
         bill_data       = bill_doc.to_dict()
         current_balance = int(bill_data.get("balance", 0))
+
+        # GST month lock — receiving money against a filed invoice is fine
+        # (the supply doesn't change), but a "financial" blind-subtract
+        # discount rewrites total_amount / gst_amount of a filed invoice.
+        # Only the credit-note discount path (Section 34) remains lawful.
+        if discount > 0 and discount_type == "financial":
+            _locked = _month_lock_response(
+                bill_data, "a financial discount (use discount_type "
+                           "'credit_note' instead)")
+            if _locked:
+                return _locked
 
         if current_balance <= 0:
             return jsonify(success=False, message="No outstanding balance on this bill")
@@ -1232,6 +1274,14 @@ def recalculate_bill():
             return jsonify(success=False, message="Bill not found"), 404
 
         bill_data    = bill_snap.to_dict()
+
+        # GST month lock — recalculation rewrites payment_cash /
+        # payment_online / balance and regenerates the PDF of an invoice
+        # already reported in a filed GSTR-1. Frozen months stay frozen.
+        _locked = _month_lock_response(bill_data, "recalculating this bill")
+        if _locked:
+            return _locked
+
         room         = str(bill_data.get("room", ""))
         guest_name   = bill_data.get("guest_name", "")
         checkin_time = bill_data.get("checkin_time", "")
@@ -1376,6 +1426,13 @@ def update_bill_service():
             return jsonify(success=False, message="Bill not found"), 404
 
         bill_data = bill_snap.to_dict()
+
+        # GST month lock — editing a service price changes the taxable
+        # value of an invoice already reported in a filed GSTR-1.
+        _locked = _month_lock_response(bill_data, "editing a service price")
+        if _locked:
+            return _locked
+
         services  = list(bill_data.get("services", []))
 
         if svc_index < 0 or svc_index >= len(services):
@@ -2690,6 +2747,12 @@ def update_bill_gst():
             return jsonify(success=False, message="Bill not found"), 404
         bill = bill_snap.to_dict() or {}
 
+        # GST month lock — recipient details decide B2B vs B2C placement
+        # in a GSTR-1 that has already been filed.
+        _locked = _month_lock_response(bill, "editing GST recipient details")
+        if _locked:
+            return _locked
+
         if bill.get("linked_credit_note_ids"):
             return jsonify(
                 success=False,
@@ -2736,13 +2799,17 @@ def update_bill_gst():
         )
         before_snapshot = {k: bill.get(k) for k in gst_fields}
 
-        # Helper closure: refresh the CGST/SGST/IGST split for a target state
-        # code. Used by both the B2B (GSTIN-derived) and B2CL (state-only)
-        # branches, and also by the "clear" branch to restore intra-state.
-        def _split_for(state_code):
+        # Helper closure: tax-head split for this bill. Section 12(3)(b)
+        # IGST Act — accommodation place of supply is the PROPERTY location
+        # (Karnataka-29), NOT the recipient's state, so the split is ALWAYS
+        # CGST+SGST. The recipient's state is still stored on the bill for
+        # GSTR-1 recipient details, but it must never flip the tax heads.
+        # The state_code parameter is accepted and deliberately ignored so
+        # all existing call sites stay unchanged.
+        def _split_for(state_code):  # noqa: ARG001 — documented no-op
             return compute_gst_split(
                 float(bill.get("gst_amount") or 0),
-                recipient_state_code=state_code,
+                recipient_state_code="29",
             )
 
         if clear:
@@ -2843,11 +2910,13 @@ def update_bill_gst():
                 igst_amount=igst_v,
             )
 
-        # ── Branch 2: B2CL (no GSTIN, but explicit out-of-state recipient) ──
-        # G5: lets the operator flag a >₹1L inter-state B2C invoice with the
-        # correct state code so the GSTR-1 B2CL bucket fires. Useful for
-        # corporate guests who can't provide a GSTIN but the place of supply
-        # is outside Karnataka — IGST applies instead of CGST+SGST.
+        # ── Branch 2: recipient-state details without a GSTIN ───────────────
+        # Records the recipient's home state for the bill's recipient block.
+        # NOTE (Section 12(3)(b) IGST Act): accommodation supplied at the
+        # lodge is ALWAYS an intra-state supply (PoS = property location),
+        # so the tax stays CGST+SGST and true B2CL (inter-state) treatment
+        # cannot arise for room charges — the state code here is recipient
+        # metadata, not place of supply.
         if state_code_in:
             if state_code_in not in _STATE_CODE_TO_NAME:
                 return jsonify(
@@ -3445,3 +3514,80 @@ def issue_credit_note():
     except Exception as e:
         logger.error(f"issue_credit_note error: {e}", exc_info=True)
         return jsonify(success=False, message=f"Error: {str(e)}"), 500
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# GST MONTH LOCKS & SYSTEM ALERTS (admin)
+# ══════════════════════════════════════════════════════════════════════════════
+
+@billing_bp.route("/gst_locks", methods=["GET"])
+@requires_permission("gst.lock.manage")
+def gst_locks_list():
+    """Last 18 months with lock state — feeds the Bills-tab lock modal."""
+    try:
+        # 24 months → two full Indian financial years in the picker.
+        return jsonify(success=True, locks=gst_lock_service.list_locks(months_back=24))
+    except Exception as e:
+        logger.error(f"gst_locks_list error: {e}", exc_info=True)
+        return jsonify(success=False, message=f"Error: {e}"), 500
+
+
+@billing_bp.route("/gst_locks/set", methods=["POST"])
+@requires_permission("gst.lock.manage")
+def gst_locks_set():
+    """
+    Lock or unlock a GST month after filing.
+    Body: {period: "YYYY-MM", locked: bool, note: str}.
+    Locking current/future months is refused by the service layer.
+    """
+    try:
+        data   = request.get_json(silent=True) or {}
+        period = (data.get("period") or "").strip()
+        locked = bool(data.get("locked"))
+        note   = (data.get("note") or "").strip()
+        actor  = (_safe_user() or {}).get("userId") or "unknown"
+        try:
+            doc = gst_lock_service.set_lock(period, locked, actor, note)
+        except ValueError as ve:
+            return jsonify(success=False, message=str(ve)), 400
+        write_log(
+            "gst.month.lock" if locked else "gst.month.unlock",
+            target_collection="gst_month_locks",
+            target_id=doc["period"],
+            metadata={"note": note},
+        )
+        return jsonify(success=True, lock=doc)
+    except Exception as e:
+        logger.error(f"gst_locks_set error: {e}", exc_info=True)
+        return jsonify(success=False, message=f"Error: {e}"), 500
+
+
+@billing_bp.route("/system_alerts", methods=["GET"])
+@requires_permission("logs.view")
+def system_alerts_list():
+    """Operational alerts (blocked checkouts etc.), newest first."""
+    try:
+        include_resolved = request.args.get("include_resolved") == "1"
+        rows = system_alerts.list_alerts(unresolved_only=not include_resolved)
+        return jsonify(success=True, alerts=rows)
+    except Exception as e:
+        logger.error(f"system_alerts_list error: {e}", exc_info=True)
+        return jsonify(success=False, message=f"Error: {e}"), 500
+
+
+@billing_bp.route("/system_alerts/resolve", methods=["POST"])
+@requires_permission("logs.view")
+def system_alerts_resolve():
+    """Mark an alert handled. Body: {alert_id}."""
+    try:
+        data = request.get_json(silent=True) or {}
+        alert_id = (data.get("alert_id") or "").strip()
+        if not alert_id:
+            return jsonify(success=False, message="alert_id is required"), 400
+        actor = (_safe_user() or {}).get("userId") or "unknown"
+        if not system_alerts.resolve_alert(alert_id, actor):
+            return jsonify(success=False, message="Alert not found"), 404
+        return jsonify(success=True)
+    except Exception as e:
+        logger.error(f"system_alerts_resolve error: {e}", exc_info=True)
+        return jsonify(success=False, message=f"Error: {e}"), 500

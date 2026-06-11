@@ -25,6 +25,7 @@ Exit code 0 = completed, non-zero = aborted.
 """
 
 from __future__ import annotations
+import os
 
 import argparse
 import sys

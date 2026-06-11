@@ -656,6 +656,41 @@ def send_whatsapp_message(phone_number, message):
         logger.error(f"Error sending WhatsApp via Twilio: {str(e)}")
         return False
 
+class SequentialNumberError(RuntimeError):
+    """
+    Raised when a statutory document number (bill / credit note) cannot be
+    allocated from the atomic Firestore counter.
+
+    This must NEVER be papered over with a fallback number: GST Rule 46(b)
+    requires a consecutive serial — a synthetic/timestamp number breaks the
+    series, can collide with a real one, and corrupts GSTR-1 Table 13.
+    Callers must abort the operation and surface the error.
+    """
+
+
+class BillCreationError(Exception):
+    """
+    Raised when create_bill_record() cannot produce a bill for a checkout.
+
+    Checkout MUST be blocked when this is raised — the pre-2026-06 behaviour
+    (return None, silently cancel the draft, let the guest leave) caused
+    invoices to vanish from the Register and GSTR-1 with no trace.
+
+    Attributes:
+        reason       — human-readable cause, safe to show to front-desk staff.
+        bill_number  — set ONLY if a sequential number was already minted
+                       before the failure. The counter cannot be rolled back,
+                       so this number is consumed: it must be reported as a
+                       cancelled document in GSTR-1 Table 13. The alert that
+                       checkout writes records it for exactly that purpose.
+    """
+
+    def __init__(self, reason, bill_number=None):
+        super().__init__(reason)
+        self.reason = reason
+        self.bill_number = bill_number
+
+
 def create_bill_record(room, room_data, checkout_time, batch=None,
                        settle_later=False, settlement_id=None):
     """
@@ -673,11 +708,17 @@ def create_bill_record(room, room_data, checkout_time, batch=None,
     try:
         guest = room_data.get("guest")
         if not guest:
-            return None
+            raise BillCreationError(
+                "guest data is missing on the room — cannot build the bill. "
+                "Re-open the room card and verify the stay, then retry checkout."
+            )
 
         checkin_time = room_data.get("checkin_time")
         if not checkin_time:
-            return None
+            raise BillCreationError(
+                "check-in time is missing on the room — cannot build the bill. "
+                "Fix the check-in time on the room card, then retry checkout."
+            )
 
         checkin_dt = datetime.strptime(checkin_time, "%Y-%m-%d %H:%M")
         checkout_dt = datetime.strptime(checkout_time, "%Y-%m-%d %H:%M")
@@ -1066,7 +1107,20 @@ def create_bill_record(room, room_data, checkout_time, batch=None,
         always_generate_bill = bool(_billing_cfg.get("always_generate_bill", False))
         # When the property's own GSTIN is registered on MMT, the hotel issues
         # the room tax invoice itself (see _BILLING_CONFIG_DEFAULTS note).
-        mmt_hotel_issues_invoice = bool(_billing_cfg.get("mmt_hotel_issues_invoice", False))
+        # C3 — OTA invoices are MANDATORY. The lodge is GST-registered, so
+        # Section 9(5) does NOT shift accommodation liability to the OTA:
+        # every OTA stay is the hotel's own outward supply and MUST carry a
+        # sequential tax invoice. The legacy model (OTA bills the room, the
+        # hotel mints no number, bill_number "-") silently dropped those
+        # supplies from GSTR-1. The Settings key is still read so old
+        # configs don't error, but it can no longer disable invoicing.
+        mmt_hotel_issues_invoice = True
+        if not bool(_billing_cfg.get("mmt_hotel_issues_invoice", True)):
+            logger.warning(
+                "billing_config.mmt_hotel_issues_invoice=False is no longer "
+                "honoured — OTA stays always receive a hotel tax invoice "
+                "(registered supplier must report the supply in GSTR-1)."
+            )
 
         # MMT service-only bill: room rent is billed by MMT, hotel issues an
         # invoice for the in-hotel service/addon portion only (cash or UPI).
@@ -1229,10 +1283,13 @@ def create_bill_record(room, room_data, checkout_time, batch=None,
             bk_invoice_type = classify_invoice_type(
                 bk_recipient_gstin, total_amount, bk_recipient_state_code
             )
-            if bk_recipient_state_code and bk_recipient_state_code != "29":
-                bill_cgst_amount, bill_sgst_amount, bill_igst_amount = compute_gst_split(
-                    gst_amount, recipient_state_code=bk_recipient_state_code
-                )
+            # Place of supply — Section 12(3)(b) IGST Act: for hotel
+            # accommodation the PoS is the LOCATION OF THE PROPERTY,
+            # irrespective of the recipient's registered state. Every supply
+            # on this bill is made at the lodge (Karnataka-29), so the split
+            # is ALWAYS CGST+SGST — never IGST — even for an out-of-state
+            # B2B recipient. (Previously this recomputed an IGST split from
+            # the recipient's state: a hard compliance error, fixed 2026-06.)
 
         bill_record = {
             "bill_number": bill_number,
@@ -1356,15 +1413,37 @@ def create_bill_record(room, room_data, checkout_time, batch=None,
 
         return bill_record
 
+    except BillCreationError:
+        # Already a structured, caller-facing failure — propagate untouched.
+        raise
     except Exception as e:
-        logger.error(f"Error creating bill record: {str(e)}")
-        return None
+        # Any other exception is a bug or infrastructure failure. NEVER
+        # swallow it: the old `return None` path let checkout continue and
+        # the invoice silently vanished from the Register and GSTR-1.
+        #
+        # If the sequential number was already minted before the failure,
+        # the counter is consumed — attach the number so the checkout
+        # alert records it (it must be declared as a cancelled document
+        # in GSTR-1 Table 13).
+        _minted = locals().get("bill_number")
+        if not isinstance(_minted, str) or _minted == "-":
+            _minted = None
+        logger.exception(f"Error creating bill record (room {room}): {e}")
+        raise BillCreationError(
+            f"internal error while building the bill: {e}",
+            bill_number=_minted,
+        ) from e
 
 def generate_sequential_bill_number(checkout_date):
     """
     Format: CC/YYYY/MM/XXXXX
     Uses an atomic Firestore counter keyed on "bill_YYYY_MM".
     Minimum sequence value is 1 (never 0).
+
+    Raises SequentialNumberError on ANY failure. There is deliberately no
+    fallback: a non-sequential number violates GST Rule 46(b), can collide
+    with a real number, and silently corrupts the series. The caller must
+    abort (checkout is blocked and an alert is raised).
     """
     try:
         year  = checkout_date.year
@@ -1377,7 +1456,10 @@ def generate_sequential_bill_number(checkout_date):
         @firestore.transactional
         def _inc(t, ref):
             snap    = ref.get(transaction=t)
-            new_val = (snap.get("count") + 1) if snap.exists else 1
+            # Tolerate a counter doc that exists but lacks the field —
+            # treat as 0 rather than crashing the whole series.
+            current = (snap.to_dict() or {}).get("count", 0) if snap.exists else 0
+            new_val = int(current) + 1
             t.set(ref, {"count": new_val})
             return new_val
 
@@ -1386,10 +1468,12 @@ def generate_sequential_bill_number(checkout_date):
         return f"CC/{year}/{month}/{serial}"
 
     except Exception as e:
-        logger.error(f"Error generating bill number: {e}")
-        # Timestamp-based fallback — still unique, never 0
-        ts = max(1, int(checkout_date.timestamp()) % 100000)
-        return f"CC/{checkout_date.year}/{str(checkout_date.month).zfill(2)}/{ts:05d}"
+        logger.exception(f"Bill number allocation failed for {checkout_date}: {e}")
+        raise SequentialNumberError(
+            f"could not allocate the next bill number ({e}). "
+            "Checkout was aborted — no number was consumed. Retry; if it "
+            "persists, check Firestore connectivity / the counters collection."
+        ) from e
 
 
 def find_serial_number_for_checkin(room_number, guest_name, checkin_dt, all_logs):
@@ -1837,17 +1921,16 @@ def compute_daily_folio(
             day_gst = 0.0
         day_taxable = round(day_total - day_gst, 2)
 
-        # Place-of-supply split — same logic as compute_gst_split, inlined
-        # here so the helper has no inter-dependency.
-        is_intra = (not recipient_state_code) or recipient_state_code == "29"
-        if is_intra:
-            day_cgst = round(day_gst / 2, 2)
-            day_sgst = round(day_gst - day_cgst, 2)
-            day_igst = 0.0
-        else:
-            day_cgst = 0.0
-            day_sgst = 0.0
-            day_igst = round(day_gst, 2)
+        # Place-of-supply split — Section 12(3)(b) IGST Act: accommodation
+        # is supplied AT the property, so the place of supply is always
+        # Karnataka (29) regardless of the recipient's state. The split is
+        # therefore ALWAYS CGST+SGST. day_igst stays in the schema (always
+        # 0.0) for backward compatibility; recipient_state_code is retained
+        # in the signature for audit visibility only and no longer affects
+        # the tax heads.
+        day_cgst = round(day_gst / 2, 2)
+        day_sgst = round(day_gst - day_cgst, 2)
+        day_igst = 0.0
 
         # 24h day window anchored on check-in time
         day_start = checkin_dt + _td(hours=24 * (entry["day_idx"] - 1))
@@ -2035,7 +2118,12 @@ def create_cancellation_charge_bill(*, booking_id, booking_data, retained_amount
 
 
 def generate_sequential_credit_note_number(cn_date):
-    """Mint next CN/YYYY/MM/XXXXX. Atomic Firestore transaction. Min value 1."""
+    """
+    Mint next CN/YYYY/MM/XXXXX. Atomic Firestore transaction. Min value 1.
+
+    Raises SequentialNumberError on failure — no fallback, for the same
+    Rule 46(b) consecutive-series reasons as generate_sequential_bill_number.
+    """
     try:
         year  = cn_date.year
         month = str(cn_date.month).zfill(2)
@@ -2046,7 +2134,8 @@ def generate_sequential_credit_note_number(cn_date):
         @firestore.transactional
         def _inc(t, ref):
             snap    = ref.get(transaction=t)
-            new_val = (snap.get("count") + 1) if snap.exists else 1
+            current = (snap.to_dict() or {}).get("count", 0) if snap.exists else 0
+            new_val = int(current) + 1
             t.set(ref, {"count": new_val})
             return new_val
 
@@ -2054,9 +2143,12 @@ def generate_sequential_credit_note_number(cn_date):
         serial = str(seq).zfill(5)
         return f"CN/{year}/{month}/{serial}"
     except Exception as e:
-        logger.error(f"Error generating CN number: {e}")
-        ts = max(1, int(cn_date.timestamp()) % 100000)
-        return f"CN/{cn_date.year}/{str(cn_date.month).zfill(2)}/{ts:05d}"
+        logger.exception(f"CN number allocation failed for {cn_date}: {e}")
+        raise SequentialNumberError(
+            f"could not allocate the next credit-note number ({e}). "
+            "The credit note was NOT issued — retry; if it persists, check "
+            "Firestore connectivity / the counters collection."
+        ) from e
 
 
 CN_REASONS = (
@@ -2218,7 +2310,21 @@ def create_credit_note(
         return cn_doc
 
     except Exception as e:
-        logger.error(f"create_credit_note failed: {e}", exc_info=True)
+        # The operator sees the failure (callers return an error for a None
+        # result), so unlike checkout this is not a silent path. But if the
+        # CN number was already minted before the failure, the counter is
+        # consumed — log it loudly so it can be declared as a cancelled
+        # document in GSTR-1 Table 13.
+        _minted_cn = locals().get("cn_number")
+        if isinstance(_minted_cn, str) and _minted_cn:
+            logger.critical(
+                f"create_credit_note failed AFTER minting {_minted_cn} — "
+                f"this CN number is consumed but no CN exists. Declare it "
+                f"as a cancelled document in GSTR-1 Table 13. Error: {e}",
+                exc_info=True,
+            )
+        else:
+            logger.error(f"create_credit_note failed: {e}", exc_info=True)
         return None
 
 

@@ -1242,6 +1242,39 @@
       cgst = 0; sgst = 0; accomBase = accomTotal;
     }
     const discounts  = b.discounts || 0;
+
+    // ── Authoritative tax figures — Section 15(3)(a) ─────────────────────────
+    // The taxable value must be NET of the on-invoice discount. The legacy
+    // block above is kept only for line-item layout; the figures printed on
+    // the GST rows and the HSN/SAC Tax Summary come from, in order:
+    //   1. the per-night daily_folio (already net of allocated discount),
+    //   2. stored bill aggregates from create_bill_record (already net),
+    //   3. legacy recompute, netting the proportional discount share that
+    //      belongs to accommodation (mirrors config.create_bill_record).
+    let taxAccomBase = accomBase, taxCgst = cgst, taxSgst = sgst;
+    const _taxFolio = Array.isArray(b.daily_folio) ? b.daily_folio : [];
+    if (_taxFolio.length > 0) {
+      const _fs = (k) => _taxFolio.reduce((acc, d) => acc + Number(d[k] || 0), 0);
+      taxAccomBase = _fs("day_taxable");
+      taxCgst      = _fs("day_cgst");
+      taxSgst      = _fs("day_sgst");
+    } else if (typeof b.accommodation_taxable === "number" && b.accommodation_taxable > 0) {
+      taxAccomBase = b.accommodation_taxable;
+      const _g = typeof b.gst_amount === "number" ? b.gst_amount : 0;
+      taxCgst = _g / 2; taxSgst = _g - _g / 2;
+    } else if (discounts > 0) {
+      const _grossAll  = accomTotal + otherSvcTotal;
+      const _accomDisc = _grossAll > 0
+        ? Math.min(discounts * (accomTotal / _grossAll), accomTotal) : 0;
+      const _accomNet  = Math.max(accomTotal - _accomDisc, 0);
+      if (gstRatePct > 0) {
+        const _gNet = _accomNet * gstRatePct / (100 + gstRatePct);
+        taxCgst = _gNet / 2; taxSgst = _gNet - _gNet / 2;
+        taxAccomBase = _accomNet - _gNet;
+      } else {
+        taxCgst = 0; taxSgst = 0; taxAccomBase = _accomNet;
+      }
+    }
     const svcTotalAll = b.services_total || 0;
     const grandTotal = (typeof b.total_amount === "number" && b.total_amount > 0)
       ? b.total_amount : roomCharges + svcTotalAll - discounts;
@@ -1266,9 +1299,9 @@
        <td class="b-tr">${fix2(s.price||0)}</td></tr>`).join("");
     const gstRows = `
       <tr class="b-gst-row"><td>CGST @ ${cgstRate}%</td>
-        <td class="b-tr">—</td><td class="b-tr">—</td><td class="b-tr">${fix2(cgst)}</td></tr>
+        <td class="b-tr">—</td><td class="b-tr">—</td><td class="b-tr">${fix2(taxCgst)}</td></tr>
       <tr class="b-gst-row"><td>SGST @ ${sgstRate}%</td>
-        <td class="b-tr">—</td><td class="b-tr">—</td><td class="b-tr">${fix2(sgst)}</td></tr>`;
+        <td class="b-tr">—</td><td class="b-tr">—</td><td class="b-tr">${fix2(taxSgst)}</td></tr>`;
     // Helper: GST slab and pre-GST taxable for a segment
     function segGstRate(p) { return p < 1000 ? 0 : p <= 7500 ? 5 : 18; }
     function segTaxable(totalIncl, price) {
@@ -1451,17 +1484,17 @@
     // Aggregates per (HSN/SAC, rate). Register tab uses the simple model:
     // one accommodation row at gstRatePct (or "Exempt" when 0).
     const _taxSumRows = [];
-    let _totTaxable = accomBase, _totCgst = cgst, _totSgst = sgst, _totIgst = 0;
-    if (accomBase > 0 || (cgst + sgst) > 0) {
+    let _totTaxable = taxAccomBase, _totCgst = taxCgst, _totSgst = taxSgst, _totIgst = 0;
+    if (taxAccomBase > 0 || (taxCgst + taxSgst) > 0) {
       const rateDisp = gstRatePct > 0 ? `${gstRatePct}%` : "Exempt";
       _taxSumRows.push(`<tr>
         <td>996311</td><td>Accommodation</td>
         <td class="b-tr">${rateDisp}</td>
-        <td class="b-tr">${fix2(accomBase)}</td>
-        <td class="b-tr">${fix2(cgst)}</td>
-        <td class="b-tr">${fix2(sgst)}</td>
+        <td class="b-tr">${fix2(taxAccomBase)}</td>
+        <td class="b-tr">${fix2(taxCgst)}</td>
+        <td class="b-tr">${fix2(taxSgst)}</td>
         <td class="b-tr">0.00</td>
-        <td class="b-tr">${fix2(cgst + sgst)}</td>
+        <td class="b-tr">${fix2(taxCgst + taxSgst)}</td>
       </tr>`);
     }
 

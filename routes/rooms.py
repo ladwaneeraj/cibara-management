@@ -19,11 +19,13 @@ from config import (
     counters_ref, bills_ref, IST, logger, invalidate_cache,
     invalidate_rooms_and_totals, get_all_rooms,
     get_totals, is_log_from_current_stay, get_next_serial_number,
-    store_transaction_metadata, create_bill_record,
+    store_transaction_metadata, create_bill_record, BillCreationError,
     find_serial_number_for_checkin, _build_active_entry_fast, _find_serial_fast,
     _batch_fill_serials, room_category
 )
 from services import payment_service, customer_service, expense_service, bills_service
+from services import system_alerts
+from services.gst_lock_service import is_month_locked
 from services.auth_service import requires_permission, login_required
 from services.audit_log import write_log, attribution_create, attribution_update, _safe_user
 from routes.billing import auto_generate_bill_pdf
@@ -553,11 +555,64 @@ def checkout():
                 bill_id = f"{room}_{int(datetime.now(IST).timestamp())}"
 
             _sid = settlement_id if (balance > 0 and settle_later) else None
-            bill_record = create_bill_record(
-                room, room_data, checkout_time, batch,
-                settle_later=(balance > 0 and settle_later),
-                settlement_id=_sid
-            )
+            try:
+                bill_record = create_bill_record(
+                    room, room_data, checkout_time, batch,
+                    settle_later=(balance > 0 and settle_later),
+                    settlement_id=_sid
+                )
+            except BillCreationError as bce:
+                # ── CHECKOUT BLOCKED ─────────────────────────────────────────
+                # The bill could not be built. The old behaviour (cancel the
+                # draft, let the guest leave) silently destroyed statutory
+                # invoices — see the May/June 2026 GSTR-1 incident. Now:
+                #   * nothing is committed (the batch is abandoned),
+                #   * the room stays occupied,
+                #   * the operator sees the reason immediately,
+                #   * a persistent admin alert is recorded.
+                # NOTE the cash no-bill toggle is NOT affected: an all-cash
+                # stay with the toggle OFF still returns a valid record with
+                # bill_number "-" — it never raises.
+                logger.error(
+                    f"CHECKOUT BLOCKED for room {room}: {bce.reason} "
+                    f"(minted_number={bce.bill_number})"
+                )
+                _alert_ctx = {
+                    "room":          str(room),
+                    "guest":         guest_name,
+                    "stay_id":       active_bill_id,
+                    "checkout_time": checkout_time,
+                    "minted_bill_number": bce.bill_number,
+                }
+                _alert_msg = (
+                    f"Checkout for room {room} (guest: {guest_name}) was "
+                    f"blocked — bill creation failed: {bce.reason}"
+                )
+                if bce.bill_number:
+                    _alert_msg += (
+                        f" Bill number {bce.bill_number} was already minted "
+                        f"and is consumed: declare it as a CANCELLED document "
+                        f"in GSTR-1 Table 13 for that month."
+                    )
+                system_alerts.record_alert(
+                    "bill.create.blocked", _alert_msg,
+                    severity="critical", context=_alert_ctx,
+                )
+                write_log(
+                    "bill.create.blocked",
+                    target_collection="rooms",
+                    target_id=str(room),
+                    metadata=_alert_ctx,
+                )
+                return jsonify(
+                    success=False,
+                    checkout_blocked=True,
+                    message=(
+                        f"Checkout blocked — the bill could not be created: "
+                        f"{bce.reason} The room has NOT been checked out. "
+                        f"An alert has been sent to the admin."
+                    ),
+                )
 
             if bill_record:
                 # Make sure the stay_id field stays correct on the doc even
@@ -608,19 +663,29 @@ def checkout():
                 logger.info(f"Bill saved for room {room}: {bill_record.get('bill_number')}, "
                             f"status={bill_record.get('status')}, "
                             f"path={'finalize' if active_bill_id else 'legacy'}")
-            elif active_bill_id:
-                # bill_record is None (guest data missing / parse error) but
-                # we have a draft pointing at this stay. Don't leave an
-                # orphan in "draft" status — flip it to cancelled so the
-                # canary in Phase 8 doesn't flag it as stuck.
-                batch.update(bills_ref.document(active_bill_id), {
-                    "status":        "cancelled",
-                    "cancel_reason": "checkout_without_bill_record",
-                    "cancelled_at":  datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S"),
-                })
-                logger.warning(f"Checkout for room {room}: bill_record was None "
-                               f"with active_bill_id={active_bill_id}; draft "
-                               f"flipped to cancelled to avoid orphan.")
+            else:
+                # Defence in depth: create_bill_record now raises
+                # BillCreationError on every failure path, so a falsy return
+                # should be impossible. If it ever happens, treat it exactly
+                # like a failure — block the checkout. NEVER fall back to the
+                # old cancel-the-draft behaviour (it silently destroyed
+                # statutory invoices).
+                system_alerts.record_alert(
+                    "bill.create.blocked",
+                    f"Checkout for room {room} (guest: {guest_name}) blocked: "
+                    f"create_bill_record returned no record without raising — "
+                    f"this is a bug, please report it.",
+                    severity="critical",
+                    context={"room": str(room), "guest": guest_name,
+                             "stay_id": active_bill_id},
+                )
+                return jsonify(
+                    success=False,
+                    checkout_blocked=True,
+                    message=("Checkout blocked — internal billing error "
+                             "(no bill record). The room has NOT been checked "
+                             "out. An alert has been sent to the admin."),
+                )
 
             # Mark room as cleaning. We also stamp `last_bill_id` and
             # `last_checkout_at` (UTC iso) so the 3-hour mistake-checkout
@@ -860,6 +925,22 @@ def revert_checkout():
                 success=False,
                 message=f"Cannot revert a bill in status '{bill_status}'",
             ), 400
+
+        # ── 2b. GST month lock — a revert voids the invoice. If GSTR-1 for
+        # the bill's month is already filed (month locked), the filed return
+        # would no longer match the books. Refuse; the lawful correction is
+        # a credit note. (In practice the 3-hour window below means this
+        # only triggers if a month is locked on filing day itself.)
+        _co_period = (bill.get("checkout_time") or "")[:7]
+        if _co_period and is_month_locked(_co_period):
+            return jsonify(
+                success=False,
+                message=(
+                    f"GST period {_co_period} is locked (GSTR-1 filed) — "
+                    f"this checkout cannot be reverted. Issue a credit note "
+                    f"instead, or ask an admin to unlock the month."
+                ),
+            ), 409
 
         # ── 3. Window check (server-authoritative) ───────────────────────────
         finalized_at_utc = _parse_finalized_at(bill)
@@ -3104,6 +3185,30 @@ def update_stay_payment():
         if new_amount is not None and pay_type in _refund_types:
             return jsonify(success=False,
                            message="Amount cannot be edited for refund records"), 400
+
+        # ── GST month lock ────────────────────────────────────────────────────
+        # A locked month's books are FROZEN. Editing a payment row (method,
+        # date, amount) rewrites the filed month's Cash/UPI columns in the
+        # CA workbook and regenerates a filed invoice's PDF — history must
+        # not change after GSTR-1 is filed. Block edits that touch a payment
+        # dated in a locked month, or that would MOVE a payment into one.
+        _lock_periods = set()
+        _old_period = (old_data.get("date") or "")[:7]
+        if _old_period:
+            _lock_periods.add(_old_period)
+        if new_date:
+            _lock_periods.add(new_date[:7])
+        for _p in sorted(_lock_periods):
+            if is_month_locked(_p):
+                return jsonify(
+                    success=False,
+                    code="MONTH_LOCKED",
+                    message=(f"GST period {_p} is locked (GSTR-1 filed) — "
+                             f"payment records of that month cannot be edited. "
+                             f"If a correction is unavoidable, an admin must "
+                             f"unlock the month first (Bills tab → lock icon), "
+                             f"and the change must be re-declared to your CA."),
+                ), 409
 
         # ── Banking integrity guards ──────────────────────────────────────────
         # These guards protect deposit and receipt-voucher integrity.

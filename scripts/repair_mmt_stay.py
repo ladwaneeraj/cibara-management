@@ -63,6 +63,13 @@ def main() -> int:
     ap.add_argument("--serial", type=int, required=True, help="Daily serial number (e.g. 8)")
     ap.add_argument("--date", default="", help="Check-in date YYYY-MM-DD (default: today IST)")
     ap.add_argument("--apply", action="store_true", help="Actually finalise an orphaned draft")
+    ap.add_argument("--checkout", default="",
+                    help="Override checkout time 'YYYY-MM-DD HH:MM'. REQUIRED for walk-in "
+                         "stays with no booking doc — otherwise the script assumes 'now', "
+                         "which mints the bill number in the WRONG month/GST period.")
+    ap.add_argument("--renewals", type=int, default=-1,
+                    help="Override renewal_count (nights - 1). Use when there is no booking "
+                         "doc to derive the stay length from (walk-ins). Default: auto.")
     args = ap.parse_args()
 
     # Side effect of importing config: Firebase + bills_service.init(db).
@@ -199,12 +206,21 @@ def main() -> int:
         renewal_count = max((_co - _ci).days - 1, 0)
     except Exception:
         renewal_count = 0
+    if args.renewals >= 0:
+        renewal_count = args.renewals  # explicit override (walk-ins)
 
-    # Checkout time: the booking's checkout date if known, else now.
-    if booking.get("check_out_date"):
+    # Checkout time: explicit override > booking's checkout date > now.
+    # The bill number is minted in the CHECKOUT month, so for a past stay an
+    # accurate checkout matters — 'now' would put it in the wrong GST period.
+    if args.checkout:
+        checkout_time = args.checkout
+    elif booking.get("check_out_date"):
         checkout_time = f"{booking['check_out_date']} 11:00"
     else:
         checkout_time = datetime.now(IST).strftime("%Y-%m-%d %H:%M")
+        print(f"WARNING: no booking doc and no --checkout given — using NOW "
+              f"({checkout_time}). For a past stay pass --checkout "
+              f"'YYYY-MM-DD HH:MM' so the bill lands in the correct month.")
 
     # Rebuild room_data from the BILL + BOOKING — NOT the live room doc, because
     # the room may have been reused by a different guest (it has here). Only
@@ -247,9 +263,15 @@ def main() -> int:
           f"renewal_count={rc} checkout={checkout_time} src={bsrc}/{psrc}")
 
     print("\nFinalising draft → bill (using create_bill_record + finalize)...")
-    bill_record = create_bill_record(room, room_data, checkout_time)
-    if not bill_record:
-        print("create_bill_record returned None (missing guest/checkin). Aborted.")
+    from config import BillCreationError
+    try:
+        bill_record = create_bill_record(room, room_data, checkout_time)
+    except BillCreationError as bce:
+        print(f"create_bill_record failed: {bce.reason}. Aborted.")
+        if bce.bill_number:
+            print(f"WARNING: bill number {bce.bill_number} was minted and is "
+                  f"consumed — declare it as a cancelled document in GSTR-1 "
+                  f"Table 13.")
         return 1
     bill_record["stay_id"] = stay_id
     ok = bills_service.finalize(stay_id, bill_record)

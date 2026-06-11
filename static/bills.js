@@ -884,6 +884,213 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
     };
   }
 
+  /**
+   * Authoritative accommodation tax figures for a register entry —
+   * Section 15(3)(a): the taxable value is NET of the on-invoice discount.
+   * Priority:
+   *   1. stored bill aggregates from create_bill_record (already net of
+   *      the discount share allocated to accommodation),
+   *   2. legacy recompute via accomGst(), then net out the proportional
+   *      accommodation discount share (mirrors the backend allocation).
+   * Same return shape as accomGst(): { taxable, cgst, sgst, cgstRate }.
+   */
+  function accomTaxFromEntry(e, days) {
+    const rate = e.room_rent || e.room_price_per_night || 0;
+    // Slab follows the pre-discount tariff (display fallback only).
+    const slabRate = typeof e.gst_rate === "number" ? e.gst_rate
+      : rate > 7500 ? 18 : rate >= 1000 ? 5 : 0;
+    if (typeof e.accommodation_taxable === "number" && e.accommodation_taxable > 0) {
+      const g = typeof e.gst_amount === "number" ? e.gst_amount : 0;
+      return {
+        taxable: e.accommodation_taxable,
+        cgst: g / 2,
+        sgst: g - g / 2,
+        cgstRate: slabRate / 2,
+      };
+    }
+    const gross = accomGst(e, days);
+    const discAll = Number(e.discounts || 0);
+    if (discAll <= 0) return gross;
+    const accomIncl = rate * (days || 1) + (e.services || [])
+      .filter(s => s.accommodation_charge && !(s.item || "").toLowerCase().includes("water"))
+      .reduce((s, x) => s + parseFloat(x.price || 0), 0);
+    const otherIncl = (e.services || [])
+      .filter(s => !s.accommodation_charge)
+      .reduce((s, x) => s + parseFloat(x.price || 0), 0);
+    const grossAll = accomIncl + otherIncl;
+    const accomDisc = grossAll > 0
+      ? Math.min(discAll * (accomIncl / grossAll), accomIncl) : 0;
+    const net = Math.max(accomIncl - accomDisc, 0);
+    const pct = gross.cgstRate * 2;
+    if (pct > 0) {
+      const base = net / (1 + pct / 100);
+      const g = net - base;
+      return { taxable: base, cgst: g / 2, sgst: g - g / 2, cgstRate: gross.cgstRate };
+    }
+    return { taxable: net, cgst: 0, sgst: 0, cgstRate: 0 };
+  }
+
+  // ── GST month lock modal (admin) ──────────────────────────────────────────
+  // Months grouped by Indian financial year (Apr–Mar). Locking a month
+  // freezes its bills server-side (edits, financial discounts, reverts and
+  // late finalizes are refused). The backend is the security boundary —
+  // this UI is convenience.
+  const _GLOCK_MONTHS = ["Jan","Feb","Mar","Apr","May","Jun",
+                         "Jul","Aug","Sep","Oct","Nov","Dec"];
+  function _glockFy(period) {
+    const y = parseInt(period.slice(0, 4), 10);
+    const m = parseInt(period.slice(5, 7), 10);
+    const fy = m >= 4 ? y : y - 1;
+    return `FY ${fy}\u2013${String((fy + 1) % 100).padStart(2, "0")}`;
+  }
+  function _glockEsc(s) {
+    return String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+    }[c]));
+  }
+
+  function openGstLockModal() {
+    let overlay = document.getElementById("bl-gstlock-overlay");
+    if (overlay) overlay.remove();
+    overlay = document.createElement("div");
+    overlay.id = "bl-gstlock-overlay";
+    overlay.style.cssText =
+      "position:fixed;inset:0;background:rgba(15,17,26,.45);z-index:9999;" +
+      "display:flex;align-items:center;justify-content:center;backdrop-filter:blur(2px);";
+    overlay.innerHTML = `
+      <div style="background:#fff;border-radius:14px;width:min(420px,92vw);
+                  max-height:78vh;display:flex;flex-direction:column;overflow:hidden;
+                  box-shadow:0 18px 50px rgba(20,20,43,.25);">
+        <div style="display:flex;justify-content:space-between;align-items:center;
+                    padding:1rem 1.15rem .55rem;">
+          <div style="font-weight:700;font-size:.95rem;color:#1f2430;">
+            <i class="fas fa-lock" style="color:#6f42c1;margin-right:.5rem;"></i>GST Month Lock
+          </div>
+          <button id="bl-gstlock-close" aria-label="Close"
+                  style="border:none;background:none;font-size:1.25rem;line-height:1;
+                         color:#9aa0ad;cursor:pointer;padding:.2rem .4rem;">&times;</button>
+        </div>
+        <div style="padding:0 1.15rem .55rem;font-size:.72rem;color:#8a8f9c;line-height:1.5;">
+          Lock a month after its GSTR-1 is filed. Locked months refuse bill
+          edits — corrections go through credit notes.
+        </div>
+        <div id="bl-gstlock-body" style="overflow:auto;padding:.1rem .55rem 1rem;">
+          <div style="padding:1.2rem;text-align:center;color:#b6bac4;font-size:.78rem;">Loading…</div>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    overlay.addEventListener("click", (e) => {
+      if (e.target === overlay) overlay.remove();
+    });
+    overlay.querySelector("#bl-gstlock-close")
+      .addEventListener("click", () => overlay.remove());
+    refreshGstLockRows(overlay);
+  }
+
+  async function refreshGstLockRows(overlay) {
+    const body = overlay.querySelector("#bl-gstlock-body");
+    if (!body) return;
+    try {
+      const res = await apiFetch("/gst_locks");
+      const data = await res.json();
+      if (!data.success) throw new Error(data.message || "load failed");
+
+      // Group by financial year, newest month first.
+      const groups = new Map();
+      (data.locks || []).forEach((l) => {
+        const fy = _glockFy(l.period);
+        if (!groups.has(fy)) groups.set(fy, []);
+        groups.get(fy).push(l);
+      });
+
+      const pill = (locked) => locked
+        ? "background:#6f42c1;border:1px solid #6f42c1;color:#fff;"
+        : "background:none;border:1px solid #dcdfe6;color:#5b6170;";
+
+      let html = "";
+      for (const [fy, rows] of groups) {
+        html += `<div style="font-size:.64rem;font-weight:700;letter-spacing:.09em;
+                     color:#b3b7c2;text-transform:uppercase;
+                     padding:.8rem .55rem .3rem;">${fy}</div>`;
+        for (const l of rows) {
+          const name = `${_GLOCK_MONTHS[parseInt(l.period.slice(5, 7), 10) - 1]} ${l.period.slice(0, 4)}`;
+          const meta = l.locked
+            ? `<div style="font-size:.66rem;color:#a9aebb;margin-top:2px;">
+                 ${_glockEsc(l.locked_by)} · ${_glockEsc((l.locked_at || "").slice(0, 10))}` +
+              (l.note ? ` · ${_glockEsc(l.note)}` : "") + `</div>`
+            : "";
+          let action;
+          if (l.is_current) {
+            action = `<span style="font-size:.67rem;color:#c3c7d1;">current</span>`;
+          } else {
+            action = `<button data-glock-period="${l.period}"
+                        data-glock-locked="${l.locked ? 0 : 1}"
+                        style="${pill(l.locked)}border-radius:999px;cursor:pointer;
+                               padding:.28rem .85rem;font-size:.69rem;font-weight:600;
+                               display:inline-flex;align-items:center;gap:.35rem;">` +
+              (l.locked
+                ? `<i class="fas fa-lock" style="font-size:.6rem;"></i>Locked`
+                : `Lock`) +
+              `</button>`;
+          }
+          html += `<div class="bl-glock-row" style="display:flex;align-items:center;
+                       justify-content:space-between;padding:.5rem .55rem;border-radius:9px;">
+              <div>
+                <div style="font-size:.8rem;font-weight:600;color:#2a2f3a;">${name}</div>${meta}
+              </div>
+              ${action}
+            </div>`;
+        }
+      }
+      body.innerHTML = html ||
+        `<div style="padding:1rem;color:#b6bac4;font-size:.78rem;">No months found</div>`;
+
+      body.querySelectorAll(".bl-glock-row").forEach((r) => {
+        r.addEventListener("mouseenter", () => { r.style.background = "#f6f7fa"; });
+        r.addEventListener("mouseleave", () => { r.style.background = ""; });
+      });
+
+      body.querySelectorAll("[data-glock-period]").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          const period = btn.getAttribute("data-glock-period");
+          const locking = btn.getAttribute("data-glock-locked") === "1";
+          let note = "";
+          if (locking) {
+            note = prompt(
+              `Lock ${period}?\nRecord the GSTR-1 filing reference ` +
+              `(ARN / filing date) — stored in the audit trail:`, "");
+            if (note === null) return;
+          } else {
+            const sure = confirm(
+              `Unlock ${period}? The filed GSTR-1 will no longer be ` +
+              `protected against edits. Only do this to apply a correction ` +
+              `you will re-declare to your CA.`);
+            if (!sure) return;
+            note = prompt("Reason for unlocking (stored in audit trail):", "");
+            if (note === null) return;
+          }
+          btn.disabled = true;
+          btn.style.opacity = ".5";
+          try {
+            const r = await apiFetch("/gst_locks/set", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ period, locked: locking, note }),
+            });
+            const out = await r.json();
+            if (!out.success) alert(out.message || "Failed");
+          } catch (err) {
+            alert("Network error: " + err);
+          }
+          refreshGstLockRows(overlay);
+        });
+      });
+    } catch (err) {
+      body.innerHTML =
+        `<div style="padding:1rem;color:#dc3545;font-size:.76rem;">Could not load locks: ${_glockEsc(err)}</div>`;
+    }
+  }
+
   // ── Build tab HTML ────────────────────────────────────────────────────────────
   function buildHTML() {
     const tab = dom("bills-tab");
@@ -909,6 +1116,11 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
       </button>
       <button class="bl-icon-btn export" id="bl-export-btn" data-perm="data.export" title="Export CA Report (Excel)">
         <i class="fas fa-file-excel"></i>
+      </button>
+      <button class="bl-icon-btn" id="bl-gst-lock-btn" data-perm="gst.lock.manage"
+              title="GST month lock (freeze filed months)"
+              style="background:#6f42c1;color:#fff;">
+        <i class="fas fa-lock"></i>
       </button>
     </div>
   </div>
@@ -1420,6 +1632,8 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
       xb = dom("bl-export-btn");
     if (rb) rb.addEventListener("click", () => loadData(true));
     if (xb) xb.addEventListener("click", exportToExcel);
+    const lk = dom("bl-gst-lock-btn");
+    if (lk) lk.addEventListener("click", openGstLockModal);
 
     // Bill modal controls
     const bc = dom("bl-bill-close");
@@ -2022,9 +2236,14 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
     let cash = 0,
       upi = 0,
       pending = 0,
+      live = 0,
       totalAccomGst = 0,
       totalWaterGst = 0;
     for (const e of entries) {
+      // Cancelled (reverted) bills are listed for serial continuity but
+      // carry ZERO output tax and no collections — never count them.
+      if (e.status === "cancelled") continue;
+      live++;
       if ((e.balance || 0) > 0) {
         pending++;
         continue;
@@ -2034,7 +2253,7 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
 
       // GST tally — only for fully paid entries
       const days = e.days_stayed || calcDays(e.checkin_time, e.checkout_time);
-      const ag   = accomGst(e, days);
+      const ag   = accomTaxFromEntry(e, days);
       totalAccomGst += ag.cgst + ag.sgst;
 
       const wg  = waterGst(e.services || []);
@@ -2059,7 +2278,7 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
 
     const countEl   = dom("bl-tc-count");
     const pendingEl = dom("bl-tc-pending");
-    if (countEl)   countEl.textContent   = entries.length;
+    if (countEl)   countEl.textContent   = live;
     if (pendingEl) pendingEl.textContent = pending || "0";
 
     // Sub-tab "Bills" badge mirrors invoice count.
@@ -2582,9 +2801,8 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
 
     const billNo = e.bill_number || "-";
 
-    // GST summary cell
-    const rate = e.room_rent || e.room_price_per_night || 0;
-    const { cgst, sgst, cgstRate } = gstAmounts(rate, days);
+    // GST summary cell — net of on-invoice discount (Section 15(3)(a))
+    const { cgst, sgst, cgstRate } = accomTaxFromEntry(e, days);
     const gstTotal = cgst + sgst;
     const gstCell =
       gstTotal > 0
@@ -3881,15 +4099,14 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
         nonWaterSvcTotal = 0;
         accomInclGst = tot;
       } else {
-        ag  = accomGst(e, days);
+        ag  = accomTaxFromEntry(e, days);
         wg  = waterGst(e.services || []);
         nonWaterSvcTotal = (e.services || [])
           .filter(s => !s.accommodation_charge && !(s.item || '').toLowerCase().includes('water'))
           .reduce((sum, s) => sum + parseFloat(s.price || 0), 0);
-        accomInclGst = (e.room_rent || 0) * days +
-          (e.services || [])
-            .filter(s => s.accommodation_charge && !(s.item || '').toLowerCase().includes('water'))
-            .reduce((sum, s) => sum + parseFloat(s.price || 0), 0);
+        // Net of on-invoice discount — taxable + GST (Section 15(3)(a)),
+        // consistent with the stored bill and the printed invoice.
+        accomInclGst = ag.taxable + ag.cgst + ag.sgst;
       }
 
       const invoiceType = e.invoice_type || "B2C";
@@ -4370,12 +4587,74 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
     schemaSheet["!hidden"] = true;
 
     try {
+      // ── Sheet: Documents Issued (GSTR-1 Table 13) ──────────────────────
+      // Mandatory since the May-2025 return period: for every document
+      // series used in the period — serial range, total issued, cancelled
+      // count, net issued. Series are grouped by prefix (CC/YYYY/MM for tax
+      // invoices incl. cancellation-charge bills, CN/YYYY/MM for credit
+      // notes). Cancelled documents are the zero-value "CANCELLED" rows of
+      // the Invoice Register (numbers consumed, no output tax).
+      function buildDocSeriesRows() {
+        const series = {};
+        const fold = (numStr, cancelled, nature) => {
+          const m = /^([A-Z]+\/\d{4}\/\d{2})\/(\d+)$/.exec((numStr || "").trim());
+          if (!m) return;
+          const key = m[1];
+          const n = parseInt(m[2], 10);
+          if (!series[key]) {
+            series[key] = { nature, prefix: key, min: n, max: n, listed: 0, cancelled: 0 };
+          }
+          const s = series[key];
+          s.min = Math.min(s.min, n);
+          s.max = Math.max(s.max, n);
+          s.listed++;
+          if (cancelled) s.cancelled++;
+        };
+        regRows.forEach((r) => {
+          const bn = r["Bill No"];
+          if (bn && bn !== "-") {
+            fold(bn, r["Reverted"] === "CANCELLED", "Invoices for outward supply");
+          }
+        });
+        creditNotes.forEach((cn) => fold(cn.cn_number, false, "Credit Note"));
+        const pad = (k, n) => `${k}/${String(n).padStart(5, "0")}`;
+        const rows = Object.values(series)
+          .sort((a, b) => a.prefix.localeCompare(b.prefix))
+          .map((s) => {
+            const rangeTotal = s.max - s.min + 1;
+            return {
+              "Nature of Document": s.nature,
+              "Sr No From":         pad(s.prefix, s.min),
+              "Sr No To":           pad(s.prefix, s.max),
+              "Total Number":       rangeTotal,
+              "Cancelled":          s.cancelled,
+              "Net Issued":         rangeTotal - s.cancelled,
+              "Listed in Workbook": s.listed,
+              "Remarks":
+                s.listed === rangeTotal
+                  ? ""
+                  : "GAP: workbook lists fewer documents than the serial " +
+                    "range — investigate missing numbers before filing",
+            };
+          });
+        return rows.length
+          ? rows
+          : [{
+              "Nature of Document": "(none in this period)",
+              "Sr No From": "", "Sr No To": "", "Total Number": 0,
+              "Cancelled": 0, "Net Issued": 0, "Listed in Workbook": 0,
+              "Remarks": "",
+            }];
+      }
+      const wsDocs = XLSX.utils.json_to_sheet(buildDocSeriesRows());
+
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, wsReg,    "Invoice Register");
       XLSX.utils.book_append_sheet(wb, wsB2B,    "B2B Invoices");
       XLSX.utils.book_append_sheet(wb, wsB2C,    "B2C Summary");
       XLSX.utils.book_append_sheet(wb, wsB2CL,   "B2CL Invoices");
       XLSX.utils.book_append_sheet(wb, wsHSN,    "HSN SAC Summary");
+      XLSX.utils.book_append_sheet(wb, wsDocs,   "Docs Issued (Table 13)");
       XLSX.utils.book_append_sheet(wb, wsCDNR,   "CDNR (B2B CNs)");
       XLSX.utils.book_append_sheet(wb, wsB2CCN,  "B2C Credit Notes");
       XLSX.utils.book_append_sheet(wb, wsAdvances, "Advances (Table 11)");

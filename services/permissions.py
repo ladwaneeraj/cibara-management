@@ -47,6 +47,9 @@ PERMISSIONS = frozenset(
         # and Section 34 credit-note issuance. Admin-only by default.
         "bill.gst.edit",
         "credit_note.issue",
+        # GST month locking — freeze a filed month against bill mutations
+        # (see services/gst_lock_service.py). Admin-only (wildcard).
+        "gst.lock.manage",
         # Bookings
         "booking.create",
         "booking.update",

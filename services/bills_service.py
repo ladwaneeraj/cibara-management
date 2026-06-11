@@ -237,6 +237,25 @@ def finalize(stay_id, checkout_fields, *, batch=None):
                        f"stay_id={stay_id} to draft status")
         return False
 
+    # GST month lock: refuse to mint a bill INTO a month whose GSTR-1 is
+    # already filed — the filed return would no longer match the books.
+    # Normal checkouts are unaffected (the current month can never be
+    # locked, enforced in gst_lock_service.set_lock); this guards repair /
+    # backfill scripts finalizing stays in past months. Unlock the month
+    # first if a late bill genuinely has to be added, then re-file/amend.
+    _co_time = checkout_fields.get("checkout_time") or ""
+    try:
+        from services.gst_lock_service import is_month_locked
+        if _co_time and is_month_locked(_co_time):
+            logger.error(
+                f"BillsService.finalize refused: GST period "
+                f"{_co_time[:7]} is locked (GSTR-1 filed); stay_id={stay_id}. "
+                f"Unlock the month before finalizing late bills into it."
+            )
+            return False
+    except ImportError:
+        pass  # lock service absent (very old deploys) — proceed as before
+
     payload = dict(checkout_fields)
     payload.setdefault("finalized_at", datetime.now(timezone.utc).isoformat())
     payload["updated_at"] = datetime.now(timezone.utc).isoformat()

@@ -15,6 +15,7 @@ from google.cloud.firestore_v1.base_query import FieldFilter
 from config import (
     db, totals_ref, bills_ref, IST, logger,
     invalidate_rooms_and_totals, get_all_rooms,
+    validate_gstin,
 )
 from services import payment_service, expense_service, kpi_service
 from services.auth_service import requires_permission, load_current_user
@@ -269,7 +270,32 @@ def _dedupe_split_groups(expenses: list) -> list:
     return singles + collapsed
 
 
-def _collect_invoice_extra(data_json: dict) -> dict:
+def _clean_vendor_gstin(raw, *, gst_amount=0.0, category=""):
+    """
+    Normalize + validate a vendor GSTIN on an expense (ITC hygiene).
+
+    Returns (gstin, error_message_or_None). Rules:
+      * Whitespace stripped, uppercased — operators often type lowercase,
+        which is technically invalid (Rule 46 format is uppercase).
+      * If non-empty, must pass validate_gstin() — a malformed GSTIN means
+        the ITC claim will never match GSTR-2B and will be denied.
+      * If a positive GST amount is claimed, the GSTIN is MANDATORY.
+        Exception: 'booking_commission' (foreign OTA — import of services
+        under RCM; the supplier has no Indian GSTIN).
+    """
+    gstin = (raw or "").strip().upper()
+    if gstin and not validate_gstin(gstin):
+        return "", (f"Invalid vendor GSTIN '{gstin}' — must be the 15-character "
+                    "GST format (e.g. 29ABCDE1234F1Z5). Correct it, or leave it "
+                    "blank if the purchase carries no GST.")
+    if (not gstin) and float(gst_amount or 0) > 0 and category != "booking_commission":
+        return "", ("Vendor GSTIN is required when claiming GST on an expense — "
+                    "an ITC claim without the supplier's GSTIN will not match "
+                    "GSTR-2B and will be denied.")
+    return gstin, None
+
+
+def _collect_invoice_extra(data_json: dict, category: str = "") -> dict:
     """
     Pull the invoice-level (bill / GST / photo) fields out of the request so
     they can be stamped onto the split's primary leg. Mirrors the field set
@@ -283,7 +309,14 @@ def _collect_invoice_extra(data_json: dict) -> dict:
     if data_json.get("has_gst"):
         extra["has_gst"] = True
         extra["vendor_name"] = data_json.get("vendor_name", "")
-        extra["vendor_gstin"] = data_json.get("vendor_gstin", "")
+        _gstin, _gerr = _clean_vendor_gstin(
+            data_json.get("vendor_gstin", ""),
+            gst_amount=data_json.get("gst_amount", 0),
+            category=category,
+        )
+        if _gerr:
+            raise ValueError(_gerr)
+        extra["vendor_gstin"] = _gstin
         try:
             extra["taxable_amount"] = float(data_json.get("taxable_amount", 0))
             extra["gst_rate"] = float(data_json.get("gst_rate", 0))
@@ -342,7 +375,11 @@ def _create_split_expense(data_json: dict, base_entry: dict, total_amount: int):
         return jsonify(success=False, message=err), 400
 
     group_id = uuid.uuid4().hex
-    primary_extra = _collect_invoice_extra(data_json)
+    try:
+        primary_extra = _collect_invoice_extra(
+            data_json, category=base_entry.get("category") or "")
+    except ValueError as _ve:
+        return jsonify(success=False, message=str(_ve)), 400
     legs = _build_split_legs(
         base_entry, group_id, counter_cash, home_cash, account, total_amount,
         primary_extra=primary_extra,
@@ -543,9 +580,16 @@ def add_expense():
         # Tier 3 — GST Bill: capture vendor + GST breakdown
         has_gst = data_json.get("has_gst", False)
         if has_gst:
+            _gstin, _gerr = _clean_vendor_gstin(
+                data_json.get("vendor_gstin", ""),
+                gst_amount=data_json.get("gst_amount", 0),
+                category=category or "",
+            )
+            if _gerr:
+                return jsonify(success=False, message=_gerr), 400
             expense_entry["has_gst"]        = True
             expense_entry["vendor_name"]    = data_json.get("vendor_name", "")
-            expense_entry["vendor_gstin"]   = data_json.get("vendor_gstin", "")
+            expense_entry["vendor_gstin"]   = _gstin
             expense_entry["taxable_amount"] = float(data_json.get("taxable_amount", 0))
             expense_entry["gst_rate"]       = float(data_json.get("gst_rate", 0))
             expense_entry["gst_amount"]     = float(data_json.get("gst_amount", 0))
@@ -738,6 +782,16 @@ def edit_expense(doc_id):
         old = expense_service.get_expense(doc_id)
         if not old:
             return jsonify(success=False, message="Expense not found"), 404
+
+        # Vendor GSTIN hygiene on edit: normalize + format-check whenever the
+        # field is being changed. (The GSTIN-mandatory-with-GST rule is
+        # enforced at creation; edits only need to never INTRODUCE a
+        # malformed value.)
+        if "vendor_gstin" in fields:
+            _gstin, _gerr = _clean_vendor_gstin(fields.get("vendor_gstin"))
+            if _gerr:
+                return jsonify(success=False, message=_gerr), 400
+            fields["vendor_gstin"] = _gstin
 
         # Split legs are immutable inline. Re-splitting an amount or moving
         # money between the cash and UPI legs has subtle counter-arithmetic
@@ -1110,6 +1164,7 @@ def gstr1_summary():
         )
 
         b2b, b2cl, credit_notes = [], [], []
+        cancelled_documents = []   # every numbered-but-cancelled invoice, zero value
         b2cs = {}          # key: (rate, state_code) -> aggregates
         rate_summary = {}   # key: rate -> aggregates
         hsn_summary = {}    # key: (hsn, rate) -> aggregates (GSTR-1 Table 12)
@@ -1237,10 +1292,27 @@ def gstr1_summary():
                 "is_cancellation_charge": bool(b.get("is_cancellation_charge")),
             }
 
-            # Section-34 documents (revert-cancelled / superseded) are listed
-            # separately so reversals aren't double-counted as fresh supplies.
-            if b.get("cancelled_by_revert") or b.get("superseded_by_revert"):
-                credit_notes.append(row)
+            # ── Document status (C2) ────────────────────────────────────
+            # EVERY numbered invoice of the period appears in the report
+            # with an explicit status. Cancelled documents (revert within
+            # the 3-hour window, or any cancelled bill that still carries a
+            # number) are listed at ZERO value and excluded from totals,
+            # the rate/HSN summaries and the B2B/B2CL/B2CS buckets — they
+            # carry no output tax, but their numbers must stay visible
+            # (they feed GSTR-1 Table 13 "documents cancelled").
+            _is_cancelled = bool(
+                b.get("cancelled_by_revert")
+                or b.get("superseded_by_revert")
+                or b.get("status") == "cancelled"
+            )
+            row["status"] = "CANCELLED" if _is_cancelled else "LIVE"
+            if _is_cancelled:
+                for _zk in ("taxable", "cgst", "sgst", "igst",
+                            "invoice_value", "gst_rate"):
+                    row[_zk] = 0
+                row["accommodation"] = None
+                row["goods"] = None
+                cancelled_documents.append(row)
                 continue
 
             totals["taxable"] += taxable
@@ -1282,6 +1354,13 @@ def gstr1_summary():
             b2cl=b2cl,
             b2cs=[_round_bucket(v) for v in b2cs.values()],
             credit_notes=credit_notes,
+            cancelled_documents=cancelled_documents,
+            documents={
+                # Table 13 seed: numbered documents in the period.
+                "listed":    totals["invoices"] + len(cancelled_documents),
+                "cancelled": len(cancelled_documents),
+                "net_live":  totals["invoices"],
+            },
             rate_summary={str(k): _round_bucket(v) for k, v in rate_summary.items()},
             hsn_summary=[_round_bucket(v) for v in hsn_summary.values()],
             ota_commission_itc=round(ota_commission_itc, 2),

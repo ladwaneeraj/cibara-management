@@ -48,7 +48,8 @@
       // banking.deposit.reverse, banking.adjustment.create,
       // banking.account.manage,
       // expense.presets.manage,
-      // expense.manage.
+      // expense.manage,
+      // gst.lock.manage (GST month locking — admin-only).
     ]),
     [ROLE_HOUSEKEEPING]: Object.freeze([
       "app.access",

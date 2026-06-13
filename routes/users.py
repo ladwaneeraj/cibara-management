@@ -705,7 +705,12 @@ def stay_history():
                 break  # cycle guard
             seen_rooms.add(cur_room)
 
-            room_events = _query_room_events(cur_room, checkin_time, room_upper)
+            # No lower bound on the query: the origin room's room-prep events
+            # (cleaning / inspection) happen BEFORE this stay's check-in, so
+            # we must look earlier than checkin_time to surface "Cleaned by"
+            # and "Inspected by". The per-room trimming below removes anything
+            # that belongs to a previous occupant.
+            room_events = _query_room_events(cur_room, "", room_upper)
 
             # Look for a transfer INTO this room (target_id == cur_room and
             # action == room.transfer). The earliest such event in the
@@ -714,7 +719,8 @@ def stay_history():
             # them. Events at or after belong to us.
             transfer_in = None
             for e in sorted(room_events, key=lambda x: x["timestamp"]):
-                if e["action"] == "room.transfer":
+                if (e["action"] == "room.transfer"
+                        and e["timestamp"] >= checkin_time):
                     transfer_in = e
                     break
 
@@ -731,29 +737,85 @@ def stay_history():
                 cur_room = str(from_room)
                 room_upper = transfer_in["timestamp"]
             else:
-                # No transfer into this room — this is the stay's origin.
+                # ── Origin room — scope to THIS stay ──────────────────────
+                # Window for this stay on its origin room:
+                #   lower = the previous occupant's checkout (EXCLUSIVE) so we
+                #           include the cleaning/inspection that prepped the
+                #           room for THIS guest but NOT the prior checkout;
+                #   start = this stay's check-in (the checkin_time param).
+                # The previous checkout is the latest room.checkout strictly
+                # before this stay's check-in.
+                prev_checkout_ts = ""
+                for e in room_events:
+                    if (e["action"] == "room.checkout"
+                            and e["timestamp"] < checkin_time
+                            and e["timestamp"] > prev_checkout_ts):
+                        prev_checkout_ts = e["timestamp"]
+                room_events = [e for e in room_events
+                               if e["timestamp"] > prev_checkout_ts]
                 all_events.extend(room_events)
                 break
 
-        # ─── Sort ascending and scope to this stay on the origin room ──
-        # On the ORIGIN room (the one the guest checked into), other
-        # stays may have happened later — guard against that by stopping
-        # at the second room.checkin if we see one.
+        # ─── Build THIS stay's chain deterministically ─────────────────────
+        # Final shape (oldest→newest), each at most once for prep:
+        #   Cleaned → Inspected → Checked in → Time edited(*) → Shifted(*) →
+        #   Checked out.  (*) time-edit and shift may legitimately repeat.
+        #
+        # The window is bounded on BOTH sides so neither the previous nor the
+        # next stay can leak in:
+        #   • anchor  = this stay's check-in (the first room.checkin at/after
+        #               the checkin_time param).
+        #   • end     = this stay's check-out (first room.checkout at/after the
+        #               anchor); for an active stay, "now".
+        #   • prep    = cleaning/inspection BEFORE the anchor. Only the LAST of
+        #               each is kept — a room cleaned several times while idle
+        #               must not produce duplicate "Cleaned by" rows, and the
+        #               NEXT guest's prep (which happens AFTER this checkout)
+        #               is excluded because we stop at `end`.
         all_events.sort(key=lambda e: e["timestamp"])
 
-        entries = []
-        seen_first_checkin = False
+        anchor_ts = None
         for e in all_events:
-            if e["action"] == "room.checkin":
-                if not seen_first_checkin:
-                    seen_first_checkin = True
-                    entries.append(e)
-                else:
-                    # A later room.checkin means a new stay began on the
-                    # origin room. Anything after this is not ours.
-                    break
-            else:
-                entries.append(e)
+            if e["action"] == "room.checkin" and e["timestamp"] >= checkin_time:
+                anchor_ts = e["timestamp"]
+                break
+        if anchor_ts is None:
+            anchor_ts = checkin_time
+
+        end_ts = now_str
+        for e in all_events:
+            if e["action"] == "room.checkout" and e["timestamp"] >= anchor_ts:
+                end_ts = e["timestamp"]
+                break
+
+        _CHAIN_ACTIONS = ("room.checkin", "room.checkin_time_update",
+                          "room.transfer", "room.checkout")
+        last_clean = None
+        last_inspect = None
+        chain = []
+        for e in all_events:
+            ts = e["timestamp"]
+            act = e["action"]
+            if ts < anchor_ts:
+                # Prep window — keep only the most recent of each.
+                if act == "room.cleaning.complete":
+                    last_clean = e
+                elif act == "room.inspection.approve":
+                    last_inspect = e
+            elif anchor_ts <= ts <= end_ts:
+                if act == "room.checkin" and ts != anchor_ts:
+                    break  # a different stay's check-in — stop
+                if act in _CHAIN_ACTIONS:
+                    chain.append(e)
+                if act == "room.checkout" and ts == end_ts:
+                    break  # this stay ends here; nothing after belongs to it
+
+        entries = []
+        if last_clean:
+            entries.append(last_clean)
+        if last_inspect:
+            entries.append(last_inspect)
+        entries.extend(chain)
 
         # Drop the internal `_room` helper field and return only the
         # public shape. metadata stays so the frontend can label

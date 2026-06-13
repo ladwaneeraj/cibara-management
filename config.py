@@ -1538,14 +1538,18 @@ def _find_serial_fast(room_str, guest_name, checkin_dt, log_index):
 def _batch_fill_serials(entries):
     """
     Batch Firestore reads for entries still missing serial numbers.
-    Uses getAll (via individual gets) but batched together to minimize overhead.
+
+    Uses a single db.get_all() RPC for ALL metadata docs. The previous
+    implementation looped over metadata_ref.document(key).get() one doc at
+    a time — N sequential round-trips (~100ms each), which dominated
+    register loads whenever many entries were missing serials.
     """
     if not entries:
         return
 
     try:
-        # Build list of metadata doc refs to fetch
-        refs = []
+        # Build doc-key -> entry map (same key collision semantics as before:
+        # last entry wins for a duplicate {date}_{room} key).
         ref_to_entry = {}
         for entry in entries:
             checkin_time = entry.get("checkin_time", "")
@@ -1553,17 +1557,21 @@ def _batch_fill_serials(entries):
             if checkin_time and room:
                 checkin_date = checkin_time.split(" ")[0]
                 doc_key = f"{checkin_date}_{room}"
-                refs.append(doc_key)
                 ref_to_entry[doc_key] = entry
 
-        # Fetch all metadata docs
-        for doc_key, entry in ref_to_entry.items():
+        if not ref_to_entry:
+            return
+
+        # Fetch all metadata docs in ONE round-trip
+        doc_refs = [metadata_ref.document(k) for k in ref_to_entry]
+        for meta_doc in db.get_all(doc_refs):
             try:
-                meta_doc = metadata_ref.document(doc_key).get()
                 if meta_doc.exists:
-                    sn = meta_doc.to_dict().get("serial_number")
+                    sn = (meta_doc.to_dict() or {}).get("serial_number")
                     if sn and sn != 0:
-                        entry["serial_number"] = int(sn)
+                        entry = ref_to_entry.get(meta_doc.id)
+                        if entry is not None:
+                            entry["serial_number"] = int(sn)
             except Exception:
                 pass  # Skip individual failures
 

@@ -19,6 +19,8 @@ Design notes
 
 from __future__ import annotations
 
+import atexit
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from typing import Any, Optional
 
@@ -29,6 +31,30 @@ from config import db, logger, IST
 
 
 AUDIT_COLLECTION = "audit_logs"
+
+# ── Background writer ────────────────────────────────────────────────────
+# The audit entry is fully built inside the request context (user, IP, UA
+# are captured synchronously), but the Firestore round-trip itself runs on
+# this small pool so it never adds ~100ms+ to checkin/checkout/payment
+# responses. Failures are logged by _commit_entry — same visibility as the
+# old inline path. atexit drains the pool so a graceful worker shutdown
+# (gunicorn SIGTERM, deploy) does not drop queued entries.
+_audit_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="audit-log")
+
+
+def _commit_entry(entry: dict, action: str) -> None:
+    try:
+        db.collection(AUDIT_COLLECTION).add(entry)
+    except Exception as e:
+        logger.warning(f"audit_log.write_log failed for action={action!r}: {e}")
+
+
+@atexit.register
+def _drain_audit_pool() -> None:
+    try:
+        _audit_pool.shutdown(wait=True)
+    except Exception:
+        pass
 
 
 def _ist_now_iso() -> str:
@@ -104,7 +130,9 @@ def write_log(
             "ipAddress": _client_ip(),
             "userAgent": _user_agent(),
         }
-        db.collection(AUDIT_COLLECTION).add(entry)
+        # Entry is complete at this point — hand the network write to the
+        # background pool. The request no longer blocks on Firestore here.
+        _audit_pool.submit(_commit_entry, entry, action)
     except Exception as e:
         # Never let audit failures break the caller.
         logger.warning(f"audit_log.write_log failed for action={action!r}: {e}")

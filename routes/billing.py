@@ -106,16 +106,79 @@ def get_register_data():
         from concurrent.futures import ThreadPoolExecutor
         t0 = _t.time()
 
-        # Run rooms + payments queries in parallel
-        with ThreadPoolExecutor(max_workers=2) as pool:
+        # ── One parallel wave for EVERY independent Firestore fetch ──────────
+        # rooms, range payments, range bills, the three Daily-Tally queries,
+        # and the per-active-room stay-payment lookups have no data
+        # dependencies on each other. They used to run sequentially (4–6
+        # back-to-back round-trips, plus one payment query PER occupied room
+        # inside the loop below — the dominant cost of this endpoint).
+        # Submitting them all here collapses wall-clock to roughly the
+        # slowest single query. Each result is consumed at the same point in
+        # the flow as before, so per-consumer error handling is unchanged.
+        today_str = datetime.now(IST).strftime("%Y-%m-%d")
+
+        # In checkout mode the date range filters on `checkout_time` so a
+        # bill belongs to the GST month it was actually invoiced. In checkin
+        # mode (legacy / Register tab) we keep the original behaviour and
+        # filter on `checkin_time`.
+        _range_field = "checkout_time" if mode == "checkout" else "checkin_time"
+        _bills_query = (
+            bills_ref
+            .where(filter=FieldFilter(_range_field, ">=", range_start_str))
+            .where(filter=FieldFilter(_range_field, "<", range_end_str))
+        )
+        # Pending MMT settlements for the tally (sum of net_receivable).
+        _mmt_pending_query = (
+            db.collection("bookings")
+            .where("booking_source", "==", "mmt")
+            .where("settlement_status", "==", "pending")
+        )
+
+        stay_payment_futures = {}  # stay_id -> Future[list[payment]]
+        with ThreadPoolExecutor(max_workers=16) as pool:
             f_rooms = pool.submit(get_all_rooms)
             f_payments = pool.submit(
                 payment_service.query_payments_by_date_range,
                 start_date, end_dt.strftime("%Y-%m-%d")
             )
+            f_bills = pool.submit(lambda: list(_bills_query.stream()))
+            f_today_pay = pool.submit(
+                payment_service.query_payments_by_date_range, today_str, today_str
+            )
+            f_today_exp = pool.submit(
+                expense_service.query_expenses_for_today, today_str
+            )
+            f_mmt_pending = pool.submit(
+                lambda: [d.to_dict() for d in _mmt_pending_query.stream()]
+            )
 
-        rooms_data = f_rooms.result()
-        range_payments = f_payments.result() or []
+            rooms_data = f_rooms.result()
+
+            # Pre-submit the per-occupied-room stay-payment lookups so they
+            # run concurrently instead of one-by-one inside the loop below.
+            # Only needed in checkin mode (checkout mode skips active rooms).
+            if mode != "checkout" and hasattr(payment_service,
+                                             "query_payments_by_stay_id"):
+                for _rn, _rd in rooms_data.items():
+                    if _rd.get("status") != "occupied":
+                        continue
+                    _sid = _rd.get("active_bill_id")
+                    if not _sid:
+                        continue
+                    # Denormalized sums stamped on the room doc make the
+                    # per-room payments query unnecessary (see
+                    # payment_service.refresh_room_stay_aggregates).
+                    if (_rd.get("stay_payment_for") == _sid
+                            and _rd.get("stay_payment_cash") is not None):
+                        continue
+                    stay_payment_futures[_sid] = pool.submit(
+                        payment_service.query_payments_by_stay_id, _sid
+                    )
+
+            range_payments = f_payments.result() or []
+        # Exiting the `with` block waits for every submitted future, so all
+        # results consumed below are already in memory — .result() calls
+        # from here on are instant.
         t1 = _t.time()
         logger.info(f"[PERF] register parallel fetch: {t1-t0:.3f}s, {len(range_payments)} payments")
 
@@ -195,39 +258,58 @@ def get_register_data():
             # the multi-query helper only for legacy stays that pre-date the
             # stay_id migration.
             stay_id_for_lookup = room_data_item.get("active_bill_id")
-            stay_payments = None
-            if stay_id_for_lookup:
-                try:
-                    stay_payments = payment_service.query_payments_by_stay_id(
-                        stay_id_for_lookup
-                    ) if hasattr(payment_service, "query_payments_by_stay_id") else None
-                except Exception as _qpe:
-                    logger.warning(
-                        f"query_payments_by_stay_id failed for {stay_id_for_lookup}: {_qpe}"
-                    )
-                    stay_payments = None
-            if stay_payments is None:
-                # Fallback: stay-aware multi-query (handles legacy stays).
-                try:
-                    stay_payments = payment_service.query_payments_for_stay(
-                        room_str, guest_name, checkin_dt,
-                        stay_id=stay_id_for_lookup,
-                    )
-                except Exception as _qpe:
-                    logger.warning(
-                        f"query_payments_for_stay failed for room {room_str} "
-                        f"({guest_name}): {_qpe}. Falling back to date-range index."
-                    )
-                    stay_payments = payments_by_room.get((room_str, guest_name), [])
 
-            payment_cash = sum(
-                p.get("amount", 0) for p in stay_payments
-                if p.get("method") == "cash" and p.get("type") not in _refund_types
+            # Denormalized fast path — receipt sums stamped on the room doc
+            # at payment time (payment_service.refresh_room_stay_aggregates).
+            # Falls through to the live-query path when no valid stamp
+            # exists (stays from before the stamps deploy, or a stamp write
+            # that failed) — correctness never depends on the stamp.
+            _stamp_ok = (
+                stay_id_for_lookup
+                and room_data_item.get("stay_payment_for") == stay_id_for_lookup
+                and room_data_item.get("stay_payment_cash") is not None
             )
-            payment_online = sum(
-                p.get("amount", 0) for p in stay_payments
-                if p.get("method") == "online" and p.get("type") not in _refund_types
-            )
+            if _stamp_ok:
+                payment_cash = room_data_item.get("stay_payment_cash") or 0
+                payment_online = room_data_item.get("stay_payment_online") or 0
+            else:
+                stay_payments = None
+                if stay_id_for_lookup:
+                    # Result of the parallel prefetch above — already
+                    # completed, so .result() returns immediately. Missing
+                    # key (legacy stay without stay_id) falls through to the
+                    # multi-query helper, exactly as before.
+                    _f_sp = stay_payment_futures.get(stay_id_for_lookup)
+                    if _f_sp is not None:
+                        try:
+                            stay_payments = _f_sp.result()
+                        except Exception as _qpe:
+                            logger.warning(
+                                f"query_payments_by_stay_id failed for {stay_id_for_lookup}: {_qpe}"
+                            )
+                            stay_payments = None
+                if stay_payments is None:
+                    # Fallback: stay-aware multi-query (handles legacy stays).
+                    try:
+                        stay_payments = payment_service.query_payments_for_stay(
+                            room_str, guest_name, checkin_dt,
+                            stay_id=stay_id_for_lookup,
+                        )
+                    except Exception as _qpe:
+                        logger.warning(
+                            f"query_payments_for_stay failed for room {room_str} "
+                            f"({guest_name}): {_qpe}. Falling back to date-range index."
+                        )
+                        stay_payments = payments_by_room.get((room_str, guest_name), [])
+
+                payment_cash = sum(
+                    p.get("amount", 0) for p in stay_payments
+                    if p.get("method") == "cash" and p.get("type") not in _refund_types
+                )
+                payment_online = sum(
+                    p.get("amount", 0) for p in stay_payments
+                    if p.get("method") == "online" and p.get("type") not in _refund_types
+                )
 
             serial = _find_serial_fast(room_str, guest_name, checkin_dt, log_index)
 
@@ -275,6 +357,12 @@ def get_register_data():
                 "lastCheckinAt":          room_data_item.get("lastCheckinAt"),
                 "lastCheckinTimeEditBy":  room_data_item.get("lastCheckinTimeEditBy"),
                 "lastCheckinTimeEditAt":  room_data_item.get("lastCheckinTimeEditAt"),
+                # Shift attribution (set by /transfer_room) — drives the
+                # "Shifted A → B by" row in the room-history popover.
+                "lastShiftedBy":          room_data_item.get("lastShiftedBy"),
+                "lastShiftedAt":          room_data_item.get("lastShiftedAt"),
+                "lastShiftedFrom":        room_data_item.get("lastShiftedFrom"),
+                "lastShiftedTo":          room_data_item.get("lastShiftedTo"),
                 # Active stays don't have a checkout actor yet
             }
             register_entries.append(entry)
@@ -290,18 +378,11 @@ def get_register_data():
         skipped_count = 0
 
         try:
-            # In checkout mode the date range filters on `checkout_time` so a
-            # bill belongs to the GST month it was actually invoiced. In checkin
-            # mode (legacy / Register tab) we keep the original behaviour and
-            # filter on `checkin_time`.
-            _range_field = "checkout_time" if mode == "checkout" else "checkin_time"
-            bills_query = (
-                bills_ref
-                .where(filter=FieldFilter(_range_field, ">=", range_start_str))
-                .where(filter=FieldFilter(_range_field, "<", range_end_str))
-            )
-
-            for bill_doc in bills_query.stream():
+            # Range query was prefetched in the parallel wave at the top of
+            # the handler (filters on checkout_time in checkout mode,
+            # checkin_time otherwise). Stream already materialized — this
+            # iterates in-memory docs.
+            for bill_doc in f_bills.result():
                 bill_data = bill_doc.to_dict()
                 checkin_time = bill_data.get("checkin_time")
                 checkout_time = bill_data.get("checkout_time")
@@ -458,6 +539,10 @@ def get_register_data():
                     "lastCheckinAt":          bill_data.get("lastCheckinAt"),
                     "lastCheckinTimeEditBy":  bill_data.get("lastCheckinTimeEditBy"),
                     "lastCheckinTimeEditAt":  bill_data.get("lastCheckinTimeEditAt"),
+                    "lastShiftedBy":          bill_data.get("lastShiftedBy"),
+                    "lastShiftedAt":          bill_data.get("lastShiftedAt"),
+                    "lastShiftedFrom":        bill_data.get("lastShiftedFrom"),
+                    "lastShiftedTo":          bill_data.get("lastShiftedTo"),
                     "lastCheckoutBy":         bill_data.get("lastCheckoutBy"),
                     "lastCheckoutAt":         bill_data.get("lastCheckoutAt"),
                 }
@@ -507,21 +592,40 @@ def get_register_data():
                     continue
                 by_serial.setdefault(sn, []).append(p)
 
-            recovered = 0
+            # Anchor each orphaned serial on its check-in / conversion row,
+            # then batch-fetch ALL their bill docs in ONE get_all round-trip.
+            # The previous per-orphan .get() loop cost a full Firestore
+            # round-trip per orphan (~0.7-1.5s each on high-latency links).
+            _anchor_of = {}
             for sn, plist in by_serial.items():
                 if sn in present_serials:
                     continue
-                # Anchor on the check-in / conversion row for identity + time.
-                anchor = next(
+                _anchor_of[sn] = next(
                     (p for p in plist
                      if p.get("type") in ("fresh_checkin", "booking_conversion")
                      or p.get("is_fresh_checkin") or p.get("is_booking_conversion")),
                     plist[0],
                 )
+            _orphan_bills = {}
+            _orphan_sids = {a.get("stay_id") for a in _anchor_of.values()
+                            if a.get("stay_id")}
+            if _orphan_sids:
+                try:
+                    for _snap in db.get_all(
+                            [bills_ref.document(s) for s in _orphan_sids]):
+                        if _snap.exists:
+                            _orphan_bills[_snap.id] = _snap.to_dict() or {}
+                except Exception as _ga_err:
+                    logger.warning(f"[REGISTER] orphan bill batch-get failed: {_ga_err}")
+                    _orphan_bills = {}
+
+            recovered = 0
+            for sn, anchor in _anchor_of.items():
                 guest_name = anchor.get("name", "")
                 room_str = str(anchor.get("room", ""))
                 if not guest_name:
                     continue
+                plist = by_serial[sn]
 
                 cash_sum = sum(p.get("amount", 0) for p in plist
                                if p.get("method") == "cash")
@@ -535,16 +639,10 @@ def get_register_data():
                     for p in plist
                 )
 
-                # Enrich from the bill doc (ANY status) when we can resolve it.
+                # Enrich from the bill doc (ANY status) when we can resolve
+                # it — already fetched above in the single get_all round-trip.
                 stay_id = anchor.get("stay_id")
-                bill = {}
-                if stay_id:
-                    try:
-                        _bd = bills_ref.document(stay_id).get()
-                        if _bd.exists:
-                            bill = _bd.to_dict() or {}
-                    except Exception:
-                        bill = {}
+                bill = _orphan_bills.get(stay_id, {}) if stay_id else {}
 
                 checkin_time = bill.get("checkin_time") or (
                     f"{anchor.get('date', '')} {anchor.get('time', '')}".strip()
@@ -597,7 +695,8 @@ def get_register_data():
         )
 
         # ── 5. Daily Tally Dashboard ─────────────────────────────────────────
-        today_str = datetime.now(IST).strftime("%Y-%m-%d")
+        # today_str was computed (and the three tally queries prefetched) in
+        # the parallel wave at the top of the handler.
         tally = {
             "cash_today": 0,
             "upi_today": 0,
@@ -607,7 +706,7 @@ def get_register_data():
             "mmt_received_today": 0,
         }
         try:
-            today_payments = payment_service.query_payments_by_date_range(today_str, today_str)
+            today_payments = f_today_pay.result()
             _refund_types = {"refund", "checkout_refund", "manual_refund", "booking_cancel_refund"}
             _bank_settlement = "bank_settlement"
 
@@ -625,23 +724,17 @@ def get_register_data():
                     tally["mmt_received_today"] += amount
 
             # Expenses today — read from dedicated expenses collection
-            today_expenses = expense_service.query_expenses_for_today(today_str)
+            today_expenses = f_today_exp.result()
             for p in today_expenses:
                 if p.get("expense_type") == "transaction":
                     tally["expenses_today"] += (p.get("amount") or 0)
 
             tally["revenue_today"] = tally["cash_today"] + tally["upi_today"]
 
-            # MMT pending: sum net_receivable from settlements collection where status=pending
-            pending_q = settlements_ref.where("settlement_status", "==", "pending").stream() \
-                if False else None  # settlements_ref stores booking_source != settlements status
-            # Query bookings collection directly for pending MMT settlements
-            mmt_pending_q = db.collection("bookings") \
-                .where("booking_source", "==", "mmt") \
-                .where("settlement_status", "==", "pending") \
-                .stream()
-            for bdoc in mmt_pending_q:
-                tally["mmt_pending"] += bdoc.to_dict().get("net_receivable", 0) or 0
+            # MMT pending: sum net_receivable over pending MMT bookings.
+            # Query was prefetched in the parallel wave (f_mmt_pending).
+            for bdata in f_mmt_pending.result():
+                tally["mmt_pending"] += bdata.get("net_receivable", 0) or 0
 
         except Exception as te:
             logger.warning(f"Tally dashboard error: {te}")

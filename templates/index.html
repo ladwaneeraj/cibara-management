@@ -21,7 +21,7 @@
       href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="/static/style.css" />
+    <link rel="stylesheet" href="{{ asset_url('style.css') }}" />
     <link rel="stylesheet" href="/static/booking.css" />
     <link rel="stylesheet" href="/static/laundry.css" />
     <link rel="stylesheet" href="/static/banking.css" />
@@ -1434,7 +1434,7 @@
               <div class="cm-search-wrap">
                 <i class="fas fa-search cm-search-icon"></i>
                 <input type="text" id="cm-search-input" class="cm-search-field"
-                  placeholder="Search by name or mobile…" oninput="cmSearch(this.value)" />
+                  placeholder="Search name, mobile (even partial), or ID number…" oninput="cmSearch(this.value)" />
                 <button class="cm-clear-search" id="cm-clear-btn" onclick="cmClearSearch()" style="display:none">
                   <i class="fas fa-times"></i>
                 </button>
@@ -2133,6 +2133,14 @@
                 required
                 pattern="[0-9]{10}"
                 title="Please enter a valid 10-digit mobile number"
+                inputmode="numeric"
+                autocomplete="off"
+                autocorrect="off"
+                autocapitalize="off"
+                spellcheck="false"
+                name="guest-mobile-nofill"
+                data-lpignore="true"
+                data-form-type="other"
               />
               <!-- Mobile suggestion dropdown (populated by customer-docs.js) -->
               <div
@@ -4805,11 +4813,11 @@
       defer
       src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"
     ></script>
-    <script defer src="/static/register.js"></script>
-    <script defer src="/static/bills.js"></script>
+    <script defer src="{{ asset_url('register.js') }}"></script>
+    <script defer src="{{ asset_url('bills.js') }}"></script>
     <!-- Banking Section: cash deposits, receipt vouchers, adjustments -->
     <script defer src="/static/banking.js"></script>
-    <script defer src="/static/script.js"></script>
+    <script defer src="{{ asset_url('script.js') }}"></script>
     <script defer src="/static/shift.js"></script>
     <script defer src="/static/analytics.js"></script>
     <script defer src="/static/expense.js"></script>
@@ -4822,9 +4830,9 @@
     <script defer src="/static/transaction-tracking.js"></script>
     <script defer src="/static/room-cleaning.js"></script>
     <!-- Enhanced check-in: document capture + customer flagging -->
-    <script defer src="/static/customer-docs.js"></script>
+    <script defer src="{{ asset_url('customer-docs.js') }}"></script>
     <!-- Customer Manager Panel -->
-    <script defer src="/static/customer-manager.js"></script>
+    <script defer src="{{ asset_url('customer-manager.js') }}"></script>
     <!-- Laundry Management -->
     <script defer src="/static/laundry.js"></script>
     <!-- Role-aware housekeeping bootstrap (no-op for non-housekeeping roles) -->
@@ -5509,12 +5517,4 @@
               </div>
             </div>
 
-          </div><!-- end bill-scroll -->
-        </div><!-- end TAB 2 -->
-
-      </div><!-- end modal-content -->
-    </div>
-    <!-- ── End Laundry Modal ─────────────────────────────────────────────── -->
-
-  </body>
-</html>
+          </div><!-- end bil

@@ -143,6 +143,14 @@ def checkin():
                 # Pointer to the draft stay doc so /checkout can finalize
                 # the existing record instead of creating a new bill.
                 "active_bill_id": stay_id,
+                # Denormalized per-stay receipt sums (register fast path).
+                # Seeded here so the register is correct immediately;
+                # payment_service.refresh_room_stay_aggregates re-stamps
+                # after every subsequent payment write for this stay.
+                "stay_payment_cash": amount_paid if payment == "cash" else 0,
+                "stay_payment_online": amount_paid if payment == "online" else 0,
+                "stay_payment_for": stay_id,
+                "stay_payment_synced_at": None,
                 # Per-stay attribution. These accumulate through the stay
                 # so the room-history popover can show the full chain:
                 #   cleanedBy → inspectedBy → bookedBy → lastCheckinBy
@@ -243,8 +251,14 @@ def checkin():
                 "transaction_type": "fresh_checkin",
             })
 
-        # Fix 7: sync=True so customer record errors are visible and logged
-        # rather than silently swallowed in a daemon thread
+        # Customer upsert runs fire-and-forget. The original "Fix 7" concern
+        # (errors silently swallowed in a daemon thread) no longer applies:
+        # customer_service._upsert() logs every failure via logger.error, so
+        # errors stay visible in the logs. Running it sync here had a worse
+        # failure mode — an upsert error AFTER the room was already claimed
+        # returned "check-in failed" for a check-in that had in fact
+        # succeeded — and it added 2–3 Firestore round-trips to every
+        # check-in response. The customer record is non-critical to the stay.
         customer_service.upsert_customer({
             "name": guest["name"],
             "mobile": data_json.get("mobile", ""),
@@ -252,7 +266,7 @@ def checkin():
             "id_number": data_json.get("id_number", ""),
             "address": data_json.get("address", ""),
             "photo": data_json.get("photo_path", ""),
-        }, amount_paid=amount_paid, sync=True)
+        }, amount_paid=amount_paid, sync=False)
 
         logger.info(f"Check-in successful for room {room}, guest: {guest['name']}, serial: {serial_number}")
         write_log(
@@ -554,6 +568,7 @@ def checkout():
             else:
                 bill_id = f"{room}_{int(datetime.now(IST).timestamp())}"
 
+            _perf_t0 = _time.time()
             _sid = settlement_id if (balance > 0 and settle_later) else None
             try:
                 bill_record = create_bill_record(
@@ -614,6 +629,9 @@ def checkout():
                     ),
                 )
 
+            _perf_t1 = _time.time()
+            logger.info(f"[PERF] checkout create_bill_record: {_perf_t1-_perf_t0:.3f}s room={room}")
+
             if bill_record:
                 # Make sure the stay_id field stays correct on the doc even
                 # if create_bill_record didn't set it. For legacy stays this
@@ -628,6 +646,26 @@ def checkout():
                 _bill_co_now = datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S")
                 bill_record["lastCheckoutBy"] = _bill_co_user
                 bill_record["lastCheckoutAt"] = _bill_co_now
+
+                # Carry shift attribution from the room onto the bill so the
+                # room-history popover shows "Shifted A → B by" for completed
+                # (transferred) stays too. Absent on non-transferred stays.
+                for _sf in ("lastShiftedBy", "lastShiftedAt",
+                            "lastShiftedFrom", "lastShiftedTo"):
+                    if room_data.get(_sf) is not None:
+                        bill_record[_sf] = room_data.get(_sf)
+
+                # Stamp this stay's total onto the customer doc (background)
+                # so the check-in mobile-suggestion dropdown shows "last paid"
+                # with no extra query next time this guest returns.
+                _co_mobile = (guest_info or {}).get("mobile", "")
+                if _co_mobile:
+                    customer_service.update_last_stay(
+                        _co_mobile,
+                        bill_record.get("total_amount", 0),
+                        bill_record.get("days_stayed", 1),
+                        checkout_time.split(" ")[0],
+                    )
 
                 # ── pre_checkout_snapshot ────────────────────────────────────
                 # Capture the room state being cleared by this checkout so the
@@ -710,6 +748,12 @@ def checkout():
                 # Release the stay-doc pointer; the stay_id now lives on
                 # the (newly finalized) bill doc.
                 "active_bill_id": None,
+                # Clear the per-stay denormalized receipt sums; the final
+                # bill was just recomputed from the payments collection.
+                "stay_payment_cash": None,
+                "stay_payment_online": None,
+                "stay_payment_for": None,
+                "stay_payment_synced_at": None,
                 "cleaning_status": "in_progress",
                 "cleaning_start_time": _co_now,
                 # Revert-window pointers (cleared by /mark_room_cleaned and
@@ -737,6 +781,10 @@ def checkout():
             if totals_update:
                 batch.update(totals_ref.document('current_totals'), totals_update)
             batch.commit()
+            logger.info(
+                f"[PERF] checkout TOTAL: {_time.time()-_perf_t0:.3f}s room={room} "
+                f"(bill={_perf_t1-_perf_t0:.3f}s, commit={_time.time()-_perf_t1:.3f}s)"
+            )
 
             invalidate_rooms_and_totals()
 
@@ -802,7 +850,23 @@ def checkout():
                 _bnum = (bill_record or {}).get("bill_number") if bill_record else None
                 if not _bnum or str(_bnum).strip() in ("", "-"):
                     from services.banking import cash_receipts as _bk_receipts
-                    _bk_receipts.mark_unofficial_on_checkout(bill_id)
+
+                    # Runs in the background: this is 2–4 Firestore
+                    # round-trips (query + batch + event record) that the
+                    # operator should not wait on. mark_unofficial_on_checkout
+                    # already catches and records its own failures internally;
+                    # the wrapper below logs anything that still escapes.
+                    def _bk_unofficial(_sid=bill_id):
+                        try:
+                            _bk_receipts.mark_unofficial_on_checkout(_sid)
+                        except Exception as _e:
+                            logger.warning(
+                                f"mark_unofficial_on_checkout failed "
+                                f"for stay={_sid}: {_e}"
+                            )
+
+                    import threading as _threading
+                    _threading.Thread(target=_bk_unofficial, daemon=True).start()
             except Exception as _bk_e:
                 # Banking-side bookkeeping must never block a checkout.
                 logger.warning(
@@ -2243,6 +2307,15 @@ def transfer_room():
         if not (200 <= _new_room_num <= 206):
             new_room_data["guest"]["isAC"] = False
 
+        # Stamp shift attribution on the destination room so the room-history
+        # popover can show "Shifted A → B by <user>" for THIS stay. Carried on
+        # the room doc (active stay) and snapshotted onto the bill at checkout.
+        _shift_user = (_safe_user() or {}).get("userId") or "system"
+        new_room_data["lastShiftedBy"]   = _shift_user
+        new_room_data["lastShiftedAt"]   = datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S")
+        new_room_data["lastShiftedFrom"] = str(old_room)
+        new_room_data["lastShiftedTo"]   = str(new_room)
+
         batch = db.batch()
 
         batch.set(rooms_ref.document(new_room), new_room_data)
@@ -3359,6 +3432,16 @@ def update_stay_payment():
         batch.commit()
         invalidate_rooms_and_totals()
 
+        # Re-stamp the room's denormalized stay sums (register fast path) —
+        # an edited amount/method must be reflected in the stamped totals.
+        _agg_sid = old_data.get("stay_id")
+        if _agg_sid:
+            import threading as _th
+            _th.Thread(
+                target=payment_service.refresh_room_stay_aggregates,
+                args=(_agg_sid,), daemon=True,
+            ).start()
+
         logger.info(f"update_stay_payment: id={payment_id} "
                     f"changes={update_fields} old_method={old_method} old_amount={old_amount}")
         write_log("payment.edit", target_collection="payments", target_id=payment_id,
@@ -3459,6 +3542,16 @@ def delete_stay_payment():
 
         batch.commit()
         invalidate_rooms_and_totals()
+
+        # Re-stamp the room's denormalized stay sums (register fast path) —
+        # the deleted row must disappear from the stamped totals too.
+        _agg_sid = old_data.get("stay_id")
+        if _agg_sid:
+            import threading as _th
+            _th.Thread(
+                target=payment_service.refresh_room_stay_aggregates,
+                args=(_agg_sid,), daemon=True,
+            ).start()
 
         logger.info(
             f"delete_stay_payment: id={payment_id} method={old_method} amount={old_amount}"

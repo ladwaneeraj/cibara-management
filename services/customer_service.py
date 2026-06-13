@@ -134,15 +134,21 @@ def _upsert(mobile: str, guest_data: dict, amount_paid: int):
 
 def search_customers(query_str: str, limit: int = 10):
     """
-    Search customers by name, mobile, or ID number.
+    Search customers by name, mobile (full OR partial), or ID number.
 
-    Firestore doesn't support full-text search natively, so we use a
-    pragmatic approach:
-      1. Exact mobile match (fastest).
-      2. ID number exact match.
-      3. Name prefix match (>= name, < name + high unicode char).
+    Every branch is a bounded, indexed Firestore query — nothing ever
+    scans the whole collection:
 
-    Returns a list of customer dicts.
+      * Query is digits (>= 4)  ->  mobile prefix range query. A full,
+        valid 10-digit number short-circuits to a direct doc get
+        (customer docs are keyed by mobile).
+      * Anything else           ->  id_number exact match + case-variant
+        name prefix range queries, all issued IN PARALLEL. These used to
+        run sequentially — up to 6 back-to-back round-trips, which is
+        why name search felt slow on high-latency links.
+
+    Returns a list of customer dicts (with `_id` injected), newest stay
+    first within each relevance band, capped at `limit`.
     """
     if _customers_ref is None:
         return []
@@ -151,58 +157,65 @@ def search_customers(query_str: str, limit: int = 10):
     if not query_str:
         return []
 
-    results = []
-
     try:
-        # 1. Try exact mobile match
-        clean = _clean_mobile(query_str)
-        if clean:
-            doc = _customers_ref.document(clean).get()
-            if doc.exists:
-                data = doc.to_dict()
-                data["_id"] = doc.id
-                results.append(data)
-                return results
+        # ── Phone-number path (the old code only matched FULL numbers;
+        #    partial numbers fell through to name search and returned
+        #    nothing — this is the "can't search by phone" bug) ─────────
+        digits  = "".join(c for c in query_str if c.isdigit())
+        letters = "".join(c for c in query_str if c.isalpha())
+        if len(digits) >= 4 and not letters:
+            clean = _clean_mobile(query_str)
+            if clean:  # full valid mobile — direct doc get (1 round-trip)
+                doc = _customers_ref.document(clean).get()
+                if doc.exists:
+                    data = doc.to_dict()
+                    data["_id"] = doc.id
+                    return [data]
+            # Partial number — indexed prefix range query on `mobile`.
+            return search_by_mobile_prefix(digits, limit=limit)
 
-        # 2. Try ID number exact match
-        id_query = (
-            _customers_ref
-            .where("id_number", "==", query_str)
-            .limit(limit)
-        )
-        for doc in id_query.stream():
-            data = doc.to_dict()
-            data["_id"] = doc.id
-            results.append(data)
-        if results:
-            return results
+        # ── Name / ID path — parallel bounded queries ──────────────────
+        def _id_exact():
+            q = _customers_ref.where("id_number", "==", query_str).limit(limit)
+            return [(d.id, d.to_dict()) for d in q.stream()]
 
-        # 3. Name prefix search — try multiple case variants to work around
-        #    Firestore's case-sensitive range queries.
-        #    Variants: original, all-lowercase, all-uppercase, title-case.
-        variants = {query_str}
-        variants.add(query_str.lower())
-        variants.add(query_str.upper())
-        variants.add(query_str.capitalize())    # first char upper, rest lower
-        variants.add(query_str.title())         # each word capitalised
+        def _name_prefix(variant):
+            q = (
+                _customers_ref
+                .where("name", ">=", variant)
+                .where("name", "<", variant + "\uf8ff")
+                .limit(limit)
+            )
+            return [(d.id, d.to_dict()) for d in q.stream()]
 
-        seen_ids = set()
-        for variant in variants:
+        # Firestore range queries are case-sensitive; cover the common
+        # casings. (A name_lower index field would collapse these to one
+        # query, but needs a backfill — out of scope here.)
+        variants = {query_str, query_str.lower(), query_str.upper(),
+                    query_str.capitalize(), query_str.title()}
+
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=len(variants) + 1) as pool:
+            futures = [pool.submit(_id_exact)]
+            futures += [pool.submit(_name_prefix, v) for v in variants]
+
+        results, seen_ids = [], set()
+        for f in futures:
             try:
-                name_query = (
-                    _customers_ref
-                    .where("name", ">=", variant)
-                    .where("name", "<", variant + "\uf8ff")
-                    .limit(limit)
-                )
-                for doc in name_query.stream():
-                    if doc.id not in seen_ids:
-                        seen_ids.add(doc.id)
-                        data = doc.to_dict()
-                        data["_id"] = doc.id
-                        results.append(data)
-            except Exception:
-                pass  # one variant failing shouldn't abort all others
+                for doc_id, data in f.result():
+                    if doc_id in seen_ids:
+                        continue
+                    seen_ids.add(doc_id)
+                    data["_id"] = doc_id
+                    results.append(data)
+            except Exception as qe:
+                logger.warning(f"CustomerService search branch failed: {qe}")
+
+        # Ranking: most recent stay first, then case-insensitive prefix
+        # matches ahead of substring-ish variant hits (stable sorts).
+        ql = query_str.lower()
+        results.sort(key=lambda c: c.get("last_stay_date") or "", reverse=True)
+        results.sort(key=lambda c: 0 if (c.get("name") or "").lower().startswith(ql) else 1)
 
         return results[:limit]
 
@@ -242,6 +255,16 @@ def search_by_mobile_prefix(prefix: str, limit: int = 6) -> list:
             results.append(data)
     except Exception as e:
         logger.warning(f"CustomerService: mobile prefix search failed - {e}")
+
+    # NOTE: this endpoint is called per-keystroke from the check-in form, so it
+    # stays a SINGLE indexed range query — no per-row bill lookups, no writes.
+    # `last_stay_amount` is read straight off the customer doc; it is populated
+    # forward at checkout (rooms.py -> update_last_stay) and, for guests who
+    # predate the feature, by the one-off backfill_last_stay_amounts() admin
+    # task. When a guest has no stamp yet the dropdown falls back to the
+    # always-present total_spent. (The previous version did live bill lookups
+    # + write-backs on every keystroke — up to ~6 reads and ~6 writes per
+    # keypress, and far worse without the composite index.)
     return results
 
 
@@ -330,10 +353,200 @@ def _slim(c: dict) -> dict:
         "total_stays":    c.get("total_stays", 0),
         "total_spent":    c.get("total_spent", 0),
         "last_stay_date": c.get("last_stay_date", ""),
+        "last_stay_amount": c.get("last_stay_amount", 0),
         "first_visit":    c.get("first_visit", ""),
         "is_flagged":     c.get("is_flagged", False),
         "doc_count":      len(c.get("id_doc_urls") or []),
     }
+
+
+def backfill_last_stay_amounts() -> dict:
+    """
+    One-off maintenance task: stamp `last_stay_amount` / `last_stay_per_day`
+    onto existing customer docs that predate the feature, so the check-in
+    dropdown's "last paid" column is populated without ever doing per-keystroke
+    bill lookups. Idempotent — skips customers already stamped. Safe to re-run.
+
+    Returns {scanned, stamped, skipped}. Intended to be triggered ONCE from an
+    admin endpoint; not on any request hot path.
+    """
+    if _customers_ref is None:
+        return {"scanned": 0, "stamped": 0, "skipped": 0}
+    scanned = stamped = skipped = 0
+    try:
+        for doc in _customers_ref.stream():
+            scanned += 1
+            d = doc.to_dict() or {}
+            if d.get("last_stay_amount"):
+                skipped += 1
+                continue
+            s = get_last_stay_summary(doc.id)
+            if s and s.get("total_amount"):
+                # Synchronous write here (not the async update_last_stay) so the
+                # task's return counts reflect completed writes.
+                try:
+                    days = max(int(s.get("days") or 1), 1)
+                    total = round(float(s["total_amount"]))
+                    _customers_ref.document(doc.id).set({
+                        "last_stay_amount":  total,
+                        "last_stay_per_day": round(total / days),
+                    }, merge=True)
+                    stamped += 1
+                except Exception as we:
+                    logger.warning(f"backfill stamp failed for {doc.id}: {we}")
+            else:
+                skipped += 1
+    except Exception as e:
+        logger.error(f"backfill_last_stay_amounts failed after {scanned}: {e}")
+    logger.info(f"backfill_last_stay_amounts: scanned={scanned} stamped={stamped} skipped={skipped}")
+    return {"scanned": scanned, "stamped": stamped, "skipped": skipped}
+
+
+def get_stay_history(mobile: str, limit: int = 60):
+    """
+    Every recorded stay for a guest, newest first, for the customer-records
+    History view. One bounded, indexed query on bills.guest_mobile (capped at
+    `limit`); sorting is done in memory so no composite index is required.
+
+    Each row is a flat dict the UI renders directly:
+        bill_number, room, checkin_time, checkout_time, days,
+        room_rate, room_charges, services_total, discounts,
+        paid_cash, paid_online, total_amount, balance, status
+    Never raises — returns [] on any error.
+    """
+    if _db is None:
+        return []
+    clean = _clean_mobile(mobile)
+    if not clean:
+        return []
+
+    _ok_status = ("completed", "checked_out", "pending_settlement", "")
+    try:
+        q = _db.collection("bills").where(
+            filter=_fs.firestore.FieldFilter("guest_mobile", "==", clean)
+        ).limit(limit)
+        rows = []
+        for snap in q.stream():
+            b = snap.to_dict() or {}
+            if not b.get("checkin_time"):
+                continue
+            if b.get("status", "") not in _ok_status:
+                continue
+            rows.append({
+                "bill_number":    b.get("bill_number", "-"),
+                "room":           str(b.get("room", "")),
+                "checkin_time":   b.get("checkin_time", ""),
+                "checkout_time":  b.get("checkout_time", ""),
+                "days":           int(b.get("days_stayed") or 1),
+                "room_rate":      b.get("room_price_per_night", 0),
+                "room_charges":   b.get("room_charges_total", 0),
+                "services_total": b.get("services_total", 0),
+                "discounts":      b.get("discounts", 0),
+                "paid_cash":      b.get("payment_cash", 0),
+                "paid_online":    b.get("payment_online", 0),
+                "total_amount":   b.get("total_amount", 0),
+                "balance":        b.get("balance", 0),
+                "status":         b.get("status", "completed"),
+            })
+        # Newest first by checkout (fallback to checkin for open/legacy rows).
+        rows.sort(key=lambda r: r["checkout_time"] or r["checkin_time"],
+                  reverse=True)
+        return rows
+    except Exception as e:
+        logger.warning(f"CustomerService get_stay_history({clean}) failed: {e}")
+        return []
+
+
+def update_last_stay(mobile: str, total_amount, days, checkout_date: str = "") -> None:
+    """
+    Stamp the guest's most-recent-stay summary onto their customer doc so the
+    check-in mobile-suggestion dropdown can show "last paid" with ZERO extra
+    queries. Fire-and-forget; never blocks or breaks the caller.
+
+        last_stay_amount   — total the guest paid that stay (incl. services,
+                             net of discounts)
+        last_stay_per_day  — that total / nights, rounded
+    """
+    if _customers_ref is None:
+        return
+    clean = _clean_mobile(mobile)
+    if not clean:
+        return
+
+    def _do():
+        try:
+            d = max(int(days or 1), 1)
+            total = round(float(total_amount or 0))
+            patch = {
+                "last_stay_amount":  total,
+                "last_stay_per_day": round(total / d),
+            }
+            if checkout_date:
+                patch["last_stay_date"] = checkout_date
+            _customers_ref.document(clean).set(patch, merge=True)
+        except Exception as e:
+            logger.warning(f"CustomerService update_last_stay({clean}) failed: {e}")
+
+    threading.Thread(target=_do, daemon=True).start()
+
+
+def get_last_stay_summary(mobile: str):
+    """
+    Most recent completed stay for this guest, summarised for the
+    check-in form's returning-guest card.
+
+    Query strategy: try the indexed `guest_mobile == X ORDER BY
+    checkout_time DESC LIMIT 1` first (needs a composite index — the
+    Firestore error log contains a one-click creation link if it's
+    missing). Fall back to a bounded unordered scan (limit 25, newest
+    picked in memory) so the feature works either way. Never raises.
+    """
+    if _db is None:
+        return None
+    clean = _clean_mobile(mobile)
+    if not clean:
+        return None
+
+    _ok_status = ("completed", "checked_out", "pending_settlement", "")
+
+    def _summarise(b):
+        days = max(int(b.get("days_stayed") or 1), 1)
+        total = float(b.get("total_amount") or 0)
+        return {
+            "room":           str(b.get("room", "")),
+            "checkout_date":  (b.get("checkout_time") or "").split(" ")[0],
+            "days":           days,
+            "room_rate":      b.get("room_price_per_night", 0),
+            "discounts":      b.get("discounts", 0),
+            "services_total": b.get("services_total", 0),
+            "total_amount":   total,
+            # What the guest effectively paid per day, all-in (room +
+            # services - discounts are already netted into total_amount).
+            "per_day":        round(total / days),
+        }
+
+    # Single equality query on guest_mobile (auto-indexed — NO composite
+    # index needed); newest stay chosen in memory. This is off the hot path
+    # (used only by checkout's own stamp and the one-off backfill), so the
+    # bounded scan is cheap and avoids any index-deploy dependency.
+    bills = _db.collection("bills")
+    try:
+        q = bills.where(
+            filter=_fs.firestore.FieldFilter("guest_mobile", "==", clean)
+        ).limit(40)
+        best = None
+        for snap in q.stream():
+            b = snap.to_dict() or {}
+            if not b.get("checkout_time"):
+                continue
+            if b.get("status", "") not in _ok_status:
+                continue
+            if best is None or (b.get("checkout_time") > best.get("checkout_time")):
+                best = b
+        return _summarise(best) if best else None
+    except Exception as e:
+        logger.warning(f"CustomerService get_last_stay_summary({clean}) failed: {e}")
+        return None
 
 
 def update_customer(mobile: str, updates: dict) -> bool:
@@ -464,6 +677,12 @@ def _write_flag(mobile: str, is_flagged: bool, flag_notes: str):
 # DOCUMENT UPLOAD
 # ---------------------------------------------------------------------------
 
+class DocumentCapReached(Exception):
+    """Raised when a customer already has the maximum number of ID documents.
+    Lets the upload route return the specific cap message without paying a
+    pre-flight Firestore read on every upload."""
+
+
 def upload_document(mobile: str, image_bytes: bytes, filename: str) -> str:
     """
     Upload a document image and append its URL to the customer's id_doc_urls.
@@ -496,44 +715,67 @@ def upload_document(mobile: str, image_bytes: bytes, filename: str) -> str:
         if not url:
             return ""
 
-        # ── Atomic Firestore transaction: append URL or clean up orphan ───────
-        @_fs.transactional
-        def _append_url(transaction, d_ref, new_url):
-            snap = d_ref.get(transaction=transaction)
-            if snap.exists:
-                urls = list(snap.to_dict().get("id_doc_urls", []) or [])
-                if len(urls) >= 3:
-                    raise RuntimeError("cap_hit")
-                if new_url not in urls:
-                    transaction.update(d_ref, {"id_doc_urls": _fs.ArrayUnion([new_url])})
-            else:
+        # ── Atomic append — single RPC, parallel-safe ─────────────────────
+        # ArrayUnion appends server-side without a read-modify-write
+        # transaction. The old transactional path cost 2 round-trips
+        # (read + commit) AND serialized concurrent uploads to the same
+        # customer with contention retries + backoff — a 2-photo parallel
+        # upload regularly doubled in wall-clock time because of it.
+        #
+        # Race-safe doc creation: update() raises NotFound when the
+        # customer doc doesn't exist yet; create() raises AlreadyExists if
+        # a parallel upload created it first — in which case the plain
+        # ArrayUnion update succeeds on retry. No path can overwrite
+        # another upload's URL (the old txn's set() stub could).
+        from google.api_core import exceptions as _gax
+        try:
+            doc_ref.update({"id_doc_urls": _fs.ArrayUnion([url])})
+        except _gax.NotFound:
+            try:
                 # Minimal stub — enriched on first check-in
-                transaction.set(d_ref, {
+                doc_ref.create({
                     "mobile": clean,
                     "name": "",
                     "address": "",
-                    "id_doc_urls": [new_url],
+                    "id_doc_urls": [url],
                     "total_stays": 0,
                     "total_spent": 0,
                     "first_visit": datetime.now(timezone.utc).isoformat(),
                     "last_stay_date": "",
                 })
+            except _gax.AlreadyExists:
+                doc_ref.update({"id_doc_urls": _fs.ArrayUnion([url])})
 
-        try:
-            _append_url(_db.transaction(), doc_ref, url)
-        except RuntimeError as cap_err:
-            if "cap_hit" in str(cap_err):
-                # Concurrent upload reached the cap first — delete the orphan
-                _delete_storage_url(url)
-                logger.warning(
-                    f"CustomerService: cap hit in transaction for {clean}; orphan deleted"
-                )
-                return ""
-            raise
+        # ── Cap enforcement (max 3) — lazy, off the request path ──────────
+        # The atomic append above can briefly overflow the cap when uploads
+        # race; this background pass trims anything beyond the first 3 and
+        # deletes the orphaned Storage blobs. The capture UI already caps
+        # photos per session, so this trim is a rare safety net, not the
+        # primary control.
+        def _trim_overflow():
+            try:
+                snap = doc_ref.get()
+                urls = list((snap.to_dict() or {}).get("id_doc_urls", []) or []) \
+                    if snap.exists else []
+                if len(urls) > 3:
+                    extras = urls[3:]
+                    doc_ref.update({"id_doc_urls": _fs.ArrayRemove(extras)})
+                    for u in extras:
+                        _delete_storage_url(u)
+                    logger.warning(
+                        f"CustomerService: doc cap exceeded for {clean}; "
+                        f"trimmed {len(extras)} overflow doc(s)"
+                    )
+            except Exception as te:
+                logger.warning(f"CustomerService: cap trim failed for {clean}: {te}")
+
+        threading.Thread(target=_trim_overflow, daemon=True).start()
 
         logger.info(f"CustomerService: document stored for {clean} -> {url}")
         return url
 
+    except DocumentCapReached:
+        raise
     except Exception as e:
         logger.error(f"CustomerService upload_document failed for {mobile}: {e}")
         return ""

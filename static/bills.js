@@ -681,9 +681,15 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
   }
 
   // ── State ────────────────────────────────────────────────────────────────────
+  // Paged rendering: rows rendered per page. applyFilters() resets the cap,
+  // the "Show more" row extends it. Export/tally still use the FULL
+  // filteredEntries list, so aggregates are unaffected by paging.
+  const PAGE_SIZE = 100;
+
   const state = {
     allEntries: [],
     filteredEntries: [],
+    visibleCount: PAGE_SIZE,
     loading: false,
     dateRange: { start: null, end: null },
     filters: { search: "", source: "all", payment: "all" },
@@ -1824,6 +1830,14 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
     const tbody = dom("bl-table-body");
     if (tbody) {
       tbody.addEventListener("click", async (e) => {
+        // Paged rendering — "Show more" extends the cap and re-renders
+        const lmBtn = e.target.closest(".bl-load-more-btn");
+        if (lmBtn) {
+          state.visibleCount += PAGE_SIZE;
+          renderTable();
+          return;
+        }
+
         // Admin-only: clicking the Payment cell opens the Register
         // Payment Records modal for this stay. Reuses the existing
         // modal (window.openRegisterPaymentsModal); no markup duplicated.
@@ -2227,6 +2241,7 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
     }
 
     state.filteredEntries = f;
+    state.visibleCount = PAGE_SIZE; // new filter/search -> back to first page
     renderTally(f);
     renderTable();
   }
@@ -2754,14 +2769,16 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
         if (va > vb) return state.sort.dir === "asc" ? 1 : -1;
         return 0;
       });
+      const cap = state.visibleCount || PAGE_SIZE;
       let html = "";
-      sorted.forEach((e, i) => {
+      sorted.slice(0, cap).forEach((e, i) => {
         // Same checkout-first key derivation as the date-grouped view, so
         // group attributes stay consistent across toggles.
         const _dkSrc = e.checkout_time || e.checkin_time || "";
         const dk = _dkSrc.split(" ")[0] || "unknown";
         html += rowHTML(e, dk, i + 1);
       });
+      html += loadMoreRowHTML(sorted.length - Math.min(cap, sorted.length));
       tbody.innerHTML = html;
       return;
     }
@@ -2777,22 +2794,34 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
       byDate[dk].push(e);
     });
 
+    // Paged rendering — at most state.visibleCount data rows per pass.
+    const cap = state.visibleCount || PAGE_SIZE;
     let html = "";
     let rowNum = 0; // sequential counter across all date groups
-    Object.keys(byDate)
-      .sort((a, b) => b.localeCompare(a))
-      .forEach((dk) => {
-        const entries = byDate[dk];
-        const label = dk !== "unknown" ? fmtDate(dk) : "Unknown Date";
-        html += `<tr class="bl-date-header" data-group="${dk}">
+    const dateKeys = Object.keys(byDate).sort((a, b) => b.localeCompare(a));
+    for (const dk of dateKeys) {
+      if (rowNum >= cap) break;
+      const entries = byDate[dk];
+      const label = dk !== "unknown" ? fmtDate(dk) : "Unknown Date";
+      html += `<tr class="bl-date-header" data-group="${dk}">
         <td colspan="13"><i class="fas fa-chevron-down"></i>${label}&nbsp;<span style="font-weight:400;opacity:.65;">(${entries.length})</span></td>
       </tr>`;
-        entries.forEach((e) => {
-          rowNum++;
-          html += rowHTML(e, dk, rowNum);
-        });
-      });
+      for (const e of entries) {
+        if (rowNum >= cap) break;
+        rowNum++;
+        html += rowHTML(e, dk, rowNum);
+      }
+    }
+    html += loadMoreRowHTML(state.filteredEntries.length - rowNum);
     tbody.innerHTML = html;
+  }
+
+  function loadMoreRowHTML(remaining) {
+    if (remaining <= 0) return "";
+    return `<tr class="bl-load-more-row"><td colspan="13" style="text-align:center;padding:10px;">
+      <button type="button" class="bl-load-more-btn" style="cursor:pointer;padding:6px 18px;">
+        Show ${Math.min(PAGE_SIZE, remaining)} more (${remaining} remaining)
+      </button></td></tr>`;
   }
 
   function rowHTML(e, dk, rowIndex) {

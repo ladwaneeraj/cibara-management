@@ -3979,3 +3979,285 @@ input:checked + .toggle-slider:before {
 }
 .exp-preset-mgr-add button:hover { background: #2c5282; }
 .exp-preset-mgr-add button:disabled { opacity: 0.55; cursor: not-allowed; }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   CUSTOMER MANAGER — v3 visual refresh
+   Overrides the original .cm- rules (these load later, same specificity or
+   higher). Design language: white surfaces, 16px radii, soft slate shadows,
+   app-blue accent, pill chips, card-like rows.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.cm-overlay { background: rgba(15, 23, 42, 0.55); backdrop-filter: blur(3px); }
+
+.cm-panel {
+  border-radius: 18px;
+  box-shadow: 0 24px 70px rgba(15, 23, 42, 0.28);
+  overflow: hidden;
+  background: #f8fafc;
+}
+
+.cm-header {
+  background: linear-gradient(135deg, #1d4ed8 0%, #3b82f6 100%);
+  color: #fff;
+  padding: 1rem 1.4rem;
+  border-bottom: none;
+}
+.cm-header h2 { color: #fff; font-size: 1.12rem; letter-spacing: .01em; }
+.cm-header-left i { color: rgba(255,255,255,.85); }
+
+.cm-add-btn {
+  background: rgba(255,255,255,.16);
+  color: #fff;
+  border: 1px solid rgba(255,255,255,.35);
+  border-radius: 999px;
+  padding: .45rem 1rem;
+  font-weight: 600;
+  transition: background .15s ease;
+}
+.cm-add-btn:hover { background: rgba(255,255,255,.28); }
+.cm-header .cm-close-btn { color: rgba(255,255,255,.9); background: transparent; }
+.cm-header .cm-close-btn:hover { color: #fff; background: rgba(255,255,255,.18); }
+
+.cm-search-bar { background: #f8fafc; padding: .9rem 1.4rem .35rem; border: none; }
+.cm-search-wrap {
+  background: #fff;
+  border: 1.5px solid #e2e8f0;
+  border-radius: 999px;
+  box-shadow: 0 1px 3px rgba(15,23,42,.05);
+  transition: border-color .15s ease, box-shadow .15s ease;
+}
+.cm-search-wrap:focus-within {
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 3px rgba(59,130,246,.15);
+}
+.cm-search-field { background: transparent; font-size: .92rem; }
+.cm-search-icon { color: #94a3b8; }
+.cm-stats { color: #64748b; font-size: .78rem; font-weight: 600; }
+
+.cm-chips { background: #f8fafc; padding: .55rem 1.4rem .75rem; border: none; }
+.cm-chip {
+  background: #fff;
+  border: 1.5px solid #e2e8f0;
+  color: #475569;
+  border-radius: 999px;
+  padding: .32rem .85rem;
+  font-weight: 600;
+  font-size: .8rem;
+  transition: all .15s ease;
+}
+.cm-chip:hover { border-color: #93c5fd; color: #1d4ed8; }
+.cm-chip.active {
+  background: #1d4ed8;
+  border-color: #1d4ed8;
+  color: #fff;
+  box-shadow: 0 3px 10px rgba(29,78,216,.30);
+}
+
+.cm-table-wrap { background: #f8fafc; padding: 0 1rem 1rem; }
+.cm-table { border-collapse: separate; border-spacing: 0 6px; }
+.cm-table thead th {
+  background: transparent;
+  color: #94a3b8;
+  font-size: .7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .07em;
+  border: none;
+  padding: .45rem .9rem .25rem;
+  position: sticky; top: 0; z-index: 2;
+}
+.cm-row { cursor: pointer; }
+.cm-row td {
+  background: #fff;
+  border: none;
+  padding: .65rem .9rem;
+  font-size: .88rem;
+  color: #0f172a;
+  box-shadow: 0 1px 2px rgba(15,23,42,.05);
+  transition: background .12s ease;
+}
+.cm-row td:first-child  { border-radius: 12px 0 0 12px; }
+.cm-row td:last-child   { border-radius: 0 12px 12px 0; }
+.cm-row:hover td        { background: #eff6ff; }
+.cm-row-flagged td      { background: #fff7f5; box-shadow: inset 3px 0 0 #f43f5e, 0 1px 2px rgba(15,23,42,.05); }
+.cm-row-flagged:hover td{ background: #ffefec; }
+
+.cm-mini-avatar {
+  width: 36px; height: 36px;
+  border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  color: #fff; font-weight: 700; font-size: .8rem;
+  flex-shrink: 0;
+  box-shadow: 0 2px 6px rgba(15,23,42,.18);
+}
+.cm-guest-name { font-weight: 600; color: #0f172a; }
+.cm-badges { display: flex; gap: .3rem; margin-top: .15rem; flex-wrap: wrap; }
+.cm-doc-chip, .cm-repeat-chip, .cm-flag-chip {
+  font-size: .68rem; font-weight: 600;
+  border-radius: 999px; padding: .08rem .5rem;
+}
+.cm-doc-chip    { background: #ecfdf5; color: #047857; }
+.cm-repeat-chip { background: #eff6ff; color: #1d4ed8; }
+.cm-flag-chip   { background: #fff1f2; color: #be123c; }
+
+.cm-icon-btn {
+  border-radius: 10px;
+  border: 1.5px solid #e2e8f0;
+  background: #fff;
+  color: #475569;
+  transition: all .15s ease;
+}
+.cm-icon-btn:hover { border-color: #3b82f6; color: #1d4ed8; background: #eff6ff; }
+
+.cm-load-more-btn {
+  background: #fff;
+  border: 1.5px solid #e2e8f0;
+  color: #1d4ed8;
+  border-radius: 999px;
+  padding: .5rem 1.6rem;
+  font-weight: 700;
+  transition: all .15s ease;
+}
+.cm-load-more-btn:hover { border-color: #3b82f6; box-shadow: 0 3px 12px rgba(59,130,246,.2); }
+
+.cm-empty { color: #94a3b8; }
+.cm-empty i { font-size: 2.2rem; opacity: .5; }
+
+/* Detail panel */
+.cm-detail-panel {
+  border-radius: 18px;
+  box-shadow: 0 24px 70px rgba(15,23,42,.30);
+  background: #f8fafc;
+}
+.cm-detail-header {
+  background: #fff;
+  border-bottom: 1px solid #eef2f7;
+  border-radius: 18px 18px 0 0;
+}
+.cm-profile-card {
+  background: linear-gradient(135deg, #1d4ed8 0%, #3b82f6 100%);
+  color: #fff;
+  border-radius: 16px;
+  box-shadow: 0 10px 30px rgba(29,78,216,.30);
+}
+.cm-profile-card h3, .cm-profile-card p { color: #fff; }
+.cm-profile-card p i { color: rgba(255,255,255,.8); }
+.cm-profile-flagged { background: linear-gradient(135deg, #be123c 0%, #f43f5e 100%); box-shadow: 0 10px 30px rgba(190,18,60,.30); }
+.cm-avatar {
+  background: rgba(255,255,255,.2);
+  border: 2px solid rgba(255,255,255,.5);
+  color: #fff;
+}
+.cm-stat-box {
+  background: #fff;
+  border: none;
+  border-radius: 14px;
+  box-shadow: 0 1px 3px rgba(15,23,42,.07);
+}
+.cm-stat-val { color: #1d4ed8; font-weight: 800; }
+.cm-stat-label { color: #94a3b8; text-transform: uppercase; font-size: .66rem; letter-spacing: .06em; }
+
+.cm-btn-primary {
+  background: #1d4ed8; border-radius: 10px; font-weight: 700;
+  box-shadow: 0 3px 10px rgba(29,78,216,.3);
+}
+.cm-btn-primary:hover { background: #1e40af; }
+.cm-btn-secondary { border-radius: 10px; font-weight: 600; }
+
+.cm-doc-item { border-radius: 12px; overflow: hidden; box-shadow: 0 2px 8px rgba(15,23,42,.12); }
+.cm-flag-alert { border-radius: 14px; }
+
+/* ── v3: mobile — keep the customer panel top-anchored & centered so the
+   on-screen keyboard never pushes it out of reach (it was bottom-anchored,
+   so focusing the search field shoved it down behind the keyboard). ── */
+@media (max-width: 640px) {
+  .cm-overlay { align-items: flex-start; padding-top: 10px; }
+  .cm-panel   {
+    align-self: center;
+    border-radius: 16px;
+    width: calc(100vw - 12px);
+    max-height: 88vh;
+    max-height: 88dvh; /* dvh shrinks with the keyboard — list stays reachable */
+  }
+}
+
+/* ── Mobile-suggestion dropdown: last-paid column ── */
+.ms-row {
+  display: flex; align-items: center; gap: .6rem;
+  padding: .5rem .75rem; cursor: pointer;
+  border-bottom: 1px solid #f1f5f9;
+}
+.ms-row:last-child { border-bottom: none; }
+.ms-row:hover { background: #f8fafc; }
+.ms-main { flex: 1; min-width: 0; }
+.ms-name {
+  font-weight: 600; color: #0f172a; font-size: .88rem;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.ms-sub { color: #94a3b8; font-size: .74rem; margin-top: .1rem; }
+
+/* Two stat cells: last paid + total spent */
+.ms-stats { display: flex; gap: .5rem; flex-shrink: 0; }
+.ms-stat {
+  text-align: right; line-height: 1.15; min-width: 56px;
+}
+.ms-stat + .ms-stat {
+  padding-left: .5rem; border-left: 1px solid #eef2f7;
+}
+.ms-stat-val { font-weight: 700; color: #1d4ed8; font-size: .86rem; }
+.ms-stat-empty { color: #cbd5e1; font-size: .86rem; font-weight: 600; }
+.ms-stat-lbl {
+  color: #94a3b8; font-size
+/* ── Customer detail: Stay History ── */
+.cm-history-section { margin: .9rem 0; }
+.cm-history-toggle {
+  width: 100%; display: flex; align-items: center; justify-content: space-between;
+  background: #fff; border: 1.5px solid #e2e8f0; border-radius: 12px;
+  padding: .7rem .9rem; font-weight: 700; color: #1d4ed8; font-size: .9rem;
+  cursor: pointer; transition: border-color .15s ease, box-shadow .15s ease;
+}
+.cm-history-toggle:hover { border-color: #93c5fd; box-shadow: 0 2px 10px rgba(59,130,246,.12); }
+.cm-history-toggle i.fa-chevron-down { transition: transform .2s ease; color: #94a3b8; }
+.cm-history-body { margin-top: .6rem; display: flex; flex-direction: column; gap: .55rem; }
+.cm-history-loading, .cm-history-empty { color: #94a3b8; font-size: .85rem; padding: .7rem; text-align: center; }
+
+.cm-hist-card {
+  background: #fff; border: 1px solid #eef2f7; border-radius: 12px;
+  padding: .7rem .8rem; box-shadow: 0 1px 3px rgba(15,23,42,.05);
+}
+.cm-hist-top { display: flex; align-items: center; justify-content: space-between; margin-bottom: .4rem; }
+.cm-hist-room { font-weight: 700; color: #0f172a; font-size: .9rem; }
+.cm-hist-room i { color: #3b82f6; margin-right: .3rem; }
+.cm-hist-bill { color: #94a3b8; font-size: .72rem; font-weight: 600; }
+.cm-hist-dates {
+  display: flex; gap: .8rem; align-items: center; flex-wrap: wrap;
+  color: #475569; font-size: .76rem; margin-bottom: .5rem;
+  padding-bottom: .5rem; border-bottom: 1px dashed #eef2f7;
+}
+.cm-hist-lbl {
+  color: #94a3b8; font-size: .6rem; text-transform: uppercase;
+  letter-spacing: .04em; margin-right: .25rem;
+}
+.cm-hist-days {
+  margin-left: auto; background: #eff6ff; color: #1d4ed8;
+  border-radius: 999px; padding: .1rem .5rem; font-size: .68rem; font-weight: 700;
+}
+.cm-hist-rows { display: flex; flex-direction: column; gap: .2rem; font-size: .8rem; }
+.cm-hist-rows > div { display: flex; justify-content: space-between; color: #334155; }
+.cm-hist-rows .disc span { color: #059669; }
+.cm-hist-rows .total {
+  margin-top: .25rem; padding-top: .3rem; border-top: 1px solid #f1f5f9;
+  font-weight: 700; color: #0f172a;
+}
+.cm-hist-foot {
+  display: flex; align-items: center; gap: .5rem; flex-wrap: wrap;
+  margin-top: .5rem; font-size: .76rem; color: #475569;
+}
+.cm-hist-paid { font-weight: 600; }
+.cm-hist-bal { border-radius: 999px; padding: .1rem .5rem; font-size: .68rem; font-weight: 700; }
+.cm-hist-bal.due { background: #fff1f2; color: #be123c; }
+.cm-hist-bal.adv { background: #ecfdf5; color: #047857; }
+.cm-hist-status.pending {
+  background: #fffbeb; color: #b45309; border-radius: 999px;
+  padding: .1rem .5rem; font-size: .68rem; font-weight: 700;
+}

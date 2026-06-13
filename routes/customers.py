@@ -39,6 +39,7 @@ def _format_customer(c: dict) -> dict:
         "total_spent": c.get("total_spent", 0),
         "first_visit": c.get("first_visit", ""),
         "last_stay_date": c.get("last_stay_date", ""),
+        "last_stay_amount": c.get("last_stay_amount", 0),
         # Flag fields — included so frontend can show warning without a second request
         "is_flagged": c.get("is_flagged", False),
         "flag_reason": c.get("flag_reason", ""),
@@ -88,6 +89,28 @@ def get_customer_route(mobile):
         return jsonify(success=False, message=f"Error: {str(e)}")
 
 
+@customers_bp.route("/admin/backfill_last_stay", methods=["POST"])
+@requires_permission("customer.manage")
+def backfill_last_stay_route():
+    """One-off: populate last_stay_amount on existing customers. Admin only."""
+    try:
+        return jsonify(success=True, result=customer_service.backfill_last_stay_amounts())
+    except Exception as e:
+        logger.error(f"backfill_last_stay error: {e}")
+        return jsonify(success=False, message=str(e)), 500
+
+
+@customers_bp.route("/customer_stays/<mobile>", methods=["GET"])
+def customer_stays_route(mobile):
+    """Full stay history for a guest — powers the Customer Records History view."""
+    try:
+        return jsonify(success=True,
+                       stays=customer_service.get_stay_history(mobile))
+    except Exception as e:
+        logger.error(f"customer_stays error: {e}")
+        return jsonify(success=False, message=str(e), stays=[])
+
+
 @customers_bp.route("/search_customers_mobile", methods=["POST"])
 def search_customers_by_mobile_route():
     """
@@ -135,23 +158,33 @@ def upload_customer_document():
         if not file or file.filename == "":
             return jsonify(success=False, message="Empty file")
 
-        # Check the customer already has the maximum number of docs
-        customer = customer_service.get_customer(mobile)
-        if customer:
-            existing_urls = customer.get("id_doc_urls", [])
-            if len(existing_urls) >= 3:
-                return jsonify(
-                    success=False,
-                    message="Maximum 3 documents already uploaded for this customer",
-                    doc_count=len(existing_urls),
-                )
-
+        # NOTE: no pre-flight cap check here — it cost one Firestore read
+        # per photo on every upload. The transaction inside upload_document
+        # is the authoritative cap enforcement; it raises DocumentCapReached
+        # (after deleting the orphaned Storage blob) in the rare at-cap case.
         image_bytes = file.read()
         mime = (file.mimetype or "image/jpeg").lower()
         filename = f"doc_{uuid.uuid4().hex[:10]}_{datetime.now().strftime('%Y%m%d%H%M%S')}.jpg"
 
-        url = customer_service.upload_document(mobile, image_bytes, filename)
+        # Diagnostic: payload size tells us whether client-side compression
+        # is active (~150-350 KB) or the browser is running a cached old
+        # bundle that uploads raw photos (2-8 MB).
+        import time as _t
+        _t0 = _t.time()
+        logger.info(
+            f"[PERF] upload_customer_document: {len(image_bytes)/1024:.0f} KB "
+            f"({mime}) for {mobile}"
+        )
+
+        try:
+            url = customer_service.upload_document(mobile, image_bytes, filename)
+        except customer_service.DocumentCapReached as cap:
+            return jsonify(success=False, message=str(cap))
         if url:
+            logger.info(
+                f"[PERF] upload_customer_document stored in {_t.time()-_t0:.2f}s "
+                f"(storage upload + firestore txn)"
+            )
             # Best-effort demographics extraction (pincode + DOB) in the
             # background — never blocks the upload response, never fails it.
             # Gated by the ID-OCR kill-switch inside ocr_service.

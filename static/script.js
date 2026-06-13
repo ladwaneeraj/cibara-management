@@ -1957,115 +1957,12 @@ function showCheckoutModal(roomNumber) {
   updateCheckoutModal(roomNumber);
   checkoutModal.classList.add("show");
 
-  // Update the proceed checkout button to mark room for cleaning
-  const proceedCheckoutBtn = document.getElementById("proceed-checkout-btn");
-  if (proceedCheckoutBtn) {
-    // Store the original handler and create a new one
-    proceedCheckoutBtn.onclick = async function () {
-      if (checkoutInProgress) {
-        return;
-      }
-
-      checkoutInProgress = true;
-      this.disabled = true;
-      this.innerHTML =
-        '<span class="loader" style="width: 20px; height: 20px;"></span> Processing...';
-
-      const roomNumberElement = document.getElementById("checkout-room-number");
-      if (!roomNumberElement) {
-        showNotification("Room number element not found", "error");
-        checkoutInProgress = false;
-        this.disabled = false;
-        this.innerHTML = "Yes, Checkout";
-        return;
-      }
-
-      const currentRoomNumber = roomNumberElement.textContent.trim();
-      const balance = rooms[currentRoomNumber].balance;
-      const isOta1 = rooms[currentRoomNumber]?.guest?.payment === "ota";
-
-      if (balance > 0 && !isOta1) {
-        showNotification("Please clear the balance before checkout", "error");
-        checkoutInProgress = false;
-        this.disabled = false;
-        this.innerHTML = "Yes, Checkout";
-
-        const checkoutConfirmModal = document.getElementById(
-          "checkout-confirm-modal",
-        );
-        if (checkoutConfirmModal) {
-          checkoutConfirmModal.classList.remove("show");
-        }
-        return;
-      }
-
-      if (balance < 0) {
-        checkoutInProgress = false;
-        this.disabled = false;
-        this.innerHTML = "Yes, Checkout";
-
-        const checkoutConfirmModal = document.getElementById(
-          "checkout-confirm-modal",
-        );
-        if (checkoutConfirmModal) {
-          checkoutConfirmModal.classList.remove("show");
-        }
-        return;
-      }
-
-      // ── Close modals & update UI immediately — don't wait for the server ──────
-      const checkoutConfirmModal = document.getElementById("checkout-confirm-modal");
-      if (checkoutConfirmModal) checkoutConfirmModal.classList.remove("show");
-      if (checkoutModal) checkoutModal.classList.remove("show");
-
-      // Snapshot for rollback if the server later reports failure
-      const prevRoomState = rooms[currentRoomNumber] ? { ...rooms[currentRoomNumber] } : null;
-
-      // Flip room to cleaning in local state immediately
-      if (rooms[currentRoomNumber]) {
-        rooms[currentRoomNumber].status = "cleaning";
-        rooms[currentRoomNumber].guest  = null;
-      }
-      renderRooms();
-      // Reset button right away
-      checkoutInProgress = false;
-      this.disabled = false;
-      this.innerHTML = "Yes, Checkout";
-
-      // ── Fire checkout + marking + PDF in background — no await ───────────────
-      apiFetch("/checkout", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ room: currentRoomNumber, final_checkout: true }),
-      })
-        .then(r => r.json())
-        .then(result => {
-          if (result.success) {
-            markRoomForCleaning(currentRoomNumber); // fire and forget
-            debouncedFetchData(3000, currentRoomNumber);
-            showNotification(
-              result.message || "Checkout successful! Room marked for cleaning.",
-              "success",
-            );
-            // Auto-generate & store PDF in background (non-blocking)
-            if (result.bill_id && typeof window._cibaraBillsAutoGenerate === "function") {
-              window._cibaraBillsAutoGenerate(result.bill_id);
-            }
-          } else {
-            // Rollback local state on failure
-            if (prevRoomState) rooms[currentRoomNumber] = prevRoomState;
-            renderRooms();
-            showNotification(result.message || "Checkout failed — please try again.", "error");
-          }
-        })
-        .catch(err => {
-          console.error("Checkout error:", err);
-          if (prevRoomState) rooms[currentRoomNumber] = prevRoomState;
-          renderRooms();
-          showNotification("Network error during checkout — please try again.", "error");
-        });
-    };
-  }
+  // NOTE: the proceed-checkout click handler lives in
+  // setupCheckoutConfirmation() (single addEventListener registration).
+  // A legacy duplicate used to be (re)assigned here via .onclick on every
+  // modal open — one click then fired BOTH handlers, double-POSTing
+  // /checkout, racing the optimistic UI flip, and leaving the shared
+  // checkoutInProgress flag wedged ("Processing…" frozen on every room).
 }
 
 // Update renewal history
@@ -3309,6 +3206,12 @@ function showCheckinModal(selectedRoomNumber) {
     // Reset captured photo data
     capturedPhotoData = null;
     uploadedPhotoUrl = null;
+
+    // Announce the open so customer-docs.js can wipe ALL returning-guest
+    // state (last-stay card, flag alert, stored-doc preview, indicator,
+    // _currentCheckinCustomer). Without this, reopening the modal showed
+    // the previous guest's details until a new search overwrote them.
+    document.dispatchEvent(new Event("checkinModalOpened"));
 
     checkinModal.classList.add("show");
   });
@@ -5112,10 +5015,14 @@ function setupCheckoutConfirmation() {
       return;
     }
 
-    const roomNumber = roomNumberElement.textContent;
+    const roomNumber = roomNumberElement.textContent.trim();
     const guestName = guestNameElement
       ? guestNameElement.textContent
       : "Unknown";
+    if (!rooms[roomNumber]) {
+      showNotification(`Room ${roomNumber} not loaded — refresh and retry.`, "error");
+      return;
+    }
     const balance = rooms[roomNumber].balance;
 
     // If balance is positive, show warning and don't proceed.
@@ -5203,7 +5110,16 @@ function setupCheckoutConfirmation() {
         return;
       }
 
-      const roomNumber = roomNumberElement.textContent;
+      const roomNumber = roomNumberElement.textContent.trim();
+      // Guard: a missing/stale room entry must never wedge the shared
+      // checkoutInProgress flag (a throw here froze every later checkout
+      // on "Processing…").
+      if (!rooms[roomNumber]) {
+        showNotification(`Room ${roomNumber} not loaded — refresh and retry.`, "error");
+        checkoutInProgress = false;
+        this.disabled = false;
+        return;
+      }
       const balance = rooms[roomNumber].balance;
       const isOta2 = rooms[roomNumber]?.guest?.payment === "ota";
 
@@ -5273,11 +5189,6 @@ function setupCheckoutConfirmation() {
       const flagNotesValue = flagNotesEl ? flagNotesEl.value.trim() : "";
       const checkoutMobile = prevRoomState?.guest?.mobile || "";
 
-      // DEBUG — remove after confirming flag works
-      console.log("[flag-debug] flagCbEl found:", !!flagCbEl);
-      console.log("[flag-debug] shouldFlag:", shouldFlag);
-      console.log("[flag-debug] checkoutMobile:", checkoutMobile);
-      console.log("[flag-debug] prevRoomState guest:", prevRoomState?.guest);
 
       // Fire request in background — no await
       apiFetch("/checkout", {
@@ -5299,9 +5210,7 @@ function setupCheckoutConfirmation() {
               window._cibaraBillsAutoGenerate(result.bill_id);
             }
             // Save customer flag if the checkbox was ticked at checkout
-            console.log("[flag-debug] checkout success. shouldFlag:", shouldFlag, "checkoutMobile:", checkoutMobile);
             if (shouldFlag && checkoutMobile) {
-              console.log("[flag-debug] firing toggle_customer_flag for:", checkoutMobile);
               apiFetch("/toggle_customer_flag", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
@@ -5803,15 +5712,16 @@ document.addEventListener("DOMContentLoaded", function () {
         const guestAddressInput = document.getElementById("guest-address");
         const guestAddress = guestAddressInput ? guestAddressInput.value.trim() : "";
 
-        // Upload any pending ID document photo before recording the check-in
+        // ID-doc upload runs IN PARALLEL with the check-in request — the
+        // wall-clock cost is max(checkin, upload) instead of the sum. The
+        // photos are keyed by mobile and attach to the customer record
+        // independently of /checkin, so ordering doesn't matter. If the
+        // upload fails the check-in still stands; staff get an explicit
+        // warning (awaited below, after the check-in UX completes) and can
+        // re-attach from the document manager or at checkout.
+        let _docUploadPromise = Promise.resolve(true);
         if (typeof window.uploadPendingDocIfAny === 'function') {
-          const docUploaded = await window.uploadPendingDocIfAny(guestMobile);
-          if (!docUploaded) {
-            // Upload error already notified — re-enable button and abort
-            submitBtn.disabled = false;
-            submitBtn.innerHTML = originalContent;
-            return;
-          }
+          _docUploadPromise = window.uploadPendingDocIfAny(guestMobile);
         }
 
         const response = await apiFetch("/checkin", {
@@ -5851,11 +5761,52 @@ document.addEventListener("DOMContentLoaded", function () {
           }
           showNotification(message, "success");
 
+          // Patch the room card locally so it flips to "occupied" instantly —
+          // same pattern the payment/refund handlers already use. The
+          // debounced background fetch below stays as the authoritative sync.
+          if (rooms[roomNumber]) {
+            const _nb = roomPrice - amountPaid;
+            const _now = new Date();
+            const _p2 = (n) => String(n).padStart(2, "0");
+            const _nowStr =
+              `${_now.getFullYear()}-${_p2(_now.getMonth() + 1)}-` +
+              `${_p2(_now.getDate())} ${_p2(_now.getHours())}:${_p2(_now.getMinutes())}`;
+            rooms[roomNumber] = {
+              ...rooms[roomNumber],
+              status: "occupied",
+              guest: {
+                name: guestName,
+                mobile: guestMobile,
+                price: roomPrice,
+                guests: guestCount,
+                payment: paymentMethod,
+                balance: _nb,
+                isAC: isAC,
+              },
+              balance: _nb,
+              checkin_time: checkinTimeOverride || _nowStr,
+              add_ons: [],
+              renewal_count: 0,
+            };
+            if (typeof renderRooms === "function") renderRooms();
+            if (typeof updateStats === "function") updateStats();
+          }
+
           // Check-in adds new guest data — let background fetch hydrate the room
           debouncedFetchData();
 
           // Notify register & bills modules to refresh live
           window.dispatchEvent(new CustomEvent("cibaraRoomUpdate", { detail: { type: "checkin" } }));
+
+          // Surface ID-doc upload failures only after the check-in UX is
+          // done — the upload ran in parallel and never blocks check-in.
+          const _docOk = await _docUploadPromise;
+          if (!_docOk) {
+            showNotification(
+              "Check-in saved, but the ID photo upload failed — re-attach it from the customer's document manager.",
+              "error",
+            );
+          }
         } else {
           showNotification(result.message || "Error during check-in", "error");
           submitBtn.disabled = false;

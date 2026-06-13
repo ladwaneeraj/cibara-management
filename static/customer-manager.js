@@ -136,6 +136,7 @@
 
     tbody.innerHTML = displayedRows.map(c => {
       const initials  = _initials(c.name);
+      const avStyle   = _avatarStyle(c.name || c.mobile);
       const lastVisit = c.last_stay_date ? _fmtDate(c.last_stay_date) : "–";
       const docBadge  = c.doc_count > 0
         ? `<span class="cm-doc-chip"><i class="fas fa-id-card"></i> ${c.doc_count}</span>` : "";
@@ -149,7 +150,7 @@
             onclick="openCustomerDetail('${_esc(c.mobile)}')">
           <td>
             <div class="cm-name-cell">
-              <div class="cm-mini-avatar">${initials}</div>
+              <div class="cm-mini-avatar" style="${avStyle}">${initials}</div>
               <div>
                 <div class="cm-guest-name">${_esc(c.name) || "<em>No name</em>"}</div>
                 <div class="cm-badges">${flagBadge}${repeatBadge}${docBadge}</div>
@@ -170,6 +171,25 @@
           </td>
         </tr>`;
     }).join("");
+  }
+
+  /* Deterministic avatar gradient from the guest's name — gives each row
+     a stable identity colour without storing anything. */
+  const _AVATAR_GRADIENTS = [
+    "linear-gradient(135deg,#2563eb,#3b82f6)",
+    "linear-gradient(135deg,#7c3aed,#a78bfa)",
+    "linear-gradient(135deg,#0d9488,#2dd4bf)",
+    "linear-gradient(135deg,#d97706,#fbbf24)",
+    "linear-gradient(135deg,#db2777,#f472b6)",
+    "linear-gradient(135deg,#4f46e5,#818cf8)",
+    "linear-gradient(135deg,#059669,#34d399)",
+    "linear-gradient(135deg,#b91c1c,#f87171)",
+  ];
+  function _avatarStyle(seed) {
+    let h = 0;
+    const s = String(seed || "");
+    for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+    return `background:${_AVATAR_GRADIENTS[h % _AVATAR_GRADIENTS.length]}`;
   }
 
   /* ─── Load more (infinite scroll trigger row) ────────────────────────── */
@@ -199,6 +219,7 @@
       if (!data.success) throw new Error(data.message || "Not found");
       currentCustomer = data.customer;
       editMode        = false;
+      _historyMobile  = null;  // force history re-fetch for this customer
       _renderDetailView();
     } catch (err) {
       document.getElementById("cm-detail-body").innerHTML =
@@ -302,6 +323,16 @@
         </div>
       </div>
 
+      <!-- Stay history -->
+      <div class="cm-history-section">
+        <button class="cm-history-toggle" id="cm-history-toggle"
+          onclick="cmToggleHistory('${_esc(c.mobile)}')">
+          <span><i class="fas fa-clock-rotate-left"></i> Stay History</span>
+          <i class="fas fa-chevron-down" id="cm-history-caret"></i>
+        </button>
+        <div id="cm-history-body" class="cm-history-body" style="display:none"></div>
+      </div>
+
       <!-- Flag section -->
       ${flagSection}
 
@@ -320,6 +351,141 @@
                <i class="fas fa-cloud-upload-alt"></i> Upload ${pendingPhotos.length} Photo${pendingPhotos.length > 1 ? "s" : ""}
              </button>` : ""}
       </div>`;
+  }
+
+  /* ─── Stay history ───────────────────────────────────────────────────── */
+  let _historyMobile = null;   // mobile whose history is currently rendered
+  let _historyCssInjected = false;
+  function _ensureHistoryCss() {
+    if (_historyCssInjected) return;
+    _historyCssInjected = true;
+    const css = `
+      .cm-history-section { margin: .9rem 0; }
+      .cm-history-toggle { width:100%; display:flex; align-items:center; justify-content:space-between;
+        background:#fff; border:1.5px solid #e2e8f0; border-radius:12px; padding:.7rem .9rem;
+        font-weight:700; color:#1d4ed8; font-size:.9rem; cursor:pointer; transition:border-color .15s,box-shadow .15s; }
+      .cm-history-toggle:hover { border-color:#93c5fd; box-shadow:0 2px 10px rgba(59,130,246,.12); }
+      .cm-history-toggle i.fa-chevron-down { transition:transform .2s; color:#94a3b8; }
+      .cm-history-body { margin-top:.6rem; display:flex; flex-direction:column; gap:.55rem; }
+      .cm-history-loading,.cm-history-empty { color:#94a3b8; font-size:.85rem; padding:.7rem; text-align:center; }
+      .cm-ht-wrap { overflow-x:auto; -webkit-overflow-scrolling:touch; border:1px solid #eef2f7; border-radius:12px; background:#fff; }
+      .cm-ht-table { border-collapse:collapse; width:100%; min-width:560px; font-size:.76rem; }
+      .cm-ht-table thead th { position:sticky; top:0; background:#f8fafc; color:#64748b; font-weight:700;
+        text-transform:uppercase; letter-spacing:.03em; font-size:.62rem; text-align:left;
+        padding:.5rem .55rem; border-bottom:1px solid #e2e8f0; white-space:nowrap; }
+      .cm-ht-table td { padding:.5rem .55rem; border-bottom:1px solid #f1f5f9; color:#334155;
+        white-space:nowrap; vertical-align:top; }
+      .cm-ht-table tbody tr:last-child td { border-bottom:none; }
+      .cm-ht-table tbody tr:nth-child(even) td { background:#fcfdff; }
+      .cm-ht-n { text-align:right; }
+      .cm-ht-c { text-align:center; }
+      .cm-ht-room { font-weight:700; color:#0f172a; }
+      .cm-ht-bill { display:block; color:#94a3b8; font-weight:600; font-size:.62rem; margin-top:.1rem; }
+      .cm-ht-time { display:block; color:#94a3b8; font-size:.64rem; }
+      .cm-ht-total { font-weight:700; color:#0f172a; }
+      .cm-ht-disc span, .cm-ht-disc { color:#059669; }
+      .cm-ht-method { display:block; color:#94a3b8; font-size:.6rem; text-transform:uppercase; letter-spacing:.02em; }
+      .cm-ht-due { color:#be123c; font-weight:700; }
+      .cm-ht-adv { color:#047857; font-weight:700; }
+      .cm-ht-ok  { color:#10b981; font-weight:700; }
+      .cm-ht-tag { background:#fffbeb; color:#b45309; border-radius:999px; padding:.02rem .4rem; font-size:.58rem; font-weight:700; }
+      .cm-ht-hint { text-align:center; color:#cbd5e1; font-size:.66rem; margin-top:.35rem; }
+      @media (min-width:560px) { .cm-ht-hint { display:none; } }`
+    const tag = document.createElement("style");
+    tag.id = "cm-history-styles";
+    tag.textContent = css;
+    document.head.appendChild(tag);
+  }
+
+  window.cmToggleHistory = async function (mobile) {
+    _ensureHistoryCss();
+    const body  = document.getElementById("cm-history-body");
+    const caret = document.getElementById("cm-history-caret");
+    if (!body) return;
+
+    const opening = body.style.display === "none";
+    body.style.display = opening ? "block" : "none";
+    if (caret) caret.style.transform = opening ? "rotate(180deg)" : "";
+    // Re-fetch when opening for a guest we haven't loaded yet. Keying on the
+    // mobile (not a boolean) means switching guests — or clearing the search
+    // and opening someone else — never shows the previous guest's stays.
+    if (!opening || _historyMobile === mobile) return;
+
+    body.innerHTML = `<div class="cm-history-loading"><i class="fas fa-spinner fa-spin"></i> Loading stays…</div>`;
+    try {
+      const res  = await apiFetch(`/customer_stays/${encodeURIComponent(mobile)}`);
+      const data = await res.json();
+      const stays = (data && data.success) ? (data.stays || []) : [];
+      _historyMobile = mobile;
+      _renderHistory(stays);
+    } catch (err) {
+      body.innerHTML = `<div class="cm-history-empty">Couldn't load history — ${_esc(err.message)}</div>`;
+    }
+  };
+
+  function _renderHistory(stays) {
+    const body = document.getElementById("cm-history-body");
+    if (!body) return;
+    if (!stays.length) {
+      body.innerHTML = `<div class="cm-history-empty">No past stays on record.</div>`;
+      return;
+    }
+    const inr = n => "₹" + Number(n || 0).toLocaleString("en-IN");
+    // Compact two-line date: "10 Jun\n19:42"
+    const dcell = s => {
+      if (!s) return "–";
+      const [d, t] = String(s).split(" ");
+      const short = _fmtDate(d).replace(/ \d{4}$/, ""); // drop the year for width
+      return `${short}${t ? `<span class="cm-ht-time">${t}</span>` : ""}`;
+    };
+    const method = s => {
+      const m = [];
+      if (s.paid_cash)   m.push("Cash");
+      if (s.paid_online) m.push("Online");
+      return m.join("+") || "–";
+    };
+    const balCell = s => {
+      const b = Number(s.balance || 0);
+      if (b > 0) return `<span class="cm-ht-due">₹${b.toLocaleString("en-IN")}</span>`;
+      if (b < 0) return `<span class="cm-ht-adv">+₹${(-b).toLocaleString("en-IN")}</span>`;
+      return `<span class="cm-ht-ok">✓</span>`;
+    };
+
+    const rows = stays.map(s => {
+      const paid = (s.paid_cash || 0) + (s.paid_online || 0);
+      const flag = s.status === "pending_settlement"
+        ? ` <span class="cm-ht-tag">settle later</span>` : "";
+      return `
+        <tr>
+          <td class="cm-ht-room">${_esc(s.room) || "–"}${flag}
+            ${s.bill_number && s.bill_number !== "-" ? `<span class="cm-ht-bill">${_esc(s.bill_number)}</span>` : ""}</td>
+          <td>${dcell(s.checkin_time)}</td>
+          <td>${dcell(s.checkout_time)}</td>
+          <td class="cm-ht-c">${s.days}d</td>
+          <td class="cm-ht-n">${inr(s.room_rate)}</td>
+          <td class="cm-ht-n">${s.services_total ? inr(s.services_total) : "–"}</td>
+          <td class="cm-ht-n cm-ht-disc">${s.discounts ? "−" + inr(s.discounts) : "–"}</td>
+          <td class="cm-ht-n cm-ht-total">${inr(s.total_amount)}</td>
+          <td class="cm-ht-n">${inr(paid)}<span class="cm-ht-method">${method(s)}</span></td>
+          <td class="cm-ht-n">${balCell(s)}</td>
+        </tr>`;
+    }).join("");
+
+    body.innerHTML = `
+      <div class="cm-ht-wrap">
+        <table class="cm-ht-table">
+          <thead>
+            <tr>
+              <th>Room</th><th>Check-in</th><th>Check-out</th><th>Nights</th>
+              <th class="cm-ht-n">Rate</th><th class="cm-ht-n">Svc</th>
+              <th class="cm-ht-n">Disc</th><th class="cm-ht-n">Total</th>
+              <th class="cm-ht-n">Paid</th><th class="cm-ht-n">Bal</th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+      <div class="cm-ht-hint"><i class="fas fa-arrows-left-right"></i> swipe to see all columns</div>`;
   }
 
   /* ─── Flag modal ─────────────────────────────────────────────────────── */

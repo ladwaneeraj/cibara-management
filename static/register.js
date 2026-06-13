@@ -1017,9 +1017,14 @@
   }
 
   // ── State ────────────────────────────────────────────────────────────────────
+  // Paged rendering: rows rendered per page. applyFilters() resets the cap,
+  // the "Show more" row extends it. Keeps first paint fast on 1000+ rows.
+  const PAGE_SIZE = 100;
+
   const state = {
     allEntries: [],
     filteredEntries: [],
+    visibleCount: PAGE_SIZE,
     loading: false,
     dateRange: { start: null, end: null },
     filters: { search: "", payment: "all", status: "all" },
@@ -2089,6 +2094,14 @@
         const hdr = e.target.closest(".date-group-header");
         if (hdr) { toggleGroup(hdr); return; }
 
+        // Paged rendering — "Show more" extends the cap and re-renders
+        const lmBtn = e.target.closest(".reg-load-more-btn");
+        if (lmBtn) {
+          state.visibleCount += PAGE_SIZE;
+          renderTable();
+          return;
+        }
+
         // Bill number click → open bill viewer
         const billLink = e.target.closest(".reg-bill-link");
         if (billLink) {
@@ -2479,6 +2492,7 @@
       });
 
     state.filteredEntries = f;
+    state.visibleCount = PAGE_SIZE; // new filter/search -> back to first page
     renderTable();
     _checkAndShowDocButtons();
   }
@@ -2499,20 +2513,35 @@
       byDate[dk].push(e);
     });
 
+    // Paged rendering — at most state.visibleCount data rows per pass.
+    // Date-group headers stay intact; a truncated group's header still
+    // shows the group's full count. The "Show more" row extends the cap.
+    const cap = state.visibleCount || PAGE_SIZE;
+    let rendered = 0;
     let html = "";
-    Object.keys(byDate)
-      .sort((a, b) => b.localeCompare(a))
-      .forEach((dk) => {
-        const entries = byDate[dk];
-        const label = dk !== "unknown" ? fmtDate(dk) : "Unknown Date";
-        html += `<tr class="date-group-header" data-group="${dk}">
+    const dateKeys = Object.keys(byDate).sort((a, b) => b.localeCompare(a));
+    for (const dk of dateKeys) {
+      if (rendered >= cap) break;
+      const entries = byDate[dk];
+      const label = dk !== "unknown" ? fmtDate(dk) : "Unknown Date";
+      html += `<tr class="date-group-header" data-group="${dk}">
         <td colspan="15"><i class="fas fa-chevron-down"></i>${label}&nbsp;<span style="font-weight:400;opacity:.65;">(${entries.length})</span></td>
       </tr>`;
-        entries.forEach((e) => {
-          html += rowHTML(e, dk);
-        });
-      });
+      for (const e of entries.slice(0, cap - rendered)) {
+        html += rowHTML(e, dk);
+      }
+      rendered += Math.min(entries.length, cap - rendered);
+    }
+    html += loadMoreRowHTML(state.filteredEntries.length - rendered);
     tbody.innerHTML = html;
+  }
+
+  function loadMoreRowHTML(remaining) {
+    if (remaining <= 0) return "";
+    return `<tr class="reg-load-more-row"><td colspan="15" style="text-align:center;padding:10px;">
+      <button type="button" class="reg-load-more-btn" style="cursor:pointer;padding:6px 18px;">
+        Show ${Math.min(PAGE_SIZE, remaining)} more (${remaining} remaining)
+      </button></td></tr>`;
   }
 
   function rowHTML(e, dk) {

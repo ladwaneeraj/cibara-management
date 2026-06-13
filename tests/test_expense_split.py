@@ -97,6 +97,11 @@ def _install_import_stubs():
     )
     config.invalidate_rooms_and_totals = lambda *a, **kw: None
     config.get_all_rooms = lambda *a, **kw: {}
+    # reports.py also imports validate_gstin from config; stub it so the
+    # import succeeds (these tests never exercise GSTIN validation).
+    # Format-only boolean check in the real config; permissive stub here
+    # (these tests use syntactically valid GSTINs and never test rejection).
+    config.validate_gstin = lambda gstin: bool(gstin)
     sys.modules["config"] = config
 
     services_pkg = types.ModuleType("services")
@@ -387,7 +392,8 @@ class TestCreateSplit(_SplitTestBase):
             "split": {"counter_cash": 400, "home_cash": 0, "account": 600},
             "has_bill": True, "invoice_number": "INV-42",
             "invoice_date": "2026-06-09",
-            "has_gst": True, "vendor_name": "Acme", "taxable_amount": 847,
+            "has_gst": True, "vendor_name": "Acme", "vendor_gstin": "29ABCDE1234F1Z5",
+            "taxable_amount": 847,
             "gst_rate": 18, "gst_amount": 153,
         }
         body, status = R._create_split_expense(data, self._base_entry(), 1000)

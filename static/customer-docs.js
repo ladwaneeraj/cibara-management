@@ -56,13 +56,14 @@ window.uploadPendingDocIfAny = async function (mobile) {
   _checkinUploadLock = true;
   try {
     const items = [..._docCapturedBlobs];
-    // Upload sequentially — parallel uploads race on the same Firestore doc
-    // and the transaction retry can drop one URL when both see the doc as
-    // non-existent at the same time.
-    for (const item of items) {
+    // Parallel uploads are safe now: the server appends URLs with an atomic
+    // ArrayUnion (create/AlreadyExists handles the brand-new-customer race),
+    // so concurrent photos can no longer drop each other's URL. Wall-clock
+    // for a multi-photo check-in is max(photo) instead of sum(photos).
+    const results = await Promise.all(items.map(async (item, i) => {
       const form = new FormData();
       form.append('mobile',   digits);
-      form.append('document', item.blob, `doc_${Date.now()}.jpg`);
+      form.append('document', item.blob, `doc_${Date.now()}_${i}.jpg`);
       const res  = await apiFetch('/upload_customer_document', { method: 'POST', body: form });
       const data = await res.json();
       if (!data.success) {
@@ -70,7 +71,9 @@ window.uploadPendingDocIfAny = async function (mobile) {
         return false;
       }
       URL.revokeObjectURL(item.url);
-    }
+      return true;
+    }));
+    if (results.some(ok => !ok)) return false;
     _docCapturedBlobs = [];
     return true;
   } catch (err) {
@@ -430,25 +433,30 @@ function renderMobileSuggestions(customers) {
   sug.innerHTML = '';
   customers.slice(0, 6).forEach(c => {
     const item = document.createElement('div');
-    item.style.cssText = 'padding:0.45rem 0.75rem;cursor:pointer;border-bottom:1px solid #f0f0f0;font-size:0.85rem;display:flex;align-items:center;gap:0.5rem';
+    item.className = 'ms-row';
 
-    const stays     = c.total_stays || 0;
-    const stayBadge = stays > 0
-      ? `<span style="background:#e3f2fd;color:#1565c0;border-radius:10px;padding:0.1rem 0.45rem;font-size:0.7rem;font-weight:700;white-space:nowrap;flex-shrink:0;">${stays}× stays</span>`
-      : '';
-
+    // Left: name + a compact sub-line (mobile · stays · last visit).
+    const stays = c.total_stays || 0;
     const sub = [c.mobile];
-    if (c.total_spent)    sub.push('₹' + Number(c.total_spent).toLocaleString('en-IN'));
+    if (stays > 0)        sub.push(`${stays}× stay${stays > 1 ? 's' : ''}`);
     if (c.last_stay_date) sub.push(_fmtDate(c.last_stay_date));
 
-    item.innerHTML = `
-      <div style="flex:1;min-width:0">
-        <div style="font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${_fmtName(c.name) || '(No name)'}</div>
-        <div style="color:#888;font-size:0.76rem">${sub.join(' · ')}</div>
-      </div>${stayBadge}`;
+    // Right side: two compact stat cells — last paid (most recent stay
+    // total) and total spent (lifetime). Each shows a muted "—" when it
+    // can't be resolved, so the columns always line up cleanly.
+    const lastPaid = Number(c.last_stay_amount || 0);
+    const lifetime = Number(c.total_spent || 0);
+    const cell = (val, lbl) => val > 0
+      ? `<div class="ms-stat"><div class="ms-stat-val">₹${val.toLocaleString('en-IN')}</div><div class="ms-stat-lbl">${lbl}</div></div>`
+      : `<div class="ms-stat"><div class="ms-stat-empty">—</div><div class="ms-stat-lbl">${lbl}</div></div>`;
 
-    item.addEventListener('mouseover', () => { item.style.background = '#f5f5f5'; });
-    item.addEventListener('mouseout',  () => { item.style.background = ''; });
+    item.innerHTML = `
+      <div class="ms-main">
+        <div class="ms-name">${_fmtName(c.name) || '(No name)'}</div>
+        <div class="ms-sub">${sub.join(' · ')}</div>
+      </div>
+      <div class="ms-stats">${cell(lastPaid, 'last paid')}${cell(lifetime, 'total spent')}</div>`;
+
     item.addEventListener('click', () => {
       const mi = document.getElementById('guest-mobile');
       if (mi) mi.value = c.mobile;
@@ -1233,9 +1241,17 @@ function captureDocPhoto() {
   const feed = document.getElementById('doc-camera-feed');
   if (!feed) return;
 
+  // Downscale at capture: ID documents stay perfectly readable at 1280px
+  // on the long edge, and upload time scales with pixel count. A 4K camera
+  // frame at q=0.90 produced 1.5-4 MB JPEGs; capped at 1280px the same shot
+  // is ~150-350 KB — the upload stops dominating check-in time.
+  const MAX_EDGE = 1280;
+  const srcW = feed.videoWidth  || 1280;
+  const srcH = feed.videoHeight || 720;
+  const _scale = Math.min(1, MAX_EDGE / Math.max(srcW, srcH));
   const canvas  = document.createElement('canvas');
-  canvas.width  = feed.videoWidth  || 1280;
-  canvas.height = feed.videoHeight || 720;
+  canvas.width  = Math.round(srcW * _scale);
+  canvas.height = Math.round(srcH * _scale);
   const ctx     = canvas.getContext('2d');
   ctx.drawImage(feed, 0, 0, canvas.width, canvas.height);
 
@@ -1265,7 +1281,7 @@ function captureDocPhoto() {
     if (addAnotherBtn) {
       addAnotherBtn.style.display = _docCapturedBlobs.length < MAX_DOC_PHOTOS ? 'flex' : 'none';
     }
-  }, 'image/jpeg', 0.90);
+  }, 'image/jpeg', 0.85);
 }
 
 function _applyScannedLook(ctx, w, h) {
@@ -1302,11 +1318,16 @@ async function useDocPhoto() {
   closeDocCameraModal();
 }
 
-function onDocFileSelected() {
+async function onDocFileSelected() {
   const file = document.getElementById('doc-file-input')?.files[0];
   if (!file || _docCapturedBlobs.length >= MAX_DOC_PHOTOS) return;
-  const url = URL.createObjectURL(file);
-  _docCapturedBlobs.push({ blob: file, url });
+  // Compress BEFORE queueing — a raw phone photo is 3-8 MB; capped at
+  // 1280px JPEG it's ~150-350 KB. This path previously uploaded the
+  // ORIGINAL file and was the single slowest part of photo check-ins.
+  // _compressImage falls back to the original blob on any error.
+  const blob = await _compressImage(file);
+  const url = URL.createObjectURL(blob);
+  _docCapturedBlobs.push({ blob, url });
   renderThumbStrip();
   _updateAddMoreBtn();
   _setIndicator('green');

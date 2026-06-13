@@ -189,11 +189,44 @@
   const _ACTION_LABEL = {
     "room.checkout":             "Checked out by",
     "room.cleaning.complete":    "Cleaned by",
-    "room.inspection.approve":   "Approved by",
+    "room.inspection.approve":   "Inspected by",
     "room.checkin":              "Checked in by",
     "room.checkin_time_update":  "Check-in time edited by",
-    "room.transfer":             "Transferred by",
+    "room.transfer":             "Shifted by",
   };
+
+  // Build the popover rows straight from a register entry's per-stay
+  // attribution fields. Each present (xBy / xAt) pair becomes one row, in
+  // lifecycle order. An absent field produces no row — so an ACTIVE stay
+  // (no lastCheckoutBy) never shows a checkout, and nothing from another
+  // stay can leak in. These fields are authoritative and stay-scoped: live
+  // room-doc values for active stays, a frozen bill snapshot for completed
+  // ones. This replaces the old audit-log + time-window reconstruction,
+  // which matched events across two different clocks and surfaced the
+  // PREVIOUS guest's check-in/checkout.
+  function _buildRowsFromEntry(info) {
+    const rows = [];
+    info = info || {};
+    function add(who, when, label) {
+      if (!who) return;
+      rows.push({
+        label: label,
+        name:  (typeof who === "string" && who.trim()) ? _resolveName(who) : "—",
+        when:  _relativeTime(when),
+      });
+    }
+    add(info.cleanedBy,             info.cleanedAt,             "Cleaned by");
+    add(info.inspectedBy,           info.inspectedAt,           "Inspected by");
+    add(info.lastCheckinBy,         info.lastCheckinAt,         "Checked in by");
+    add(info.lastCheckinTimeEditBy, info.lastCheckinTimeEditAt, "Check-in time edited by");
+    if (info.lastShiftedBy) {
+      const f = info.lastShiftedFrom, t = info.lastShiftedTo;
+      add(info.lastShiftedBy, info.lastShiftedAt,
+          (f && t) ? ("Shifted " + f + " → " + t + " by") : "Shifted by");
+    }
+    add(info.lastCheckoutBy,        info.lastCheckoutAt,        "Checked out by");
+    return rows;
+  }
 
   // Convert an audit-log entry into the row shape the popover renderer
   // consumes. `room.transfer` rows get an extra "from X → to Y" label
@@ -348,25 +381,11 @@
     _openPopover = popover;
     _openAnchor = anchor;
 
-    // Scope the audit-log query to this stay using room + checkin time
-    // (the only fields we strictly need). Works uniformly for active
-    // and completed stays — no dependence on a bill_id that may be
-    // synthetic ("active_<room>_<ts>") for active rows.
-    if (roomInfo && roomInfo.room && (roomInfo.checkin_time || roomInfo.checkin)) {
-      _fetchStayHistory(roomInfo).then(function (entries) {
-        // Bail if the user closed the popover while the fetch was in flight.
-        if (_openPopover !== popover) return;
-        const rows = (entries || []).map(_entryToRow);
-        _renderBody(popover, rows);
-        // Reposition — content height changed, may have flipped the
-        // optimal placement above/below.
-        _positionPopover(popover, anchor.getBoundingClientRect());
-      });
-    } else {
-      // Missing the minimum inputs (room + checkin time). Render empty
-      // state immediately rather than spinning forever.
-      _renderBody(popover, []);
-    }
+    // Render the timeline synchronously from the entry's per-stay
+    // attribution fields — no audit-log fetch, no time-window guessing.
+    // This is exact and stay-scoped (see _buildRowsFromEntry).
+    _renderBody(popover, _buildRowsFromEntry(roomInfo));
+    _positionPopover(popover, anchor.getBoundingClientRect());
 
     // Outside click closes. Use capture so clicks on inner elements that
     // call stopPropagation still bubble to us.

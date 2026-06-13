@@ -34,6 +34,25 @@ app = Flask(__name__,
 
 Compress(app)
 
+
+# ---------------------------------------------------------------------------
+# Static asset cache-busting
+# ---------------------------------------------------------------------------
+# Browsers cache /static/*.css and *.js aggressively (Flask sends a 12h
+# max-age by default), so a deployed CSS/JS change wouldn't show until the
+# cache expired or the user manually cleared it. `asset_url` appends the
+# file's modification time as a ?v= query, which changes whenever the file
+# changes — forcing exactly one reload after each deploy and full caching
+# otherwise. Templates use {{ asset_url('style.css') }}.
+@app.template_global()
+def asset_url(filename: str) -> str:
+    try:
+        full = os.path.join(STATIC_DIR, filename)
+        ver = int(os.path.getmtime(full))
+    except OSError:
+        ver = 0
+    return f"/static/{filename}?v={ver}"
+
 # ---------------------------------------------------------------------------
 # Startup warnings for missing env vars (non-fatal locally)
 # ---------------------------------------------------------------------------

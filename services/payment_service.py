@@ -182,6 +182,12 @@ def _write_async(doc: dict):
         _payments_ref.document().set(doc)
     except Exception as e:
         logger.error(f"PaymentService async-write failed: {e}")
+        return
+    # Legacy rows may still carry a stay_id — keep the room-doc stay sums
+    # fresh for them too (no-op when the stay isn't live on a room).
+    _sid = doc.get("stay_id")
+    if _sid:
+        refresh_room_stay_aggregates(_sid)
 
 
 # ---------------------------------------------------------------------------
@@ -310,6 +316,12 @@ def write_payment_with_stay(stay_id: str, payment_data: dict, *,
         try:
             new_ref.set(doc)
             _fire_banking_hook(stay_id, new_ref.id, doc)
+            # Stay-sums stamp runs in the background even on the sync path —
+            # the caller wanted a blocking WRITE, not a blocking aggregate.
+            threading.Thread(
+                target=refresh_room_stay_aggregates,
+                args=(stay_id,), daemon=True,
+            ).start()
             return True
         except Exception as e:
             logger.error(f"write_payment_with_stay sync-write failed: {e}")
@@ -324,6 +336,107 @@ def write_payment_with_stay(stay_id: str, payment_data: dict, *,
         daemon=True,
     ).start()
     return True
+
+
+# ---------------------------------------------------------------------------
+# Room-doc stay aggregates (register fast path)
+# ---------------------------------------------------------------------------
+# After any payment write for an ACTIVE stay, recompute the stay's cash /
+# online receipt sums and stamp them onto the room document:
+#
+#   stay_payment_cash / stay_payment_online — drawer sums; refunds and
+#       discount/expense rows excluded (same population the register's
+#       active-room rows display)
+#   stay_payment_for       — the stay_id the sums belong to, so a stale
+#       stamp can never leak into the next stay on the same room
+#   stay_payment_synced_at — IST timestamp, for debugging
+#
+# The register endpoint reads these straight off the room docs it already
+# fetched and skips its per-room payments query. Stays without a valid
+# stamp (checked in before this deploy, or a stamp write that failed)
+# transparently fall back to the live query — correctness never depends on
+# the stamp existing. Recompute-and-stamp (rather than increments) keeps
+# the value self-correcting: every stamp is a fresh aggregate of the
+# authoritative payment rows. Checkout clears the fields and recomputes the
+# final bill from the payments collection as before, so any residual drift
+# on an active stay can never reach an invoice.
+
+_STAY_AGG_EXCLUDED_TYPES = frozenset({
+    "refund", "checkout_refund", "manual_refund", "booking_cancel_refund",
+    "discount", "expense",
+})
+
+
+def refresh_room_stay_aggregates(stay_id: str) -> bool:
+    """
+    Recompute cash/online sums for `stay_id` and stamp them onto the room
+    doc currently holding that stay (room.active_bill_id == stay_id).
+    No-op when the stay isn't live on any room (already checked out).
+    Never raises — safe to call from background threads.
+    """
+    if _db is None or not stay_id:
+        return False
+    try:
+        room_ref = None
+        room_q = (
+            _db.collection("rooms")
+            .where(filter=fa_firestore.FieldFilter("active_bill_id", "==", stay_id))
+            .limit(1)
+            .stream()
+        )
+        for snap in room_q:
+            room_ref = snap.reference
+        if room_ref is None:
+            return False  # stay not live on any room — nothing to stamp
+
+        payments = query_payments_by_stay_id(stay_id)
+        cash = sum(
+            p.get("amount", 0) for p in payments
+            if p.get("method") == "cash"
+            and p.get("type") not in _STAY_AGG_EXCLUDED_TYPES
+        )
+        online = sum(
+            p.get("amount", 0) for p in payments
+            if p.get("method") == "online"
+            and p.get("type") not in _STAY_AGG_EXCLUDED_TYPES
+        )
+
+        _ist = timezone(timedelta(hours=5, minutes=30))
+        # Transactional re-check: a concurrent checkout may have cleared the
+        # room (active_bill_id -> None) AFTER our query matched it. Without
+        # this guard a late-firing thread could re-stamp stale sums onto a
+        # room that has already been checked out and possibly re-occupied.
+        # The transaction re-reads active_bill_id and only stamps if the room
+        # is still live on THIS stay.
+        @fa_firestore.transactional
+        def _stamp(txn, ref):
+            snap = ref.get(transaction=txn)
+            if not snap.exists:
+                return False
+            if (snap.to_dict() or {}).get("active_bill_id") != stay_id:
+                return False  # room moved on (checked out / re-occupied)
+            txn.update(ref, {
+                "stay_payment_cash": cash,
+                "stay_payment_online": online,
+                "stay_payment_for": stay_id,
+                "stay_payment_synced_at": datetime.now(_ist).strftime("%Y-%m-%d %H:%M:%S"),
+            })
+            return True
+        if not _stamp(_db.transaction(), room_ref):
+            return False  # stay no longer live on this room — skip stamp
+
+        # The register reads rooms through config.get_all_rooms() (30s TTL);
+        # bust it so fresh sums are visible on the next register load.
+        # Lazy import avoids a circular dependency at module-load time.
+        try:
+            from config import invalidate_rooms_and_totals
+            invalidate_rooms_and_totals()
+        except Exception:
+            pass
+        return True
+    except Exception as e:
+        logger.warning(f"refresh_room_stay_aggregates({stay_id}) failed: {e}")
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -392,6 +505,10 @@ def _write_async_with_hook(new_ref, doc: dict, stay_id: str) -> None:
         logger.error(f"PaymentService async-write failed: {e}")
         return
     _fire_banking_hook(stay_id, new_ref.id, doc)
+    # Keep the room doc's denormalized stay sums in step with the payment
+    # rows (register fast path). Runs on this daemon thread — never blocks
+    # the request, never raises.
+    refresh_room_stay_aggregates(stay_id)
 
 
 def _safe_userid_from_request() -> str:

@@ -692,7 +692,8 @@ class BillCreationError(Exception):
 
 
 def create_bill_record(room, room_data, checkout_time, batch=None,
-                       settle_later=False, settlement_id=None):
+                       settle_later=False, settlement_id=None,
+                       defer_number=False):
     """
     Create bill record with original check-in serial number.
     Reads from payments collection as primary data source.
@@ -1198,14 +1199,27 @@ def create_bill_record(room, room_data, checkout_time, batch=None,
         # the toggle.
         if is_no_bill:
             bill_number = "-"
+            needs_bill_number = False
         elif is_mmt_ota and not mmt_service_only and not mmt_hotel_issues_invoice:
             # Pure MMT room stay (no service) and the hotel does NOT issue the
             # room invoice → no hotel bill number. When mmt_hotel_issues_invoice
             # is enabled this branch is skipped and a sequential number is
             # minted below so the room supply is reportable in GSTR-1.
             bill_number = "-"
+            needs_bill_number = False
         else:
-            bill_number = generate_sequential_bill_number(checkout_dt)
+            needs_bill_number = True
+            if defer_number:
+                # GAP-FREE PATH: do NOT mint here. The number is allocated
+                # ATOMICALLY with the bill-document write at finalize time
+                # (allocate_and_finalize_bill), so the counter can never
+                # advance without a stored bill. Leave a placeholder; the
+                # real CC/ number is stamped inside the transaction.
+                bill_number = "-"
+            else:
+                # Legacy / non-checkout callers (repair scripts, MMT ingest)
+                # keep the original inline mint.
+                bill_number = generate_sequential_bill_number(checkout_dt)
 
         # ── Build clean room_segments array ──────────────────────────────────────
         # Each entry: {room, date_from, date_to, nights, rate, total}
@@ -1411,6 +1425,13 @@ def create_bill_record(room, room_data, checkout_time, batch=None,
             # (it has flask.g context for the user who initiated the checkout).
         }
 
+        # Internal hint for the atomic finalize path (popped before the doc is
+        # written). Only present when the caller deferred minting; tells
+        # allocate_and_finalize_bill whether this stay should consume a CC/
+        # number at all (False for no-bill / pure-MMT stays).
+        if defer_number:
+            bill_record["_needs_bill_number"] = needs_bill_number
+
         return bill_record
 
     except BillCreationError:
@@ -1474,6 +1495,107 @@ def generate_sequential_bill_number(checkout_date):
             "Checkout was aborted — no number was consumed. Retry; if it "
             "persists, check Firestore connectivity / the counters collection."
         ) from e
+
+
+def allocate_and_finalize_bill(stay_id, bill_record, checkout_dt, *,
+                               is_new_doc, needs_number):
+    """
+    Atomically mint the next sequential bill number AND write the finalized
+    bill document, in ONE Firestore transaction.
+
+    GAP-FREE INVARIANT
+        The per-month counter (counters/bill_YYYY_MM.count) is advanced if and
+        only if the bill document that carries the resulting number is committed
+        in the SAME transaction. A retry, contention abort, crash, or any error
+        rolls back BOTH the counter and the bill write together — so a CC/
+        number is NEVER consumed without a stored bill, and the series stays
+        gap-free (GST Rule 46(b)). This replaces the old two-step flow (mint in
+        its own committed transaction, then write the bill later in a separate
+        batch), where a duplicate or failed checkout could burn a number.
+
+    IDEMPOTENT
+        If the target doc is already finalized (status completed /
+        pending_settlement with a real bill_number), the existing number is
+        returned and NOTHING is minted or overwritten. Combined with Firestore
+        optimistic concurrency, this also defeats a true double-submit race: the
+        losing transaction is forced to retry, re-reads the now-finalized doc,
+        and returns the existing number instead of minting a second one.
+
+    Parameters
+        stay_id      : Firestore doc id for the bill (draft UUID for new stays,
+                       or the legacy {room}_{ts} id).
+        bill_record  : fully-built record EXCEPT bill_number, which is stamped
+                       here. Any internal "_needs_bill_number" hint is dropped.
+        checkout_dt  : datetime — selects the counter month (CC/YYYY/MM/...).
+        is_new_doc   : True  -> create a fresh doc (legacy path; transaction.set).
+                       False -> finalize an existing draft (set with merge=True).
+        needs_number : False for no-bill / pure-MMT stays -> the doc is still
+                       written but bill_number stays "-" and the counter is
+                       untouched.
+
+    Returns
+        (bill_number: str, newly_finalized: bool)
+          newly_finalized is True when THIS call wrote the bill, False when it
+          found the stay already finalized (duplicate/concurrent) — the caller
+          must then NOT repeat the room / totals / payment side-effects.
+
+    NOTE
+        This is the checkout path, which always finalizes into the current
+        (never-locked) GST month. Repair / backfill into a PAST month must keep
+        using bills_service.finalize, which enforces the GST month-lock.
+    """
+    from datetime import timezone
+
+    doc_ref     = bills_ref.document(stay_id)
+    year        = checkout_dt.year
+    month       = str(checkout_dt.month).zfill(2)
+    counter_ref = counters_ref.document(f"bill_{year}_{month}")
+
+    base_payload = dict(bill_record)
+    base_payload.pop("_needs_bill_number", None)   # never persist the hint
+
+    txn = db.transaction()
+
+    @firestore.transactional
+    def _run(t):
+        # reads first (Firestore requires all reads before any write)
+        snap = doc_ref.get(transaction=t)
+        existing = snap.to_dict() if snap.exists else None
+        if existing:
+            _st = existing.get("status")
+            _bn = existing.get("bill_number")
+            if _st in ("completed", "pending_settlement") and _bn and _bn != "-":
+                # Already finalized — idempotent no-op. No mint, no overwrite.
+                return _bn, False
+
+        if needs_number:
+            csnap   = counter_ref.get(transaction=t)
+            current = (csnap.to_dict() or {}).get("count", 0) if csnap.exists else 0
+            new_count = int(current) + 1
+            number    = f"CC/{year}/{month}/{str(new_count).zfill(5)}"
+        else:
+            new_count = None
+            number    = "-"
+
+        # writes
+        now_utc = datetime.now(timezone.utc).isoformat()
+        payload = dict(base_payload)
+        payload["bill_number"]  = number
+        payload["finalized_at"] = now_utc
+        payload["updated_at"]   = now_utc
+
+        if is_new_doc:
+            t.set(doc_ref, payload)
+        else:
+            # merge keeps any draft-only fields not present in bill_record
+            t.set(doc_ref, payload, merge=True)
+
+        if needs_number:
+            t.set(counter_ref, {"count": new_count}, merge=True)
+
+        return number, True
+
+    return _run(txn)
 
 
 def find_serial_number_for_checkin(room_number, guest_name, checkin_dt, all_logs):
@@ -2035,7 +2157,10 @@ def create_cancellation_charge_bill(*, booking_id, booking_data, retained_amount
         return None
 
     cancel_dt = cancel_dt or datetime.now(IST)
-    bill_number = generate_sequential_bill_number(cancel_dt)
+    # bill_number is minted ATOMICALLY with the bill write below
+    # (allocate_and_finalize_bill) so the CC/ series can never gap if the write
+    # fails. Placeholder until the transaction stamps the real number.
+    bill_number = "-"
 
     # 18% inclusive math. SAC 999794 ("agreement to refrain") — a B2C
     # forfeiture by default; the operator never has GSTIN for a no-show.
@@ -2113,14 +2238,19 @@ def create_cancellation_charge_bill(*, booking_id, booking_data, retained_amount
         "payment_source":        "hotel",
     }
     try:
-        bills_ref.document(bill_id).set(bill_doc)
+        _num, _newly = allocate_and_finalize_bill(
+            bill_id, bill_doc, cancel_dt,
+            is_new_doc=True, needs_number=True,
+        )
+        bill_doc["bill_number"] = _num
         logger.info(
-            f"create_cancellation_charge_bill: minted {bill_number} "
+            f"create_cancellation_charge_bill: minted {_num} "
             f"booking={booking_id} amount=Rs.{retained_amount} "
-            f"taxable={taxable} gst={gst_amount}"
+            f"taxable={taxable} gst={gst_amount} (atomic; newly={_newly})"
         )
         return bill_doc
     except Exception as e:
+        # Transaction rolled back -> NO CC/ number consumed, no bill written.
         logger.error(f"create_cancellation_charge_bill failed: {e}", exc_info=True)
         return None
 
@@ -2157,6 +2287,57 @@ def generate_sequential_credit_note_number(cn_date):
             "The credit note was NOT issued — retry; if it persists, check "
             "Firestore connectivity / the counters collection."
         ) from e
+
+
+def allocate_and_write_credit_note(cn_id, cn_doc, bill_id, cn_date):
+    """
+    Atomically mint the next CN/ number, write the credit-note document, and
+    link it onto the original bill — all in ONE Firestore transaction.
+
+    GAP-FREE INVARIANT: the cn_YYYY_MM counter advances if and only if the CN
+    document carrying the number is committed in the same transaction. A retry,
+    contention abort, or crash rolls back BOTH — a CN/ number is never consumed
+    without a stored credit note (Section 34 / Rule 46(b) consecutive series).
+
+    Returns the CN number string. The bill-link update reads the live bill doc
+    inside the transaction, so concurrent links never clobber each other.
+    """
+    year        = cn_date.year
+    month       = str(cn_date.month).zfill(2)
+    counter_ref = counters_ref.document(f"cn_{year}_{month}")
+    cn_ref      = credit_notes_ref.document(cn_id)
+    bill_ref    = bills_ref.document(bill_id) if bill_id else None
+
+    txn = db.transaction()
+
+    @firestore.transactional
+    def _run(t):
+        # reads first (Firestore requires all reads before any write)
+        csnap     = counter_ref.get(transaction=t)
+        bill_snap = bill_ref.get(transaction=t) if bill_ref is not None else None
+
+        current   = (csnap.to_dict() or {}).get("count", 0) if csnap.exists else 0
+        new_count = int(current) + 1
+        number    = f"CN/{year}/{month}/{str(new_count).zfill(5)}"
+
+        doc = dict(cn_doc)
+        doc["cn_number"] = number
+        t.set(cn_ref, doc)
+        t.set(counter_ref, {"count": new_count}, merge=True)
+
+        if bill_snap is not None and bill_snap.exists:
+            bd    = bill_snap.to_dict() or {}
+            links = list(bd.get("linked_credit_note_ids") or [])
+            if cn_id not in links:
+                links.append(cn_id)
+                t.update(bill_ref, {
+                    "linked_credit_note_ids": links,
+                    "linked_credit_note_id":  cn_id,
+                    "lastModifiedAt": datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S"),
+                })
+        return number
+
+    return _run(txn)
 
 
 CN_REASONS = (
@@ -2223,7 +2404,10 @@ def create_credit_note(
                 logger.warning(f"create_credit_note: idempotency lookup failed: {_ie}")
 
         cn_id     = _uuid.uuid4().hex
-        cn_number = generate_sequential_credit_note_number(cn_date)
+        # cn_number is minted ATOMICALLY with the CN write below
+        # (allocate_and_write_credit_note) so the CN/ series can't gap if the
+        # write fails. Placeholder until the transaction stamps the real number.
+        cn_number = "-"
         cn_date_s = cn_date.strftime("%Y-%m-%d")
         now_iso   = datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S")
 
@@ -2286,17 +2470,11 @@ def create_credit_note(
             "room":                str(bill_data.get("room") or ""),
         }
 
-        batch = db.batch()
-        batch.set(credit_notes_ref.document(cn_id), cn_doc)
-        existing_links = bill_data.get("linked_credit_note_ids") or []
-        if cn_id not in existing_links:
-            updated_links = list(existing_links) + [cn_id]
-            batch.update(bills_ref.document(bill_id), {
-                "linked_credit_note_ids": updated_links,
-                "linked_credit_note_id":  cn_id,
-                "lastModifiedAt":         now_iso,
-            })
-        batch.commit()
+        # Atomic: mint the CN/ number, write the CN doc, and link it onto the
+        # original bill in ONE transaction. The cn_YYYY_MM counter advances iff
+        # the CN document is stored -> the CN series stays gap-free.
+        cn_number = allocate_and_write_credit_note(cn_id, cn_doc, bill_id, cn_date)
+        cn_doc["cn_number"] = cn_number
 
         logger.info(
             f"create_credit_note: minted {cn_number} for bill "

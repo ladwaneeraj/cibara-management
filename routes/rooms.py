@@ -20,6 +20,7 @@ from config import (
     invalidate_rooms_and_totals, get_all_rooms,
     get_totals, is_log_from_current_stay, get_next_serial_number,
     store_transaction_metadata, create_bill_record, BillCreationError,
+    allocate_and_finalize_bill,
     find_serial_number_for_checkin, _build_active_entry_fast, _find_serial_fast,
     _batch_fill_serials, room_category
 )
@@ -450,6 +451,84 @@ def checkout():
             guest_info = room_data["guest"]
             guest_name = guest_info["name"] if guest_info else "Unknown"
 
+            # ── Idempotency guard — prevents duplicate bill-number minting ──────
+            # A duplicate /checkout for the same stay (double-click, a retried
+            # request, or two competing client handlers) must NOT mint a second
+            # sequential bill number. generate_sequential_bill_number() consumes
+            # a CC/ number the moment it runs, decoupled from whether the bill is
+            # ultimately stored — so a second pass burns a number and leaves a
+            # permanent gap in the GST series (Rule 46(b)).
+            #
+            # If this stay's draft is already finalized (status completed /
+            # pending_settlement with a real bill_number), the checkout is
+            # already done: return that result idempotently WITHOUT minting or
+            # writing anything.
+            #
+            # Scope note: this is a read-check. It closes the common duplicate
+            # cases (sequential re-submits, retries, the double-handler bug). A
+            # pair of *truly simultaneous* requests can still both observe
+            # "draft" before either finalizes; fully closing that race requires
+            # minting inside the same transaction that writes the bill (see
+            # config.create_bill_record / generate_sequential_bill_number).
+            if active_bill_id:
+                try:
+                    _existing = bills_ref.document(active_bill_id).get()
+                    if _existing.exists:
+                        _ed = _existing.to_dict() or {}
+                        _estatus = _ed.get("status")
+                        _ebill_no = _ed.get("bill_number")
+                        if (_estatus in ("completed", "pending_settlement")
+                                and _ebill_no and _ebill_no != "-"):
+                            logger.warning(
+                                f"[CHECKOUT] duplicate ignored for room {room}: "
+                                f"stay {active_bill_id} already finalized "
+                                f"(status={_estatus}, bill_number={_ebill_no}). "
+                                f"No new bill number minted."
+                            )
+                            # Recovery: if a prior attempt committed the bill but
+                            # its room-reset batch failed, the room may still read
+                            # 'occupied'. Free it idempotently so the operator is
+                            # not stuck. Totals / payment-ledger are NOT re-touched
+                            # (amounts already live on the bill doc).
+                            try:
+                                _lr = rooms_ref.document(room).get()
+                                if _lr.exists and _lr.to_dict().get("status") == "occupied":
+                                    rooms_ref.document(room).update({
+                                        "status": "cleaning",
+                                        "guest": None,
+                                        "checkin_time": None,
+                                        "balance": 0,
+                                        "active_bill_id": None,
+                                        "last_bill_id": active_bill_id,
+                                        "cleaning_status": "in_progress",
+                                    })
+                                    invalidate_rooms_and_totals()
+                                    logger.warning(
+                                        f"[CHECKOUT] freed stuck room {room} on "
+                                        f"idempotent retry (bill {_ebill_no} "
+                                        f"already stored)."
+                                    )
+                            except Exception as _free_err:
+                                logger.warning(
+                                    f"[CHECKOUT] could not free room {room} on "
+                                    f"retry: {_free_err}"
+                                )
+                            return jsonify(
+                                success=True,
+                                idempotent=True,
+                                bill_id=active_bill_id,
+                                bill_number=_ebill_no,
+                                message="Checkout already completed for this stay.",
+                            )
+                except Exception as _idem_err:
+                    # A guard failure must NEVER block a legitimate checkout —
+                    # fall through to the normal path (which still creates the
+                    # bill). Worst case we lose idempotency for this one request.
+                    logger.warning(
+                        f"[CHECKOUT] idempotency pre-check failed for "
+                        f"{active_bill_id}: {_idem_err}. Proceeding with checkout."
+                    )
+
             # Build atomic update for totals
             totals_update = {}
 
@@ -574,7 +653,8 @@ def checkout():
                 bill_record = create_bill_record(
                     room, room_data, checkout_time, batch,
                     settle_later=(balance > 0 and settle_later),
-                    settlement_id=_sid
+                    settlement_id=_sid,
+                    defer_number=True,
                 )
             except BillCreationError as bce:
                 # ── CHECKOUT BLOCKED ─────────────────────────────────────────
@@ -688,19 +768,74 @@ def checkout():
                     "snapshot_at":             datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S"),
                 }
 
-                if active_bill_id:
-                    # Finalize the existing draft — merges checkout fields
-                    # onto the doc that's been there since check-in. Goes
-                    # through the helper so the audit timestamps and the
-                    # "no revert to draft" guard are applied.
-                    bills_service.finalize(active_bill_id, bill_record, batch=batch)
-                else:
-                    # Legacy path: create a fresh bill doc as before.
-                    batch.set(bills_ref.document(bill_id), bill_record)
+                # ── Atomic mint + write (gap-free bill numbering) ─────────────
+                # The CC/ number is allocated INSIDE the same transaction that
+                # writes the bill doc, so the per-month counter can never
+                # advance without a stored bill (and a stored bill always
+                # carries its number). Replaces the old split flow where the
+                # number was minted separately and could be burned by a
+                # duplicate or a failed commit.
+                _needs_number = bill_record.pop("_needs_bill_number", True)
+                try:
+                    _checkout_dt = datetime.strptime(checkout_time, "%Y-%m-%d %H:%M")
+                except (ValueError, TypeError):
+                    _checkout_dt = datetime.now(IST)
+                try:
+                    _minted_number, _newly_finalized = allocate_and_finalize_bill(
+                        bill_id, bill_record,
+                        checkout_dt=_checkout_dt,
+                        is_new_doc=(active_bill_id is None),
+                        needs_number=_needs_number,
+                    )
+                except Exception as _alloc_err:
+                    # Transaction rolled back: NO number consumed, NO bill
+                    # written. Block the checkout exactly like a build failure.
+                    logger.error(
+                        f"CHECKOUT BLOCKED for room {room}: atomic bill "
+                        f"finalize failed: {_alloc_err}", exc_info=True
+                    )
+                    system_alerts.record_alert(
+                        "bill.create.blocked",
+                        f"Checkout for room {room} (guest: {guest_name}) was "
+                        f"blocked — atomic bill finalize failed: {_alloc_err}. "
+                        f"No bill number was consumed (the series is intact).",
+                        severity="critical",
+                        context={"room": str(room), "guest": guest_name,
+                                 "stay_id": active_bill_id},
+                    )
+                    return jsonify(
+                        success=False,
+                        checkout_blocked=True,
+                        message=(
+                            "Checkout blocked — the bill could not be saved "
+                            "atomically. No bill number was used and the room "
+                            "has NOT been checked out. Please retry; an alert "
+                            "has been sent to the admin."
+                        ),
+                    )
 
-                logger.info(f"Bill saved for room {room}: {bill_record.get('bill_number')}, "
-                            f"status={bill_record.get('status')}, "
-                            f"path={'finalize' if active_bill_id else 'legacy'}")
+                bill_record["bill_number"] = _minted_number
+
+                if not _newly_finalized:
+                    # A concurrent / duplicate checkout already finalized this
+                    # stay and owns the room/totals/payment writes. Do NOT
+                    # repeat them (would double-count). Return idempotently.
+                    logger.warning(
+                        f"[CHECKOUT] concurrent duplicate for room {room}: "
+                        f"stay {bill_id} already finalized as {_minted_number}; "
+                        f"skipping side-effects."
+                    )
+                    return jsonify(
+                        success=True, idempotent=True,
+                        bill_id=bill_id, bill_number=_minted_number,
+                        message="Checkout already completed for this stay.",
+                    )
+
+                logger.info(
+                    f"Bill saved (atomic) for room {room}: {_minted_number}, "
+                    f"status={bill_record.get('status')}, "
+                    f"path={'finalize' if active_bill_id else 'legacy'}"
+                )
             else:
                 # Defence in depth: create_bill_record now raises
                 # BillCreationError on every failure path, so a falsy return
@@ -780,7 +915,40 @@ def checkout():
 
             if totals_update:
                 batch.update(totals_ref.document('current_totals'), totals_update)
-            batch.commit()
+            try:
+                batch.commit()
+            except Exception as _commit_err:
+                # The bill + its number are ALREADY committed atomically above,
+                # so the invoice series is intact (no gap). Only the room reset
+                # / totals / payment-ledger writes in this batch failed. Surface
+                # it loudly; re-running checkout frees the room without minting a
+                # new number (handled by the idempotency guard above).
+                logger.error(
+                    f"[CHECKOUT] post-bill batch commit failed for room {room} "
+                    f"(bill {bill_record.get('bill_number')} is safely stored): "
+                    f"{_commit_err}", exc_info=True
+                )
+                system_alerts.record_alert(
+                    "checkout.sideeffects.failed",
+                    f"Bill {bill_record.get('bill_number')} for room {room} "
+                    f"(guest: {guest_name}) was created, but freeing the room / "
+                    f"updating totals did not commit: {_commit_err}. The bill "
+                    f"series is intact (no gap). Re-run checkout for room "
+                    f"{room} to finish.",
+                    severity="critical",
+                    context={"room": str(room), "guest": guest_name,
+                             "bill_number": bill_record.get("bill_number"),
+                             "stay_id": bill_id},
+                )
+                return jsonify(
+                    success=False, checkout_partial=True,
+                    bill_id=bill_id, bill_number=bill_record.get("bill_number"),
+                    message=(
+                        f"The bill ({bill_record.get('bill_number')}) was "
+                        f"created — no number was lost — but freeing the room "
+                        f"failed. Please click Checkout again to finish."
+                    ),
+                )
             logger.info(
                 f"[PERF] checkout TOTAL: {_time.time()-_perf_t0:.3f}s room={room} "
                 f"(bill={_perf_t1-_perf_t0:.3f}s, commit={_time.time()-_perf_t1:.3f}s)"

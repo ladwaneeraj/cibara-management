@@ -73,7 +73,8 @@ def main() -> int:
     args = ap.parse_args()
 
     # Side effect of importing config: Firebase + bills_service.init(db).
-    from config import db, rooms_ref, bills_ref, bookings_ref, IST, create_bill_record
+    from config import (db, rooms_ref, bills_ref, bookings_ref, IST,
+                        create_bill_record, allocate_and_finalize_bill)
     from services import bills_service
 
     date_str = args.date or datetime.now(IST).strftime("%Y-%m-%d")
@@ -265,18 +266,30 @@ def main() -> int:
     print("\nFinalising draft → bill (using create_bill_record + finalize)...")
     from config import BillCreationError
     try:
-        bill_record = create_bill_record(room, room_data, checkout_time)
+        bill_record = create_bill_record(room, room_data, checkout_time,
+                                         defer_number=True)
     except BillCreationError as bce:
         print(f"create_bill_record failed: {bce.reason}. Aborted.")
-        if bce.bill_number:
-            print(f"WARNING: bill number {bce.bill_number} was minted and is "
-                  f"consumed — declare it as a cancelled document in GSTR-1 "
-                  f"Table 13.")
         return 1
     bill_record["stay_id"] = stay_id
-    ok = bills_service.finalize(stay_id, bill_record)
-    if not ok:
-        print("finalize() failed — see logs. Aborted.")
+
+    # Atomic mint + write — same gap-free path as checkout. The CC/ number is
+    # consumed only if this bill document is actually stored, so a failed
+    # repair can never leave a hole in the invoice series.
+    _needs_number = bill_record.pop("_needs_bill_number", True)
+    from datetime import datetime as _dt
+    try:
+        _co_dt = _dt.strptime(checkout_time, "%Y-%m-%d %H:%M")
+    except (ValueError, TypeError):
+        _co_dt = _dt.now(IST)
+    try:
+        _num, _newly = allocate_and_finalize_bill(
+            stay_id, bill_record, _co_dt,
+            is_new_doc=False, needs_number=_needs_number,
+        )
+        bill_record["bill_number"] = _num
+    except Exception as _e:
+        print(f"atomic finalize failed: {_e}. Aborted (no number consumed).")
         return 1
 
     print(f"DONE. status={bill_record.get('status')} "

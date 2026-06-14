@@ -31,110 +31,20 @@ function initSettleLater() {
     });
   }
 
-  // 2. Modify the proceed-checkout-btn click handler
-  const originalProceedCheckoutBtn = document.getElementById(
-    "proceed-checkout-btn"
-  );
-
-  if (originalProceedCheckoutBtn) {
-    // Save the original onclick handler if it exists
-    const originalClickHandler = originalProceedCheckoutBtn.onclick;
-
-    // Replace with new handler that includes "settle later" logic
-    originalProceedCheckoutBtn.onclick = async function () {
-      console.log("Proceed checkout clicked with settle later handler");
-
-      // Disable button and show loading state
-      this.disabled = true;
-      this.innerHTML =
-        '<span class="loader" style="width: 20px; height: 20px;"></span> Processing...';
-
-      const roomNumberElement = document.getElementById("checkout-room-number");
-      if (!roomNumberElement) {
-        showNotification("Room number element not found", "error");
-        console.error("Room number element not found during checkout");
-        return;
-      }
-
-      const roomNumber = roomNumberElement.textContent;
-      const balance = rooms[roomNumber].balance;
-
-      // Check if settle later is enabled
-      const settleLaterEnabled =
-        document.getElementById("settle-later-checkbox")?.checked || false;
-      const settlementNotes =
-        document.getElementById("settlement-notes")?.value || "";
-
-      // Get refund method if there's a negative balance
-      const refundMethod =
-        balance < 0
-          ? document.querySelector(".refund-container .payment-btn.active")
-              ?.id === "refund-cash-btn"
-            ? "cash"
-            : "online"
-          : null;
-
-      try {
-        console.log("Sending checkout request to server");
-        const response = await apiFetch("/checkout", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            room: roomNumber,
-            final_checkout: true,
-            refund_method: refundMethod,
-            settle_later: settleLaterEnabled,
-            settlement_notes: settlementNotes,
-          }),
-        });
-
-        if (!response.ok) {
-          throw new Error(`Server responded with status: ${response.status}`);
-        }
-
-        const result = await response.json();
-        if (result.success) {
-          console.log("Checkout successful");
-          // Close both modals
-          const checkoutConfirmModal = document.getElementById(
-            "checkout-confirm-modal"
-          );
-          if (checkoutConfirmModal) {
-            checkoutConfirmModal.classList.remove("show");
-          }
-
-          const checkoutModal = document.getElementById("checkout-modal");
-          if (checkoutModal) {
-            checkoutModal.classList.remove("show");
-          }
-
-          // Mark room locally for immediate UI update
-          if (rooms[roomNumber]) {
-            rooms[roomNumber].status = "cleaning";
-            rooms[roomNumber].guest = null;
-          }
-          if (typeof renderRooms === "function") renderRooms();
-          debouncedFetchData(); // background sync
-
-          // If settled later, let the user know
-          if (settleLaterEnabled && balance > 0) {
-          } else {
-            showNotification("Checkout successful!", "success");
-          }
-        } else {
-          console.error("Checkout failed:", result.message);
-          showNotification(result.message || "Error during checkout", "error");
-        }
-      } catch (error) {
-        console.error("Error during checkout:", error);
-        showNotification(`Error during checkout: ${error.message}`, "error");
-      } finally {
-        // Re-enable button
-        this.disabled = false;
-        this.innerHTML = "Yes, Checkout";
-      }
-    };
-  }
+  // 2. proceed-checkout-btn click handler — INTENTIONALLY NOT BOUND HERE.
+  //
+  // The canonical checkout handler lives in settle-later-fix.js, which clones
+  // #proceed-checkout-btn (stripping any prior listeners) and attaches a single
+  // enhanced handler (RBAC, balance validation, settle-later, customer flag).
+  //
+  // This file used to ALSO assign `.onclick` on the same button ~1s after the
+  // fix had already cloned it. The result was TWO live handlers on one button,
+  // so a single click fired TWO `POST /checkout` requests. Each request mints
+  // its own sequential bill number (config.generate_sequential_bill_number
+  // increments the bill_YYYY_MM counter atomically), so the CC/ series advanced
+  // by 2 per checkout — leaving permanent gaps (e.g. 162, 164, 166...) that were
+  // never stored in Firestore. See routes/rooms.py checkout() for the matching
+  // server-side idempotency guard. DO NOT re-add a checkout handler here.
 
   // 3. Initialize the quick actions button for pending settlements
   const quickSettlementsBtn = document.getElementById("quick-settlements-btn");

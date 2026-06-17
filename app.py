@@ -18,6 +18,8 @@ from routes.laundry import laundry_bp
 from routes.users import users_bp
 from routes.banking import banking_bp
 from routes.mmt_ingest import mmt_ingest_bp
+from routes.agoda_ingest import agoda_ingest_bp
+from routes.bank_settlement import bank_settlement_bp
 from services.auth_service import load_current_user
 from flask import g
 import os
@@ -112,6 +114,24 @@ def require_auth():
         if _ingest_secret:
             _provided = request.headers.get("X-Ingest-Secret", "")
             if _provided == _ingest_secret:
+                return None
+
+    # 1c. Agoda ingestion endpoint — same shared-secret scheme as MMT. Accepts
+    # AGODA_INGEST_SECRET, falling back to MMT_INGEST_SECRET so a single
+    # scheduler secret can drive both OTA pollers.
+    if path == "/agoda/ingest":
+        _agoda_secret = os.environ.get("AGODA_INGEST_SECRET", "") or os.environ.get("MMT_INGEST_SECRET", "")
+        if _agoda_secret:
+            _provided = request.headers.get("X-Ingest-Secret", "")
+            if _provided == _agoda_secret:
+                return None
+
+    # 1d. Bank payment-advice settlement endpoint — same shared-secret scheme.
+    if path == "/bank/settlements/ingest":
+        _bank_secret = os.environ.get("AGODA_INGEST_SECRET", "") or os.environ.get("MMT_INGEST_SECRET", "")
+        if _bank_secret:
+            _provided = request.headers.get("X-Ingest-Secret", "")
+            if _provided == _bank_secret:
                 return None
 
     # 2. Firebase ID token
@@ -253,6 +273,8 @@ app.register_blueprint(laundry_bp,    url_prefix="")
 app.register_blueprint(users_bp,      url_prefix="")
 app.register_blueprint(banking_bp)    # /banking/* — owns its url_prefix
 app.register_blueprint(mmt_ingest_bp, url_prefix="")  # /mmt/ingest, /mmt/ingest_status
+app.register_blueprint(agoda_ingest_bp, url_prefix="")  # /agoda/ingest, /agoda/ingest_status
+app.register_blueprint(bank_settlement_bp, url_prefix="")  # /bank/settlements/ingest
 
 # ---------------------------------------------------------------------------
 # Error handlers

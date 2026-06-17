@@ -4,6 +4,19 @@ let filteredBookings = [];
 let currentBookingFilter = "upcoming";
 let _activeBookingForWhatsApp = null; // stores the full booking object currently shown in details modal
 
+// OTA prepaid sources behave identically in the UI (prepaid, settles via OTA,
+// no money collected from the guest at the hotel): MMT and Agoda.
+const OTA_PREPAID_SOURCES = ["mmt", "agoda"];
+function isOtaPrepaid(src) {
+  return OTA_PREPAID_SOURCES.includes(src);
+}
+// Display label for an OTA source badge / details panel.
+function otaSourceLabel(src) {
+  if (src === "mmt") return "MMT";
+  if (src === "agoda") return "Agoda";
+  return (src || "").toUpperCase();
+}
+
 // DOM Elements
 document.addEventListener("DOMContentLoaded", function () {
   // Initialize booking tab
@@ -242,7 +255,7 @@ function initializeBookingForm() {
     const source = bookingSourceSelect ? bookingSourceSelect.value : "normal";
     const totalAmountInput = document.getElementById("booking-total-amount");
     const otaTotalInput = document.getElementById("booking-ota-total");
-    if (source === "mmt") {
+    if (isOtaPrepaid(source)) {
       if (normalPaymentFields) normalPaymentFields.style.display = "none";
       if (mmtFields) mmtFields.style.display = "block";
       // Remove required from hidden field so browser doesn't block submission silently
@@ -353,8 +366,8 @@ async function createBooking(event) {
   // Rate per night (for storage, used in bill calculation reference)
   const ratePerNight = parseInt(document.getElementById("booking-rate-per-night")?.value || 0) || null;
 
-  // OTA vs normal fields
-  const isMmt = bookingSource === "mmt";
+  // OTA vs normal fields (MMT and Agoda are both prepaid OTA sources)
+  const isMmt = isOtaPrepaid(bookingSource);
   // For normal bookings, we recompute the total below from rate × nights as a
   // safety net (see "Submit-time recompute"). We still read the form value
   // here so the existing required-field validation works.
@@ -386,7 +399,7 @@ async function createBooking(event) {
   }
 
   if (isMmt && !otaTotal) {
-    showNotification("Please enter OTA total amount for MMT bookings", "error");
+    showNotification("Please enter OTA total amount for prepaid OTA bookings", "error");
     return;
   }
 
@@ -580,18 +593,11 @@ async function createBooking(event) {
   }
 }
 
-// Manually fetch new MMT/Goibibo bookings from email, then refresh the list.
-// Uses the logged-in user's auth (apiFetch attaches the Firebase token), so
-// no ingest secret is needed from the browser.
-async function fetchFromMmt() {
-  const btn = document.getElementById("fetch-mmt-btn");
-  const original = btn ? btn.innerHTML : "";
-  if (btn) {
-    btn.disabled = true;
-    btn.innerHTML = '<i class="fas fa-sync-alt fa-spin"></i> Fetching...';
-  }
+// Trigger one ingestion pass for a single OTA endpoint. Returns a normalised
+// {ok, created, settled, skipped, review, message} result; never throws.
+async function _ingestOta(label, endpoint) {
   try {
-    const response = await apiFetch("/mmt/ingest", {
+    const response = await apiFetch(endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({}),
@@ -600,29 +606,83 @@ async function fetchFromMmt() {
     if (!response.ok || result.success === false) {
       throw new Error(result.message || `HTTP ${response.status}`);
     }
-    const created = result.created || 0;
-    const settled = result.settled || 0;
-    const skipped = result.skipped_existing || 0;
-    const review = result.needs_review || 0;
-    if (created > 0 || settled > 0) {
-      let msg = "";
-      if (created > 0) msg += `${created} new booking${created !== 1 ? "s" : ""}`;
-      if (settled > 0) msg += `${msg ? ", " : ""}${settled} settled`;
-      if (review > 0) msg += ` (${review} need review)`;
-      showNotification(`MMT: ${msg}`, "success");
+    return {
+      label,
+      ok: true,
+      created: result.created || 0,
+      settled: result.settled || 0,
+      skipped: result.skipped_existing || 0,
+      review: result.needs_review || 0,
+    };
+  } catch (error) {
+    console.error(`Error fetching from ${label}:`, error);
+    return { label, ok: false, message: error.message };
+  }
+}
+
+// Manually fetch new bookings from BOTH OTA inboxes (MMT + Agoda) in one
+// click, then refresh the list. Uses the logged-in user's auth (apiFetch
+// attaches the Firebase token), so no ingest secret is needed from the browser.
+// The two passes run in parallel and are reported together; a failure in one
+// does not abort the other.
+async function fetchFromMmt() {
+  const btn = document.getElementById("fetch-mmt-btn");
+  const original = btn ? btn.innerHTML : "";
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fas fa-sync-alt fa-spin"></i> Fetching...';
+  }
+  try {
+    // 1) Pull new bookings from both OTA inboxes in parallel.
+    const otaResults = await Promise.all([
+      _ingestOta("MMT", "/mmt/ingest"),
+      _ingestOta("Agoda", "/agoda/ingest"),
+    ]);
+    // 2) Then reconcile bank payment-advice settlements — runs AFTER booking
+    //    ingest so a just-created booking can be matched in the same click.
+    const bankResult = await _ingestOta("Settlements", "/bank/settlements/ingest");
+    const results = [...otaResults, bankResult];
+
+    const totalCreated = results.reduce((s, r) => s + (r.created || 0), 0);
+    const totalSettled = results.reduce((s, r) => s + (r.settled || 0), 0);
+    const totalReview = results.reduce((s, r) => s + (r.review || 0), 0);
+    const totalSkipped = results.reduce((s, r) => s + (r.skipped || 0), 0);
+    const failures = results.filter((r) => !r.ok);
+
+    // Per-source detail for the toast, e.g. "MMT: 2 new · Agoda: 1 new".
+    const parts = results
+      .filter((r) => r.ok && (r.created > 0 || r.settled > 0))
+      .map((r) => {
+        let s = `${r.label}: `;
+        const bits = [];
+        if (r.created > 0) bits.push(`${r.created} new`);
+        if (r.settled > 0) bits.push(`${r.settled} settled`);
+        return s + bits.join(", ");
+      });
+
+    if (totalCreated > 0 || totalSettled > 0) {
+      let msg = parts.join(" · ");
+      if (totalReview > 0) msg += ` (${totalReview} need review)`;
+      showNotification(msg, "success");
+    } else if (failures.length === results.length) {
+      // Everything failed — surface the first error.
+      showNotification(`Fetch failed: ${failures[0].message}`, "error");
+    } else if (failures.length > 0) {
+      showNotification(
+        `${failures.map((f) => f.label).join(", ")} fetch failed; others up to date`,
+        "error",
+      );
     } else {
       showNotification(
-        skipped > 0
-          ? "MMT: no new bookings (already up to date)"
-          : "MMT: no new emails found",
+        totalSkipped > 0
+          ? "No new bookings (already up to date)"
+          : "No new emails found",
         "info",
       );
     }
+
     // Reload the bookings list so newly-created ones appear.
     await fetchBookings();
-  } catch (error) {
-    console.error("Error fetching from MMT:", error);
-    showNotification(`MMT fetch failed: ${error.message}`, "error");
   } finally {
     if (btn) {
       btn.disabled = false;
@@ -791,6 +851,8 @@ function renderBookings() {
     let sourceBadge = "";
     if (src === "mmt") {
       sourceBadge = '<span class="booking-source-badge src-mmt"><i class="fas fa-globe"></i> MMT</span>';
+    } else if (src === "agoda") {
+      sourceBadge = '<span class="booking-source-badge src-agoda"><i class="fas fa-globe"></i> Agoda</span>';
     } else if (src === "booking.com") {
       sourceBadge = '<span class="booking-source-badge src-bookingcom"><i class="fas fa-globe"></i> Booking.com</span>';
     }
@@ -830,7 +892,7 @@ function renderBookings() {
         <div class="booking-footer">
           <div class="booking-payment">
             ${paymentStatus}
-            <div class="booking-amount">${src === "mmt" ? "OTA" : "₹" + booking.total_amount}</div>
+            <div class="booking-amount">${isOtaPrepaid(src) ? "OTA" : "₹" + booking.total_amount}</div>
           </div>
           <div class="booking-actions">
             <button class="action-btn btn-sm btn-primary view-booking-btn" data-id="${
@@ -990,8 +1052,9 @@ function showBookingDetails(bookingId) {
     }
   }
 
-  // For MMT: hide the payment section (no money collected from guest)
-  const isMmt = booking.booking_source === "mmt";
+  // For OTA prepaid (MMT / Agoda): hide the payment section (no money
+  // collected from the guest at the hotel).
+  const isMmt = isOtaPrepaid(booking.booking_source);
   const paymentSection = document.getElementById("details-payment-section");
   if (paymentSection) paymentSection.style.display = isMmt ? "none" : "";
 
@@ -1008,7 +1071,7 @@ function showBookingDetails(bookingId) {
     if (isMmt) {
       otaSection.style.display = "block";
       const srcEl = document.getElementById("details-booking-source");
-      if (srcEl) srcEl.textContent = "MMT Prepaid";
+      if (srcEl) srcEl.textContent = otaSourceLabel(booking.booking_source) + " Prepaid";
       const otaTotalEl = document.getElementById("details-ota-total");
       const otaCommEl  = document.getElementById("details-ota-commission");
       const netRecvEl  = document.getElementById("details-net-receivable");
@@ -1573,7 +1636,7 @@ function showConvertBookingModal(bookingId) {
   document.getElementById("convert-check-in").textContent =
     `${formattedDate} at ${formattedTime}`;
 
-  const isMmtBooking = booking.booking_source === "mmt";
+  const isMmtBooking = isOtaPrepaid(booking.booking_source);
 
   // Payment summary rows
   const totalRow = document.getElementById("convert-total-amount")?.closest(".summary-row");
@@ -3290,8 +3353,8 @@ function sendWhatsAppBookingConfirmation() {
     const paidAmount   = bk.paid_amount    || 0;
     const balance      = bk.balance        != null ? bk.balance : (totalAmount - paidAmount);
 
-    // For MMT: no payment section from guest side
-    const isMmt = src === "mmt";
+    // For OTA prepaid (MMT / Agoda): no payment section from guest side
+    const isMmt = isOtaPrepaid(src);
     let paymentSection = "";
     if (!isMmt) {
       const rateLineStr = (ratePerNight > 0 && nights > 0)
@@ -3368,6 +3431,33 @@ let _mmtUnsettled  = null;
 let _mmtSettled    = null;
 let _mmtActiveTab  = "pending";
 
+// ── Settlement card helpers ────────────────────────────────────────────────
+// Platform chip (MMT orange / Agoda purple).
+function _otaPlatChip(plat) {
+  if (!plat) return "";
+  const ag = plat === "agoda";
+  return `<span style="font-size:0.66rem;font-weight:700;text-transform:uppercase;letter-spacing:0.02em;padding:1px 6px;border-radius:6px;margin-left:6px;${
+    ag ? "background:#ede9fe;color:#6d28d9;" : "background:#fff1e6;color:#c2410c;"
+  }">${otaSourceLabel(plat)}</span>`;
+}
+// How the settlement was recorded: bank PDF auto-match, settlement email, or manual.
+function _settleSourcePill(src) {
+  const map = {
+    bank_pdf: ["Auto · bank", "#dcfce7", "#15803d"],
+    email:    ["Auto · email", "#dbeafe", "#1d4ed8"],
+    manual:   ["Manual", "#f1f5f9", "#475569"],
+  };
+  const [label, bg, fg] = map[src] || ["Manual", "#f1f5f9", "#475569"];
+  return `<span style="font-size:0.66rem;font-weight:600;padding:1px 7px;border-radius:6px;background:${bg};color:${fg};white-space:nowrap;">${label}</span>`;
+}
+// Whole days since an ISO date (used to show how long a payout has been due).
+function _daysSince(dateStr) {
+  if (!dateStr) return null;
+  const d = new Date(dateStr + "T00:00:00");
+  if (isNaN(d.getTime())) return null;
+  return Math.floor((Date.now() - d.getTime()) / 86400000);
+}
+
 async function showMmtSettlementsModal() {
   const modal  = document.getElementById("mmt-settlements-modal");
   const listEl = document.getElementById("mmt-settlements-list");
@@ -3435,7 +3525,7 @@ async function _mmtRenderPending() {
     listEl.innerHTML = `
       <div style="text-align:center;padding:2rem;color:var(--text-secondary);">
         <i class="fas fa-check-circle" style="font-size:2rem;margin-bottom:0.75rem;opacity:0.4;display:block;color:#16a34a;"></i>
-        All MMT bookings are settled!
+        All OTA bookings are settled!
       </div>`;
     return;
   }
@@ -3454,18 +3544,26 @@ async function _mmtRenderPending() {
     const net    = b.net_receivable != null ? `₹${Number(b.net_receivable).toLocaleString("en-IN")}` : "—";
     const checkin  = b.check_in_date  || "—";
     const checkout = b.check_out_date || "—";
+    const plat   = b.platform || b.booking_source || "";
+    const platChip = _otaPlatChip(plat);
+    // How long the payout has been due (counted from check-out).
+    const due = _daysSince(b.check_out_date);
+    const ageChip = (due != null && due >= 0)
+      ? `<span style="margin-left:auto;font-weight:600;color:${due > 14 ? "#b91c1c" : "#92400e"};white-space:nowrap;">
+           <i class="fas fa-hourglass-half" style="margin-right:3px;"></i>${due}d due</span>`
+      : "";
 
     html += `
       <div style="border:1px solid #fde68a;border-radius:8px;padding:0.65rem 0.85rem;
                   margin-bottom:0.5rem;background:#fffbeb;">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.3rem;">
-          <span style="font-weight:600;">${b.guest_name || "—"}</span>
+          <span style="font-weight:600;">${b.guest_name || "—"}${platChip}</span>
           <span style="font-weight:700;color:#d97706;">${net}</span>
         </div>
-        <div style="display:flex;gap:1rem;font-size:0.78rem;color:var(--text-secondary);flex-wrap:wrap;margin-bottom:0.45rem;">
+        <div style="display:flex;gap:0.9rem;font-size:0.78rem;color:var(--text-secondary);flex-wrap:wrap;align-items:center;margin-bottom:0.45rem;">
           <span><i class="fas fa-door-open" style="margin-right:3px;"></i>Room ${b.room || "—"}</span>
-          <span><i class="fas fa-sign-in-alt" style="margin-right:3px;"></i>${checkin}</span>
-          <span><i class="fas fa-sign-out-alt" style="margin-right:3px;"></i>${checkout}</span>
+          <span><i class="fas fa-calendar-day" style="margin-right:3px;"></i>${checkin} → ${checkout}</span>
+          ${ageChip}
         </div>
         <button
           onclick="document.getElementById('mmt-settlements-modal').classList.remove('show'); showBookingDetails('${b.booking_id}');"
@@ -3499,39 +3597,76 @@ async function _mmtRenderReceived() {
     listEl.innerHTML = `
       <div style="text-align:center;padding:2rem;color:var(--text-secondary);">
         <i class="fas fa-university" style="font-size:2rem;margin-bottom:0.75rem;opacity:0.4;display:block;"></i>
-        No MMT settlements recorded yet.<br>
-        <small>Use "Mark Settlement" in a booking's details once MMT pays you.</small>
+        No OTA settlements recorded yet.<br>
+        <small>Use "Mark Settlement" in a booking's details once MMT / Agoda pays you.</small>
       </div>`;
     return;
   }
 
   const totalSettled = _mmtSettled.reduce((s, x) => s + (x.settlement_amount || 0), 0);
+  // Per-platform breakdown (shown only when more than one platform appears).
+  const byPlat = {};
+  _mmtSettled.forEach((x) => {
+    const p = x.platform || "other";
+    byPlat[p] = (byPlat[p] || 0) + Number(x.settlement_amount || 0);
+  });
+  const platLine = Object.keys(byPlat).length > 1
+    ? `<div style="display:flex;gap:0.85rem;font-size:0.72rem;color:var(--text-secondary);margin-top:0.4rem;flex-wrap:wrap;">
+        ${Object.entries(byPlat).map(([p, amt]) =>
+          `<span>${otaSourceLabel(p)}: <strong>₹${amt.toLocaleString("en-IN")}</strong></span>`).join("")}
+       </div>`
+    : "";
 
   let html = `
-    <div style="display:flex;justify-content:space-between;align-items:center;
-                background:rgba(12,111,205,0.07);border:1px solid rgba(12,111,205,0.2);
+    <div style="background:rgba(12,111,205,0.07);border:1px solid rgba(12,111,205,0.2);
                 border-radius:8px;padding:0.6rem 0.85rem;margin-bottom:0.75rem;font-size:0.85rem;">
-      <span style="color:var(--text-secondary);">${_mmtSettled.length} settlement${_mmtSettled.length !== 1 ? "s" : ""}</span>
-      <span style="font-weight:600;color:#0c6fcd;">Total: ₹${totalSettled.toLocaleString("en-IN")}</span>
+      <div style="display:flex;justify-content:space-between;align-items:center;">
+        <span style="color:var(--text-secondary);">${_mmtSettled.length} settlement${_mmtSettled.length !== 1 ? "s" : ""}</span>
+        <span style="font-weight:600;color:#0c6fcd;">Total: ₹${totalSettled.toLocaleString("en-IN")}</span>
+      </div>
+      ${platLine}
     </div>`;
 
   _mmtSettled.forEach((s) => {
-    const amount    = s.settlement_amount != null ? `₹${s.settlement_amount.toLocaleString("en-IN")}` : "—";
-    const date      = s.settlement_date || s.created_at || "—";
-    const bookingId = s.booking_id || "—";
+    const settled  = Number(s.settlement_amount || 0);
+    const amount   = s.settlement_amount != null ? `₹${settled.toLocaleString("en-IN")}` : "—";
+    const date     = s.settlement_date || s.created_at || "—";
+    const utr      = s.utr || "";
+    const plat     = s.platform || "";
+    const platChip = _otaPlatChip(plat);
+    const srcPill  = _settleSourcePill(s.source);
+
+    // Gap between what was expected (net receivable) and what actually landed.
+    const net = s.net_receivable != null ? Number(s.net_receivable) : null;
+    let deltaChip = "";
+    if (net != null && Math.abs(settled - net) > 1) {
+      const d = settled - net;
+      deltaChip = `<span title="Expected ₹${net.toLocaleString("en-IN")}"
+        style="font-size:0.7rem;font-weight:600;color:${d < 0 ? "#b91c1c" : "#15803d"};white-space:nowrap;">
+        ${d > 0 ? "+" : "−"}₹${Math.abs(d).toLocaleString("en-IN")} vs expected</span>`;
+    }
+
+    // Bottom line: UTR (bank reference) on the left, any gap on the right.
+    const utrLine = (utr || deltaChip)
+      ? `<div style="display:flex;gap:0.5rem;align-items:center;margin-top:0.4rem;font-size:0.72rem;color:var(--text-secondary);">
+           ${utr ? `<span><i class="fas fa-hashtag" style="margin-right:2px;"></i>UTR <span style="font-family:monospace;">${utr}</span></span>` : ""}
+           ${deltaChip ? `<span style="margin-left:auto;">${deltaChip}</span>` : ""}
+         </div>`
+      : "";
 
     html += `
       <div style="border:1px solid var(--border);border-radius:8px;padding:0.65rem 0.85rem;
                   margin-bottom:0.5rem;background:var(--surface);">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.3rem;">
-          <span style="font-weight:600;">${s.guest_name || "—"}</span>
+          <span style="font-weight:600;">${s.guest_name || "—"}${platChip}</span>
           <span style="font-weight:700;color:var(--success);">${amount}</span>
         </div>
-        <div style="display:flex;gap:1rem;font-size:0.78rem;color:var(--text-secondary);">
+        <div style="display:flex;gap:0.9rem;font-size:0.78rem;color:var(--text-secondary);align-items:center;flex-wrap:wrap;">
           <span><i class="fas fa-door-open" style="margin-right:3px;"></i>Room ${s.room || "—"}</span>
-          <span><i class="fas fa-calendar" style="margin-right:3px;"></i>${date}</span>
-          <span style="margin-left:auto;font-family:monospace;font-size:0.72rem;">${bookingId.slice(-8)}</span>
+          <span><i class="fas fa-calendar-check" style="margin-right:3px;"></i>Settled ${date}</span>
+          <span style="margin-left:auto;">${srcPill}</span>
         </div>
+        ${utrLine}
       </div>`;
   });
 

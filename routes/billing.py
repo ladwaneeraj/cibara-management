@@ -127,10 +127,11 @@ def get_register_data():
             .where(filter=FieldFilter(_range_field, ">=", range_start_str))
             .where(filter=FieldFilter(_range_field, "<", range_end_str))
         )
-        # Pending MMT settlements for the tally (sum of net_receivable).
+        # Pending OTA settlements (MMT + Agoda) for the tally (sum of
+        # net_receivable). Variable name kept for back-compat.
         _mmt_pending_query = (
             db.collection("bookings")
-            .where("booking_source", "==", "mmt")
+            .where("booking_source", "in", ["mmt", "agoda"])
             .where("settlement_status", "==", "pending")
         )
 

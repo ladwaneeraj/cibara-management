@@ -1088,7 +1088,12 @@ def create_bill_record(room, room_data, checkout_time, batch=None,
         # any service/addon (cash OR online) — used for MMT service-only bill trigger
         any_addon = any(p.get("type") == "addon" for p in stay_payments)
         is_same_day = checkin_dt.date() == checkout_dt.date()
-        is_mmt_ota = (booking_source == "mmt" and payment_source == "ota")
+        # OTA stays where the hotel issues the room tax invoice and the room
+        # money settles to the bank (MMT and Agoda behave identically here).
+        # Name kept as is_mmt_ota because the downstream invoice/GST branches
+        # reference it; broadening the source set makes Agoda follow the exact
+        # same path as MMT without a sprawling rename.
+        is_mmt_ota = (booking_source in ("mmt", "agoda") and payment_source == "ota")
         is_booking_com = (booking_source == "booking.com")
         # ── Read billing config FIRST ────────────────────────────────────────
         # This MUST precede any use of mmt_hotel_issues_invoice / always_generate_bill

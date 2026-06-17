@@ -1247,9 +1247,12 @@ def apply_ota_settlement(booking_id, settlement_date, settlement_amount, *,
             return {"ok": False, "already": False, "message": "Booking not found"}
 
         booking = booking_doc.to_dict()
-        if booking.get("booking_source") != "mmt":
+        _src = booking.get("booking_source")
+        if _src not in ("mmt", "agoda"):
             return {"ok": False, "already": False,
-                    "message": "Settlement is only applicable to MMT bookings"}
+                    "message": "Settlement is only applicable to OTA (MMT / Agoda) bookings"}
+        # Human-readable platform label used on the payment / settlement rows.
+        _platform_label = {"mmt": "MMT", "agoda": "Agoda"}.get(_src, _src.upper())
         if booking.get("settlement_status") == "received":
             return {"ok": True, "already": True,
                     "message": "Settlement already marked as received",
@@ -1267,7 +1270,7 @@ def apply_ota_settlement(booking_id, settlement_date, settlement_amount, *,
         # Write to ota_settlements collection (separate from hotel-side settle-later)
         settlement_entry = {
             "booking_id": booking_id,
-            "platform": "mmt",
+            "platform": _src,
             "type": "bank_settlement",
             "room": booking.get("room", ""),
             "guest_name": booking.get("guest_name", ""),
@@ -1294,11 +1297,11 @@ def apply_ota_settlement(booking_id, settlement_date, settlement_amount, *,
             "time": datetime.now(IST).strftime("%H:%M"),
             "booking_id": booking_id,
             "transaction_type": "bank_settlement",
-            "platform": "mmt",
+            "platform": _src,
             "utr": utr,
             # Label surfaced in the Transactions tab so the row reads
-            # "MMT Settlement" rather than a generic settlement.
-            "label": "MMT Settlement",
+            # "MMT Settlement" / "Agoda Settlement" rather than a generic one.
+            "label": f"{_platform_label} Settlement",
         }
         _booking_stay_id = booking.get("stay_id")
         if _booking_stay_id:
@@ -1321,24 +1324,25 @@ def apply_ota_settlement(booking_id, settlement_date, settlement_amount, *,
             _comm_gst = float(booking.get("ota_commission_gst", 0) or 0)
             _comm_total = round(_comm + _comm_gst, 2)
             if _comm_total > 0:
+                _vendor = {"mmt": "MakeMyTrip / Go-MMT", "agoda": "Agoda"}.get(_src, _platform_label)
                 expense_service.write_expense({
                     "date": settlement_date,
                     "time": datetime.now(IST).strftime("%H:%M"),
                     "category": "booking_commission",
                     "description": (
-                        f"MMT commission — {booking.get('guest_name', '')} "
+                        f"{_platform_label} commission — {booking.get('guest_name', '')} "
                         f"(booking {str(booking_id)[:8]})"
                     ),
                     "amount": int(round(_comm_total)),
                     "payment_method": "bank_settlement",
                     "expense_type": "report",          # non-cash accrual
                     "has_gst": True,
-                    "vendor_name": "MakeMyTrip / Go-MMT",
+                    "vendor_name": _vendor,
                     "vendor_gstin": "",
                     "taxable_amount": _comm,
                     "gst_rate": 18.0,
                     "gst_amount": _comm_gst,
-                    "commission_platform": "mmt",
+                    "commission_platform": _src,
                     "commission_amount": _comm,
                     "commission_gst": _comm_gst,
                     "commission_payment_status": "paid",
@@ -1408,14 +1412,17 @@ def get_ota_settlements():
 @bookings_bp.route("/get_mmt_unsettled", methods=["GET"])
 def get_mmt_unsettled():
     """
-    Return all MMT bookings where settlement has NOT been received yet.
-    Queries bookings collection for booking_source=mmt AND settlement_status=pending.
-    Sorted by check-in date descending (most recent first).
+    Return all OTA bookings (MMT + Agoda) where settlement has NOT been
+    received yet. Queries bookings for booking_source in (mmt, agoda) AND
+    settlement_status=pending. Sorted by check-in date descending.
+
+    The route name is kept for backwards compatibility with the existing
+    frontend; it now covers every OTA source.
     """
     try:
         docs = (
             bookings_ref
-            .where("booking_source", "==", "mmt")
+            .where("booking_source", "in", ["mmt", "agoda"])
             .where("settlement_status", "==", "pending")
             .stream()
         )
@@ -1423,6 +1430,7 @@ def get_mmt_unsettled():
         for doc in docs:
             b = doc.to_dict()
             b["booking_id"] = doc.id
+            b["platform"] = b.get("booking_source", "")
             unsettled.append(b)
 
         # Sort by check_in_date descending (string sort works for YYYY-MM-DD)
@@ -1430,5 +1438,5 @@ def get_mmt_unsettled():
 
         return jsonify(success=True, unsettled=unsettled)
     except Exception as e:
-        logger.error(f"Error fetching unsettled MMT bookings: {str(e)}")
+        logger.error(f"Error fetching unsettled OTA bookings: {str(e)}")
         return jsonify(success=False, message=f"Error: {str(e)}")

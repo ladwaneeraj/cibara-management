@@ -1119,26 +1119,27 @@
               <button
                 id="fetch-mmt-btn"
                 class="action-btn btn-sm"
-                title="Fetch new MMT / Goibibo bookings from email"
+                title="Fetch new MMT and Agoda bookings from email"
                 style="
                   background: rgba(230, 81, 0, 0.12);
                   color: #e65100;
                   border: 1px solid rgba(230, 81, 0, 0.3);
                 "
               >
-                <i class="fas fa-sync-alt"></i> Fetch from MMT
+                <i class="fas fa-sync-alt"></i> Fetch Bookings
               </button>
               <button
                 id="mmt-settlements-btn"
                 class="action-btn btn-sm"
                 data-perm="settlement.manage"
+                title="MMT and Agoda bank settlements"
                 style="
                   background: rgba(12, 111, 205, 0.12);
                   color: #0c6fcd;
                   border: 1px solid rgba(12, 111, 205, 0.3);
                 "
               >
-                <i class="fas fa-university"></i> MMT Settlements
+                <i class="fas fa-university"></i> OTA Settlements
               </button>
               <button
                 id="new-booking-btn"
@@ -1265,7 +1266,7 @@
           >
             <div class="modal-header">
               <h2 style="color: #0c6fcd">
-                <i class="fas fa-university" style="margin-right: 6px"></i>MMT
+                <i class="fas fa-university" style="margin-right: 6px"></i>OTA
                 Settlements
               </h2>
               <button
@@ -3855,6 +3856,7 @@
               <select class="form-control" id="booking-source" required>
                 <option value="normal">Normal</option>
                 <option value="mmt">MMT (Prepaid)</option>
+                <option value="agoda">Agoda (Prepaid)</option>
                 <option value="booking.com">Booking.com (Pay at Hotel)</option>
               </select>
             </div>

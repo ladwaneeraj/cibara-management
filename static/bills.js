@@ -1039,12 +1039,37 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
                 : `Lock`) +
               `</button>`;
           }
-          html += `<div class="bl-glock-row" style="display:flex;align-items:center;
-                       justify-content:space-between;padding:.5rem .55rem;border-radius:9px;">
-              <div>
-                <div style="font-size:.8rem;font-weight:600;color:#2a2f3a;">${name}</div>${meta}
+          const atts = l.attachments || [];
+          const attList = atts.map((a) => `
+                <div style="display:flex;align-items:center;gap:.4rem;font-size:.67rem;
+                     color:#5b6170;padding:1px 0;">
+                  <i class="fas fa-paperclip" style="font-size:.58rem;color:#9aa0ad;"></i>
+                  <a href="${a.url}" target="_blank" rel="noopener"
+                     style="color:#3b5bdb;text-decoration:none;">${_glockEsc(a.filename)}</a>
+                  <button data-glock-att-del="${a.id}" data-glock-att-period="${l.period}"
+                     title="Remove" style="border:none;background:none;color:#c0392b;
+                     cursor:pointer;font-size:.78rem;line-height:1;">&times;</button>
+                </div>`).join("");
+          const attBlock = `
+              <div class="bl-glock-atts" style="margin-top:.35rem;padding-left:.1rem;">
+                ${attList}
+                <label style="display:inline-flex;align-items:center;gap:.3rem;
+                       font-size:.66rem;color:#3b5bdb;cursor:pointer;margin-top:2px;">
+                  <i class="fas fa-plus" style="font-size:.58rem;"></i>Attach filing report
+                  <input type="file" data-glock-att-upload="${l.period}"
+                     accept=".pdf,.png,.jpg,.jpeg,application/pdf,image/*"
+                     style="display:none;">
+                </label>
+              </div>`;
+          html += `<div class="bl-glock-row" style="display:flex;flex-direction:column;
+                       align-items:stretch;padding:.5rem .55rem;border-radius:9px;">
+              <div style="display:flex;align-items:center;justify-content:space-between;">
+                <div>
+                  <div style="font-size:.8rem;font-weight:600;color:#2a2f3a;">${name}</div>${meta}
+                </div>
+                ${action}
               </div>
-              ${action}
+              ${attBlock}
             </div>`;
         }
       }
@@ -1085,6 +1110,47 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
             });
             const out = await r.json();
             if (!out.success) alert(out.message || "Failed");
+          } catch (err) {
+            alert("Network error: " + err);
+          }
+          refreshGstLockRows(overlay);
+        });
+      });
+
+      body.querySelectorAll("[data-glock-att-upload]").forEach((inp) => {
+        inp.addEventListener("change", async () => {
+          const period = inp.getAttribute("data-glock-att-upload");
+          const file = inp.files && inp.files[0];
+          if (!file) return;
+          const fd = new FormData();
+          fd.append("period", period);
+          fd.append("file", file);
+          inp.disabled = true;
+          try {
+            const r = await apiFetch("/gst_locks/attachments/upload",
+                                     { method: "POST", body: fd });
+            const out = await r.json().catch(() => ({}));
+            if (!out.success) alert(out.message || "Upload failed");
+          } catch (err) {
+            alert("Network error: " + err);
+          }
+          refreshGstLockRows(overlay);
+        });
+      });
+
+      body.querySelectorAll("[data-glock-att-del]").forEach((delBtn) => {
+        delBtn.addEventListener("click", async () => {
+          const id = delBtn.getAttribute("data-glock-att-del");
+          const period = delBtn.getAttribute("data-glock-att-period");
+          if (!confirm("Remove this filing report?")) return;
+          try {
+            const r = await apiFetch("/gst_locks/attachments/delete", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ period, attachment_id: id }),
+            });
+            const out = await r.json().catch(() => ({}));
+            if (!out.success) alert(out.message || "Delete failed");
           } catch (err) {
             alert("Network error: " + err);
           }

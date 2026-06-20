@@ -2152,13 +2152,34 @@ def update_checkin_time():
                 logger.warning(f"update_checkin_time: failed to sync draft "
                                f"stay_id={_abid}: {_e}")
 
+        # ── Re-rank the affected day(s) so the daily serial (#) always
+        #    matches check-in-time order. A time-only edit re-ranks the one
+        #    day; a date change re-ranks BOTH the old and the new day. Covers
+        #    ALL stays that day (active and checked-out), per ops policy.
+        from config import renumber_day_serials
+        _final_serial = None
+        _days = [new_date] + ([old_date] if (date_changed and old_date) else [])
+        for _d in _days:
+            try:
+                _order = renumber_day_serials(_d)
+            except Exception as _re:
+                logger.warning(f"renumber_day_serials({_d}) failed: {_re}")
+                _order = []
+            if _d == new_date and _abid:
+                for _row in _order:
+                    if _row.get("stay_id") == _abid:
+                        _final_serial = _row.get("serial")
+                        break
+        if _final_serial is not None:
+            new_serial = _final_serial
+
         # Same _GET_DATA_CACHE concern as transfer_room — use the
         # monkey-patched invalidator so the /get_data cache is busted too.
         invalidate_rooms_and_totals()
 
         msg = "Check-in time updated successfully."
         if new_serial:
-            msg += f" Serial reassigned to #{new_serial} for {new_date}."
+            msg += f" Serial set to #{new_serial} for {new_date} (day re-ordered by check-in time)."
 
         logger.info(f"Check-in time updated for room {room}: {new_checkin_time}")
         write_log("room.checkin_time_update", target_collection="rooms", target_id=str(room),

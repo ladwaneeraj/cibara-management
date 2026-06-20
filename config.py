@@ -513,6 +513,61 @@ def store_transaction_metadata(room, date, serial_number, transaction_type="chec
 
     threading.Thread(target=_store, daemon=True).start()
 
+
+def renumber_day_serials(date_str):
+    """
+    Re-rank every check-in on `date_str` by check-in time and reassign the
+    daily serial (#) 1..N across ALL stays that day — active AND checked-out.
+    Keeps the register's # column in check-in-time order after a check-in
+    time/date edit. Updates each stay's check-in payment, its
+    transaction_metadata (date_room), the linked bill doc (via stay_id), and
+    the day counter. Best-effort: logs and continues on error.
+
+    Returns a list of {stay_id, room, name, time, serial} in the NEW order,
+    or [] on failure / no check-ins that day.
+    """
+    try:
+        from google.cloud.firestore_v1.base_query import FieldFilter as _FF
+        payments_ref = db.collection("payments")
+        checkins = []
+        for d in payments_ref.where(filter=_FF("date", "==", date_str)).stream():
+            pd = d.to_dict() or {}
+            if pd.get("transaction_type") in ("fresh_checkin", "booking_conversion"):
+                checkins.append((d.id, pd))
+        if not checkins:
+            return []
+        # Chronological by check-in time ("HH:MM"); stable tie-break on the
+        # previous serial so equal times keep their relative order.
+        checkins.sort(key=lambda it: ((it[1].get("time") or "99:99"),
+                                      (it[1].get("serial_number") or 9999)))
+        now_str = datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S")
+        order = []
+        batch = db.batch()
+        writes = 0
+        for idx, (pid, pd) in enumerate(checkins, start=1):
+            room = str(pd.get("room") or "")
+            sid = pd.get("stay_id")
+            batch.update(payments_ref.document(pid), {"serial_number": idx})
+            batch.set(metadata_ref.document(f"{date_str}_{room}"),
+                      {"serial_number": idx, "transaction_type": "renumber",
+                       "timestamp": now_str}, merge=True)
+            if sid:
+                batch.set(bills_ref.document(sid), {"serial_number": idx}, merge=True)
+            writes += 3
+            order.append({"stay_id": sid, "room": room, "name": pd.get("name"),
+                          "time": pd.get("time"), "serial": idx})
+            if writes >= 400:
+                batch.commit(); batch = db.batch(); writes = 0
+        # Day counter = N so the next check-in continues the sequence.
+        batch.set(counters_ref.document(date_str), {"count": len(checkins)}, merge=True)
+        batch.commit()
+        logger.info(f"renumber_day_serials({date_str}): re-ranked {len(checkins)} check-ins")
+        return order
+    except Exception as e:
+        logger.error(f"renumber_day_serials({date_str}) failed: {e}", exc_info=True)
+        return []
+
+
 def cleanup_old_counters():
     """Cleanup old counters in background"""
     try:
@@ -571,10 +626,41 @@ def initialize_data():
             logger.info("Creating default room structure in background...")
             threading.Thread(target=create_default_structure, daemon=True).start()
 
+        # One-time auto-backfill of customers' `last_stay_amount` so the
+        # check-in "last paid" column is never blank for guests who predate
+        # the field or whose stay skipped the checkout stamp. Guarded by a
+        # sentinel so it runs ONCE per project, off the request path.
+        threading.Thread(target=_auto_backfill_last_stay, daemon=True).start()
+
         return True
     except Exception as e:
         logger.error(f"Error initializing Firebase data: {str(e)}")
         return False
+
+
+def _auto_backfill_last_stay():
+    """
+    Run customer_service.backfill_last_stay_amounts() exactly once, guarded by
+    a sentinel doc (settings/app_meta.last_stay_backfill_version). Idempotent:
+    the backfill itself skips already-stamped customers, and any failure is
+    logged without affecting startup. Bump SENTINEL_VERSION to force a re-run
+    after changing the backfill logic.
+    """
+    SENTINEL_VERSION = 1
+    try:
+        meta_ref = settings_ref.document('app_meta')
+        meta = (meta_ref.get().to_dict() or {})
+        if int(meta.get('last_stay_backfill_version', 0)) >= SENTINEL_VERSION:
+            return  # already done for this version
+        result = customer_service.backfill_last_stay_amounts()
+        meta_ref.set({
+            'last_stay_backfill_version': SENTINEL_VERSION,
+            'last_stay_backfill_at': datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S"),
+            'last_stay_backfill_result': result,
+        }, merge=True)
+        logger.info(f"[last_stay backfill] auto-run complete: {result}")
+    except Exception as e:
+        logger.error(f"[last_stay backfill] auto-run failed: {e}")
 
 def create_default_structure():
     """Create default room structure in background"""

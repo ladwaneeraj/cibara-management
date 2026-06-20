@@ -1693,6 +1693,36 @@
     const area = dom("reg-bill-print-area");
     if (!area || !_regOpenBillData) return;
     area.innerHTML = buildBillHTML(_regOpenBillData);
+    _syncGenInvoiceBtn();
+  }
+
+  // Show the admin "Generate Invoice" button only when this stay needs it:
+  // checked out, finalized (has a CC/ number), missing its PDF, and within
+  // 5 days of checkout. The server enforces the same rules; this is just UI.
+  function _syncGenInvoiceBtn() {
+    const btn = dom("reg-bill-geninvoice");
+    if (!btn) return;
+    const b = _regOpenBillData || {};
+    const _auth = window.CibaraAuth;
+    const isAdmin = !!(_auth && _auth.isAdmin && _auth.isAdmin());
+    const billNo = (b.bill_number || "").trim();
+    const hasNumber = billNo && billNo !== "-";
+    const hasPdf = !!b.pdf_url;
+    const completed = b.status === "completed" || b.status === "pending_settlement";
+    let recent = false, sameMonth = false;
+    const coDate = (b.checkout_time || "").slice(0, 10);
+    if (coDate) {
+      const d = new Date(coDate + "T00:00:00");
+      if (!isNaN(d.getTime())) {
+        const ageDays = Math.floor((Date.now() - d.getTime()) / 86400000);
+        recent = ageDays <= 7;
+      }
+      const _nm = new Date();
+      const _nymStr = _nm.getFullYear() + "-" + String(_nm.getMonth() + 1).padStart(2, "0");
+      sameMonth = (b.checkout_time || "").slice(0, 7) === _nymStr;
+    }
+    btn.style.display =
+      (isAdmin && completed && (!hasNumber || !hasPdf) && recent && sameMonth) ? "" : "none";
   }
 
   // Show the toggle only when the open bill has a folio that can actually be
@@ -1750,6 +1780,102 @@
   // NOT touch the modal markup or buildBillHTML here: user wants the
   // register modal to be the single source of truth for bill rendering.
   window.openRegBill = openRegBill;
+
+  // ── Generate-Invoice confirmation popup ───────────────────────────────────
+  function _genInvEsc(s) {
+    return String(s == null ? "" : s).replace(/[&<>"]/g, (c) =>
+      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  }
+  function _genInvOverlay() {
+    let ov = document.getElementById("reg-geninv-overlay");
+    if (ov) return ov;
+    ov = document.createElement("div");
+    ov.id = "reg-geninv-overlay";
+    ov.style.cssText =
+      "position:fixed;inset:0;background:rgba(15,23,42,.55);display:none;" +
+      "align-items:center;justify-content:center;z-index:10050;";
+    ov.innerHTML =
+      '<div style="background:#fff;border-radius:14px;max-width:430px;width:92%;' +
+      'box-shadow:0 20px 60px rgba(0,0,0,.28);overflow:hidden;">' +
+        '<div style="padding:1.05rem 1.25rem;border-bottom:1px solid #eef0f4;' +
+        'display:flex;align-items:center;gap:.55rem;">' +
+          '<i class="fas fa-file-invoice" style="color:#4f46e5;"></i>' +
+          '<h3 style="margin:0;font-size:1rem;font-weight:700;color:#1e293b;">Generate GST Invoice</h3>' +
+        '</div>' +
+        '<div id="reg-geninv-body" style="padding:1.1rem 1.25rem;font-size:.85rem;color:#334155;"></div>' +
+        '<div id="reg-geninv-foot" style="padding:.85rem 1.25rem;border-top:1px solid #eef0f4;' +
+        'display:flex;justify-content:flex-end;gap:.5rem;"></div>' +
+      '</div>';
+    document.body.appendChild(ov);
+    ov.addEventListener("click", (ev) => { if (ev.target === ov) ov.style.display = "none"; });
+    return ov;
+  }
+  function _openGenInvoiceModal(entry) {
+    const ov = _genInvOverlay();
+    const body = ov.querySelector("#reg-geninv-body");
+    const foot = ov.querySelector("#reg-geninv-foot");
+    body.innerHTML =
+      '<p style="margin:0 0 .8rem;">A new sequential GST invoice number will be ' +
+      'created for this checkout and a PDF generated. This is recorded in the audit log.</p>' +
+      '<div style="background:#f8fafc;border:1px solid #eef0f4;border-radius:10px;' +
+      'padding:.7rem .85rem;line-height:1.75;">' +
+        '<div><strong>Guest:</strong> ' + _genInvEsc(entry.guest_name || "-") + '</div>' +
+        '<div><strong>Room:</strong> ' + _genInvEsc(entry.room || "-") + '</div>' +
+        '<div><strong>Check-out:</strong> ' + _genInvEsc(entry.checkout_time ? fmtDT(entry.checkout_time) : "-") + '</div>' +
+        '<div><strong>Total:</strong> \u20B9' + inr(entry.total_amount) + '</div>' +
+      '</div>';
+    foot.innerHTML =
+      '<button id="reg-geninv-cancel" class="action-btn btn-secondary">Cancel</button>' +
+      '<button id="reg-geninv-confirm" class="action-btn btn-primary">' +
+      '<i class="fas fa-file-invoice"></i> Generate Invoice</button>';
+    ov.style.display = "flex";
+    ov.querySelector("#reg-geninv-cancel").onclick = () => { ov.style.display = "none"; };
+    ov.querySelector("#reg-geninv-confirm").onclick = async () => {
+      const _auth = window.CibaraAuth;
+      if (!(_auth && _auth.isAdmin && _auth.isAdmin())) {
+        _genInvResult(false, "Only admin users can generate invoices."); return;
+      }
+      const cBtn = ov.querySelector("#reg-geninv-confirm");
+      cBtn.disabled = true;
+      cBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Generating\u2026';
+      try {
+        const res = await apiFetch("/generate_invoice/" + entry.id, {
+          method: "POST", headers: { "Content-Type": "application/json" }, body: "{}",
+        });
+        const data = await res.json().catch(() => ({}));
+        if (res.ok && data && data.success) {
+          _genInvResult(true, data.message || "Invoice generated.", data.bill_number);
+        } else {
+          _genInvResult(false, (data && data.message) || ("Failed (HTTP " + res.status + ")."));
+        }
+      } catch (err) {
+        console.error("[Register] generate invoice failed:", err);
+        _genInvResult(false, "Network error during invoice generation.");
+      }
+    };
+  }
+  function _genInvResult(ok, msg, billNo) {
+    const ov = document.getElementById("reg-geninv-overlay");
+    if (!ov) return;
+    const body = ov.querySelector("#reg-geninv-body");
+    const foot = ov.querySelector("#reg-geninv-foot");
+    body.innerHTML = ok
+      ? '<div style="text-align:center;padding:.4rem 0;">' +
+          '<i class="fas fa-check-circle" style="color:#16a34a;font-size:2.1rem;"></i>' +
+          '<p style="margin:.6rem 0 0;font-weight:600;">' + _genInvEsc(msg) + '</p>' +
+          (billNo ? '<p style="margin:.3rem 0 0;color:#475569;">Bill No: <strong>' +
+                    _genInvEsc(billNo) + '</strong></p>' : '') +
+        '</div>'
+      : '<div style="text-align:center;padding:.4rem 0;">' +
+          '<i class="fas fa-times-circle" style="color:#dc2626;font-size:2.1rem;"></i>' +
+          '<p style="margin:.6rem 0 0;font-weight:600;">' + _genInvEsc(msg) + '</p>' +
+        '</div>';
+    foot.innerHTML = '<button id="reg-geninv-done" class="action-btn btn-primary">Done</button>';
+    ov.querySelector("#reg-geninv-done").onclick = () => {
+      ov.style.display = "none";
+      if (ok) loadData(true);
+    };
+  }
 
   // ── Build tab HTML ────────────────────────────────────────────────────────────
   function buildHTML() {
@@ -1987,6 +2113,14 @@
               title="Re-read payments and refresh the bill totals">
         <i class="fas fa-sync-alt"></i> Recalculate
       </button>
+      <!-- Generate Invoice: admin-only. Shown (via _syncGenInvoiceBtn) only
+           for a checked-out stay whose bill is finalized but has no PDF yet,
+           and only within 5 days of checkout. POSTs /generate_invoice. -->
+      <button class="action-btn btn-secondary" id="reg-bill-geninvoice"
+              data-roles="admin" style="display:none;"
+              title="Generate the GST invoice PDF for this checked-out stay">
+        <i class="fas fa-file-invoice"></i> Generate Invoice
+      </button>
       <button class="action-btn btn-primary" id="reg-bill-print-btn">
         <i class="fas fa-print"></i> Print
       </button>
@@ -2107,6 +2241,17 @@
         if (billLink) {
           e.stopPropagation();
           openRegBill(billLink.dataset.id);
+          return;
+        }
+
+        // Generate Invoice (admin) — open a confirmation popup, then mint.
+        const genInvRowBtn = e.target.closest(".reg-geninv-btn");
+        if (genInvRowBtn) {
+          e.stopPropagation();
+          const gid = genInvRowBtn.dataset.id;
+          if (!gid) return;
+          const fullEntry = state.filteredEntries.find((en) => en.id === gid) || { id: gid };
+          _openGenInvoiceModal(fullEntry);
           return;
         }
 
@@ -2252,6 +2397,43 @@
         } finally {
           regBillRecalc.disabled = false;
           regBillRecalc.innerHTML = _orig;
+        }
+      });
+    }
+
+    // ── Generate Invoice (admin-only) ─────────────────────────────────
+    const regBillGenInv = dom("reg-bill-geninvoice");
+    if (regBillGenInv) {
+      regBillGenInv.addEventListener("click", async function () {
+        if (!_regOpenBillId) return;
+        const _auth = window.CibaraAuth;
+        if (!(_auth && _auth.isAdmin && _auth.isAdmin())) {
+          alert("Only admin users can generate invoices.");
+          return;
+        }
+        const _orig = regBillGenInv.innerHTML;
+        regBillGenInv.disabled = true;
+        regBillGenInv.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Generating\u2026';
+        try {
+          const res = await apiFetch("/generate_invoice/" + _regOpenBillId, {
+            method:  "POST",
+            headers: { "Content-Type": "application/json" },
+            body:    "{}",
+          });
+          const data = await res.json().catch(() => ({}));
+          if (res.ok && data && data.success) {
+            alert(data.message || "Invoice generated.");
+            await openRegBill(_regOpenBillId);
+          } else {
+            alert("Error: " + ((data && data.message) ||
+                  ("Generate failed (HTTP " + res.status + ").")));
+          }
+        } catch (err) {
+          console.error("[Register] generate invoice failed:", err);
+          alert("Network error during invoice generation.");
+        } finally {
+          regBillGenInv.disabled = false;
+          regBillGenInv.innerHTML = _orig;
         }
       });
     }
@@ -2556,9 +2738,33 @@
     const stCls = e.status === "active" ? "status-active" : "status-completed";
     // Make bill number clickable for completed bills with a real Firestore doc id
     const isRealBill = billNo !== "-" && e.id && !String(e.id).startsWith("active_");
-    const billNoCell = isRealBill
-      ? `<button class="reg-bill-link" data-id="${e.id}" title="View Bill">${billNo}</button>`
-      : `<span style="font-size:.73rem;white-space:nowrap;">${billNo}</span>`;
+    // Eligibility to MINT a GST invoice: completed stay with a real bill doc
+    // but no number yet (Bill No "-"), checked out within the last 5 days.
+    let _coRecent = false, _coSameMonth = false;
+    const _coDate = (e.checkout_time || "").slice(0, 10);
+    if (_coDate) {
+      const _d = new Date(_coDate + "T00:00:00");
+      if (!isNaN(_d.getTime())) _coRecent = Math.floor((Date.now() - _d.getTime()) / 86400000) <= 7;
+      const _nm = new Date();
+      const _nymStr = _nm.getFullYear() + "-" + String(_nm.getMonth() + 1).padStart(2, "0");
+      _coSameMonth = (e.checkout_time || "").slice(0, 7) === _nymStr;
+    }
+    // Eligible only within 7 days AND in the current month (no inter-month).
+    const _needsInvoice = e.status === "completed" && billNo === "-" &&
+      e.id && !String(e.id).startsWith("active_") && _coRecent && _coSameMonth;
+    let billNoCell;
+    if (isRealBill) {
+      billNoCell = `<button class="reg-bill-link" data-id="${e.id}" title="View Bill">${billNo}</button>`;
+    } else if (_needsInvoice) {
+      billNoCell = `<button class="reg-geninv-btn" data-roles="admin" data-id="${e.id}"
+            title="Generate GST invoice for this checkout"
+            style="cursor:pointer;border:1px solid #c7d2fe;background:#eef2ff;color:#4f46e5;
+                   border-radius:6px;padding:3px 9px;font-size:.69rem;font-weight:600;
+                   white-space:nowrap;display:inline-flex;align-items:center;gap:.3rem;">
+            <i class="fas fa-file-invoice"></i> Generate</button>`;
+    } else {
+      billNoCell = `<span style="font-size:.73rem;white-space:nowrap;">${billNo}</span>`;
+    }
     const guestCount = e.guest_count || (e.guest && e.guest.guests) || 1;
     // Persons count is a dedicated column (header: "Persons"). Keeping
     // it separate means the Guest Name column doesn't reflow as a pill

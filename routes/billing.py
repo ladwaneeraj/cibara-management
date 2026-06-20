@@ -688,8 +688,16 @@ def get_register_data():
         except Exception as _bf_err:
             logger.warning(f"[REGISTER] serial backfill failed: {_bf_err}")
 
-        # ── 4. Sort: date DESC, serial ASC within each day ──
-        register_entries.sort(key=lambda e: e.get("serial_number") or 999999)
+        # ── 4. Sort: days newest-first; WITHIN each day by check-in time
+        #         ascending (earliest check-in first). Two stable passes -
+        #         the secondary (time ASC) is applied first, then the primary
+        #         (date DESC) preserves that order within each day.
+        #         The receipt `serial_number` shown in the # column is left
+        #         untouched: it is intentionally NOT the sort key (GST/CA
+        #         reconciliation value), only the row ORDER follows check-in time.
+        register_entries.sort(
+            key=lambda e: (e.get("checkin_time") or "9999-12-31 23:59")
+        )
         register_entries.sort(
             key=lambda e: (e.get("checkin_time") or "0000-00-00").split(" ")[0],
             reverse=True,
@@ -3653,6 +3661,179 @@ def gst_locks_set():
         return jsonify(success=True, lock=doc)
     except Exception as e:
         logger.error(f"gst_locks_set error: {e}", exc_info=True)
+        return jsonify(success=False, message=f"Error: {e}"), 500
+
+
+@billing_bp.route("/gst_locks/attachments/upload", methods=["POST"])
+@requires_permission("gst.lock.manage")
+def gst_lock_attach_upload():
+    """
+    Attach a GST filing report (GSTR-1/3B summary, ARN receipt; PDF or image)
+    to a month. Multipart: period=YYYY-MM, file=<upload>. Multiple files per
+    month are allowed, and attaching is permitted whether or not the month is
+    locked (it is evidence, not a financial figure).
+    """
+    try:
+        period = (request.form.get("period") or "").strip()
+        norm = gst_lock_service.normalize_period(period)
+        if not norm:
+            return jsonify(success=False, message="period must be YYYY-MM"), 400
+        if "file" not in request.files:
+            return jsonify(success=False, message="No file provided"), 400
+        f = request.files["file"]
+        if not f or not f.filename:
+            return jsonify(success=False, message="Empty file"), 400
+        data = f.read()
+        if not data:
+            return jsonify(success=False, message="Empty file"), 400
+        if len(data) > 15 * 1024 * 1024:
+            return jsonify(success=False, message="File too large (max 15 MB)"), 400
+        ctype = f.mimetype or "application/octet-stream"
+        url = pdf_service.upload_filing_attachment(norm, f.filename, data, ctype)
+        if not url:
+            return jsonify(success=False, message="Upload to storage failed"), 500
+        actor = (_safe_user() or {}).get("userId") or "unknown"
+        att = gst_lock_service.add_attachment(norm, {
+            "filename": f.filename, "url": url,
+            "content_type": ctype, "size": len(data), "uploaded_by": actor,
+        })
+        write_log("gst.month.attach", target_collection="gst_month_locks",
+                  target_id=norm, metadata={"filename": f.filename})
+        return jsonify(success=True, attachment=att)
+    except Exception as e:
+        logger.error(f"gst_lock_attach_upload error: {e}", exc_info=True)
+        return jsonify(success=False, message=f"Error: {e}"), 500
+
+
+@billing_bp.route("/gst_locks/attachments/delete", methods=["POST"])
+@requires_permission("gst.lock.manage")
+def gst_lock_attach_delete():
+    """Remove a filing-report attachment. Body: {period, attachment_id}."""
+    try:
+        data = request.get_json(silent=True) or {}
+        period = (data.get("period") or "").strip()
+        att_id = (data.get("attachment_id") or "").strip()
+        norm = gst_lock_service.normalize_period(period)
+        if not norm or not att_id:
+            return jsonify(success=False, message="period and attachment_id required"), 400
+        if not gst_lock_service.remove_attachment(norm, att_id):
+            return jsonify(success=False, message="Attachment not found"), 404
+        write_log("gst.month.attach.delete", target_collection="gst_month_locks",
+                  target_id=norm, metadata={"attachment_id": att_id})
+        return jsonify(success=True)
+    except Exception as e:
+        logger.error(f"gst_lock_attach_delete error: {e}", exc_info=True)
+        return jsonify(success=False, message=f"Error: {e}"), 500
+
+
+@billing_bp.route("/generate_invoice/<entry_id>", methods=["POST"])
+@requires_permission("bill.gst.edit")
+def generate_invoice(entry_id):
+    """
+    Admin: ensure a GST invoice PDF exists for a CHECKED-OUT stay whose bill is
+    finalized (has a CC/ number) but is missing its PDF — re-renders it. The
+    action is:
+      * idempotent — if a PDF already exists it returns the existing URL;
+      * lock-aware — refuses if the stay's GST month is locked (GSTR-1 filed);
+      * time-boxed — only stays checked out within the last 5 days qualify;
+      * non-fabricating — a stay with NO finalized bill number (checked out
+        without billing) is NOT minted here (that needs a re-checkout within
+        the revert window); a clear message is returned instead.
+    """
+    try:
+        snap = bills_ref.document(entry_id).get()
+        if not snap.exists:
+            return jsonify(success=False,
+                           message="No bill on record for this stay."), 404
+        bill = snap.to_dict() or {}
+
+        checkout_time = (bill.get("checkout_time") or "").strip()
+        status = (bill.get("status") or "").strip()
+        if not checkout_time or status not in ("completed", "pending_settlement"):
+            return jsonify(success=False,
+                           message="This stay is not checked out yet."), 400
+
+        # GST month lock — never (re)write a filed month.
+        locked = _month_lock_response(bill, "generating the invoice")
+        if locked:
+            return locked
+
+        # 7-day window (admin policy): only recent checkouts qualify.
+        co_date = checkout_time[:10]
+        try:
+            age_days = (datetime.now(IST).date()
+                        - datetime.strptime(co_date, "%Y-%m-%d").date()).days
+        except ValueError:
+            age_days = None
+        if age_days is not None and age_days > 7:
+            return jsonify(success=False, message=(
+                f"Checkout was {age_days} days ago — invoice generation is only "
+                f"available within 7 days of checkout."
+            )), 400
+
+        # No inter-month generation: the invoice must belong to the CURRENT
+        # calendar month. Never mint an invoice number into a prior month
+        # (its GSTR-1 figures must not change), even if within 7 days and
+        # not yet locked.
+        if checkout_time[:7] != datetime.now(IST).strftime("%Y-%m"):
+            return jsonify(success=False, message=(
+                "Invoice can only be generated in the same month as the "
+                "checkout. This checkout falls in a previous month, so a new "
+                "invoice number cannot be created for it."
+            )), 400
+
+        bill_number = (bill.get("bill_number") or "").strip()
+        has_number = bool(bill_number) and bill_number != "-"
+        has_pdf = bool(bill.get("pdf_url"))
+
+        if not has_number:
+            # No invoice number yet (same-day cash / OTA checkout). Mint one
+            # now — atomically and gap-free — into the bill's OWN checkout
+            # month. The month-lock and 5-day checks above already gate this,
+            # so we never mint into a filed or stale period.
+            try:
+                co_dt = datetime.strptime(checkout_time[:16], "%Y-%m-%d %H:%M")
+            except ValueError:
+                try:
+                    co_dt = datetime.strptime(co_date, "%Y-%m-%d")
+                except ValueError:
+                    return jsonify(success=False,
+                                   message="This stay has an invalid checkout time."), 400
+            from config import allocate_and_finalize_bill
+            try:
+                number, _newly = allocate_and_finalize_bill(
+                    entry_id, bill, co_dt, is_new_doc=False, needs_number=True)
+            except Exception as me:
+                logger.error(f"generate_invoice mint failed for {entry_id}: {me}",
+                             exc_info=True)
+                return jsonify(success=False,
+                               message=f"Could not allocate an invoice number: {me}"), 500
+            fresh = (bills_ref.document(entry_id).get().to_dict() or {})
+            auto_generate_bill_pdf(entry_id, fresh)
+            fresh = (bills_ref.document(entry_id).get().to_dict() or {})
+            write_log("bill.invoice.generate", target_collection="bills",
+                      target_id=entry_id,
+                      metadata={"bill_number": number, "minted": True})
+            return jsonify(success=True, bill_number=number,
+                           pdf_url=fresh.get("pdf_url", ""),
+                           message=f"Invoice {number} generated.")
+
+        if has_pdf:
+            return jsonify(success=True, already=True, pdf_url=bill.get("pdf_url"),
+                           message="Invoice already generated.")
+
+        # Bill is finalized but the PDF is missing — render it now (synchronous
+        # so the caller gets the URL back). auto_generate_bill_pdf re-reads the
+        # bill and skips if a PDF appeared in the meantime.
+        auto_generate_bill_pdf(entry_id, bill)
+        fresh = (bills_ref.document(entry_id).get().to_dict() or {})
+        write_log("bill.invoice.generate", target_collection="bills",
+                  target_id=entry_id, metadata={"bill_number": bill_number})
+        return jsonify(success=True, pdf_url=fresh.get("pdf_url", ""),
+                       message="Invoice generated." if fresh.get("pdf_url")
+                       else "Invoice generation started; refresh shortly.")
+    except Exception as e:
+        logger.error(f"generate_invoice error: {e}", exc_info=True)
         return jsonify(success=False, message=f"Error: {e}"), 500
 
 

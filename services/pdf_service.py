@@ -100,6 +100,30 @@ def upload_bill_pdf(bill_id: str, invoice_no: str, pdf_bytes: bytes) -> dict:
         return {"url": "", "version": 0}
 
 
+def upload_filing_attachment(period: str, filename: str, data: bytes,
+                             content_type: str = "application/octet-stream") -> str:
+    """
+    Upload a GST filing-report file (GSTR-1/3B summary, ARN receipt, etc.) to
+    Firebase Storage under gst_filings/{period}/. Returns a token download URL,
+    or "" on failure. Does NOT touch Firestore — the caller records the URL on
+    the gst_month_locks doc via gst_lock_service.add_attachment().
+    """
+    try:
+        safe_period = (period or "unknown").replace("/", "_").replace(" ", "_")
+        safe_name = "".join(
+            c for c in (filename or "file") if c.isalnum() or c in "._-"
+        ) or "file"
+        blob_path = f"gst_filings/{safe_period}/{_uuid.uuid4().hex}_{safe_name}"
+        return _store_bytes(blob_path, data, content_type or "application/octet-stream")
+    except Exception as e:
+        logger.error(
+            f"PdfService: upload_filing_attachment failed for {period}: "
+            f"{type(e).__name__}: {e}",
+            exc_info=True,
+        )
+        return ""
+
+
 # ---------------------------------------------------------------------------
 # INTERNAL HELPERS
 # ---------------------------------------------------------------------------
@@ -140,6 +164,42 @@ def _store_pdf(blob_path: str, pdf_bytes: bytes) -> str:
     except Exception as e:
         logger.error(
             f"PdfService: Storage upload FAILED for {blob_path} — "
+            f"{type(e).__name__}: {e}",
+            exc_info=True,
+        )
+        return ""
+
+
+def _store_bytes(blob_path: str, data: bytes, content_type: str) -> str:
+    """
+    Generic Storage upload (any content type). Mirrors _store_pdf() but lets the
+    caller set the MIME type — used for GST filing-report attachments which may
+    be PDF or image. Returns a token download URL, or "" on failure.
+    """
+    try:
+        from firebase_admin import storage as _fb_storage
+
+        bucket = _fb_storage.bucket()
+        if not bucket or "your-project-id" in (bucket.name or ""):
+            logger.error("PdfService: Firebase Storage not configured")
+            return ""
+
+        blob = bucket.blob(blob_path)
+        download_token = str(_uuid.uuid4())
+        blob.metadata = {"firebaseStorageDownloadTokens": download_token}
+        blob.upload_from_string(data, content_type=content_type or "application/octet-stream")
+
+        encoded_path = urllib.parse.quote(blob_path, safe="")
+        url = (
+            f"https://firebasestorage.googleapis.com/v0/b/"
+            f"{bucket.name}/o/{encoded_path}"
+            f"?alt=media&token={download_token}"
+        )
+        logger.info(f"PdfService: Storage upload OK -> {blob_path}")
+        return url
+    except Exception as e:
+        logger.error(
+            f"PdfService: _store_bytes FAILED for {blob_path} — "
             f"{type(e).__name__}: {e}",
             exc_info=True,
         )

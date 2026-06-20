@@ -89,6 +89,20 @@ def _upsert(mobile: str, guest_data: dict, amount_paid: int):
                 "total_stays": (existing.get("total_stays", 0) + 1),
                 "total_spent": (existing.get("total_spent", 0) + amount_paid),
             }
+            # Provisional "last paid" stamp at check-in. total_spent and
+            # last_stay_amount used to drift because total_spent is bumped
+            # HERE (every stay) while last_stay_amount was only set at
+            # checkout (rooms.py -> update_last_stay) - so any stay that
+            # skipped that path left the dropdown's "last paid" blank.
+            # We stamp the check-in payment now as a floor; checkout
+            # overwrites it with the accurate stay total. Guarded by >0 so a
+            # zero-paid (settle-later) check-in never WIPES a prior good value.
+            try:
+                _amt = round(float(amount_paid or 0))
+            except (TypeError, ValueError):
+                _amt = 0
+            if _amt > 0:
+                updates["last_stay_amount"] = _amt
             # Fill in blanks if we have better data now
             if name and not existing.get("name"):
                 updates["name"] = name
@@ -110,7 +124,11 @@ def _upsert(mobile: str, guest_data: dict, amount_paid: int):
             doc_ref.update(updates)
         else:
             # New customer
-            doc_ref.set({
+            try:
+                _amt = round(float(amount_paid or 0))
+            except (TypeError, ValueError):
+                _amt = 0
+            new_doc = {
                 "name": name,
                 "mobile": mobile,
                 "id_type": id_type,
@@ -121,7 +139,12 @@ def _upsert(mobile: str, guest_data: dict, amount_paid: int):
                 "total_spent": amount_paid,
                 "first_visit": now_str,
                 "last_stay_date": now_str,
-            })
+            }
+            # Provisional "last paid" (see existing-customer branch above);
+            # refined to the real stay total at checkout.
+            if _amt > 0:
+                new_doc["last_stay_amount"] = _amt
+            doc_ref.set(new_doc)
 
         logger.info(f"CustomerService: upserted customer {mobile}")
     except Exception as e:
@@ -395,7 +418,24 @@ def backfill_last_stay_amounts() -> dict:
                 except Exception as we:
                     logger.warning(f"backfill stamp failed for {doc.id}: {we}")
             else:
-                skipped += 1
+                # No resolvable bill (e.g. same-day cash with no bill doc, or
+                # legacy stay). For a SINGLE-stay guest, lifetime total_spent
+                # IS the last-stay amount - stamp it exactly. (For multi-stay
+                # guests we don't guess from the lifetime average; those resolve
+                # via the bill query above or get refined on their next stay.)
+                try:
+                    spent  = round(float(d.get("total_spent") or 0))
+                    stays  = int(d.get("total_stays") or 0)
+                    if spent > 0 and stays <= 1:
+                        _customers_ref.document(doc.id).set({
+                            "last_stay_amount": spent,
+                        }, merge=True)
+                        stamped += 1
+                    else:
+                        skipped += 1
+                except Exception as we:
+                    logger.warning(f"backfill fallback failed for {doc.id}: {we}")
+                    skipped += 1
     except Exception as e:
         logger.error(f"backfill_last_stay_amounts failed after {scanned}: {e}")
     logger.info(f"backfill_last_stay_amounts: scanned={scanned} stamped={stamped} skipped={skipped}")

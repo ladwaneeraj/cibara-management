@@ -155,11 +155,61 @@ def set_lock(period: str, locked: bool, actor: str, note: str = "") -> dict:
         "locked_at": _now_ist(),
         "note":      str(note or ""),
         "history":   history[-50:],  # bounded trail
+        # Preserve filing-report attachments across lock/unlock — set() would
+        # otherwise overwrite them.
+        "attachments": list(existing.get("attachments") or []),
     }
     ref.set(doc)
     logger.info(f"gst_lock: {norm} {'LOCKED' if locked else 'UNLOCKED'} "
                 f"by {actor} ({note!r})")
     return {"period": norm, **doc}
+
+
+def add_attachment(period: str, attachment: dict) -> dict:
+    """
+    Append a GST filing-report attachment to a month's lock doc. The doc is
+    created/merged if absent — attaching evidence does not require the month to
+    be locked first. Returns the stored attachment (with generated id + time).
+    """
+    import uuid as _uuid
+    norm = normalize_period(period)
+    if norm is None:
+        raise ValueError(f"period must be YYYY-MM, got {period!r}")
+    att = {
+        "id":           str(_uuid.uuid4()),
+        "filename":     str(attachment.get("filename") or "file"),
+        "url":          str(attachment.get("url") or ""),
+        "content_type": str(attachment.get("content_type") or ""),
+        "size":         int(attachment.get("size") or 0),
+        "uploaded_by":  str(attachment.get("uploaded_by") or "unknown"),
+        "uploaded_at":  _now_ist(),
+    }
+    ref = _col().document(norm)
+    snap = ref.get()
+    existing = snap.to_dict() if snap.exists else {}
+    atts = list(existing.get("attachments") or [])
+    atts.append(att)
+    ref.set({"attachments": atts}, merge=True)
+    logger.info(f"gst_lock: {norm} filing attachment added ({att['filename']!r})")
+    return att
+
+
+def remove_attachment(period: str, attachment_id: str) -> bool:
+    """Remove a filing-report attachment by id. Returns True if removed."""
+    norm = normalize_period(period)
+    if norm is None:
+        return False
+    ref = _col().document(norm)
+    snap = ref.get()
+    if not snap.exists:
+        return False
+    atts = list((snap.to_dict() or {}).get("attachments") or [])
+    kept = [a for a in atts if a.get("id") != attachment_id]
+    if len(kept) == len(atts):
+        return False
+    ref.set({"attachments": kept}, merge=True)
+    logger.info(f"gst_lock: {norm} filing attachment removed ({attachment_id})")
+    return True
 
 
 def list_locks(months_back: int = 18) -> list[dict]:
@@ -191,11 +241,12 @@ def list_locks(months_back: int = 18) -> list[dict]:
     for p in periods:
         d = docs.get(p, {})
         out.append({
-            "period":     p,
-            "locked":     bool(d.get("locked")),
-            "locked_by":  d.get("locked_by"),
-            "locked_at":  d.get("locked_at"),
-            "note":       d.get("note") or "",
-            "is_current": p == current,
+            "period":      p,
+            "locked":      bool(d.get("locked")),
+            "locked_by":   d.get("locked_by"),
+            "locked_at":   d.get("locked_at"),
+            "note":        d.get("note") or "",
+            "attachments": d.get("attachments") or [],
+            "is_current":  p == current,
         })
     return out

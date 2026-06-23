@@ -3631,6 +3631,26 @@ def update_stay_payment():
                 args=(_agg_sid,), daemon=True,
             ).start()
 
+        # If the CHECK-IN payment's date changed, the stay moved to a different
+        # day — re-rank BOTH the old and new day's serials from 1 so the #
+        # column stays a clean check-in-time sequence (and the day the stay
+        # left no longer has a gap at the top).
+        try:
+            _is_checkin_pay = (old_data.get("transaction_type") in
+                               ("fresh_checkin", "booking_conversion"))
+            _old_d = (old_data.get("date") or "")[:10]
+            _new_d = (new_date or "")[:10]
+            if _is_checkin_pay and _new_d and _new_d != _old_d:
+                from config import renumber_day_serials
+                for _d in {_old_d, _new_d}:
+                    if _d:
+                        try:
+                            renumber_day_serials(_d)
+                        except Exception as _re:
+                            logger.warning(f"renumber_day_serials({_d}) failed: {_re}")
+        except Exception as _e:
+            logger.warning(f"update_stay_payment renumber hook failed: {_e}")
+
         logger.info(f"update_stay_payment: id={payment_id} "
                     f"changes={update_fields} old_method={old_method} old_amount={old_amount}")
         write_log("payment.edit", target_collection="payments", target_id=payment_id,

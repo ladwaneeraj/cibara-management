@@ -2706,11 +2706,21 @@
       if (rendered >= cap) break;
       const entries = byDate[dk];
       const label = dk !== "unknown" ? fmtDate(dk) : "Unknown Date";
+      // Dynamic per-day serial (#): always 1..N by check-in time (earliest
+      // = 1), derived live on every render. It needs no stored value and
+      // re-adjusts the instant a check-in time changes — fully dynamic.
+      const _posMap = new Map();
+      entries
+        .slice()
+        .sort((a, b) =>
+          String(a.checkin_time || "9999-12-31 23:59").localeCompare(
+            String(b.checkin_time || "9999-12-31 23:59")))
+        .forEach((en, i) => _posMap.set(en, i + 1));
       html += `<tr class="date-group-header" data-group="${dk}">
         <td colspan="15"><i class="fas fa-chevron-down"></i>${label}&nbsp;<span style="font-weight:400;opacity:.65;">(${entries.length})</span></td>
       </tr>`;
       for (const e of entries.slice(0, cap - rendered)) {
-        html += rowHTML(e, dk);
+        html += rowHTML(e, dk, _posMap.get(e) || 0);
       }
       rendered += Math.min(entries.length, cap - rendered);
     }
@@ -2726,14 +2736,18 @@
       </button></td></tr>`;
   }
 
-  function rowHTML(e, dk) {
+  function rowHTML(e, dk, posSerial) {
     const days = e.days_stayed || calcDays(e.checkin_time, e.checkout_time);
+    // Dynamic per-day position (1..N by check-in time) wins; fall back to the
+    // stored serial only for callers that don't pass one (optimistic insert).
     const serial =
-      e.serial_number !== null &&
-      e.serial_number !== undefined &&
-      e.serial_number !== 0
-        ? e.serial_number
-        : "-";
+      (posSerial && posSerial > 0)
+        ? posSerial
+        : (e.serial_number !== null &&
+           e.serial_number !== undefined &&
+           e.serial_number !== 0
+            ? e.serial_number
+            : "-");
     const billNo = e.status === "completed" ? e.bill_number || "-" : "-";
     const stCls = e.status === "active" ? "status-active" : "status-completed";
     // Make bill number clickable for completed bills with a real Firestore doc id

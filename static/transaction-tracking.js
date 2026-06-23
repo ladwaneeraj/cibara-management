@@ -404,7 +404,46 @@ class TransactionLogManager {
           return sum + (l.amount || 0);
         }, 0);
 
-        logsHTML += `<div class="log-date-header">${dateDisplay}<span class="log-date-total">₹${dayTotal.toLocaleString("en-IN")}</span></div>`;
+        // Per-day cash/UPI split + payment counts for the collapsible header.
+        // Continue (room renewal) and fresh check-in counts EXCLUDE add-ons
+        // (water/service), refunds and expenses, per ops request.
+        let dayCash = 0, dayOnline = 0, freshCount = 0, contCount = 0;
+        logsByDate[date].forEach((l) => {
+          if (l.logType === "cash") dayCash += (l.amount || 0);
+          else if (l.logType === "online") dayOnline += (l.amount || 0);
+          const isService = !!(l.item || l.transaction_type === "service");
+          const isFresh = !!(l.is_fresh_checkin ||
+            l.transaction_type === "fresh_checkin" ||
+            l.transaction_type === "booking_conversion" ||
+            l.is_booking_conversion);
+          const isContinue = !!(l.is_renewal ||
+            l.transaction_type === "renewal_payment");
+          if (l.logType === "refunds" || l.logType === "expenses" ||
+              l.logType === "settlement" || isService) return;
+          if (isFresh) freshCount += 1;
+          else if (isContinue) contCount += 1;
+        });
+        const _inr = (n) => n.toLocaleString("en-IN");
+        const _meta =
+          '<span class="log-date-meta" style="display:inline-flex;gap:.5rem;' +
+          'flex-wrap:wrap;margin-left:.5rem;font-size:.64rem;font-weight:600;">' +
+            '<span style="color:#16a34a;">Cash ₹' + _inr(dayCash) + '</span>' +
+            '<span style="color:#2563eb;">UPI ₹' + _inr(dayOnline) + '</span>' +
+            '<span style="color:#7c3aed;">Fresh ' + freshCount + '</span>' +
+            '<span style="color:#b45309;">Continue ' + contCount + '</span>' +
+          '</span>';
+
+        logsHTML +=
+          '<div class="log-date-header" data-log-date="' + date + '" style="cursor:pointer;">' +
+            '<span style="display:inline-flex;align-items:center;flex-wrap:wrap;">' +
+              '<span class="log-date-caret" style="display:inline-block;width:1em;' +
+              'margin-right:.35rem;">▾</span>' +
+              '<span>' + dateDisplay + '</span>' + _meta +
+            '</span>' +
+            '<span class="log-date-total">₹' + _inr(dayTotal) + '</span>' +
+          '</div>';
+
+        logsHTML += '<div class="log-date-group" data-log-group="' + date + '">';
 
         // Per-day serial numbers, derived fresh from the data on every
         // render: serial-eligible rows are numbered 1..N by ascending
@@ -427,9 +466,29 @@ class TransactionLogManager {
             _serialOf.get(log) || 0,
           );
         });
+
+        logsHTML += '</div>';
       });
 
     transactionLog.innerHTML = logsHTML;
+
+    // Collapsible date groups — bind once on the persistent container so the
+    // handler survives re-renders (innerHTML swaps children, not the node).
+    if (transactionLog && !transactionLog._collapseBound) {
+      transactionLog._collapseBound = true;
+      transactionLog.addEventListener("click", (ev) => {
+        const hdr = ev.target.closest(".log-date-header");
+        if (!hdr || !transactionLog.contains(hdr)) return;
+        const d = hdr.getAttribute("data-log-date");
+        if (!d) return;
+        const grp = transactionLog.querySelector(
+          '.log-date-group[data-log-group="' + d + '"]');
+        const collapsed = hdr.classList.toggle("collapsed");
+        const caret = hdr.querySelector(".log-date-caret");
+        if (caret) caret.textContent = collapsed ? "▸" : "▾";
+        if (grp) grp.style.display = collapsed ? "none" : "";
+      });
+    }
   }
 
   _updateAnalyticsCards(cashLogs, onlineLogs, refundLogs, expenseLogs) {

@@ -54,6 +54,7 @@ def collect_settlement():
         payment_amount = int(data_json.get("payment_amount", 0))
         discount_amount = int(data_json.get("discount_amount", 0))
         discount_reason = data_json.get("discount_reason", "")
+        payment_date_in = (data_json.get("payment_date") or "").strip()
 
         # ── Discount classification (Goal 2 Section 15(3)/Section 34 fork) ──
         # Two valid values:
@@ -80,6 +81,39 @@ def collect_settlement():
             return jsonify(success=False, message="Settlement not found")
 
         settlement = settlement_doc.to_dict()
+
+        # ── Optional backdating of the receipt date (default: today) ──────────
+        # Range: checkout date .. today (no future). A date in a GST-locked
+        # (filed) month is refused. The chosen date is the value date used by
+        # the register/reports; created_at stays "now" for the audit trail.
+        from services import gst_lock_service as _gls
+        _now_dt    = datetime.now(IST)
+        value_date = _now_dt.strftime("%Y-%m-%d")
+        if payment_date_in:
+            try:
+                _vd = datetime.strptime(payment_date_in, "%Y-%m-%d")
+            except ValueError:
+                return jsonify(success=False, message="payment_date must be YYYY-MM-DD"), 400
+            if _vd.date() > _now_dt.date():
+                return jsonify(success=False, message="Receipt date cannot be in the future"), 400
+            _co = (settlement.get("checkout_date") or "")[:10]
+            if _co:
+                try:
+                    if _vd.date() < datetime.strptime(_co, "%Y-%m-%d").date():
+                        return jsonify(success=False,
+                                       message=f"Receipt date cannot be before checkout ({_co})"), 400
+                except ValueError:
+                    pass
+            try:
+                _per = _gls.normalize_period(payment_date_in)
+                if _per and _gls.is_month_locked(_per):
+                    return jsonify(success=False, month_locked=True,
+                                   message=(f"GST period {_per} is locked (GSTR-1 filed) — "
+                                            "choose a date in an open period or unlock "
+                                            "the month first.")), 409
+            except Exception:
+                pass
+            value_date = _vd.strftime("%Y-%m-%d")
         # A1: snapshot the settlement state for the audit log before any
         # mutation. Only the fields that this route can change.
         before_snapshot = {
@@ -113,7 +147,7 @@ def collect_settlement():
 
         if payment_amount == settlement["amount"]:
             settlement["status"] = "paid"
-            settlement["payment_date"] = datetime.now(IST).strftime("%Y-%m-%d")
+            settlement["payment_date"] = value_date
             settlement["payment_time"] = datetime.now(IST).strftime("%H:%M")
             settlement["payment_mode"] = payment_mode
 
@@ -132,7 +166,7 @@ def collect_settlement():
 
             settlement["payments"].append({
                 "amount": payment_amount,
-                "date": datetime.now(IST).strftime("%Y-%m-%d"),
+                "date": value_date,
                 "time": datetime.now(IST).strftime("%H:%M"),
                 "mode": payment_mode,
             })
@@ -163,7 +197,7 @@ def collect_settlement():
             "room": settlement["room"], "name": settlement["guest_name"],
             "amount": payment_amount, "method": payment_mode,
             "type": "settlement_payment",
-            "date": datetime.now(IST).strftime("%Y-%m-%d"),
+            "date": value_date,
             "time": datetime.now(IST).strftime("%H:%M"),
             "settlement_id": settlement_id,
             "transaction_type": "settlement_payment",
@@ -180,7 +214,7 @@ def collect_settlement():
                 "room": settlement["room"], "name": settlement["guest_name"],
                 "amount": discount_amount, "method": "discount",
                 "type": "discount",
-                "date": datetime.now(IST).strftime("%Y-%m-%d"),
+                "date": value_date,
                 "time": datetime.now(IST).strftime("%H:%M"),
                 "settlement_id": settlement_id,
                 "transaction_type": "settlement_discount",

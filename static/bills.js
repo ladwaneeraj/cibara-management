@@ -252,12 +252,16 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
   font-size: .78rem; font-weight: 600; color: #555;
   display: block; margin-bottom: .3rem; margin-top: .8rem;
 }
-.bl-pay-modal input[type=number] {
+.bl-pay-modal input[type=number],
+.bl-pay-modal input[type=date] {
   width: 100%; padding: .5rem .65rem; border: 1px solid #d0d0d0;
-  border-radius: 7px; font-size: .9rem; outline: none;
+  border-radius: 7px; font-size: .9rem; outline: none; font-family: inherit;
+  background: #fff; color: #333; height: 38px; line-height: 1.2;
   transition: border-color .15s; box-sizing: border-box;
 }
-.bl-pay-modal input[type=number]:focus { border-color: var(--primary,#3f51b5); }
+.bl-pay-modal input[type=number]:focus,
+.bl-pay-modal input[type=date]:focus { border-color: var(--primary,#3f51b5); }
+.bl-pay-modal input[type=date]::-webkit-calendar-picker-indicator { cursor: pointer; opacity: .6; }
 .bl-pm-toggle { display: flex; gap: .5rem; margin-top: .75rem; }
 .bl-pm-btn {
   flex: 1; padding: .45rem; border-radius: 8px; border: 2px solid #e0e0e0;
@@ -1413,6 +1417,9 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
       </button>
     </div>
 
+    <label for="bl-pm-date">Receipt Date</label>
+    <input type="date" id="bl-pm-date" />
+
     <div class="bl-pay-error" id="bl-pm-error"></div>
 
     <div class="bl-pay-modal-actions">
@@ -1512,11 +1519,66 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
               title="Re-read payments from Firestore and refresh the bill totals">
         <i class="fas fa-sync-alt"></i> Recalculate
       </button>
+      <!--
+        Edit Price — admin-only.
+        Corrects the per-night room tariff on a finalized bill and recomputes
+        room charges, GST (per-night) and the DERIVED balance via
+        /edit_bill_room_price. Payment split is NOT edited here — that lives in
+        the Register Payment Records modal (single source of truth), reached by
+        clicking the Payment cell in the Bills table. Hidden for non-admins by
+        the data-roles handler in auth.js; the backend also enforces
+        @requires_permission("payment.edit").
+      -->
+      <button class="action-btn btn-secondary" id="bl-bill-editprice"
+              data-roles="admin"
+              title="Correct the room tariff and recompute charges, GST and balance">
+        <i class="fas fa-pen"></i> Edit Price
+      </button>
       <button class="bl-bill-save-btn" id="bl-bill-save-pdf" title="Save PDF to cloud &amp; share on WhatsApp">
         <i class="fab fa-whatsapp"></i> Save &amp; Share
       </button>
       <button class="action-btn btn-primary" id="bl-bill-print">
         <i class="fas fa-print"></i> Print
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- Edit Room Price modal (admin-only). Corrects the per-night tariff and
+     recomputes charges/GST/balance server-side. Inline styles keep it
+     self-contained (no dependency on app-wide modal CSS). -->
+<div id="bl-rprice-backdrop"
+     style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.45);
+            z-index:10000; align-items:center; justify-content:center;">
+  <div style="background:#fff; width:min(440px,92vw); border-radius:12px;
+              padding:20px 22px; box-shadow:0 10px 40px rgba(0,0,0,.25);">
+    <h3 style="margin:0 0 4px; font-size:18px;">Edit room price</h3>
+    <p style="margin:0 0 14px; font-size:13px; color:#555; line-height:1.45;">
+      Sets the actual per-night tariff for this stay. Room charges, GST and the
+      balance are recomputed from it. To change how much was paid in cash vs
+      online, use the Payment cell in the Bills table instead.
+    </p>
+    <div id="bl-rprice-context"
+         style="font-size:13px; color:#374151; background:#f3f4f6;
+                border-radius:8px; padding:8px 10px; margin-bottom:12px;"></div>
+    <label style="display:block; font-size:13px; font-weight:600; margin-bottom:4px;">
+      New price per night (₹)
+    </label>
+    <input id="bl-rprice-input" type="number" min="0" step="1" inputmode="numeric"
+           style="width:100%; box-sizing:border-box; padding:9px 10px; font-size:15px;
+                  border:1px solid #cbd5e1; border-radius:8px; margin-bottom:12px;" />
+    <label style="display:block; font-size:13px; font-weight:600; margin-bottom:4px;">
+      Reason (recorded in the audit log)
+    </label>
+    <input id="bl-rprice-reason" type="text" maxlength="500"
+           placeholder="e.g. wrong tariff entered at checkout"
+           style="width:100%; box-sizing:border-box; padding:9px 10px; font-size:14px;
+                  border:1px solid #cbd5e1; border-radius:8px; margin-bottom:8px;" />
+    <div id="bl-rprice-msg" style="font-size:13px; min-height:18px; margin-bottom:8px;"></div>
+    <div style="display:flex; gap:10px; justify-content:flex-end;">
+      <button id="bl-rprice-cancel" class="action-btn btn-secondary" type="button">Cancel</button>
+      <button id="bl-rprice-save" class="action-btn btn-primary" type="button">
+        Recompute &amp; Save
       </button>
     </div>
   </div>
@@ -1866,6 +1928,125 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
         } finally {
           bRecalc.disabled = false;
           bRecalc.innerHTML = _origHtml;
+        }
+      });
+    }
+
+    // ── "Edit Price" button in bill modal (admin-only) ───────────────────
+    //
+    // Opens a small modal to correct the per-night room tariff. Posts to
+    // /edit_bill_room_price, which recomputes room charges, per-night GST and
+    // the DERIVED balance server-side. The payment split is intentionally NOT
+    // editable here — cash vs online is owned by the payments ledger (click
+    // the Payment cell to open the Register Payment Records modal). Visibility
+    // is gated client-side by data-roles="admin"; the click handler re-checks
+    // isAdmin() defensively and the backend enforces payment.edit.
+    const bEditPrice = dom("bl-bill-editprice");
+    const rpBackdrop = dom("bl-rprice-backdrop");
+    const rpInput    = dom("bl-rprice-input");
+    const rpReason   = dom("bl-rprice-reason");
+    const rpMsg      = dom("bl-rprice-msg");
+    const rpSave     = dom("bl-rprice-save");
+    const rpCancel   = dom("bl-rprice-cancel");
+    const rpContext  = dom("bl-rprice-context");
+
+    function _closeRprice() {
+      if (rpBackdrop) rpBackdrop.style.display = "none";
+    }
+    function _isAdminNow() {
+      const a = window.CibaraAuth;
+      return !!(a && a.isAdmin && a.isAdmin());
+    }
+
+    if (bEditPrice && rpBackdrop) {
+      bEditPrice.addEventListener("click", function () {
+        if (!_openBillId) return;
+        if (!_isAdminNow()) { alert("Only admin users can edit the room price."); return; }
+        const entry = (state.allEntries || []).find((x) => x.id === _openBillId) || {};
+        // Best-effort prefill. room_charges_total is in the list payload;
+        // days_stayed / per-night may not be, so derive what we can and fall
+        // back to a blank input the admin fills in.
+        const rct  = Number(entry.room_charges_total || 0);
+        const days = Number(entry.days_stayed || 0);
+        const perNight = (days > 0 && rct > 0)
+          ? Math.round(rct / days)
+          : (entry.room_price_per_night || "");
+        if (rpContext) {
+          rpContext.innerHTML =
+            "Current room charges: <b>₹" + (rct || 0) + "</b>" +
+            (days > 0 ? " (" + days + " night" + (days === 1 ? "" : "s") + ")" : "") +
+            ". Changing the nightly rate re-derives GST and the balance.";
+        }
+        if (rpInput)  rpInput.value = perNight === "" ? "" : String(perNight);
+        if (rpReason) rpReason.value = "";
+        if (rpMsg)    { rpMsg.style.color = "#b91c1c"; rpMsg.textContent = ""; }
+        rpBackdrop.style.display = "flex";
+        if (rpInput) { rpInput.focus(); rpInput.select(); }
+      });
+
+      if (rpCancel) rpCancel.addEventListener("click", _closeRprice);
+      rpBackdrop.addEventListener("click", (e) => {
+        if (e.target === rpBackdrop) _closeRprice();
+      });
+
+      if (rpSave) rpSave.addEventListener("click", async function () {
+        if (!_openBillId) return;
+        if (!_isAdminNow()) { alert("Only admin users can edit the room price."); return; }
+        const raw = ((rpInput && rpInput.value) || "").trim();
+        const n = Number(raw);
+        if (raw === "" || isNaN(n) || n < 0 || !Number.isInteger(n)) {
+          if (rpMsg) { rpMsg.style.color = "#b91c1c"; rpMsg.textContent = "Enter a whole, non-negative rupee amount."; }
+          return;
+        }
+        const newPrice = parseInt(raw, 10);
+        const _orig = rpSave.innerHTML;
+        rpSave.disabled = true; rpSave.innerHTML = "Saving…";
+        if (rpMsg) { rpMsg.style.color = "#374151"; rpMsg.textContent = "Recomputing…"; }
+        try {
+          const res = await apiFetch("/edit_bill_room_price", {
+            method:  "POST",
+            headers: { "Content-Type": "application/json" },
+            body:    JSON.stringify({
+              bill_id:              _openBillId,
+              room_price_per_night: newPrice,
+              reason:               ((rpReason && rpReason.value) || "").trim(),
+            }),
+          });
+          const data = await res.json().catch(() => ({}));
+          if (res.ok && data && data.success) {
+            _closeRprice();
+            alert(
+              "Room price updated.\n" +
+              "Price/night: ₹" + (data.room_price_per_night ?? newPrice) + "\n" +
+              "Room charges: ₹" + (data.room_charges_total ?? 0) + "\n" +
+              "GST: ₹" + (data.gst_amount ?? 0) + " (" + (data.gst_rate ?? 0) + "%)\n" +
+              "Total: ₹" + (data.total_amount ?? 0) + "\n" +
+              "Balance: ₹" + (data.balance ?? 0) + "  [" + (data.status || "") + "]"
+            );
+            try {
+              if (Array.isArray(state.allEntries)) {
+                const ix = state.allEntries.findIndex((x) => x.id === _openBillId);
+                if (ix !== -1) {
+                  state.allEntries[ix] = {
+                    ...state.allEntries[ix],
+                    room_charges_total: data.room_charges_total,
+                    total_amount:       data.total_amount,
+                    gst_amount:         data.gst_amount,
+                    balance:            data.balance,
+                  };
+                }
+              }
+            } catch (_) { /* non-fatal cache update */ }
+            await openBill(_openBillId);
+          } else {
+            const m = (data && data.message) || ("Edit failed (HTTP " + res.status + ").");
+            if (rpMsg) { rpMsg.style.color = "#b91c1c"; rpMsg.textContent = m; }
+          }
+        } catch (err) {
+          console.error("[Bills] edit price failed:", err);
+          if (rpMsg) { rpMsg.style.color = "#b91c1c"; rpMsg.textContent = "Network error."; }
+        } finally {
+          rpSave.disabled = false; rpSave.innerHTML = _orig;
         }
       });
     }
@@ -2407,6 +2588,12 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
     set("bl-pm-guest", guestName || "—");
     set("bl-pm-billno", billNumber || "—");
     set("bl-pm-due", "₹" + inr(balance));
+    const _pmDate = dom("bl-pm-date");
+    if (_pmDate) {
+      const _t = new Date();
+      const _iso = _t.getFullYear() + "-" + String(_t.getMonth() + 1).padStart(2, "0") + "-" + String(_t.getDate()).padStart(2, "0");
+      _pmDate.value = _iso; _pmDate.max = _iso;
+    }
 
     // Reset discount to 0 and recompute net / payment
     const discountEl = dom("bl-pm-discount");
@@ -2497,6 +2684,7 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
           body: JSON.stringify({
             bill_id: billId,
             payment_mode: mode,
+            payment_date: (dom("bl-pm-date") && dom("bl-pm-date").value) || "",
             amount,
             discount,
             discount_type: discType,

@@ -2113,6 +2113,11 @@
               title="Re-read payments and refresh the bill totals">
         <i class="fas fa-sync-alt"></i> Recalculate
       </button>
+      <button class="action-btn btn-secondary" id="reg-bill-editprice"
+              data-roles="admin"
+              title="Correct the room tariff and recompute charges, GST and balance">
+        <i class="fas fa-pen"></i> Edit Price
+      </button>
       <!-- Generate Invoice: admin-only. Shown (via _syncGenInvoiceBtn) only
            for a checked-out stay whose bill is finalized but has no PDF yet,
            and only within 5 days of checkout. POSTs /generate_invoice. -->
@@ -2398,6 +2403,61 @@
           regBillRecalc.disabled = false;
           regBillRecalc.innerHTML = _orig;
         }
+      });
+    }
+
+    // Edit Price (admin-only): correct per-night tariff -> recompute charges/GST/balance.
+    const regBillEditPrice = dom("reg-bill-editprice");
+    if (regBillEditPrice) {
+      regBillEditPrice.addEventListener("click", function () {
+        if (!_regOpenBillId) return;
+        const _a = window.CibaraAuth;
+        if (!(_a && _a.isAdmin && _a.isAdmin())) { alert("Only admin users can edit the room price."); return; }
+        _openRegRpriceModal();
+      });
+    }
+    function _openRegRpriceModal() {
+      const ex = document.getElementById("reg-rprice-backdrop"); if (ex) ex.remove();
+      const d = _regOpenBillData || {};
+      const rct = Number(d.room_charges_total || 0), days = Number(d.days_stayed || 0);
+      const perNight = Number(d.room_price_per_night || 0) || (days > 0 && rct > 0 ? Math.round(rct / days) : "");
+      const back = document.createElement("div");
+      back.id = "reg-rprice-backdrop";
+      back.setAttribute("style", "position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:100000;display:flex;align-items:center;justify-content:center;");
+      back.innerHTML =
+        '<div style="background:#fff;width:min(440px,92vw);border-radius:12px;padding:20px 22px;box-shadow:0 10px 40px rgba(0,0,0,.25);">' +
+          '<h3 style="margin:0 0 4px;font-size:18px;">Edit room price</h3>' +
+          '<p style="margin:0 0 12px;font-size:13px;color:#555;line-height:1.45;">Sets the actual per-night tariff. Room charges, GST and the balance are recomputed from it. To change cash vs online, use the Payment cell in the Bills table.</p>' +
+          '<div style="font-size:13px;color:#374151;background:#f3f4f6;border-radius:8px;padding:8px 10px;margin-bottom:12px;">Current room charges: <b>₹' + (rct || 0) + '</b>' + (days > 0 ? ' (' + days + ' night' + (days === 1 ? '' : 's') + ')' : '') + '.</div>' +
+          '<label style="display:block;font-size:13px;font-weight:600;margin-bottom:4px;">New price per night (₹)</label>' +
+          '<input id="reg-rprice-input" type="number" min="0" step="1" inputmode="numeric" style="width:100%;box-sizing:border-box;padding:9px 10px;font-size:15px;border:1px solid #cbd5e1;border-radius:8px;margin-bottom:12px;" />' +
+          '<label style="display:block;font-size:13px;font-weight:600;margin-bottom:4px;">Reason (recorded in the audit log)</label>' +
+          '<input id="reg-rprice-reason" type="text" maxlength="500" placeholder="e.g. wrong tariff entered at checkout" style="width:100%;box-sizing:border-box;padding:9px 10px;font-size:14px;border:1px solid #cbd5e1;border-radius:8px;margin-bottom:8px;" />' +
+          '<div id="reg-rprice-msg" style="font-size:13px;min-height:18px;margin-bottom:8px;color:#b91c1c;"></div>' +
+          '<div style="display:flex;gap:10px;justify-content:flex-end;"><button id="reg-rprice-cancel" class="action-btn btn-secondary" type="button">Cancel</button><button id="reg-rprice-save" class="action-btn btn-primary" type="button">Recompute &amp; Save</button></div>' +
+        '</div>';
+      document.body.appendChild(back);
+      const inp = document.getElementById("reg-rprice-input"), rsn = document.getElementById("reg-rprice-reason");
+      const msg = document.getElementById("reg-rprice-msg"), saveB = document.getElementById("reg-rprice-save"), cancelB = document.getElementById("reg-rprice-cancel");
+      if (inp) { inp.value = perNight === "" ? "" : String(perNight); inp.focus(); inp.select(); }
+      function _close() { back.remove(); }
+      if (cancelB) cancelB.addEventListener("click", _close);
+      back.addEventListener("click", function (e) { if (e.target === back) _close(); });
+      if (saveB) saveB.addEventListener("click", async function () {
+        const raw = ((inp && inp.value) || "").trim(), num = Number(raw);
+        if (raw === "" || isNaN(num) || num < 0 || !Number.isInteger(num)) { if (msg) { msg.style.color = "#b91c1c"; msg.textContent = "Enter a whole, non-negative rupee amount."; } return; }
+        const _o = saveB.innerHTML; saveB.disabled = true; saveB.innerHTML = "Saving…";
+        if (msg) { msg.style.color = "#374151"; msg.textContent = "Recomputing…"; }
+        try {
+          const res = await apiFetch("/edit_bill_room_price", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ bill_id: _regOpenBillId, room_price_per_night: parseInt(raw, 10), reason: ((rsn && rsn.value) || "").trim() }) });
+          const data = await res.json().catch(() => ({}));
+          if (res.ok && data && data.success) {
+            _close();
+            alert("Room price updated.\n" + "Price/night: ₹" + (data.room_price_per_night ?? raw) + "\n" + "Room charges: ₹" + (data.room_charges_total ?? 0) + "\n" + "GST: ₹" + (data.gst_amount ?? 0) + " (" + (data.gst_rate ?? 0) + "%)\n" + "Total: ₹" + (data.total_amount ?? 0) + "\n" + "Balance: ₹" + (data.balance ?? 0) + "  [" + (data.status || "") + "]");
+            await openRegBill(_regOpenBillId);
+          } else { if (msg) { msg.style.color = "#b91c1c"; msg.textContent = (data && data.message) || ("Edit failed (HTTP " + res.status + ")."); } }
+        } catch (err) { console.error("[Register] edit price failed:", err); if (msg) { msg.style.color = "#b91c1c"; msg.textContent = "Network error."; } }
+        finally { saveB.disabled = false; saveB.innerHTML = _o; }
       });
     }
 

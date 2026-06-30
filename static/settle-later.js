@@ -412,6 +412,15 @@ function showCollectSettlementModal(settlementId) {
     paymentAmountInput.max = settlement.amount;
   }
 
+  const _slDate = document.getElementById("settlement-payment-date");
+  if (_slDate) {
+    const _t = new Date();
+    const _iso = _t.getFullYear() + "-" + String(_t.getMonth() + 1).padStart(2, "0") + "-" + String(_t.getDate()).padStart(2, "0");
+    _slDate.value = _iso; _slDate.max = _iso;
+    const _co = (settlement.checkout_date || "").slice(0, 10);
+    if (_co) _slDate.min = _co;
+  }
+
   if (discountAmountInput) {
     discountAmountInput.value = "0";
     discountAmountInput.max = settlement.amount;
@@ -547,6 +556,7 @@ async function collectSettlementPayment() {
         settlement_id: activeSettlementId,
         payment_mode: settlementPaymentMethod,
         payment_amount: paymentAmount,
+        payment_date: (document.getElementById("settlement-payment-date") && document.getElementById("settlement-payment-date").value) || "",
         discount_amount: discountAmount,
         discount_reason: discountReason,
       }),

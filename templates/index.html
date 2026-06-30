@@ -3247,6 +3247,13 @@
           </div>
         </div>
 
+        <!-- Receipt Date (supports recording a past payment date) -->
+        <div class="form-group" style="margin-top: 1.5rem">
+          <label class="form-label" for="settlement-payment-date">Receipt Date</label>
+          <input type="date" class="form-control" id="settlement-payment-date" />
+          <small class="form-helper">Date the payment was actually received</small>
+        </div>
+
         <!-- Add Payment Section -->
         <div class="form-group" style="margin-top: 1.5rem">
           <label class="form-label" for="settlement-payment-amount"
@@ -4819,6 +4826,9 @@
     <script defer src="{{ asset_url('bills.js') }}"></script>
     <!-- Banking Section: cash deposits, receipt vouchers, adjustments -->
     <script defer src="/static/banking.js"></script>
+    <!-- optimistic.js MUST load before script.js: it defines window.optimisticWrite
+         and window.cibaraWrites used by the check-in / payment / service handlers. -->
+    <script defer src="{{ asset_url('optimistic.js') }}"></script>
     <script defer src="{{ asset_url('script.js') }}"></script>
     <script defer src="/static/shift.js"></script>
     <script defer src="/static/analytics.js"></script>

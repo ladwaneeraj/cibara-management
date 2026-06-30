@@ -572,6 +572,8 @@ def get_register_data():
         # duplicates a healthy stay — it only recovers the orphans.
         try:
             present_serials = set()
+            _present_room_ci = set()   # (room, checkin_time) already shown
+            _present_stays = set()     # stay_ids already shown
             for e in register_entries:
                 sn = e.get("serial_number")
                 if sn:
@@ -579,6 +581,11 @@ def get_register_data():
                         present_serials.add(int(sn))
                     except (TypeError, ValueError):
                         pass
+                _sid0 = e.get("stay_id")
+                if _sid0:
+                    _present_stays.add(_sid0)
+                _present_room_ci.add(
+                    (str(e.get("room", "")), (e.get("checkin_time") or "").strip()))
 
             by_serial = {}
             for p in range_payments:
@@ -650,6 +657,15 @@ def get_register_data():
                 )
                 total_amount = bill.get("total_amount") or (ota_sum + cash_sum + online_sum)
 
+                # De-dup: never add an orphan/draft row for a stay already
+                # represented by an active-room or completed-bill entry (same
+                # stay_id, OR same room + check-in time). This is what stops a
+                # phantom "draft" row from appearing next to the live active
+                # stay when a retried check-in left a stray draft stay doc.
+                if (stay_id and stay_id in _present_stays) or \
+                   ((room_str, (checkin_time or "").strip()) in _present_room_ci):
+                    continue
+
                 register_entries.append({
                     "id": f"recovered_{sn}_{room_str}",
                     "stay_id": stay_id,
@@ -680,6 +696,9 @@ def get_register_data():
                     "recovered": True,
                 })
                 present_serials.add(sn)
+                _present_room_ci.add((room_str, (checkin_time or "").strip()))
+                if stay_id:
+                    _present_stays.add(stay_id)
                 recovered += 1
 
             if recovered:
@@ -1087,6 +1106,7 @@ def add_bill_payment():
         # Section 34 CN for the discount amount.
         discount_type   = (data_json.get("discount_type") or "financial").lower()
         discount_reason = (data_json.get("discount_reason") or "").strip()
+        payment_date_in = (data_json.get("payment_date") or "").strip()
         # Optional client flag marking a financial discount as a bad-debt
         # write-off. Previously referenced but never parsed — any discount
         # payment write raised NameError. Defaults to False.
@@ -1111,6 +1131,42 @@ def add_bill_payment():
 
         bill_data       = bill_doc.to_dict()
         current_balance = int(bill_data.get("balance", 0))
+
+        # ── Optional backdating of the receipt date (default: today) ──────────
+        # Allowed range: bill check-in date .. today (no future dates). A date
+        # inside a GST-locked (filed) month is refused — record it in an open
+        # period, or unlock the month first. The chosen date becomes the
+        # payment's value date (used by the register/reports); the row's
+        # created_at stays "now" so the entry-time audit trail is intact.
+        _now_dt    = datetime.now(IST)
+        value_date = _now_dt.strftime("%Y-%m-%d")
+        if payment_date_in:
+            try:
+                _vd = datetime.strptime(payment_date_in, "%Y-%m-%d")
+            except ValueError:
+                return jsonify(success=False,
+                               message="payment_date must be YYYY-MM-DD"), 400
+            if _vd.date() > _now_dt.date():
+                return jsonify(success=False,
+                               message="Receipt date cannot be in the future"), 400
+            _ci = (bill_data.get("checkin_time") or "")[:10]
+            if _ci:
+                try:
+                    if _vd.date() < datetime.strptime(_ci, "%Y-%m-%d").date():
+                        return jsonify(success=False,
+                                       message=f"Receipt date cannot be before check-in ({_ci})"), 400
+                except ValueError:
+                    pass
+            try:
+                _per = gst_lock_service.normalize_period(payment_date_in)
+                if _per and gst_lock_service.is_month_locked(_per):
+                    return jsonify(success=False, month_locked=True,
+                                   message=(f"GST period {_per} is locked (GSTR-1 filed) — "
+                                            "choose a date in an open period or unlock "
+                                            "the month first.")), 409
+            except Exception:
+                pass
+            value_date = _vd.strftime("%Y-%m-%d")
 
         # GST month lock — receiving money against a filed invoice is fine
         # (the supply doesn't change), but a "financial" blind-subtract
@@ -1197,7 +1253,7 @@ def add_bill_payment():
         invalidate_rooms_and_totals()
 
         # ── Write to payments collection ──────────────────────────────────────
-        now_date = datetime.now(IST).strftime("%Y-%m-%d")
+        now_date = value_date  # backdated receipt date (defaults to today)
         now_time = datetime.now(IST).strftime("%H:%M")
         _base = {
             "room":        bill_data.get("room", ""),
@@ -1325,7 +1381,9 @@ def add_bill_payment():
             target_collection="bills",
             target_id=str(bill_id),
             metadata={"amount": amount, "discount": discount,
-                      "method": payment_mode, "new_balance": new_balance},
+                      "method": payment_mode, "new_balance": new_balance,
+                      "value_date": value_date,
+                      "backdated": bool(payment_date_in) and value_date != _now_dt.strftime("%Y-%m-%d")},
         )
         return jsonify(
             success=True,
@@ -1615,6 +1673,303 @@ def update_bill_service():
 
     except Exception as e:
         logger.error(f"update_bill_service error: {e}", exc_info=True)
+        return jsonify(success=False, message=f"Error: {str(e)}"), 500
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# EDIT BILL ROOM PRICE — correct the per-night tariff on a finalized bill and
+# recompute room charges, totals, per-night GST and the (derived) balance.
+# ══════════════════════════════════════════════════════════════════════════════
+
+@billing_bp.route("/edit_bill_room_price", methods=["POST"])
+@requires_permission("payment.edit")
+def edit_bill_room_price():
+    """
+    Admin-only correction of the room tariff (``room_price_per_night``) on a
+    finalized bill. Recomputes in lock-step with the canonical checkout math
+    in ``config.create_bill_record`` / ``config.compute_daily_folio``:
+
+        room_charges_total = new_price * days_stayed
+        total_amount       = room_charges_total + services_total - discounts
+        gst_*              = re-aggregated from a freshly rebuilt daily_folio
+        balance            = total_amount - cash - online - ota + refunds
+
+    Design boundaries (intentional, for correctness + auditability):
+
+    * This endpoint does NOT write the payment split. Cash vs online is owned
+      by the ``payments`` ledger — edit individual receipts in the Register
+      Payment Records modal, then call ``/recalculate_bill``. If this endpoint
+      also stamped payment_cash/online onto the bill, the next recalculate
+      (which re-sums the ledger) would silently revert it. One source of truth.
+    * ``balance`` is always DERIVED from the recomputed total and the receipts
+      already on record. We never invent a payment to close a gap, so the books
+      cannot be left inconsistent: total == receipts + balance by construction,
+      and GST is always recomputed on the new value of supply (no GST gap).
+
+    Refused (HTTP 409/400) when:
+      * bill not found / not in completed|pending_settlement
+      * the bill's GST month is locked (filed GSTR-1) — use a credit note
+      * a credit note is already linked to the bill
+      * the stay had a mid-stay room transfer / multiple nightly rates — the
+        per-night segments can't be re-derived safely here; issue a credit
+        note (Section 34) + fresh invoice instead.
+    """
+    try:
+        data          = request.json or {}
+        bill_id       = (data.get("bill_id") or "").strip()
+        new_price_raw = data.get("room_price_per_night")
+        reason        = (data.get("reason") or "").strip()
+
+        if not bill_id:
+            return jsonify(success=False, message="bill_id is required"), 400
+        if new_price_raw is None:
+            return jsonify(success=False, message="room_price_per_night is required"), 400
+        try:
+            new_price = int(new_price_raw)
+        except (ValueError, TypeError):
+            return jsonify(success=False,
+                           message="room_price_per_night must be an integer"), 400
+        if new_price < 0:
+            return jsonify(success=False, message="Price cannot be negative"), 400
+
+        bill_snap = bills_ref.document(bill_id).get()
+        if not bill_snap.exists:
+            return jsonify(success=False, message="Bill not found"), 404
+        bill = bill_snap.to_dict() or {}
+
+        # ── Guards ────────────────────────────────────────────────────────────
+        # GST month lock — changing the tariff changes the taxable value of an
+        # invoice already reported in a filed GSTR-1.
+        _locked = _month_lock_response(bill, "editing the room price")
+        if _locked:
+            return _locked
+
+        if bill.get("linked_credit_note_ids"):
+            return jsonify(
+                success=False,
+                message=("This bill has a credit note linked — the room price "
+                         "is locked. Issue a fresh invoice if the tariff must "
+                         "change."),
+            ), 409
+
+        if bill.get("status") not in ("completed", "pending_settlement"):
+            return jsonify(
+                success=False,
+                message=("Only a checked-out bill can be repriced (status must "
+                         "be completed or pending_settlement)."),
+            ), 409
+
+        days_stayed = int(bill.get("days_stayed") or 0)
+        if days_stayed <= 0:
+            return jsonify(
+                success=False,
+                message="Bill has no recorded nights (days_stayed) to reprice.",
+            ), 400
+
+        old_price          = int(bill.get("room_price_per_night") or 0)
+        room_charges_total_existing = int(bill.get("room_charges_total") or 0)
+
+        # ── Mid-stay transfer / multi-rate detection ──────────────────────────
+        # A transferred stay carries multiple (room, rate) segments in its
+        # daily_folio; repricing only the current tariff here would silently
+        # mis-bill the earlier segments and break per-night GST. Refuse and
+        # route to the credit-note path, consistent with the rest of the app.
+        folio = bill.get("daily_folio") or []
+        distinct_rooms = {str(e.get("room")) for e in folio if e.get("room") is not None}
+        if (bill.get("lastShiftedFrom")
+                or bill.get("pre_transfer_charges")
+                or len(distinct_rooms) > 1):
+            return jsonify(
+                success=False,
+                message=("This stay had a mid-stay room transfer (multiple "
+                         "nightly rates), so its per-night tax can't be "
+                         "re-derived here. Issue a credit note (Section 34) "
+                         "and a fresh invoice instead."),
+            ), 409
+        # Secondary safety net: room charges that don't equal a single flat
+        # nightly rate × nights (legacy/imported data) — refuse rather than
+        # guess. Same remedy: credit note + fresh invoice.
+        if room_charges_total_existing != old_price * days_stayed:
+            return jsonify(
+                success=False,
+                message=("This bill's room charges don't match a single flat "
+                         f"nightly rate (₹{room_charges_total_existing} is not "
+                         f"₹{old_price} × {days_stayed} nights), so it can't be "
+                         "repriced safely here. Issue a credit note + fresh "
+                         "invoice instead."),
+            ), 409
+
+        # ── Recompute, mirroring config.create_bill_record exactly ────────────
+        # Local import: these are module-level in config.py but not in the
+        # top-of-file import block (matches the existing local-import pattern,
+        # e.g. `from config import allocate_and_finalize_bill`).
+        from config import compute_daily_folio
+
+        services        = bill.get("services") or []
+        services_total  = sum(int(s.get("price", 0) or 0) for s in services)
+        total_discounts = int(bill.get("discounts", 0) or 0)
+
+        room_charges_total = new_price * days_stayed
+        total_amount       = room_charges_total + services_total - total_discounts
+
+        # Accommodation vs non-accommodation discount allocation (same split
+        # create_bill_record uses to feed the folio).
+        accommodation_addons_total = sum(
+            int(s.get("price", 0) or 0) for s in services
+            if s.get("accommodation_charge", False)
+        )
+        non_accommodation_total          = services_total - accommodation_addons_total
+        accommodation_total_pre_discount = room_charges_total + accommodation_addons_total
+        gross_pre_discount               = accommodation_total_pre_discount + non_accommodation_total
+        accommodation_discount_share     = 0.0
+        if total_discounts > 0 and gross_pre_discount > 0:
+            accommodation_discount_share = round(
+                total_discounts * (accommodation_total_pre_discount / gross_pre_discount), 2
+            )
+
+        # Rebuild the per-night folio with the new tariff. Transfers were
+        # refused above, so pre_transfer_charges is empty (single-room path).
+        try:
+            checkin_dt = datetime.strptime(bill.get("checkin_time", ""), "%Y-%m-%d %H:%M")
+        except (ValueError, TypeError):
+            checkin_dt = None
+
+        new_folio = []
+        if checkin_dt is not None:
+            new_folio = compute_daily_folio(
+                checkin_dt=checkin_dt,
+                days_stayed=days_stayed,
+                room_price_per_night=new_price,
+                current_room_no=str(bill.get("room") or ""),
+                accommodation_services=services,
+                pre_transfer_charges=[],
+                discount_on_accom=accommodation_discount_share,
+                recipient_state_code=str(bill.get("recipient_state_code") or "29"),
+            )
+
+        if new_folio:
+            gst_amount            = round(sum(e["day_gst_amount"] for e in new_folio), 2)
+            accommodation_taxable = round(sum(e["day_taxable"]    for e in new_folio), 2)
+            cgst_amount           = round(sum(e["day_cgst"]       for e in new_folio), 2)
+            sgst_amount           = round(sum(e["day_sgst"]       for e in new_folio), 2)
+            igst_amount           = round(sum(e["day_igst"]       for e in new_folio), 2)
+            _rate_counts = {}
+            for _e in new_folio:
+                _rate_counts[_e["day_gst_rate"]] = _rate_counts.get(_e["day_gst_rate"], 0) + 1
+            gst_rate = max(_rate_counts.keys(), key=lambda r: (_rate_counts[r], r))
+        else:
+            # Defensive fallback (malformed checkin_time) — single-slab inclusive
+            # math identical to create_bill_record's own fallback branch.
+            def _gst_rate_for_price(price):
+                if price < 1000:
+                    return 0
+                elif price <= 7500:
+                    return 5
+                return 18
+            gst_rate   = _gst_rate_for_price(new_price)
+            _accom     = room_charges_total + accommodation_addons_total
+            _eff_accom = _accom - min(total_discounts, _accom)
+            divisor    = 100 + gst_rate if gst_rate else 100
+            gst_amount = round(_eff_accom * gst_rate / divisor, 2) if gst_rate else 0.0
+            accommodation_taxable = round(_eff_accom - gst_amount, 2)
+            cgst_amount, sgst_amount, igst_amount = compute_gst_split(
+                gst_amount, recipient_state_code="29")
+
+        # ── Balance: DERIVED from receipts already on record. ─────────────────
+        payment_cash   = int(bill.get("payment_cash", 0) or 0)
+        payment_online = int(bill.get("payment_online", 0) or 0)
+        payment_ota    = int(bill.get("payment_ota", 0) or 0)
+        total_refunds  = int(bill.get("refunds", 0) or 0)
+        new_balance    = (total_amount - payment_cash - payment_online
+                          - payment_ota + total_refunds)
+
+        # Keep status/balance consistent (same rule as add_bill_payment).
+        new_status = "completed" if new_balance <= 0 else "pending_settlement"
+
+        # ── Audit snapshots (changed fields only — write_log wants partials) ──
+        before_snap = {
+            "room_price_per_night": old_price,
+            "room_charges_total":   bill.get("room_charges_total"),
+            "total_amount":         bill.get("total_amount"),
+            "gst_rate":             bill.get("gst_rate"),
+            "gst_amount":           bill.get("gst_amount"),
+            "balance":              bill.get("balance"),
+            "status":               bill.get("status"),
+        }
+        after_snap = {
+            "room_price_per_night": new_price,
+            "room_charges_total":   room_charges_total,
+            "total_amount":         total_amount,
+            "gst_rate":             gst_rate,
+            "gst_amount":           gst_amount,
+            "balance":              new_balance,
+            "status":               new_status,
+        }
+
+        _attr  = attribution_update()
+        update = {
+            "room_price_per_night":  new_price,
+            "room_charges_total":    room_charges_total,
+            "total_amount":          total_amount,
+            "gst_rate":              gst_rate,
+            "gst_amount":            gst_amount,
+            "accommodation_taxable": accommodation_taxable,
+            "cgst_amount":           cgst_amount,
+            "sgst_amount":           sgst_amount,
+            "igst_amount":           igst_amount,
+            "balance":               new_balance,
+            "status":                new_status,
+            "lastEditedBy":          _attr.get("lastModifiedBy"),
+            "lastEditedAt":          _attr.get("lastModifiedAt"),
+            **_attr,
+        }
+        if new_folio:
+            update["daily_folio"] = new_folio
+        bills_ref.document(bill_id).update(update)
+
+        # Background PDF regeneration so the stored invoice matches the edit.
+        updated_bill = dict(bill)
+        updated_bill.update(update)
+        import threading as _thr
+        _thr.Thread(
+            target=auto_generate_bill_pdf,
+            args=(bill_id, updated_bill),
+            daemon=True,
+        ).start()
+
+        write_log(
+            "payment.edit_bill_room_price",
+            target_collection="bills",
+            target_id=str(bill_id),
+            before=before_snap,
+            after=after_snap,
+            metadata={
+                "reason":      reason[:500],
+                "old_price":   old_price,
+                "new_price":   new_price,
+                "days_stayed": days_stayed,
+            },
+        )
+        logger.info(
+            f"edit_bill_room_price: {bill_id} price {old_price}->{new_price} "
+            f"total={total_amount} gst={gst_amount}({gst_rate}%) "
+            f"balance={new_balance} status={new_status}"
+        )
+        return jsonify(
+            success=True,
+            message=("Room price updated; charges, GST and balance recomputed. "
+                     "PDF queued."),
+            room_price_per_night=new_price,
+            room_charges_total=room_charges_total,
+            total_amount=total_amount,
+            gst_rate=gst_rate,
+            gst_amount=gst_amount,
+            balance=new_balance,
+            status=new_status,
+        )
+
+    except Exception as e:
+        logger.error(f"edit_bill_room_price error: {e}", exc_info=True)
         return jsonify(success=False, message=f"Error: {str(e)}"), 500
 
 

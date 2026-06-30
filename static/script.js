@@ -2402,71 +2402,121 @@ async function addService() {
     };
     if (appliedOnDay !== null) _addOnBody.applied_on_day = appliedOnDay;
 
-    const response = await apiFetch("/add_on", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(_addOnBody),
-    });
+    // Re-enable helper. The trigger button stays disabled until the
+    // background write settles, so an accidental double-click can't post the
+    // same service twice (money safety) — while the modal/grid update instantly.
+    const _reenableServiceBtn = () => {
+      const b = document.getElementById("add-service-btn");
+      if (b) { b.disabled = false; b.innerHTML = "Add Service"; }
+    };
 
-    if (!response.ok) {
-      throw new Error(`Server responded with status: ${response.status}`);
-    }
-
-    const result = await response.json();
-    if (result.success) {
-      // Patch local room state immediately — no need to wait for a full server round-trip
-      if (rooms[roomNumber]) {
-        if (!rooms[roomNumber].add_ons) rooms[roomNumber].add_ons = [];
-        const nowDt = new Date();
-        rooms[roomNumber].add_ons.push({
-          room: roomNumber,
-          item: serviceWithQuantity,
-          price: totalPrice,
-          unit_price: price,
-          quantity: quantity,
-          time: nowDt.toTimeString().slice(0, 5),
-          date: nowDt.toISOString().split("T")[0],
-          payment_method: servicePaymentMethod,
-          transaction_type: "service",
-          accommodation_charge: isAccommodationCharge,
-          applied_on_day: appliedOnDay || 1,
+    // Defensive fallback: if optimistic.js failed to load, use the old flow.
+    if (typeof window.optimisticWrite !== "function") {
+      try {
+        const response = await apiFetch("/add_on", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(_addOnBody),
         });
-        // Balance increases only when service is billed to room (not paid now)
-        if (servicePaymentMethod === "balance") {
-          rooms[roomNumber].balance = (rooms[roomNumber].balance || 0) + totalPrice;
+        if (!response.ok) throw new Error(`Server responded with status: ${response.status}`);
+        const result = await response.json();
+        if (result.success) {
+          if (rooms[roomNumber]) {
+            if (!rooms[roomNumber].add_ons) rooms[roomNumber].add_ons = [];
+            const nowDt = new Date();
+            rooms[roomNumber].add_ons.push({
+              room: roomNumber, item: serviceWithQuantity, price: totalPrice,
+              unit_price: price, quantity: quantity, time: nowDt.toTimeString().slice(0, 5),
+              date: nowDt.toISOString().split("T")[0], payment_method: servicePaymentMethod,
+              transaction_type: "service", accommodation_charge: isAccommodationCharge,
+              applied_on_day: appliedOnDay || 1,
+            });
+            if (servicePaymentMethod === "balance") {
+              rooms[roomNumber].balance = (rooms[roomNumber].balance || 0) + totalPrice;
+            }
+          }
+          updateCheckoutModal(roomNumber);
+          renderRooms();
+          debouncedFetchData(2000, roomNumber);
+          showNotification(
+            servicePaymentMethod === "balance"
+              ? `Added ${serviceWithQuantity} (₹${totalPrice}) to balance`
+              : `Added ${serviceWithQuantity} (₹${totalPrice}) - paid by ${servicePaymentMethod}`,
+            "success",
+          );
+          resetServiceForm();
+        } else {
+          showNotification(result.message || "Error adding service", "error");
         }
+      } catch (error) {
+        console.error("Error adding service:", error);
+        showNotification(`Error adding service: ${error.message}`, "error");
+      } finally {
+        _reenableServiceBtn();
       }
-      updateCheckoutModal(roomNumber);
-      renderRooms();
-      debouncedFetchData(2000, roomNumber); // background sync + bust pay history cache
-
-      // Show an appropriate message based on the payment method
-      if (servicePaymentMethod === "balance") {
-        showNotification(
-          `Added ${serviceWithQuantity} (₹${totalPrice}) to balance`,
-          "success",
-        );
-      } else {
-        showNotification(
-          `Added ${serviceWithQuantity} (₹${totalPrice}) - paid by ${servicePaymentMethod}`,
-          "success",
-        );
-      }
-
-      resetServiceForm();
-    } else {
-      showNotification(result.message || "Error adding service", "error");
+      return;
     }
+
+    // ── Optimistic path: update the modal + grid NOW, persist in background ──
+    window.optimisticWrite({
+      key: roomNumber,
+      label: "service",
+      apply() {
+        const snap = {
+          add_ons: (rooms[roomNumber] && rooms[roomNumber].add_ons)
+            ? rooms[roomNumber].add_ons.slice() : [],
+          balance: rooms[roomNumber] ? (rooms[roomNumber].balance || 0) : 0,
+        };
+        if (rooms[roomNumber]) {
+          if (!rooms[roomNumber].add_ons) rooms[roomNumber].add_ons = [];
+          const nowDt = new Date();
+          rooms[roomNumber].add_ons.push({
+            room: roomNumber, item: serviceWithQuantity, price: totalPrice,
+            unit_price: price, quantity: quantity, time: nowDt.toTimeString().slice(0, 5),
+            date: nowDt.toISOString().split("T")[0], payment_method: servicePaymentMethod,
+            transaction_type: "service", accommodation_charge: isAccommodationCharge,
+            applied_on_day: appliedOnDay || 1,
+          });
+          // Balance increases only when service is billed to room (not paid now)
+          if (servicePaymentMethod === "balance") {
+            rooms[roomNumber].balance = (rooms[roomNumber].balance || 0) + totalPrice;
+          }
+        }
+        updateCheckoutModal(roomNumber);
+        renderRooms();
+        resetServiceForm();
+        showNotification(
+          servicePaymentMethod === "balance"
+            ? `Added ${serviceWithQuantity} (₹${totalPrice}) to balance`
+            : `Added ${serviceWithQuantity} (₹${totalPrice}) - paid by ${servicePaymentMethod}`,
+          "success",
+        );
+        return snap;
+      },
+      rollback(snap) {
+        if (rooms[roomNumber]) {
+          rooms[roomNumber].add_ons = snap.add_ons;
+          rooms[roomNumber].balance = snap.balance;
+        }
+        updateCheckoutModal(roomNumber);
+        renderRooms();
+      },
+      request(opId) {
+        return apiFetch("/add_on", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(Object.assign({}, _addOnBody, { op_id: opId })),
+        });
+      },
+      onSuccess() {
+        debouncedFetchData(2000, roomNumber); // authoritative background re-sync
+      },
+    }).then(_reenableServiceBtn, _reenableServiceBtn);
   } catch (error) {
     console.error("Error adding service:", error);
     showNotification(`Error adding service: ${error.message}`, "error");
-  } finally {
-    // Re-enable button
-    const addServiceBtn = document.getElementById("add-service-btn");
-    if (addServiceBtn) {
-      addServiceBtn.disabled = false;
-      addServiceBtn.innerHTML = "Add Service";
-    }
+    const b = document.getElementById("add-service-btn");
+    if (b) { b.disabled = false; b.innerHTML = "Add Service"; }
   }
 }
 
@@ -3658,65 +3708,88 @@ async function addPayment(mode) {
       : 0;
     // ────────────────────────────────────────────────────────────────────────
 
-    // Proceed with payment API call - using the fixed backend endpoint
-    const response = await apiFetch("/checkout", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        room: roomNumber,
-        payment_mode: mode,
-        amount: amount,
-        is_refund: false,
-      }),
-    });
+    // Re-enable helper. For money-in, the trigger button stays disabled until
+    // the background write settles so a double-click can't post the same
+    // payment twice; the balance + modal update instantly.
+    const _reenablePaymentBtns = () => {
+      const ap = document.getElementById("add-payment-btn");
+      const cb = document.getElementById("checkout-cash-btn");
+      const ob = document.getElementById("checkout-online-btn");
+      if (ap) { ap.disabled = false; ap.innerHTML = '<i class="fas fa-plus-circle"></i> Add Payment'; }
+      if (cb) { cb.disabled = false; cb.innerHTML = '<i class="fas fa-money-bill"></i> Cash'; }
+      if (ob) { ob.disabled = false; ob.innerHTML = '<i class="fas fa-mobile-alt"></i> Online'; }
+    };
 
-    if (!response.ok) {
-      throw new Error(`Server responded with status: ${response.status}`);
-    }
-
-    const result = await response.json();
-    if (result.success) {
-      // Patch local balance using the pre-request snapshot (race-condition safe).
-      // Simple subtraction mirrors the server: new_balance = old_balance - amount.
-      if (rooms[roomNumber]) {
-        rooms[roomNumber].balance = balanceBeforePayment - amount;
+    // Defensive fallback: if optimistic.js failed to load, use the old flow.
+    if (typeof window.optimisticWrite !== "function") {
+      try {
+        const response = await apiFetch("/checkout", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ room: roomNumber, payment_mode: mode, amount: amount, is_refund: false }),
+        });
+        if (!response.ok) throw new Error(`Server responded with status: ${response.status}`);
+        const result = await response.json();
+        if (result.success) {
+          if (rooms[roomNumber]) rooms[roomNumber].balance = balanceBeforePayment - amount;
+          debouncedFetchData(2000, roomNumber);
+          updateCheckoutModal(roomNumber);
+          showNotification(result.message || `Payment of ₹${amount} added successfully`, "success");
+        } else {
+          showNotification(result.message || "Error adding payment", "error");
+        }
+      } catch (error) {
+        console.error("Error adding payment:", error);
+        showNotification(`Error adding payment: ${error.message}`, "error");
+      } finally {
+        _reenablePaymentBtns();
       }
-      debouncedFetchData(2000, roomNumber); // background sync + bust pay history cache
-
-      // Update the checkout modal
-      updateCheckoutModal(roomNumber);
-
-      showNotification(
-        result.message || `Payment of ₹${amount} added successfully`,
-        "success",
-      );
-    } else {
-      showNotification(result.message || "Error adding payment", "error");
+      return;
     }
+
+    // ── Optimistic path: reduce balance + update modal NOW, persist in bg ──
+    window.optimisticWrite({
+      key: roomNumber,
+      label: "payment",
+      apply() {
+        // balanceBeforePayment is the pre-request snapshot (race-condition safe).
+        const snap = { balance: balanceBeforePayment };
+        if (rooms[roomNumber]) {
+          rooms[roomNumber].balance = balanceBeforePayment - amount;
+        }
+        updateCheckoutModal(roomNumber);
+        showNotification(`Payment of ₹${amount} added`, "success");
+        return snap;
+      },
+      rollback(snap) {
+        if (rooms[roomNumber]) {
+          rooms[roomNumber].balance = snap.balance;
+        }
+        updateCheckoutModal(roomNumber);
+      },
+      request(opId) {
+        return apiFetch("/checkout", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            room: roomNumber, payment_mode: mode, amount: amount,
+            is_refund: false, op_id: opId,
+          }),
+        });
+      },
+      onSuccess() {
+        debouncedFetchData(2000, roomNumber); // authoritative background re-sync
+      },
+    }).then(_reenablePaymentBtns, _reenablePaymentBtns);
   } catch (error) {
     console.error("Error adding payment:", error);
     showNotification(`Error adding payment: ${error.message}`, "error");
-  } finally {
-    // Re-enable buttons if they exist
-    const addPaymentBtn = document.getElementById("add-payment-btn");
-    const cashBtn = document.getElementById("checkout-cash-btn");
-    const onlineBtn = document.getElementById("checkout-online-btn");
-
-    if (addPaymentBtn) {
-      addPaymentBtn.disabled = false;
-      addPaymentBtn.innerHTML =
-        '<i class="fas fa-plus-circle"></i> Add Payment';
-    }
-
-    if (cashBtn) {
-      cashBtn.disabled = false;
-      cashBtn.innerHTML = '<i class="fas fa-money-bill"></i> Cash';
-    }
-
-    if (onlineBtn) {
-      onlineBtn.disabled = false;
-      onlineBtn.innerHTML = '<i class="fas fa-mobile-alt"></i> Online';
-    }
+    const ap = document.getElementById("add-payment-btn");
+    if (ap) { ap.disabled = false; ap.innerHTML = '<i class="fas fa-plus-circle"></i> Add Payment'; }
+    const cb = document.getElementById("checkout-cash-btn");
+    if (cb) { cb.disabled = false; cb.innerHTML = '<i class="fas fa-money-bill"></i> Cash'; }
+    const ob = document.getElementById("checkout-online-btn");
+    if (ob) { ob.disabled = false; ob.innerHTML = '<i class="fas fa-mobile-alt"></i> Online'; }
   }
 }
 
@@ -5190,8 +5263,10 @@ function setupCheckoutConfirmation() {
       const checkoutMobile = prevRoomState?.guest?.mobile || "";
 
 
-      // Fire request in background — no await
-      apiFetch("/checkout", {
+      // Fire request in background — no await. Routed through the per-room
+      // queue so it waits for any pending add-service / add-payment writes for
+      // this room; otherwise the bill could be computed before they land.
+      const _doCheckout = () => apiFetch("/checkout", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -5199,7 +5274,10 @@ function setupCheckoutConfirmation() {
           final_checkout: true,
           room_data: prevRoomState, // pass to server so it can skip a Firestore read
         }),
-      })
+      });
+      (window.cibaraWrites && typeof window.cibaraWrites.enqueue === "function"
+        ? window.cibaraWrites.enqueue(roomNumber, _doCheckout)
+        : _doCheckout())
         .then((r) => r.json())
         .then((result) => {
           if (result.success) {
@@ -5708,98 +5786,31 @@ document.addEventListener("DOMContentLoaded", function () {
       submitBtn.innerHTML =
         '<span class="loader" style="width: 20px; height: 20px;"></span> Processing...';
 
-      try {
-        const guestAddressInput = document.getElementById("guest-address");
-        const guestAddress = guestAddressInput ? guestAddressInput.value.trim() : "";
+      // Capture form values + kick the parallel ID-doc upload BEFORE we
+      // optimistically close the modal (the form may reset on close).
+      const guestAddressInput = document.getElementById("guest-address");
+      const guestAddress = guestAddressInput ? guestAddressInput.value.trim() : "";
 
-        // ID-doc upload runs IN PARALLEL with the check-in request — the
-        // wall-clock cost is max(checkin, upload) instead of the sum. The
-        // photos are keyed by mobile and attach to the customer record
-        // independently of /checkin, so ordering doesn't matter. If the
-        // upload fails the check-in still stands; staff get an explicit
-        // warning (awaited below, after the check-in UX completes) and can
-        // re-attach from the document manager or at checkout.
-        let _docUploadPromise = Promise.resolve(true);
-        if (typeof window.uploadPendingDocIfAny === 'function') {
-          _docUploadPromise = window.uploadPendingDocIfAny(guestMobile);
-        }
+      // ID-doc upload runs IN PARALLEL with the check-in request and never
+      // blocks it. Keyed by mobile, it attaches to the customer record
+      // independently of /checkin, so ordering doesn't matter. If it fails the
+      // check-in still stands; staff get an explicit warning afterwards.
+      let _docUploadPromise = Promise.resolve(true);
+      if (typeof window.uploadPendingDocIfAny === 'function') {
+        _docUploadPromise = window.uploadPendingDocIfAny(guestMobile);
+      }
 
-        const response = await apiFetch("/checkin", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            room: roomNumber,
-            name: guestName,
-            mobile: guestMobile,
-            address: guestAddress,
-            price: roomPrice,
-            guests: guestCount,
-            payment: paymentMethod,
-            amountPaid: amountPaid,
-            photoPath: uploadedPhotoUrl,
-            isAC: isAC,
-            // Optional override; server falls back to now() if absent or
-            // if it fails server-side validation.
-            checkin_time: checkinTimeOverride,
-          }),
-        });
+      const _checkinBody = {
+        room: roomNumber, name: guestName, mobile: guestMobile, address: guestAddress,
+        price: roomPrice, guests: guestCount, payment: paymentMethod,
+        amountPaid: amountPaid, photoPath: uploadedPhotoUrl, isAC: isAC,
+        // Optional override; server falls back to now() if absent/invalid.
+        checkin_time: checkinTimeOverride,
+      };
 
-        if (!response.ok) {
-          throw new Error(`Server responded with status: ${response.status}`);
-        }
-
-        const result = await response.json();
-        if (result.success) {
-          // Close modal and show success immediately — don't block on data reload
-          checkinModal.classList.remove("show");
-          submitBtn.disabled = false;
-          submitBtn.innerHTML = originalContent;
-
-          let message = result.message || "Check-in successful!";
-          if (result.serial_number) {
-            message += ` (Serial #${result.serial_number})`;
-          }
-          showNotification(message, "success");
-
-          // Patch the room card locally so it flips to "occupied" instantly —
-          // same pattern the payment/refund handlers already use. The
-          // debounced background fetch below stays as the authoritative sync.
-          if (rooms[roomNumber]) {
-            const _nb = roomPrice - amountPaid;
-            const _now = new Date();
-            const _p2 = (n) => String(n).padStart(2, "0");
-            const _nowStr =
-              `${_now.getFullYear()}-${_p2(_now.getMonth() + 1)}-` +
-              `${_p2(_now.getDate())} ${_p2(_now.getHours())}:${_p2(_now.getMinutes())}`;
-            rooms[roomNumber] = {
-              ...rooms[roomNumber],
-              status: "occupied",
-              guest: {
-                name: guestName,
-                mobile: guestMobile,
-                price: roomPrice,
-                guests: guestCount,
-                payment: paymentMethod,
-                balance: _nb,
-                isAC: isAC,
-              },
-              balance: _nb,
-              checkin_time: checkinTimeOverride || _nowStr,
-              add_ons: [],
-              renewal_count: 0,
-            };
-            if (typeof renderRooms === "function") renderRooms();
-            if (typeof updateStats === "function") updateStats();
-          }
-
-          // Check-in adds new guest data — let background fetch hydrate the room
-          debouncedFetchData();
-
-          // Notify register & bills modules to refresh live
-          window.dispatchEvent(new CustomEvent("cibaraRoomUpdate", { detail: { type: "checkin" } }));
-
-          // Surface ID-doc upload failures only after the check-in UX is
-          // done — the upload ran in parallel and never blocks check-in.
+      // Surface ID-doc upload failures without ever blocking the check-in UX.
+      const _surfaceDocResult = async () => {
+        try {
           const _docOk = await _docUploadPromise;
           if (!_docOk) {
             showNotification(
@@ -5807,17 +5818,112 @@ document.addEventListener("DOMContentLoaded", function () {
               "error",
             );
           }
-        } else {
-          showNotification(result.message || "Error during check-in", "error");
+        } catch (_) { /* upload errors are non-fatal to check-in */ }
+      };
+
+      // Patch the room card to "occupied" in local state. Returns a snapshot
+      // for rollback. Shared by the optimistic and fallback paths.
+      const _applyCheckinPatch = () => {
+        const snap = { room: rooms[roomNumber] ? { ...rooms[roomNumber] } : null };
+        if (rooms[roomNumber]) {
+          const _nb = roomPrice - amountPaid;
+          const _now = new Date();
+          const _p2 = (n) => String(n).padStart(2, "0");
+          const _nowStr =
+            `${_now.getFullYear()}-${_p2(_now.getMonth() + 1)}-` +
+            `${_p2(_now.getDate())} ${_p2(_now.getHours())}:${_p2(_now.getMinutes())}`;
+          rooms[roomNumber] = {
+            ...rooms[roomNumber],
+            status: "occupied",
+            guest: {
+              name: guestName, mobile: guestMobile, price: roomPrice,
+              guests: guestCount, payment: paymentMethod, balance: _nb, isAC: isAC,
+            },
+            balance: _nb,
+            checkin_time: checkinTimeOverride || _nowStr,
+            add_ons: [],
+            renewal_count: 0,
+          };
+          if (typeof renderRooms === "function") renderRooms();
+          if (typeof updateStats === "function") updateStats();
+        }
+        return snap;
+      };
+
+      // Defensive fallback: if optimistic.js failed to load, use the old flow.
+      if (typeof window.optimisticWrite !== "function") {
+        try {
+          const response = await apiFetch("/checkin", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(_checkinBody),
+          });
+          if (!response.ok) throw new Error(`Server responded with status: ${response.status}`);
+          const result = await response.json();
+          if (result.success) {
+            checkinModal.classList.remove("show");
+            submitBtn.disabled = false;
+            submitBtn.innerHTML = originalContent;
+            let message = result.message || "Check-in successful!";
+            if (result.serial_number) message += ` (Serial #${result.serial_number})`;
+            showNotification(message, "success");
+            _applyCheckinPatch();
+            debouncedFetchData();
+            window.dispatchEvent(new CustomEvent("cibaraRoomUpdate", { detail: { type: "checkin" } }));
+            _surfaceDocResult();
+          } else {
+            showNotification(result.message || "Error during check-in", "error");
+            submitBtn.disabled = false;
+            submitBtn.innerHTML = originalContent;
+          }
+        } catch (error) {
+          console.error("Error during check-in:", error);
+          showNotification(`Error during check-in: ${error.message}`, "error");
           submitBtn.disabled = false;
           submitBtn.innerHTML = originalContent;
         }
-      } catch (error) {
-        console.error("Error during check-in:", error);
-        showNotification(`Error during check-in: ${error.message}`, "error");
-        submitBtn.disabled = false;
-        submitBtn.innerHTML = originalContent;
+        return;
       }
+
+      // ── Optimistic path: close modal + flip room to occupied NOW ──────────
+      // The bill/serial come back from the server; we show them on success.
+      // On failure we revert the card and the helper shows a loud error.
+      window.optimisticWrite({
+        key: roomNumber,
+        label: "check-in",
+        apply() {
+          checkinModal.classList.remove("show");
+          submitBtn.disabled = false;
+          submitBtn.innerHTML = originalContent;
+          const snap = _applyCheckinPatch();
+          window.dispatchEvent(new CustomEvent("cibaraRoomUpdate", { detail: { type: "checkin" } }));
+          return snap;
+        },
+        rollback(snap) {
+          if (snap && snap.room) {
+            rooms[roomNumber] = snap.room;
+          } else if (rooms[roomNumber]) {
+            rooms[roomNumber] = { ...rooms[roomNumber], status: "vacant", guest: null };
+          }
+          if (typeof renderRooms === "function") renderRooms();
+          if (typeof updateStats === "function") updateStats();
+          window.dispatchEvent(new CustomEvent("cibaraRoomUpdate", { detail: { type: "checkin" } }));
+        },
+        request(opId) {
+          return apiFetch("/checkin", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(Object.assign({}, _checkinBody, { op_id: opId })),
+          });
+        },
+        onSuccess(result) {
+          let message = result.message || "Check-in successful!";
+          if (result.serial_number) message += ` (Serial #${result.serial_number})`;
+          showNotification(message, "success");
+          debouncedFetchData(); // authoritative background hydrate
+          _surfaceDocResult();
+        },
+      });
     });
   } else {
     debugLog("Check-in form not found");
@@ -6254,4 +6360,7 @@ document.addEventListener("DOMContentLoaded", function () {
   }
   setInterval(tick, TICK_MS);
 })();
+
+// [perf] optimistic-write UI applied (add-service / add-payment / check-in).
+// Kill-switch: window.CIBARA_OPTIMISTIC=false or localStorage CIBARA_OPTIMISTIC=0
 

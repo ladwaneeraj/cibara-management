@@ -197,8 +197,26 @@
     }
 
     window.fetch = function (input, init) {
-      const url = typeof input === "string" ? input : (input && input.url);
+      let url = typeof input === "string" ? input : (input && input.url);
       const sameOrigin = _shouldAttachToken(url);
+
+      // Manual-refresh cache-bypass: the header refresh button sets
+      // window.__forceFresh for the duration of the refresh. For same-origin
+      // GET/HEAD requests we append a _t=<ts> cache-buster and set no-store,
+      // so neither the browser HTTP cache nor the server-side /get_data
+      // payload cache can serve stale data. POST loaders (Bills/Register/
+      // Bookings) are never browser-cached, so they are unaffected.
+      if (sameOrigin && window.__forceFresh) {
+        const _m = ((init && init.method) || "GET").toUpperCase();
+        if (_m === "GET" || _m === "HEAD") {
+          init = Object.assign({}, init || {});
+          init.cache = "no-store";
+          if (typeof input === "string") {
+            input += (input.indexOf("?") === -1 ? "?" : "&") + "_t=" + Date.now();
+            url = input;
+          }
+        }
+      }
 
       // Non-same-origin or no token: just pass through.
       if (!sameOrigin) return originalFetch(input, init);

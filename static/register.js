@@ -2104,15 +2104,6 @@
               title="Save PDF and share on WhatsApp">
         <i class="fab fa-whatsapp"></i> Save &amp; Share
       </button>
-      <!-- Recalculate: admin-only. Hits /recalculate_bill which
-           re-reads payments from Firestore and writes fresh totals
-           onto the bill doc, then re-opens the bill so the new
-           numbers render. -->
-      <button class="action-btn btn-secondary" id="reg-bill-recalc"
-              data-roles="admin"
-              title="Re-read payments and refresh the bill totals">
-        <i class="fas fa-sync-alt"></i> Recalculate
-      </button>
       <button class="action-btn btn-secondary" id="reg-bill-editprice"
               data-roles="admin"
               title="Correct the room tariff and recompute charges, GST and balance">

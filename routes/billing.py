@@ -489,6 +489,10 @@ def get_register_data():
                     "payment_source": bill_data.get("payment_source", "hotel"),
                     "net_receivable": bill_data.get("net_receivable", 0),
                     "settlement_status": bill_data.get("settlement_status"),
+                    # Link to the settle-later settlement doc. Used below to
+                    # attach the note the operator typed at checkout (the note
+                    # lives on settlements/<id>.notes, not on the bill).
+                    "settlement_id": bill_data.get("settlement_id"),
                     # GST invoice flag
                     "invoice_generated": bill_data.get("invoice_generated", False),
                     # PDF — must be included so the WhatsApp button stays dark
@@ -766,6 +770,34 @@ def get_register_data():
 
         except Exception as te:
             logger.warning(f"Tally dashboard error: {te}")
+
+        # ── Attach settle-later checkout notes to pending rows ───────────────
+        # The note the operator types in the "Settle Later" box at checkout is
+        # stored on the settlement document (settlements/<id>.notes), not on the
+        # bill. Surface it on pending_settlement entries so the Bills view can
+        # show it under the guest name. A single batched get_all keeps this to
+        # one round-trip no matter how many pending rows fall in the range, and
+        # any failure here is non-fatal — the register still returns.
+        try:
+            _pending_sids = list({
+                e["settlement_id"] for e in register_entries
+                if e.get("status") == "pending_settlement" and e.get("settlement_id")
+            })
+            if _pending_sids:
+                _notes_by_sid = {}
+                for _snap in db.get_all(
+                        [settlements_ref.document(s) for s in _pending_sids]):
+                    if _snap.exists:
+                        _note = ((_snap.to_dict() or {}).get("notes") or "").strip()
+                        if _note:
+                            _notes_by_sid[_snap.id] = _note
+                if _notes_by_sid:
+                    for e in register_entries:
+                        _sid = e.get("settlement_id")
+                        if _sid in _notes_by_sid:
+                            e["settlement_notes"] = _notes_by_sid[_sid]
+        except Exception as _sn_err:
+            logger.warning(f"[REGISTER] settle-later note attach failed: {_sn_err}")
 
         t3 = _t.time()
         logger.info(f"[PERF] /get_register_data TOTAL: {t3-t0:.3f}s, entries: {len(register_entries)}")
@@ -1925,6 +1957,13 @@ def edit_bill_room_price():
         }
         if new_folio:
             update["daily_folio"] = new_folio
+        # Invalidate the cached invoice PDF. The bill already carries a pdf_url
+        # from checkout, and auto_generate_bill_pdf SKIPS when one exists; the
+        # WhatsApp "Save & Share" flow also reuses the stored pdf_url. Clearing
+        # it forces both to regenerate from the edited figures (a fresh version
+        # is minted and stamped back by pdf_service.upload_bill_pdf).
+        update["pdf_url"] = ""
+        update["pdf_status"] = "pending_price_edit"
         bills_ref.document(bill_id).update(update)
 
         # Background PDF regeneration so the stored invoice matches the edit.

@@ -173,6 +173,15 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
   background: #fff3cd; color: #856404;
   vertical-align: middle; text-transform: uppercase;
 }
+/* Checkout note typed in the "Settle Later" box — shown under the guest
+   name on pending rows only. */
+.bl-guest-note {
+  margin-top: 2px;
+  font-size: 0.68rem; font-weight: 400;
+  color: #b45309; line-height: 1.3;
+  white-space: normal; max-width: 190px;
+}
+.bl-guest-note i { margin-right: 3px; opacity: 0.75; }
 .bl-collect-btn {
   width: 28px; height: 28px; padding: 0;
   background: #fd7e14;
@@ -1505,20 +1514,6 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
     <div id="bl-bill-print-area"></div>
     <div class="bill-actions">
       <button class="action-btn btn-secondary" id="bl-bill-close2">Close</button>
-      <!--
-        Recalculate — admin-only.
-        Re-reads every payment doc tagged with this bill's stay_id and
-        rewrites payment_cash / payment_online / balance on the bill doc,
-        then re-opens the bill so the new totals render. Use this when
-        a bill shows a stale total (e.g. a duplicate-payment fix or a
-        manually-added payment that didn't auto-trigger a recalc).
-        Hidden for non-admin users by the data-roles handler in auth.js.
-      -->
-      <button class="action-btn btn-secondary" id="bl-bill-recalc"
-              data-roles="admin"
-              title="Re-read payments from Firestore and refresh the bill totals">
-        <i class="fas fa-sync-alt"></i> Recalculate
-      </button>
       <!--
         Edit Price — admin-only.
         Corrects the per-night room tariff on a finalized bill and recomputes
@@ -3108,6 +3103,14 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
       isPending || hasBalance
         ? `<span class="bl-pending-badge">Pending</span>`
         : "";
+    // Checkout note (typed in the "Settle Later" box at checkout, stored on the
+    // settlement doc and surfaced by /get_register_data). Shown under the guest
+    // name on pending rows only; escaped since it's free-text operator input.
+    const _coNote = (e.settlement_notes || "").trim();
+    const guestNoteHTML =
+      (isPending || hasBalance) && _coNote
+        ? `<div class="bl-guest-note" title="Checkout note"><i class="fas fa-sticky-note"></i>${_glockEsc(_coNote)}</div>`
+        : "";
     // Action cell — fixed 4-slot grid so buttons never shift between rows.
     //
     // Each row reserves the same four columns (Collect / View / WhatsApp /
@@ -3204,7 +3207,7 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
     return `<tr class="${rowCls}" data-date-group="${dk}" data-entry-id="${e.id || ''}">
       <td style="color:#888;font-size:.75rem;">${rowIndex}</td>
       <td style="font-size:.73rem;white-space:nowrap;font-family:monospace;">${billNo}${pendingBadge}${b2bPill}${revertedPill}${cancelPill}</td>
-      <td><strong>${e.guest_name || "-"}</strong></td>
+      <td><strong>${e.guest_name || "-"}</strong>${guestNoteHTML}</td>
       <td style="font-size:.78rem;">${e.guest_mobile || "-"}</td>
       <td><strong>${e.room || "-"}</strong></td>
       <td style="font-size:.76rem;white-space:nowrap;">${fmtDT(e.checkin_time)}</td>

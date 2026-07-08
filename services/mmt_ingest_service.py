@@ -425,6 +425,18 @@ def parse_voucher_html(html: str, *, subject: str = "", received_dt=None) -> dic
     parsed["booking_status"] = _search(r"BOOKING STATUS\s+([A-Za-z]+)", text)
     parsed["payment_status"] = _search(r"PAYMENT STATUS\s+([A-Za-z ]+?)\s+BOOKED", text)
 
+    # Layout-independent cancellation flag. A two-column voucher can render
+    # as "LABEL value LABEL value" OR "LABEL LABEL value value" once flattened
+    # to text, so relying on booking_status alone can miss a cancel. A cancelled
+    # voucher uniquely carries a "CANCELLED ON <date>" field (never present on a
+    # confirmed one) — match that too, plus the adjacent-token form.
+    _up = (text or "").upper()
+    parsed["is_cancelled"] = bool(
+        (parsed.get("booking_status") or "").strip().upper() == "CANCELLED"
+        or re.search(r"CANCELLED\s+ON\s", _up)
+        or re.search(r"BOOKING\s+STATUS\s+CANCELLED", _up)
+    )
+
     # ── GST: property + customer (B2B) ────────────────────────────────────
     parsed["property_gstin"] = _search(r"PROPERTY GSTN\s*([0-9A-Z]{15})", text)
     parsed["customer_gstin"] = _search(r"COMPANY GSTN\s*([0-9A-Z]{15})", text)
@@ -888,6 +900,46 @@ def _booking_exists_for(bookings_ref, mmt_booking_id: str) -> bool:
         return False
 
 
+def _cancel_bookings_for(bookings_ref, mmt_booking_id: str, *, dry_run: bool = False) -> int:
+    """
+    Flip every app booking matching this MMT id to status='cancelled', UNLESS it
+    was already cancelled or already consumed (checked_in / checked_out — a stay
+    that already started is never silently undone here; a human handles that).
+
+    A cancelled booking stops blocking room availability automatically (the
+    overlap / room-assignment checks already skip status='cancelled'), so the
+    held room frees up for those dates with no extra work.
+
+    Returns the number of bookings actually cancelled.
+    """
+    if not mmt_booking_id:
+        return 0
+    n = 0
+    try:
+        for d in bookings_ref.where("mmt_booking_id", "==", mmt_booking_id).stream():
+            data = d.to_dict() or {}
+            st = (data.get("status") or "").strip().lower()
+            if st in ("cancelled", "checked_in", "checked_out"):
+                continue  # already cancelled, or the stay was already consumed
+            if dry_run:
+                n += 1
+                continue
+            _now = datetime.now(IST).isoformat()
+            d.reference.update({
+                "status": "cancelled",
+                "cancelled_at": _now,
+                "cancel_reason": "MMT cancellation (auto-ingest)",
+                "cancelledBy": "mmt-gmail-ingest",
+                "lastModifiedBy": "mmt-gmail-ingest",
+                "lastModifiedAt": _now,
+            })
+            n += 1
+            logger.info(f"mmt_ingest: cancelled app booking {d.id} for MMT {mmt_booking_id}")
+    except Exception as e:
+        logger.warning(f"mmt_ingest: cancel query failed for {mmt_booking_id}: {e}")
+    return n
+
+
 def read_cursor(settings_ref):
     try:
         doc = settings_ref.document(_CURSOR_DOC).get()
@@ -1002,7 +1054,7 @@ def ingest(*, dry_run: bool = False, force_days: int | None = None) -> dict:
     cfg = load_config()
     summary = {
         "configured": is_configured(cfg),
-        "created": 0, "skipped_existing": 0, "skipped_past": 0, "needs_review": 0,
+        "created": 0, "cancelled": 0, "skipped_existing": 0, "skipped_past": 0, "needs_review": 0,
         "errors": 0, "scanned": 0, "created_ids": [], "messages": [],
         # Settlement-email outcomes (separate from booking creation).
         "settled": 0, "settle_skipped": 0, "settle_unmatched": 0,
@@ -1096,6 +1148,23 @@ def ingest(*, dry_run: bool = False, force_days: int | None = None) -> dict:
         seen_ids.add(mmt_id)
 
         try:
+            # ── MMT cancellation ─────────────────────────────────────────
+            # A cancelled voucher (BOOKING STATUS: CANCELLED) must flip the
+            # matching app booking to cancelled, NOT be skipped as "existing".
+            _bstatus = (parsed.get("booking_status") or "").strip().lower()
+            if parsed.get("is_cancelled") or _bstatus in ("cancelled", "canceled"):
+                _cn = _cancel_bookings_for(bookings_ref, mmt_id, dry_run=dry_run)
+                if _cn:
+                    summary["cancelled"] = summary.get("cancelled", 0) + _cn
+                    summary["messages"].append(
+                        f"{mmt_id}: cancelled {_cn} booking(s) in app (MMT cancellation)"
+                    )
+                else:
+                    # Nothing to cancel (never ingested, already cancelled, or
+                    # the stay was already checked in/out).
+                    summary["skipped_existing"] += 1
+                continue
+
             if _booking_exists_for(bookings_ref, mmt_id):
                 summary["skipped_existing"] += 1
                 continue

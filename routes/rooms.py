@@ -1625,7 +1625,16 @@ def add_on():
         #   applied_on_day >= _default_day_idx → going-forward
         #     → bump guest.price + snapshot prior days (legacy behaviour)
         is_retroactive = applied_on_day < _default_day_idx
-        if accommodation_charge and not is_retroactive:
+        # One-time by default: an accommodation add-on (Extra Bed / AC / extra
+        # person) is a SINGLE charge for the day it is applied and must NOT
+        # raise the nightly rent. Bumping guest.price made every later renewal
+        # bill at the higher rate while staff kept collecting the old rate,
+        # leaving a phantom balance (the "why is there a Rs.150 balance" bug:
+        # a Rs.150 Extra Bed silently turned Rs.450/night into Rs.600/night).
+        # Set apply_to_all_nights=true ONLY for a genuine permanent per-night
+        # increase for the rest of the stay (e.g. a real AC upgrade).
+        _apply_to_all_nights = bool(data_json.get("apply_to_all_nights", False))
+        if accommodation_charge and not is_retroactive and _apply_to_all_nights:
             guest        = room_data.get("guest", {})
             old_price    = guest.get("price", 0)
             renewal_count = room_data.get("renewal_count", 0)
@@ -2810,6 +2819,13 @@ def get_data():
     try:
         from concurrent.futures import ThreadPoolExecutor
         t0 = _time.time()
+
+        # Cache-bypass: the refresh button appends ?_t=<ts> (or ?fresh=1) to
+        # force a live read. invalidate_rooms_and_totals() (monkey-patched
+        # above) clears the rooms, totals AND /get_data payload caches, so the
+        # payload below is recomputed fresh from Firestore.
+        if request.args.get("_t") or request.args.get("fresh"):
+            invalidate_rooms_and_totals()
 
         # Serve from cache if fresh
         if _GET_DATA_CACHE["payload"] and (_time.time() - _GET_DATA_CACHE["ts"] < _GET_DATA_TTL):

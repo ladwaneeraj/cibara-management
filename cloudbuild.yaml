@@ -8,6 +8,11 @@ steps:
       - "--region=asia-south1"
       - "--platform=managed"
       - "--allow-unauthenticated"
+      # Keep one instance warm so checkout/checkin never pay a cold-start
+      # penalty (the old 5-7s spikes). Steady-state checkout is ~0.5s.
+      - "--min-instances=1"
+      # Startup CPU boost shortens any cold start that does occur.
+      - "--cpu-boost"
       - "--clear-base-image"
       # ── Environment is managed in the Cloud Run CONSOLE, not here ─────────
       # This deploy intentionally does NOT set any env vars or secrets.

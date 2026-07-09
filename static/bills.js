@@ -705,7 +705,7 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
     visibleCount: PAGE_SIZE,
     loading: false,
     dateRange: { start: null, end: null },
-    filters: { search: "", source: "all", payment: "all" },
+    filters: { search: "", source: "all", payment: "all", type: "all" },
     lastLoadedRange: null,
     _reqId: 0,            // incremented on every fetch; detects stale responses
     // Default: sorted flat list by bill number, latest first. Bill numbers
@@ -1276,6 +1276,15 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
       <option value="normal">Normal</option>
       <option value="booking.com">Booking.com</option>
     </select>
+    <select id="bl-type-filter" title="Filter by bill type / status">
+      <option value="all">All Bills</option>
+      <option value="b2b">B2B (GSTIN)</option>
+      <option value="b2c">B2C</option>
+      <option value="cancelled">Cancelled</option>
+      <option value="settle_later">Settle-later</option>
+      <option value="cancel_charge">Cancellation charge</option>
+      <option value="reverted">Reverted</option>
+    </select>
     <input type="text" class="bl-search-input" id="bl-search"
            placeholder="Name / Room / Invoice No…" />
   </div>
@@ -1710,6 +1719,7 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
 
     const srcf = dom("bl-source-filter");
     const payf = dom("bl-payment-filter");
+    const typf = dom("bl-type-filter");
     const sr = dom("bl-search");
 
     if (srcf)
@@ -1720,6 +1730,11 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
     if (payf)
       payf.addEventListener("change", () => {
         state.filters.payment = payf.value;
+        applyFilters();
+      });
+    if (typf)
+      typf.addEventListener("change", () => {
+        state.filters.type = typf.value;
         applyFilters();
       });
     if (sr)
@@ -2446,7 +2461,7 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
         e.bill_number.trim() !== "",
     );
 
-    const { search, source, payment } = state.filters;
+    const { search, source, payment, type } = state.filters;
 
     if (search)
       f = f.filter(
@@ -2478,6 +2493,23 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
             return b > 0;
           default:
             return true;
+        }
+      });
+    }
+
+    // Bill type / status filter — the "Show" dropdown. Each value maps to the
+    // same field the row pills use (invoice_type / status / is_cancellation_charge
+    // / superseded_by_revert), so the filter and the badges always agree.
+    if (type !== "all") {
+      f = f.filter((e) => {
+        switch (type) {
+          case "b2b":           return e.invoice_type === "B2B";
+          case "b2c":           return e.invoice_type !== "B2B";
+          case "cancelled":     return e.status === "cancelled";
+          case "settle_later":  return e.status === "pending_settlement";
+          case "cancel_charge": return !!e.is_cancellation_charge;
+          case "reverted":      return !!e.superseded_by_revert;
+          default:              return true;
         }
       });
     }

@@ -4526,49 +4526,98 @@ function _setHideRegisterToggleUI(enabled) {
   }
 }
 
-// Apply the UI config to the DOM. Idempotent. Also handles the case where the
-// user is currently viewing the Register tab and another device flips the
-// toggle — we switch them to Rooms so they don't get stuck on a hidden tab.
+// Paint the Incognito toggle (single master switch) inside Settings.
+function _setIncognitoToggleUI(enabled) {
+  const toggle = document.getElementById("settings-incognito-toggle");
+  const slider = document.getElementById("settings-incognito-slider");
+  const knob   = document.getElementById("settings-incognito-knob");
+  const sub    = document.getElementById("settings-incognito-sub");
+  if (toggle) toggle.checked = !!enabled;
+  if (slider) slider.style.background = enabled ? "#212121" : "#ccc";
+  if (knob)   knob.style.transform   = enabled ? "translateX(20px)" : "translateX(0)";
+  if (sub) {
+    sub.textContent = enabled
+      ? "Transactions & Register hidden · every stay billed · price locked"
+      : "Off — standard mode";
+  }
+}
+
+// Persistent merged view of the UI config. applyUIConfig() is called both with
+// full server configs and with partial objects (e.g. { incognito_mode: true }
+// from a toggle handler). Merging into one object means effective visibility is
+// always computed from the complete picture, so a partial call never silently
+// clears an unrelated flag. Seeded with defaults; the server-rendered
+// window.__initialUIConfig is merged in by the initial applyUIConfig() call.
+let _uiConfigState = { hide_register_tab: false, incognito_mode: false };
+
+// Apply the UI config to the DOM. Idempotent. Incognito is a superset: it hides
+// the Register AND Transactions tabs plus the bill "Edit Price" button (the last
+// via a body class consumed by CSS). If the user is sitting on a tab that just
+// became hidden — e.g. another device flipped the toggle — we bounce them to
+// Rooms so they aren't stuck on a hidden tab.
 function applyUIConfig(cfg) {
-  cfg = cfg || {};
-  const hideReg = !!cfg.hide_register_tab;
+  Object.assign(_uiConfigState, cfg || {});
 
-  const navItem = document.getElementById("nav-item-register");
-  if (navItem) {
-    navItem.style.display = hideReg ? "none" : "";
+  const incognito = !!_uiConfigState.incognito_mode;
+  const hideReg   = !!_uiConfigState.hide_register_tab || incognito;
+  const hideTxn   = incognito;
+
+  const regNav = document.getElementById("nav-item-register");
+  if (regNav) regNav.style.display = hideReg ? "none" : "";
+  const txnNav = document.getElementById("nav-item-transactions");
+  if (txnNav) txnNav.style.display = hideTxn ? "none" : "";
+
+  // Edit-Price visibility is CSS-driven (body.incognito-mode) so it applies to
+  // the bill modal whether it's already rendered or built later, and to reprints.
+  if (document.body) document.body.classList.toggle("incognito-mode", incognito);
+
+  // Hide the Settings gear directly here too — not only via the
+  // body.incognito-mode stylesheet rule — so it disappears reliably even if
+  // style.css is served stale from cache. Mirrors the direct nav-tab hiding
+  // above. opacity:0 (not display:none) keeps its spot clickable for the
+  // triple-tap that reopens Settings while incognito.
+  const gearBtn = document.getElementById("profile-menu-settings");
+  if (gearBtn) {
+    gearBtn.style.opacity = incognito ? "0" : "";
+    gearBtn.style.cursor  = incognito ? "default" : "pointer";
   }
 
-  // If Register is currently the visible tab and we're hiding it, switch to
-  // Rooms. Two signals to detect "currently on register":
-  //   • #register-tab is visible (does not have `.hidden`)
-  //   • OR the register nav-item has `.active`
-  if (hideReg) {
-    const regTabContent = document.getElementById("register-tab");
-    const regNavActive  = navItem && navItem.classList.contains("active");
-    const regVisible    = regTabContent && !regTabContent.classList.contains("hidden");
-    if (regNavActive || regVisible) {
-      // Trigger the Rooms tab the same way a click would — this reuses all the
-      // existing tab-switch wiring (active class, hidden class, etc.).
-      const roomsNav = document.querySelector('.nav-item[data-tab="rooms"]');
-      if (roomsNav) {
-        roomsNav.click();
-      } else {
-        // Fallback if the rooms nav isn't found for some reason.
-        document.querySelectorAll(".tab-content").forEach((c) =>
-          c.classList.add("hidden"),
-        );
-        const roomsTab = document.getElementById("rooms-tab");
-        if (roomsTab) roomsTab.classList.remove("hidden");
-      }
+  // Bounce off a now-hidden tab → Rooms. Reuses the normal tab-switch wiring by
+  // synthesising a click on the Rooms nav (active/hidden classes, etc.).
+  const bounceToRooms = () => {
+    const roomsNav = document.querySelector('.nav-item[data-tab="rooms"]');
+    if (roomsNav) {
+      roomsNav.click();
+    } else {
+      document.querySelectorAll(".tab-content").forEach((c) =>
+        c.classList.add("hidden"),
+      );
+      const roomsTab = document.getElementById("rooms-tab");
+      if (roomsTab) roomsTab.classList.remove("hidden");
     }
+  };
+
+  const onHiddenTab = (navEl, contentId) => {
+    const content   = document.getElementById(contentId);
+    const navActive = navEl && navEl.classList.contains("active");
+    const visible   = content && !content.classList.contains("hidden");
+    return !!(navActive || visible);
+  };
+
+  if ((hideReg && onHiddenTab(regNav, "register-tab")) ||
+      (hideTxn && onHiddenTab(txnNav, "transactions-tab"))) {
+    bounceToRooms();
   }
 
-  // Keep the Settings toggle UI in sync if the modal is open or will open.
-  _setHideRegisterToggleUI(hideReg);
+  // Keep the Settings toggle UIs in sync if the modal is open or will open.
+  _setHideRegisterToggleUI(!!_uiConfigState.hide_register_tab);
+  _setIncognitoToggleUI(incognito);
 }
 
 async function loadUIConfig() {
-  const sub = document.getElementById("settings-hidereg-sub");
+  // The register card is hidden (folded into Incognito); drive the visible
+  // Incognito card's subtitle for loading/error feedback instead.
+  const sub = document.getElementById("settings-incognito-sub");
   if (sub) sub.textContent = "Loading…";
   try {
     const res = await apiFetch("/settings/ui_config");
@@ -4579,7 +4628,7 @@ async function loadUIConfig() {
   } catch (err) {
     console.warn("[ui_config] load failed:", err);
     if (sub) sub.textContent = "Could not load — tap to retry";
-    const toggle = document.getElementById("settings-hidereg-toggle");
+    const toggle = document.getElementById("settings-incognito-toggle");
     if (toggle) toggle.checked = false;
   }
 }
@@ -4624,6 +4673,45 @@ async function toggleHideRegisterTab(inputEl) {
   }
 }
 
+async function toggleIncognitoMode(inputEl) {
+  const desired = !!(inputEl && inputEl.checked);
+  // Optimistic UI: apply locally first, then persist.
+  applyUIConfig({ incognito_mode: desired });
+  if (inputEl) inputEl.disabled = true;
+  try {
+    const res = await apiFetch("/settings/ui_config", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ incognito_mode: desired }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    if (!data.success) throw new Error(data.message || "Save failed");
+    // Re-paint from the server's authoritative response.
+    applyUIConfig(data.config || {});
+    if (typeof showNotification === "function") {
+      showNotification(
+        desired ? "Incognito mode ON." : "Incognito mode OFF.",
+        "success",
+      );
+    }
+  } catch (err) {
+    console.error("[ui_config] incognito save failed:", err);
+    // Revert to the previous state.
+    applyUIConfig({ incognito_mode: !desired });
+    if (typeof showNotification === "function") {
+      showNotification(
+        "Could not save setting: " + (err.message || "network error"),
+        "error",
+      );
+    } else {
+      alert("Could not save setting: " + (err.message || "network error"));
+    }
+  } finally {
+    if (inputEl) inputEl.disabled = false;
+  }
+}
+
 // Initial apply: window.__initialUIConfig is server-rendered. Re-applying it
 // in JS is idempotent and ensures the toggle UI inside Settings reflects the
 // current state when the modal first opens.
@@ -4640,6 +4728,52 @@ async function toggleHideRegisterTab(inputEl) {
 window.addEventListener("cibaraUIConfigChanged", (e) => {
   applyUIConfig((e && e.detail) || {});
 });
+
+// ── Incognito: hidden Settings gear, triple-click to open ─────────────────────
+// In incognito mode the Settings gear in the profile-menu head is made invisible
+// but kept in place and clickable (CSS: opacity:0 on body.incognito-mode — NOT
+// display:none, which would remove it from the layout and make it unclickable).
+// It opens only after THREE quick clicks on its spot, so it isn't usable at a
+// glance. Outside incognito the gear is visible and auth.js opens it on a single
+// click, so this handler stays out of the way then.
+//
+// Registered in the CAPTURE phase so it runs before auth.js's (bubble-phase)
+// click handler; in incognito it swallows each click with stopImmediatePropagation()
+// so auth.js can't open on the first one. The counter resets 800ms after a click.
+(function _wireIncognitoGearTripleClick() {
+  const gear = document.getElementById("profile-menu-settings");
+  if (!gear) return;
+  let clicks = 0;
+  let timer = null;
+  gear.addEventListener(
+    "click",
+    function (e) {
+      // Normal mode: let auth.js handle the single click (open immediately).
+      if (!document.body.classList.contains("incognito-mode")) return;
+      // Incognito: block auth.js's immediate open; require three quick clicks.
+      e.stopImmediatePropagation();
+      e.preventDefault();
+      clicks += 1;
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(function () { clicks = 0; timer = null; }, 800);
+      if (clicks >= 3) {
+        clicks = 0;
+        clearTimeout(timer);
+        timer = null;
+        // Close the menu. auth.js tracks open state purely via menu.hidden, so
+        // setting it here stays consistent with its openMenu/closeMenu.
+        const menu = document.getElementById("profile-menu");
+        const pbtn = document.getElementById("profile-btn");
+        if (menu) menu.hidden = true;
+        if (pbtn) pbtn.setAttribute("aria-expanded", "false");
+        if (typeof window.openSettingsModal === "function") {
+          window.openSettingsModal();
+        }
+      }
+    },
+    true,
+  );
+})();
 
 function closeSettingsModal() {
   const modal = document.getElementById("settings-modal");

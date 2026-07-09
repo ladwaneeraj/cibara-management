@@ -436,6 +436,15 @@ def invalidate_billing_config_cache():
 
 _UI_CONFIG_DEFAULTS = {
     "hide_register_tab": False,
+    # incognito_mode (bool, default False):
+    #   True  → single master switch. The frontend hides the Transactions and
+    #           Register tabs and the bill-modal "Edit Price" button; the
+    #           backend forces bill generation for every stay (OR-ed into
+    #           always_generate_bill in create_bill_record). Kept here (not in
+    #           billing_config) so the one Incognito toggle drives both UI and
+    #           billing behaviour from a single doc.
+    #   False → default.
+    "incognito_mode": False,
 }
 
 
@@ -1197,6 +1206,17 @@ def create_bill_record(room, room_data, checkout_time, batch=None,
                            f"using defaults: {_cfg_err}")
             _billing_cfg = dict(_BILLING_CONFIG_DEFAULTS)
         always_generate_bill = bool(_billing_cfg.get("always_generate_bill", False))
+        # Incognito mode (settings/ui_config) is a superset switch: when ON it
+        # forces bill generation for every stay, exactly like always_generate_bill.
+        # We OR it in here so the single Incognito toggle governs billing without
+        # having to also flip the standalone always_generate_bill flag. Read is
+        # defensive — a ui_config blip must never break checkout.
+        try:
+            if bool(get_ui_config().get("incognito_mode", False)):
+                always_generate_bill = True
+        except Exception as _incog_err:
+            logger.warning(f"create_bill_record: ui_config read failed, "
+                           f"ignoring incognito: {_incog_err}")
         # When the property's own GSTIN is registered on MMT, the hotel issues
         # the room tax invoice itself (see _BILLING_CONFIG_DEFAULTS note).
         # C3 — OTA invoices are MANDATORY. The lodge is GST-registered, so

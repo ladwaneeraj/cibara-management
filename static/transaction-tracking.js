@@ -313,6 +313,11 @@ class TransactionLogManager {
       typeFilter === "all" || typeFilter === "expenses"
         ? recentExpenseLogs
         : [];
+    // Composable "GST only" sub-filter — list only, so the analytics cards above
+    // still reflect every expense in the range.
+    if (txnExpenseGstOnly) {
+      expenseForList = expenseForList.filter(_expenseCarriesGst);
+    }
     let settlementForList =
       typeFilter === "all" || typeFilter === "settlements"
         ? recentSettlementLogs
@@ -1981,7 +1986,23 @@ let txnActiveType = "all"; // "all" | "cash" | "online" | "refunds" | "expenses"
 // view. "daily" = drawer expenses (default — matches the non-admin
 // view); "report" = report expenses; "all" = both.
 let txnExpenseScope = "daily";
+// Composable "GST only" sub-filter for the Expense view (admin). Independent of
+// txnExpenseScope, so you can view e.g. "Report + GST". Filters the LIST only —
+// the analytics cards keep reflecting every expense in the range.
+let txnExpenseGstOnly = false;
 let txnDateUnlocked = false; // true after manager password verified
+
+// True if an expense log carries GST. Mirrors _carries_gst in routes/reports.py
+// (the same rule the GST/ITC export uses): the has_gst flag, a positive
+// gst_amount, or booking.com commission GST. Split legs each carry the
+// denormalised has_gst, so every leg of a GST split matches.
+function _expenseCarriesGst(log) {
+  if (!log) return false;
+  if (log.has_gst === true) return true;
+  const g = parseFloat(log.gst_amount || 0) || 0;
+  const c = parseFloat(log.commission_gst || 0) || 0;
+  return g > 0 || c > 0;
+}
 let txnExtendedLogs = null; // cached logs from /get_transactions_range for current range
 
 function _getDateOffset(days) {
@@ -2035,6 +2056,17 @@ function _setExpenseScopeActive(scope) {
     });
 }
 
+// Reflect the composable GST-only toggle state (green = active). The button
+// lives inside #txn-expense-scope alongside Daily/Report/All but uses a distinct
+// class, so _setExpenseScopeActive never touches it and vice-versa.
+function _setGstToggleActive(on) {
+  const btn = document.querySelector("#txn-expense-scope .txn-gst-btn");
+  if (!btn) return;
+  btn.style.background = on ? "#2e7d32" : "#fff";
+  btn.style.color = on ? "#fff" : "#475569";
+  btn.style.borderColor = on ? "#2e7d32" : "#c7d2fe";
+}
+
 // Returns the #txn-expense-scope toggle, building it if the loaded page
 // HTML predates it (stale cache / not yet redeployed). Buttons are
 // wired exactly once — tracked via the data-wired attribute — so this
@@ -2064,6 +2096,28 @@ function _ensureExpenseScopeEl() {
       .join("");
     anchor.parentNode.insertBefore(el, anchor.nextSibling);
   }
+
+  // Ensure the composable "GST only" toggle exists — whether #txn-expense-scope
+  // came from the server-rendered HTML (which may predate this feature) or was
+  // built just above. Idempotent: appended only when missing, so it shows up on
+  // a hard-reload without needing an HTML redeploy.
+  if (!el.querySelector(".txn-gst-btn")) {
+    const sep = document.createElement("span");
+    sep.setAttribute("aria-hidden", "true");
+    sep.style.cssText =
+      "width:1px;align-self:stretch;background:#e2e8f0;margin:2px 2px;";
+    const gst = document.createElement("button");
+    gst.type = "button";
+    gst.className = "txn-gst-btn";
+    gst.title = "Show only GST-bearing expenses";
+    gst.textContent = "GST";
+    gst.style.cssText =
+      "padding:4px 13px;border:1px solid #c7d2fe;border-radius:6px;" +
+      "font-size:0.78rem;font-weight:600;cursor:pointer;background:#fff;color:#475569;";
+    el.appendChild(sep);
+    el.appendChild(gst);
+  }
+
   if (!el.dataset.wired) {
     el.dataset.wired = "1";
     el.querySelectorAll(".txn-scope-btn").forEach((btn) => {
@@ -2075,6 +2129,21 @@ function _ensureExpenseScopeEl() {
       });
     });
     _setExpenseScopeActive(txnExpenseScope);
+  }
+
+  // Wire the GST toggle once — tracked on the button itself (not the container's
+  // data-wired), because the button may be appended AFTER the scope buttons were
+  // already wired on an earlier render.
+  const gstBtn = el.querySelector(".txn-gst-btn");
+  if (gstBtn && !gstBtn.dataset.wired) {
+    gstBtn.dataset.wired = "1";
+    gstBtn.addEventListener("click", function () {
+      txnExpenseGstOnly = !txnExpenseGstOnly;
+      _setGstToggleActive(txnExpenseGstOnly);
+      const { fromDate, toDate } = txnActiveDateRange;
+      _triggerRender(fromDate, toDate);
+    });
+    _setGstToggleActive(txnExpenseGstOnly);
   }
   return el;
 }

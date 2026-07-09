@@ -1069,6 +1069,8 @@ def update_ui_config_endpoint():
         update = {}
         if "hide_register_tab" in data:
             update["hide_register_tab"] = bool(data["hide_register_tab"])
+        if "incognito_mode" in data:
+            update["incognito_mode"] = bool(data["incognito_mode"])
 
         if not update:
             return jsonify(success=False,

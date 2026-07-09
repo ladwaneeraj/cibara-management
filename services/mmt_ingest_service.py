@@ -405,9 +405,21 @@ def parse_voucher_html(html: str, *, subject: str = "", received_dt=None) -> dic
 
     nights = _search(r"\((\d+)\s*Night", text)
 
-    parsed["check_in_date"] = _parse_mmt_date(ci_date)
+    # Order the two stay dates chronologically. A stay's check-in is always on
+    # or before its check-out, so the EARLIER date is check-in and the LATER is
+    # check-out — independent of the order the voucher's table happened to render
+    # them in. This fixes vouchers whose layout lists the check-out column before
+    # the check-in column (dates/times arrived swapped). ISO strings compare
+    # chronologically. Each time token lives in the same date+time block as its
+    # date, so it travels with the date when we swap.
+    ci_iso = _parse_mmt_date(ci_date)
+    co_iso = _parse_mmt_date(co_date)
+    if ci_iso and co_iso and ci_iso > co_iso:
+        ci_iso, co_iso = co_iso, ci_iso
+        ci_time, co_time = co_time, ci_time
+    parsed["check_in_date"] = ci_iso
     parsed["check_in_time"] = _parse_mmt_time(ci_time) or "12:00"
-    parsed["check_out_date"] = _parse_mmt_date(co_date)
+    parsed["check_out_date"] = co_iso
     parsed["check_out_time"] = _parse_mmt_time(co_time) or "12:00"
     parsed["nights"] = int(nights) if nights else None
 

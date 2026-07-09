@@ -4266,3 +4266,24 @@ input:checked + .toggle-slider:before {
   background: #fffbeb; color: #b45309; border-radius: 999px;
   padding: .1rem .5rem; font-size: .68rem; font-weight: 700;
 }
+
+/* ── Incognito mode ─────────────────────────────────────────────────────────
+   Toggled by applyUIConfig() in script.js (body.incognito-mode). CSS-driven so
+   the hide applies to the bill modal's "Edit Price" button whether it is
+   already in the DOM or rendered later by bills.js, and on reprints. The
+   backend still enforces payment.edit on /edit_bill_room_price — this is a
+   UI affordance, not the security boundary. */
+body.incognito-mode #bl-bill-editprice {
+  display: none !important;
+}
+
+/* Incognito mode: make the Settings gear invisible but keep it in place and
+   clickable, so a triple-click on its spot still opens Settings (handled by
+   _wireIncognitoGearTripleClick in script.js). Deliberately NOT display:none /
+   visibility:hidden — those remove the element from hit-testing and it could no
+   longer be clicked. cursor:default avoids the pointer-cursor tell over the
+   otherwise-empty spot. !important overrides the button's inline styles. */
+body.incognito-mode #profile-menu-settings {
+  opacity: 0 !important;
+  cursor: default !important;
+}

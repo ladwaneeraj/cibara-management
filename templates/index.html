@@ -650,7 +650,7 @@
       }
     </style>
   </head>
-  <body>
+  <body{% if ui_config and ui_config.incognito_mode %} class="incognito-mode"{% endif %}>
     <div class="app-container">
       <!-- Header -->
       <header class="header">
@@ -701,15 +701,42 @@
             <div id="profile-menu-name" class="profile-menu-name">—</div>
             <div id="profile-menu-role" class="profile-menu-role">—</div>
           </div>
+          <!-- Settings — icon only, right-aligned in the menu head. Wired in
+               auth.js (#profile-menu-settings → closeMenu + openSettingsModal);
+               permission-gated by settings.view. margin-left:auto pushes it to
+               the far right of the flex head row. -->
+          <button
+            id="profile-menu-settings"
+            data-perm="settings.view"
+            type="button"
+            title="Settings"
+            aria-label="Settings"
+            style="
+              margin-left: auto;
+              display: inline-flex;
+              align-items: center;
+              justify-content: center;
+              width: 34px;
+              height: 34px;
+              padding: 0;
+              background: none;
+              border: none;
+              border-radius: 8px;
+              color: #555;
+              font-size: 1.05rem;
+              cursor: pointer;
+              transition: background 0.15s;
+            "
+            onmouseover="this.style.background='#f0f0f0'"
+            onmouseout="this.style.background='none'"
+          >
+            <i class="fas fa-cog"></i>
+          </button>
         </div>
         <div class="profile-menu-divider"></div>
         <button class="profile-menu-item" id="profile-menu-change-password" role="menuitem" type="button">
           <i class="fas fa-key profile-menu-icon"></i>
           <span>Change Password</span>
-        </button>
-        <button class="profile-menu-item" id="profile-menu-settings" data-perm="settings.view" role="menuitem" type="button">
-          <i class="fas fa-cog profile-menu-icon"></i>
-          <span>Settings</span>
         </button>
         <button class="profile-menu-item" id="profile-menu-users" data-perm="user.manage" role="menuitem" type="button">
           <i class="fas fa-users-cog profile-menu-icon"></i>
@@ -852,6 +879,11 @@
               style="padding:4px 13px;border:1px solid #c7d2fe;border-radius:6px;font-size:0.78rem;font-weight:600;cursor:pointer;background:#fff;color:#475569;">Report</button>
             <button type="button" class="txn-scope-btn" data-scope="all"
               style="padding:4px 13px;border:1px solid #c7d2fe;border-radius:6px;font-size:0.78rem;font-weight:600;cursor:pointer;background:#fff;color:#475569;">All</button>
+            <!-- Composable "GST only" toggle — layers on top of Daily/Report/All.
+                 Wired in transaction-tracking.js (_ensureExpenseScopeEl). -->
+            <span aria-hidden="true" style="width:1px;align-self:stretch;background:#e2e8f0;margin:2px 2px;"></span>
+            <button type="button" class="txn-gst-btn" title="Show only GST-bearing expenses"
+              style="padding:4px 13px;border:1px solid #c7d2fe;border-radius:6px;font-size:0.78rem;font-weight:600;cursor:pointer;background:#fff;color:#475569;">GST</button>
           </div>
 
           <!-- Analytics Cards -->
@@ -1604,11 +1636,11 @@
           <div class="nav-icon"><i class="fas fa-bed"></i></div>
           <div class="nav-label">Rooms</div>
         </div>
-        <div class="nav-item" data-tab="transactions" data-hide-roles="housekeeping">
+        <div class="nav-item" data-tab="transactions" id="nav-item-transactions" data-hide-roles="housekeeping"{% if ui_config and ui_config.incognito_mode %} style="display:none"{% endif %}>
           <div class="nav-icon"><i class="fas fa-receipt"></i></div>
           <div class="nav-label">Transactions</div>
         </div>
-        <div class="nav-item" data-tab="register" id="nav-item-register" data-hide-roles="housekeeping"{% if ui_config and ui_config.hide_register_tab %} style="display:none"{% endif %}>
+        <div class="nav-item" data-tab="register" id="nav-item-register" data-hide-roles="housekeeping"{% if ui_config and (ui_config.hide_register_tab or ui_config.incognito_mode) %} style="display:none"{% endif %}>
           <div class="nav-icon"><i class="fas fa-book"></i></div>
           <div class="nav-label">Register</div>
         </div>
@@ -1715,11 +1747,114 @@
             ></i>
           </div>
 
-          <!-- Bill generation toggle -->
+          <!-- Incognito mode — single master switch (see script.js
+               toggleIncognitoMode). ON → hides Transactions + Register tabs and
+               the bill "Edit Price" button, and forces bill generation for every
+               stay (server-enforced in config.create_bill_record). ORs into
+               always_generate_bill / hide_register_tab under the hood, so those
+               two standalone cards below are intentionally hidden — Incognito is
+               the one control. -->
+          <div
+            id="settings-incognito-card"
+            style="
+              display: flex;
+              align-items: center;
+              gap: 1rem;
+              padding: 0.85rem 1rem;
+              border-radius: 12px;
+              border: 1.5px solid var(--border);
+              margin-top: 0.65rem;
+            "
+          >
+            <div
+              style="
+                width: 44px;
+                height: 44px;
+                border-radius: 12px;
+                flex-shrink: 0;
+                background: rgba(33, 33, 33, 0.1);
+                display: flex;
+                align-items: center;
+                justify-content: center;
+              "
+            >
+              <i
+                class="fas fa-user-secret"
+                style="color: #212121; font-size: 1.1rem"
+              ></i>
+            </div>
+            <div style="flex: 1; min-width: 0">
+              <div
+                style="
+                  font-weight: 600;
+                  font-size: 0.92rem;
+                  color: var(--text-primary);
+                "
+              >
+                Incognito mode
+              </div>
+              <div
+                id="settings-incognito-sub"
+                style="
+                  font-size: 0.75rem;
+                  color: var(--text-secondary);
+                  margin-top: 2px;
+                "
+              >
+                Loading…
+              </div>
+            </div>
+            <label
+              class="settings-toggle"
+              style="
+                position: relative;
+                display: inline-block;
+                width: 44px;
+                height: 24px;
+                flex-shrink: 0;
+                cursor: pointer;
+              "
+              title="Enable incognito mode"
+            >
+              <input
+                type="checkbox"
+                id="settings-incognito-toggle"
+                onchange="toggleIncognitoMode(this)"
+                style="opacity: 0; width: 0; height: 0"
+              />
+              <span
+                id="settings-incognito-slider"
+                style="
+                  position: absolute;
+                  inset: 0;
+                  background: #ccc;
+                  border-radius: 24px;
+                  transition: background 0.2s;
+                "
+              ></span>
+              <span
+                id="settings-incognito-knob"
+                style="
+                  position: absolute;
+                  height: 18px;
+                  width: 18px;
+                  left: 3px;
+                  top: 3px;
+                  background: white;
+                  border-radius: 50%;
+                  transition: transform 0.2s;
+                  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+                "
+              ></span>
+            </label>
+          </div>
+
+          <!-- Bill generation toggle — hidden: folded into Incognito (kept in
+               the DOM so its existing load/save JS stays intact). -->
           <div
             id="settings-billgen-card"
             style="
-              display: flex;
+              display: none;
               align-items: center;
               gap: 1rem;
               padding: 0.85rem 1rem;
@@ -1816,10 +1951,12 @@
           </div>
 
           <!-- Hide Register tab toggle -->
+          <!-- Hide Register tab — hidden: folded into Incognito (kept in the
+               DOM so its existing load/save JS stays intact). -->
           <div
             id="settings-hidereg-card"
             style="
-              display: flex;
+              display: none;
               align-items: center;
               gap: 1rem;
               padding: 0.85rem 1rem;

@@ -3799,7 +3799,13 @@ def toggle_housekeeping():
     Toggle mid-stay housekeeping request for a room.
     Sets service_cleaning.room and/or service_cleaning.bathroom flags.
 
-    Body: { room: str, room_clean: bool, bathroom_clean: bool }
+    Body: { room: str, room_clean?: bool, bathroom_clean?: bool }
+
+    Only the flags present in the body are updated; any omitted flag is
+    left untouched. This is important because the card icons and the
+    single-toggle in the checkout modal send just one flag at a time.
+    Rebuilding the whole service_cleaning map here would reset the
+    unsent flag to False and make both icons vanish on the next refresh.
     """
     try:
         data = request.json or {}
@@ -3807,20 +3813,30 @@ def toggle_housekeeping():
         if not room:
             return jsonify(success=False, message="room is required"), 400
 
-        room_clean     = bool(data.get("room_clean", False))
-        bathroom_clean = bool(data.get("bathroom_clean", False))
+        room_clean_raw     = data.get("room_clean", None)
+        bathroom_clean_raw = data.get("bathroom_clean", None)
+
+        if room_clean_raw is None and bathroom_clean_raw is None:
+            return jsonify(
+                success=False,
+                message="At least one of room_clean or bathroom_clean is required",
+            ), 400
 
         room_doc = rooms_ref.document(str(room)).get()
         if not room_doc.exists:
             return jsonify(success=False, message="Room not found"), 404
 
+        # Use dotted field paths so only the specified sub-field(s) change;
+        # the other flag and the rest of the map are preserved by Firestore.
         update = {
-            "service_cleaning": {
-                "room":     room_clean,
-                "bathroom": bathroom_clean,
-                "requested_at": datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S"),
-            }
+            "service_cleaning.requested_at":
+                datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S"),
         }
+        if room_clean_raw is not None:
+            update["service_cleaning.room"] = bool(room_clean_raw)
+        if bathroom_clean_raw is not None:
+            update["service_cleaning.bathroom"] = bool(bathroom_clean_raw)
+
         rooms_ref.document(str(room)).update(update)
         invalidate_rooms_and_totals()
         return jsonify(success=True, message="Housekeeping flags updated")

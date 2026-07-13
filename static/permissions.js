@@ -39,6 +39,11 @@
       // reconcile, reverse, create adjustments, or manage accounts.
       "banking.view",
       "banking.deposit.create",
+      // Deep-check maintenance — manager inspects and marks fixed;
+      // verify / checklist edit / delete stay admin-only.
+      "maintenance.view",
+      "maintenance.inspect",
+      "maintenance.issue.fix",
       // Manager does NOT get: settings.view, discount.apply,
       // settlement.manage, transaction.history.full, payment.edit,
       // data.export, customer.manage, booking.revert, revenue.view,
@@ -49,7 +54,9 @@
       // banking.account.manage,
       // expense.presets.manage,
       // expense.manage,
-      // gst.lock.manage (GST month locking — admin-only).
+      // gst.lock.manage (GST month locking — admin-only),
+      // maintenance.issue.verify, maintenance.checklist.manage,
+      // maintenance.manage (deep-check admin ops — admin-only).
     ]),
     [ROLE_HOUSEKEEPING]: Object.freeze([
       "app.access",

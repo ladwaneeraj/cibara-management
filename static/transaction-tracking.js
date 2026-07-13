@@ -15,6 +15,73 @@ function _localYMD(d) {
   return `${y}-${m}-${day}`;
 }
 
+// ── Payment-history formatters ────────────────────────────────────────────
+// Absolute date/time only — no relative "Today/Yesterday" labels. Dates
+// render as DD-MM-YYYY, times as 12-hour with AM/PM. Both return the raw
+// stored value on any parse failure so a row never renders worse than the
+// data behind it.
+function _fmtDMY(ymd) {
+  if (!ymd) return "";
+  const datePart = String(ymd).trim().split(/[ T]/)[0];
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(datePart);
+  return m ? `${m[3]}-${m[2]}-${m[1]}` : String(ymd);
+}
+
+function _fmt12h(hhmm) {
+  if (!hhmm) return "";
+  const m = /^(\d{1,2}):(\d{2})/.exec(String(hhmm).trim());
+  if (!m) return String(hhmm);
+  let h = +m[1];
+  const ampm = h >= 12 ? "PM" : "AM";
+  h = h % 12 === 0 ? 12 : h % 12;
+  return `${h}:${m[2]} ${ampm}`;
+}
+
+// "11-07-2026, 10:55 AM" — omits whichever part is missing.
+function _payWhen(dateStr, timeStr) {
+  return [_fmtDMY(dateStr), _fmt12h(timeStr)].filter(Boolean).join(", ");
+}
+
+// Payment-method → clean pill label + CSS modifier. Anything that isn't
+// cash/online is treated as an on-account "Balance".
+function _methodLabel(m) {
+  m = String(m || "").toLowerCase();
+  if (m === "cash") return "Cash";
+  if (m === "online") return "Online";
+  return "Balance";
+}
+function _methodClass(m) {
+  m = String(m || "").toLowerCase();
+  if (m === "cash" || m === "online") return m;
+  return "balance";
+}
+
+// Is this add-on an accommodation charge (Extra Bed / AC)? Those are the
+// entries billed to a specific night, so they get a "For <date>" tag.
+// Prefer the explicit flag; fall back to the item name for legacy rows.
+function _isAccomAddon(payment) {
+  if (payment && payment.accommodation_charge === true) return true;
+  return /\b(bed|ac)\b/.test(String((payment && payment.item) || "").toLowerCase());
+}
+
+// Icon for a row, chosen from FontAwesome names already shipped in the app.
+function _payIcon(kind, item) {
+  if (kind === "refund") return "fa-undo";
+  if (kind === "shift") return "fa-exchange-alt";
+  if (kind === "booking") return "fa-calendar-check";
+  if (kind === "later") return "fa-clock";
+  if (kind === "online") return "fa-mobile-alt";
+  if (kind === "cash") return "fa-money-bill-wave";
+  if (kind === "addon") {
+    const it = String(item || "").toLowerCase();
+    if (/\bbed\b/.test(it)) return "fa-bed";
+    if (/\bac\b/.test(it)) return "fa-snowflake";
+    if (it.includes("water")) return "fa-tint";
+    return "fa-concierge-bell";
+  }
+  return "fa-receipt";
+}
+
 class TransactionTracker {
   constructor() {
     this.dailyCounters = this.loadDailyCounters();
@@ -1037,58 +1104,83 @@ class TransactionLogManager {
       if (seen.has(key)) return;
       seen.add(key);
 
-      let paymentType = "Payment";
-      let colorStyle = "";
+      let title = "Payment";
+      let kind = "cash"; // cash | online | addon | refund | shift | booking | later
       let amountText = `₹${payment.amount || 0}`;
-      let badgeHtml = "";
+      let amtKind = "in"; // in | addon | refund  (colour of the amount)
+      let showAmount = true;
+      let methodBadgeHtml = "";
 
       const src = payment._source;
       const ptype = payment.type || "";
 
       if (src === "refund" || _refundTypes.has(ptype)) {
-        paymentType = "Refund";
-        colorStyle = "style='color: var(--danger)'";
+        title = "Refund";
+        kind = "refund";
+        amtKind = "refund";
+        amountText = `₹${Math.abs(payment.amount || 0)}`;
       } else if (src === "addon" || ptype === "addon") {
-        const itemName = payment.item || payment.note || "Add-on";
-        paymentType = `Add-on: ${itemName}`;
-        colorStyle = "style='color: var(--warning)'";
+        title = payment.item || payment.note || "Add-on";
+        kind = "addon";
+        amtKind = "addon";
         const method = payment.method || payment.payment_method || "balance";
-        badgeHtml = `<span class="service-payment-badge ${method}">${method}</span>`;
+        methodBadgeHtml = `<span class="pay-badge pay-badge--${_methodClass(method)}">${_methodLabel(method)}</span>`;
         amountText = `₹${payment.amount || payment.price || 0}`;
       } else if (src === "shift" || ptype === "room_shift") {
-        const oldRoom = payment.old_room || "?";
-        paymentType = `Room Shifted from Room ${oldRoom}`;
-        colorStyle = "style='color: var(--info, #17a2b8)'";
-        amountText = "";
+        title = `Room shifted from Room ${payment.old_room || "?"}`;
+        kind = "shift";
+        showAmount = false;
       } else if (ptype === "booking_advance" || ptype === "booking_payment") {
-        paymentType = `Booking Advance (${payment.method || "cash"})`;
-        colorStyle = "style='color: var(--info, #17a2b8)'";
+        title = "Booking Advance";
+        kind = "booking";
+        methodBadgeHtml = `<span class="pay-badge pay-badge--${_methodClass(payment.method || "cash")}">${_methodLabel(payment.method || "cash")}</span>`;
       } else if (ptype === "booking_conversion") {
         if (payment.amount === 0) {
-          paymentType = "Booking — Fully Paid";
-          colorStyle = "style='color: var(--warning)'";
+          title = "Booking — Fully Paid";
+          kind = "booking";
+          showAmount = false;
         } else {
-          paymentType = `Booking Final Payment (${payment.method || "cash"})`;
+          title = "Booking Final Payment";
+          kind = "booking";
+          methodBadgeHtml = `<span class="pay-badge pay-badge--${_methodClass(payment.method || "cash")}">${_methodLabel(payment.method || "cash")}</span>`;
         }
       } else if (src === "cash" || payment.method === "cash") {
         if (payment.payment_method === "pay_later" || payment.amount === 0) {
-          paymentType = "Pay Later";
-          colorStyle = "style='color: var(--warning)'";
+          title = "Pay Later";
+          kind = "later";
+          amtKind = "addon";
+          showAmount = !!payment.amount;
         } else {
-          paymentType = "Cash Payment";
+          title = "Cash Payment";
+          kind = "cash";
+          methodBadgeHtml = `<span class="pay-badge pay-badge--cash">Cash</span>`;
         }
       } else if (src === "online" || payment.method === "online") {
-        paymentType = "Online Payment";
+        title = "Online Payment";
+        kind = "online";
+        methodBadgeHtml = `<span class="pay-badge pay-badge--online">Online</span>`;
+      }
+
+      // "For <date>" tag — the night an Extra Bed / AC charge was billed to.
+      // Prefers the absolute applied_on_date; falls back to the relative
+      // "Day N" index for legacy rows that predate the date stamp.
+      let forTagHtml = "";
+      if (kind === "addon" && _isAccomAddon(payment)) {
+        let forWhen = "";
+        if (payment.applied_on_date) forWhen = _fmtDMY(payment.applied_on_date);
+        else if (payment.applied_on_day) forWhen = `Day ${payment.applied_on_day}`;
+        if (forWhen) {
+          forTagHtml = `<span class="pay-for"><i class="fas fa-calendar-day"></i> For ${forWhen}</span>`;
+        }
       }
 
       // "Added by" — small chip showing who recorded the payment.
-      // Resolved via the user directory; falls back to the userId, and
-      // hides entirely when createdBy is missing (legacy entries).
+      // Resolved via the user directory; hidden when createdBy is missing.
       let byHtml = "";
       if (payment.createdBy && window.CibaraUsers) {
         const _byName = window.CibaraUsers.nameOf(payment.createdBy);
         byHtml =
-          ' <span class="txn-added-by" title="Recorded by ' +
+          '<span class="txn-added-by" title="Recorded by ' +
           String(_byName).replace(/"/g, "&quot;") +
           '"><i class="fas fa-user"></i> ' +
           String(_byName).replace(/[<&>]/g, function (c) {
@@ -1097,13 +1189,45 @@ class TransactionLogManager {
           "</span>";
       }
 
+      const iconClass = _payIcon(kind, payment.item);
+      const iconTone =
+        kind === "refund"
+          ? "refund"
+          : kind === "shift"
+            ? "shift"
+            : kind === "booking"
+              ? "booking"
+              : kind === "online"
+                ? "online"
+                : kind === "cash"
+                  ? "cash"
+                  : "addon"; // addon + later share the amber tone
+      const whenStr = _payWhen(payment.date, payment.time);
+
+      // A plain cash/online payment is already identified by its coloured
+      // pill, so the "Cash Payment"/"Online Payment" title just repeats it.
+      // Drop the title and let the pill be the row label; remove it from
+      // line 2 so the method isn't shown twice.
+      let line1Label = `<span class="pay-title">${title}</span>`;
+      if ((kind === "cash" || kind === "online") && methodBadgeHtml) {
+        line1Label = `<span class="pay-lead">${methodBadgeHtml}</span>`;
+        methodBadgeHtml = "";
+      }
+
+      const line2 = `${forTagHtml}${methodBadgeHtml}`;
+      const line3 = `${whenStr ? `<span class="pay-when">${whenStr}</span>` : ""}${byHtml}`;
+
       logsHtml += `
-        <div class="log-item">
-          <div class="log-details">
-            <div class="log-title">${paymentType}${badgeHtml}${byHtml}</div>
-            <div class="log-subtitle">${payment.time || "N/A"} on ${payment.date || "N/A"}</div>
+        <div class="pay-row">
+          <div class="pay-icon pay-icon--${iconTone}"><i class="fas ${iconClass}"></i></div>
+          <div class="pay-body">
+            <div class="pay-line1">
+              ${line1Label}
+              ${showAmount ? `<span class="pay-amt pay-amt--${amtKind}">${amountText}</span>` : ""}
+            </div>
+            ${line2 ? `<div class="pay-line2">${line2}</div>` : ""}
+            ${line3 ? `<div class="pay-line3">${line3}</div>` : ""}
           </div>
-          <div class="log-amount" ${colorStyle}>${amountText}</div>
         </div>
       `;
     });
@@ -1359,6 +1483,107 @@ const transactionTrackingStyles = `
         .log-item {
             padding: 0.5rem;
         }
+    }
+
+    /* ── Payment-history cards (redesigned list) ───────────────────────── */
+    #checkout-payment-logs { display: flex; flex-direction: column; gap: 8px; }
+
+    .pay-row {
+        display: flex;
+        align-items: flex-start;
+        gap: 12px;
+        padding: 11px 13px;
+        background: #fff;
+        border: 1px solid #edeff3;
+        border-radius: 12px;
+        box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04);
+    }
+
+    .pay-icon {
+        flex: 0 0 auto;
+        width: 38px;
+        height: 38px;
+        border-radius: 10px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 0.95rem;
+    }
+    .pay-icon--in      { background: #ecfdf3; color: #067647; }
+    .pay-icon--cash    { background: #ecfdf3; color: #067647; }
+    .pay-icon--online  { background: #eff8ff; color: #175cd3; }
+    .pay-icon--addon   { background: #fffaeb; color: #b54708; }
+    .pay-icon--refund  { background: #fef3f2; color: #b42318; }
+    .pay-icon--shift   { background: #f0fdfa; color: #0f766e; }
+    .pay-icon--booking { background: #eef4ff; color: #3538cd; }
+
+    .pay-body { flex: 1 1 auto; min-width: 0; }
+
+    .pay-line1 {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+    }
+    .pay-title {
+        font: 600 0.92rem 'Inter', system-ui, sans-serif;
+        color: #1a1a2e;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    .pay-amt {
+        font: 700 0.95rem 'Inter', system-ui, sans-serif;
+        white-space: nowrap;
+    }
+    .pay-amt--in     { color: #067647; }
+    .pay-amt--addon  { color: #b54708; }
+    .pay-amt--refund { color: #b42318; }
+
+    .pay-line2,
+    .pay-line3 {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 6px;
+        margin-top: 5px;
+    }
+
+    /* The night an Extra Bed / AC charge was billed to — the "for which
+       date" the operator asked to see, made prominent. */
+    .pay-for {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 2px 9px;
+        border-radius: 999px;
+        background: #fff4e5;
+        color: #b54708;
+        border: 1px solid #fde3c0;
+        font: 700 0.72rem 'Inter', system-ui, sans-serif;
+    }
+    .pay-for i { font-size: 0.68rem; }
+
+    .pay-badge {
+        display: inline-flex;
+        align-items: center;
+        padding: 2px 9px;
+        border-radius: 999px;
+        font: 700 0.68rem 'Inter', system-ui, sans-serif;
+    }
+    .pay-badge--cash    { background: #ecfdf3; color: #067647; }
+    .pay-badge--online  { background: #eff8ff; color: #175cd3; }
+    .pay-badge--balance { background: #fef9c3; color: #854d0e; }
+
+    /* Promoted pill used as the row label for plain cash/online rows. */
+    .pay-lead .pay-badge {
+        font-size: 0.78rem;
+        padding: 3px 11px;
+    }
+
+    .pay-when {
+        font: 500 0.74rem 'Inter', system-ui, sans-serif;
+        color: #667085;
     }
 `;
 

@@ -25,6 +25,7 @@
     <link rel="stylesheet" href="/static/booking.css" />
     <link rel="stylesheet" href="/static/laundry.css" />
     <link rel="stylesheet" href="/static/banking.css" />
+    <link rel="stylesheet" href="/static/maintenance.css" />
     <link
       rel="stylesheet"
       href="https://cdnjs.cloudflare.com/ajax/libs/flatpickr/4.6.13/flatpickr.min.css"
@@ -455,7 +456,11 @@
         background: rgba(245,158,11,0.1);
         border: 1px solid rgba(245,158,11,0.28);
         border-radius: 4px;
-        padding: 1px 3px;
+        padding: 1px 10px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 34px;
         transition: background 0.12s;
         line-height: 1.4;
         user-select: none;
@@ -3183,6 +3188,15 @@
           <i class="fas fa-university"></i>
           <span>Banking</span>
         </div>
+
+        <!-- Deep-check maintenance — room-by-room inspection rounds,
+             defect tracking and analytics. Managers + admin
+             (maintenance.view); hidden from housekeeping. -->
+        <div class="quick-action-item" id="quick-maintenance-btn"
+             data-perm="maintenance.view" data-hide-roles="housekeeping">
+          <i class="fas fa-tools"></i>
+          <span>Deep Check</span>
+        </div>
       </div>
     </div>
     <!-- Checkout Confirmation Modal -->
@@ -4984,6 +4998,8 @@
     <script defer src="{{ asset_url('customer-manager.js') }}"></script>
     <!-- Laundry Management -->
     <script defer src="/static/laundry.js"></script>
+    <!-- Deep-check maintenance (rounds, issues, analytics) -->
+    <script defer src="{{ asset_url('maintenance.js') }}"></script>
     <!-- Role-aware housekeeping bootstrap (no-op for non-housekeeping roles) -->
     <script defer src="/static/housekeeping-mode.js"></script>
     <!-- Admin: user management page (admin-only; UI does its own role check) -->

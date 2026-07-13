@@ -102,6 +102,15 @@ PERMISSIONS = frozenset(
         # an expense (everyone with banking.adjustment.create / write
         # access to the transaction tab can create). Admin-only by default.
         "expense.manage",
+        # Deep-check maintenance (routes/maintenance.py). Manager runs
+        # inspections and logs fixes; admin additionally verifies fixes,
+        # edits the checklist template and deletes/alters records.
+        "maintenance.view",
+        "maintenance.inspect",
+        "maintenance.issue.fix",
+        "maintenance.issue.verify",      # admin-only (wildcard)
+        "maintenance.checklist.manage",  # admin-only (wildcard)
+        "maintenance.manage",            # admin-only (wildcard) — destructive ops
     }
 )
 
@@ -132,6 +141,12 @@ ROLE_PERMISSIONS: dict[str, FrozenSet[str]] = {
             # operator's custody.
             "banking.view",
             "banking.deposit.create",
+            # Deep-check maintenance — manager inspects rooms and marks
+            # issues fixed; verification, checklist editing and deletion
+            # stay admin-only.
+            "maintenance.view",
+            "maintenance.inspect",
+            "maintenance.issue.fix",
             # Manager DOES NOT get: settings.view, discount.apply,
             # settlement.manage, transaction.history.full, payment.edit,
             # data.export, customer.manage, booking.revert, revenue.view,

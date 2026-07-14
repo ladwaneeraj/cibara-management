@@ -15,6 +15,9 @@ which role gets what:
 Every mutation writes an audit_log entry.
 """
 
+import time as _time
+from concurrent.futures import ThreadPoolExecutor
+
 from flask import Blueprint, request, jsonify, g
 
 from services import maintenance_service as svc
@@ -23,6 +26,18 @@ from services.audit_log import write_log
 from config import logger
 
 maintenance_bp = Blueprint("maintenance", __name__, url_prefix="/maintenance")
+
+# ── /overview short-lived cache ─────────────────────────────────────────────
+# The dashboard payload costs several sequential Firestore round-trips;
+# a 15s per-process cache (same pattern as rooms.py's /get_data cache)
+# makes repeat opens instant. Every mutation below busts it.
+_OVERVIEW_CACHE: dict = {"payload": None, "ts": 0.0}
+_OVERVIEW_TTL = 15  # seconds
+
+
+def _invalidate_overview():
+    _OVERVIEW_CACHE["payload"] = None
+    _OVERVIEW_CACHE["ts"] = 0.0
 
 
 def _fail(message, code=400):
@@ -53,6 +68,7 @@ def save_checklist():
     try:
         items = (request.json or {}).get("items")
         saved = svc.save_checklist(items, g.current_user)
+        _invalidate_overview()
         write_log("maintenance.checklist.update",
                   target_collection="settings", target_id="maintenance_checklist",
                   metadata={"item_count": len(saved)})
@@ -82,6 +98,7 @@ def start_round():
     try:
         name = (request.json or {}).get("name", "")
         rnd = svc.start_round(name, g.current_user)
+        _invalidate_overview()
         write_log("maintenance.round.start",
                   target_collection="maintenance_rounds", target_id=rnd["id"],
                   metadata={"name": rnd["name"]})
@@ -98,6 +115,7 @@ def start_round():
 def close_round(round_id):
     try:
         rnd = svc.close_round(round_id, g.current_user)
+        _invalidate_overview()
         write_log("maintenance.round.close",
                   target_collection="maintenance_rounds", target_id=round_id)
         return jsonify(success=True, round=rnd)
@@ -123,14 +141,33 @@ def round_status(round_id):
 @maintenance_bp.route("/overview", methods=["GET"])
 @requires_permission("maintenance.view")
 def overview():
-    """Single dashboard payload: open round (+coverage) & checklist."""
+    """Single dashboard payload: open round (+coverage) & checklist.
+
+    Cached for _OVERVIEW_TTL seconds; independent Firestore reads run in
+    parallel on a miss (latency, not compute, dominates here).
+    """
     try:
-        open_round = svc.get_open_round()
-        payload = {"checklist": svc.get_checklist(),
-                   "categories": svc.known_room_categories(),
-                   "open_round": open_round, "status": None}
-        if open_round:
-            payload["status"] = svc.round_status(open_round["id"])
+        cached = _OVERVIEW_CACHE["payload"]
+        if cached is not None and _time.time() - _OVERVIEW_CACHE["ts"] < _OVERVIEW_TTL:
+            return jsonify(success=True, **cached)
+
+        with ThreadPoolExecutor(max_workers=3) as ex:
+            f_checklist = ex.submit(svc.get_checklist)
+            f_cats = ex.submit(svc.known_room_categories)
+            f_round = ex.submit(svc.get_open_round)
+            open_round = f_round.result()
+            f_status = (
+                ex.submit(svc.round_status, open_round["id"], open_round)
+                if open_round else None
+            )
+            payload = {
+                "checklist": f_checklist.result(),
+                "categories": f_cats.result(),
+                "open_round": open_round,
+                "status": f_status.result() if f_status else None,
+            }
+        _OVERVIEW_CACHE["payload"] = payload
+        _OVERVIEW_CACHE["ts"] = _time.time()
         return jsonify(success=True, **payload)
     except Exception as e:
         logger.exception("maintenance/overview failed")
@@ -148,6 +185,7 @@ def submit_inspection():
             data.get("round_id", ""), str(data.get("room", "")),
             data.get("items", []), g.current_user,
         )
+        _invalidate_overview()
         write_log("maintenance.inspect",
                   target_collection="maintenance_inspections", target_id=ins["id"],
                   metadata={"room": ins["room"], "score": ins["score"],
@@ -200,6 +238,7 @@ def create_issue():
             category=data.get("category", "general"),
             user=g.current_user,
         )
+        _invalidate_overview()
         write_log("maintenance.issue.create",
                   target_collection="maintenance_issues", target_id=iss["id"],
                   metadata={"room": iss["room"], "item": iss["item_label"]})
@@ -218,6 +257,7 @@ def fix_issue(issue_id):
         data = request.json or {}
         iss = svc.fix_issue(issue_id, data.get("note", ""), data.get("cost"),
                             g.current_user)
+        _invalidate_overview()
         write_log("maintenance.issue.fix",
                   target_collection="maintenance_issues", target_id=issue_id,
                   metadata={"room": iss.get("room"), "cost": iss.get("cost")})
@@ -234,6 +274,7 @@ def fix_issue(issue_id):
 def verify_issue(issue_id):
     try:
         iss = svc.verify_issue(issue_id, g.current_user)
+        _invalidate_overview()
         write_log("maintenance.issue.verify",
                   target_collection="maintenance_issues", target_id=issue_id,
                   metadata={"room": iss.get("room")})
@@ -251,6 +292,7 @@ def reopen_issue(issue_id):
     try:
         reason = (request.json or {}).get("reason", "")
         iss = svc.reopen_issue(issue_id, reason, g.current_user)
+        _invalidate_overview()
         write_log("maintenance.issue.reopen",
                   target_collection="maintenance_issues", target_id=issue_id,
                   metadata={"room": iss.get("room"), "reason": reason[:100]})
@@ -267,6 +309,7 @@ def reopen_issue(issue_id):
 def delete_issue(issue_id):
     try:
         iss = svc.delete_issue(issue_id)
+        _invalidate_overview()
         write_log("maintenance.issue.delete",
                   target_collection="maintenance_issues", target_id=issue_id,
                   before={"room": iss.get("room"), "item": iss.get("item_label"),

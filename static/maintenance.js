@@ -107,6 +107,44 @@
     });
   }
 
+  // ── unsaved-inspection drafts (localStorage, survives reload/close) ────
+  var DRAFT_MAX_AGE_MS = 48 * 3600 * 1000;
+
+  function draftKey() {
+    var rid = state.openRound ? state.openRound.id : "";
+    return "mnt-draft:" + rid + ":" + state.inspectRoom;
+  }
+  function saveDraft() {
+    try {
+      localStorage.setItem(draftKey(),
+        JSON.stringify({ ts: Date.now(), draft: state.inspectDraft }));
+    } catch (_) { /* storage full / private mode — drafts just don't persist */ }
+  }
+  function loadDraft() {
+    try {
+      var raw = localStorage.getItem(draftKey());
+      if (!raw) return null;
+      var obj = JSON.parse(raw);
+      if (!obj || !obj.draft) return null;
+      if (Date.now() - (obj.ts || 0) > DRAFT_MAX_AGE_MS) {
+        localStorage.removeItem(draftKey());
+        return null;
+      }
+      return obj.draft;
+    } catch (_) { return null; }
+  }
+  function clearDraft() {
+    try { localStorage.removeItem(draftKey()); } catch (_) {}
+  }
+  function applyDraftOverlay() {
+    var saved = loadDraft();
+    if (!saved) return;
+    var keys = Object.keys(saved);
+    if (!keys.length) return;
+    keys.forEach(function (k) { state.inspectDraft[k] = saved[k]; });
+    notify("Restored your unsaved inspection for room " + state.inspectRoom, "info");
+  }
+
   function roomNumbers() {
     if (state.status && state.status.rooms.length) {
       return state.status.rooms.map(function (r) { return r.room; });
@@ -187,7 +225,11 @@
 
   function loadOverview() {
     var pane = document.getElementById("mnt-pane-dashboard");
-    pane.innerHTML = '<div class="mnt-empty">Loading…</div>';
+    // Stale-while-revalidate: paint instantly from the last payload,
+    // refresh silently in the background.
+    var hasCache = !!state._overviewLoaded;
+    if (hasCache) renderDashboard();
+    else pane.innerHTML = '<div class="mnt-empty">Loading…</div>';
     api("/maintenance/overview")
       .then(function (json) {
         state.checklist = json.checklist || [];
@@ -198,10 +240,12 @@
         ((json.status || {}).rooms || []).forEach(function (r) {
           state.roomCats[r.room] = r.category || "other";
         });
+        state._overviewLoaded = true;
         renderDashboard();
       })
       .catch(function (e) {
-        pane.innerHTML = '<div class="mnt-empty">' + esc(e.message) + "</div>";
+        if (hasCache) notify(e.message, "error");
+        else pane.innerHTML = '<div class="mnt-empty">' + esc(e.message) + "</div>";
       });
   }
 
@@ -352,9 +396,10 @@
             };
           });
         }
+        applyDraftOverlay();   // unsaved local draft wins over the server copy
         renderInspectForm();
       })
-      .catch(function () { renderInspectForm(); });
+      .catch(function () { applyDraftOverlay(); renderInspectForm(); });
   }
 
   function renderInspectForm() {
@@ -429,6 +474,7 @@
       state.inspectItems.forEach(function (it) {
         state.inspectDraft[it.id] = { status: "ok", severity: "medium", note: "" };
       });
+      saveDraft();
       renderInspectForm();
     });
 
@@ -443,18 +489,22 @@
         row.querySelector(".mnt-ok-btn").classList.add("sel-ok");
         row.querySelector(".mnt-issue-btn").classList.remove("sel-issue");
         row.querySelector(".mnt-issue-detail").style.display = "none";
+        saveDraft();
       });
       row.querySelector(".mnt-issue-btn").addEventListener("click", function () {
         draft().status = "issue";
         row.querySelector(".mnt-issue-btn").classList.add("sel-issue");
         row.querySelector(".mnt-ok-btn").classList.remove("sel-ok");
         row.querySelector(".mnt-issue-detail").style.display = "flex";
+        saveDraft();
       });
       row.querySelector(".mnt-sev").addEventListener("change", function (e) {
         draft().severity = e.target.value;
+        saveDraft();
       });
       row.querySelector(".mnt-note").addEventListener("input", function (e) {
         draft().note = e.target.value;
+        saveDraft();
       });
     });
 
@@ -485,6 +535,7 @@
       round_id: state.openRound.id, room: state.inspectRoom, items: items,
     })
       .then(function (json) {
+        clearDraft();
         var n = json.inspection.issues_created;
         notify(
           "Room " + state.inspectRoom + " inspected — score " +
@@ -509,11 +560,18 @@
 
   function loadIssues() {
     var pane = document.getElementById("mnt-pane-issues");
-    pane.innerHTML = '<div class="mnt-empty">Loading…</div>';
+    var hasCache = !!state._issuesLoaded;
+    if (hasCache) renderIssues();
+    else pane.innerHTML = '<div class="mnt-empty">Loading…</div>';
     api("/maintenance/issues")
-      .then(function (json) { state.issues = json.issues || []; renderIssues(); })
+      .then(function (json) {
+        state.issues = json.issues || [];
+        state._issuesLoaded = true;
+        renderIssues();
+      })
       .catch(function (e) {
-        pane.innerHTML = '<div class="mnt-empty">' + esc(e.message) + "</div>";
+        if (hasCache) notify(e.message, "error");
+        else pane.innerHTML = '<div class="mnt-empty">' + esc(e.message) + "</div>";
       });
   }
 
@@ -741,11 +799,13 @@
 
   function loadAnalytics() {
     var pane = document.getElementById("mnt-pane-analytics");
-    pane.innerHTML = '<div class="mnt-empty">Crunching…</div>';
+    if (state.analytics) renderAnalytics();
+    else pane.innerHTML = '<div class="mnt-empty">Crunching…</div>';
     api("/maintenance/analytics")
       .then(function (json) { state.analytics = json.analytics; renderAnalytics(); })
       .catch(function (e) {
-        pane.innerHTML = '<div class="mnt-empty">' + esc(e.message) + "</div>";
+        if (state.analytics) notify(e.message, "error");
+        else pane.innerHTML = '<div class="mnt-empty">' + esc(e.message) + "</div>";
       });
   }
 
@@ -1022,11 +1082,16 @@
 
   function loadHistory() {
     var pane = document.getElementById("mnt-pane-history");
-    pane.innerHTML = '<div class="mnt-empty">Loading…</div>';
+    if (state._rounds) renderHistory(state._rounds);
+    else pane.innerHTML = '<div class="mnt-empty">Loading…</div>';
     api("/maintenance/rounds")
-      .then(function (json) { renderHistory(json.rounds || []); })
+      .then(function (json) {
+        state._rounds = json.rounds || [];
+        renderHistory(state._rounds);
+      })
       .catch(function (e) {
-        pane.innerHTML = '<div class="mnt-empty">' + esc(e.message) + "</div>";
+        if (state._rounds) notify(e.message, "error");
+        else pane.innerHTML = '<div class="mnt-empty">' + esc(e.message) + "</div>";
       });
   }
 

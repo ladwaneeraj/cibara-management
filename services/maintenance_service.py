@@ -54,6 +54,7 @@ Invariants
 from __future__ import annotations
 
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -217,33 +218,60 @@ def list_rounds(limit: int = 12) -> list[dict]:
     rounds.sort(key=lambda r: r.get("created_at", ""), reverse=True)
     rounds = rounds[:limit]
     total_rooms = len(get_all_rooms())
+    # One stream over all inspections instead of a query per round (N+1).
+    by_round: dict[str, list[dict]] = {}
+    for d in _inspections_ref().stream():
+        data = d.to_dict() or {}
+        by_round.setdefault(data.get("round_id"), []).append(data)
     for r in rounds:
-        insp = list(
-            _inspections_ref()
-            .where(filter=FieldFilter("round_id", "==", r["id"]))
-            .stream()
-        )
+        insp = by_round.get(r["id"], [])
         r["rooms_inspected"] = len(insp)
         r["rooms_total"] = total_rooms
-        r["issues_found"] = sum((d.to_dict() or {}).get("issue_count", 0) for d in insp)
+        r["issues_found"] = sum(i.get("issue_count", 0) for i in insp)
     return rounds
 
 
-def round_status(round_id: str) -> dict:
-    """Per-room coverage for one round + rollup counters (dashboard payload)."""
-    snap = _rounds_ref().document(round_id).get()
-    if not snap.exists:
-        raise ValueError("Round not found")
-    rnd = {**(snap.to_dict() or {}), "id": round_id}
+def round_status(round_id: str, rnd: Optional[dict] = None) -> dict:
+    """Per-room coverage for one round + rollup counters (dashboard payload).
+
+    Pass `rnd` (an already-fetched round dict) to skip the extra doc read.
+    The two collection queries run in parallel — Firestore latency, not
+    compute, dominates this endpoint.
+    """
+    if rnd is None:
+        snap = _rounds_ref().document(round_id).get()
+        if not snap.exists:
+            raise ValueError("Round not found")
+        rnd = {**(snap.to_dict() or {}), "id": round_id}
+
+    def _fetch_inspections():
+        return [
+            (d.to_dict() or {})
+            for d in _inspections_ref()
+            .where(filter=FieldFilter("round_id", "==", round_id))
+            .stream()
+        ]
+
+    def _fetch_open_issues():
+        return [
+            (d.to_dict() or {})
+            for d in _issues_ref()
+            .where(filter=FieldFilter("status", "in", ["open", "fixed"]))
+            .stream()
+        ]
+
+    with ThreadPoolExecutor(max_workers=2) as ex:
+        f_ins = ex.submit(_fetch_inspections)
+        f_iss = ex.submit(_fetch_open_issues)
+        ins_list = f_ins.result()
+        iss_list = f_iss.result()
 
     inspections = {}
-    for d in _inspections_ref().where(filter=FieldFilter("round_id", "==", round_id)).stream():
-        data = d.to_dict() or {}
+    for data in ins_list:
         inspections[data.get("room")] = data
 
     open_by_room: dict[str, dict] = {}
-    for d in _issues_ref().where(filter=FieldFilter("status", "in", ["open", "fixed"])).stream():
-        iss = d.to_dict() or {}
+    for iss in iss_list:
         room = iss.get("room")
         agg = open_by_room.setdefault(room, {"open": 0, "fixed": 0, "high": 0})
         agg[iss.get("status", "open")] = agg.get(iss.get("status", "open"), 0) + 1

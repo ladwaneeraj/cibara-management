@@ -4,6 +4,51 @@
 function initializeCleaningFeature() {
   console.log("Cleaning feature initialized");
   createQualityCheckModals();
+  addQualityCheckStyles();   // inject once at init, not on first open
+  _initQcButtonDelegation();
+}
+
+/* ── Race-proof, instant handling for the Ready/Cleaned buttons ───────────
+ * The room grid is re-rendered live by Firestore snapshot listeners. With
+ * inline onclick, a re-render between finger-down and finger-up destroyed
+ * the button node and the click never fired — the tap "did nothing".
+ * Instead we capture the intent at pointerdown on the ORIGINAL node and
+ * act on pointerup anywhere: immune to re-renders, and the modal opens the
+ * moment the finger lifts (no synthesized-click wait).
+ * Buttons are matched by [data-qc-room] (see script.js card renderer). */
+function _initQcButtonDelegation() {
+  let pending = null;
+  let handledAt = 0;
+
+  document.addEventListener("pointerdown", function (e) {
+    const btn = e.target && e.target.closest
+      ? e.target.closest("[data-qc-room]") : null;
+    pending = btn
+      ? { room: btn.getAttribute("data-qc-room"),
+          x: e.clientX, y: e.clientY, t: Date.now() }
+      : null;
+  }, true);
+
+  document.addEventListener("pointerup", function (e) {
+    if (!pending) return;
+    const p = pending;
+    pending = null;
+    if (Date.now() - p.t > 700) return;                 // long-press → ignore
+    if (Math.abs(e.clientX - p.x) > 14 ||
+        Math.abs(e.clientY - p.y) > 14) return;         // scroll/drag → ignore
+    handledAt = Date.now();
+    markRoomAsCleaned(String(p.room));
+  }, true);
+
+  // Swallow the click that follows a handled pointerup so the room card's
+  // own click handler doesn't also fire (that's what stopPropagation in the
+  // old inline handlers used to do).
+  document.addEventListener("click", function (e) {
+    if (Date.now() - handledAt < 400) {
+      e.stopPropagation();
+      e.preventDefault();
+    }
+  }, true);
 }
 
 // Create quality check modals (only created once)
@@ -163,6 +208,18 @@ function addQualityCheckStyles() {
   const style = document.createElement("style");
   style.id = "quality-check-styles";
   style.textContent = `
+    /* QC modals open instantly — skip the generic 0.3s backdrop fade */
+    #premium-check-modal, #standard-check-modal, #regular-check-modal {
+      transition: none;
+    }
+    #premium-check-modal .modal-content,
+    #standard-check-modal .modal-content,
+    #regular-check-modal .modal-content {
+      transition: none;
+      animation: none;
+    }
+    .cleaned-btn { touch-action: manipulation; }
+
     .quality-checklist {
       display: flex;
       flex-direction: column;

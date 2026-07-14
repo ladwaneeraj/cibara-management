@@ -955,6 +955,28 @@
 }
 .reg-doc-btn:hover { background: #f1f5f9; color: #475569; border-color: #cbd5e1; }
 
+/* Guest has NO ID on file — amber dashed button that uploads from the row.
+   Visually distinct from the plain grey "view docs" state. */
+.reg-doc-btn { position: relative; }
+.reg-doc-btn.missing {
+  color: #b45309;
+  border: 1px dashed #f59e0b;
+  background: #fffbeb;
+}
+.reg-doc-btn.missing:hover { background: #fef3c7; color: #92400e; border-color: #d97706; }
+.reg-doc-plus {
+  position: absolute;
+  top: -5px; right: -5px;
+  background: #f59e0b;
+  color: #fff;
+  border-radius: 50%;
+  width: 13px; height: 13px;
+  font-size: 10px; line-height: 13px;
+  font-weight: 700;
+  text-align: center;
+  pointer-events: none;
+}
+
 /* Invisible placeholder rendered when a row has no document. Reserves
    the same footprint as .reg-doc-btn so the ₹ and history icons stay
    in the same horizontal position across rows. */
@@ -2286,10 +2308,14 @@
         const docBtn = e.target.closest(".reg-doc-btn");
         if (docBtn) {
           e.stopPropagation();
-          _openDocsModal(
-            docBtn.dataset.mobile,
-            decodeURIComponent(docBtn.dataset.guest || "")
-          );
+          if (docBtn.dataset.mode === "upload") {
+            _openDocUploadPicker(docBtn);
+          } else {
+            _openDocsModal(
+              docBtn.dataset.mobile,
+              decodeURIComponent(docBtn.dataset.guest || "")
+            );
+          }
         }
       });
     }
@@ -3011,17 +3037,84 @@
       if (!data.success) return;
 
       const withDocs = new Set(data.mobiles_with_docs || []);
-      // Reveal the hidden doc buttons for mobiles that have documents.
-      // Use visibility (not display) so the button's footprint is always
-      // reserved — keeps the ₹ and history icons in the same column
-      // position regardless of whether a doc exists for that row.
+      // Every row with a mobile gets a visible button in one of two modes:
+      //   view   (grey, solid)  — docs exist, click opens the viewer
+      //   upload (amber, dashed, corner +) — NO ID on file, click uploads
       document.querySelectorAll(".reg-doc-btn").forEach(btn => {
-        btn.style.visibility = withDocs.has(btn.dataset.mobile)
-          ? "visible"
-          : "hidden";
+        const has = withDocs.has(btn.dataset.mobile);
+        btn.style.visibility = "visible";
+        btn.dataset.mode = has ? "view" : "upload";
+        btn.classList.toggle("missing", !has);
+        btn.title = has
+          ? "View ID documents"
+          : "No ID on file — tap to upload";
+        btn.innerHTML = has
+          ? '<i class="fas fa-id-card"></i>'
+          : '<i class="fas fa-id-card"></i><span class="reg-doc-plus">+</span>';
       });
     } catch (_) {
       // Silent fail — buttons stay hidden, not a blocking issue
+    }
+  }
+
+  // ── Upload a missing ID straight from the register row ──────────────────
+  // Reuses the check-in flow's endpoint (/upload_customer_document) and,
+  // when available, its _compressImage helper from customer-docs.js so a
+  // 5 MB phone photo shrinks to a few hundred KB before upload.
+  let _regDocInput = null;
+  let _regDocTargetBtn = null;
+
+  function _openDocUploadPicker(btn) {
+    _regDocTargetBtn = btn;
+    if (!_regDocInput) {
+      _regDocInput = document.createElement("input");
+      _regDocInput.type = "file";
+      _regDocInput.accept = "image/*";
+      _regDocInput.style.display = "none";
+      document.body.appendChild(_regDocInput);
+      _regDocInput.addEventListener("change", () => {
+        const file = _regDocInput.files && _regDocInput.files[0];
+        _regDocInput.value = "";           // allow re-picking the same file
+        if (file && _regDocTargetBtn) _uploadRegisterDoc(_regDocTargetBtn, file);
+      });
+    }
+    _regDocInput.click();
+  }
+
+  async function _uploadRegisterDoc(btn, file) {
+    const mobile = btn.dataset.mobile;
+    const guest = decodeURIComponent(btn.dataset.guest || "");
+    const toast = window.showNotification || _notify;
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+    try {
+      let blob = file;
+      if (typeof _compressImage === "function") {
+        try { blob = await _compressImage(file); } catch (_) { blob = file; }
+      }
+      const form = new FormData();
+      form.append("mobile", mobile);
+      form.append("document", blob, `register_doc_${Date.now()}.jpg`);
+      const res = await apiFetch("/upload_customer_document", {
+        method: "POST", body: form,
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.message || "Upload failed");
+      // Flip every row for this guest to the "has docs" state.
+      document.querySelectorAll(
+        `.reg-doc-btn[data-mobile="${mobile}"]`
+      ).forEach(b => {
+        b.disabled = false;
+        b.dataset.mode = "view";
+        b.classList.remove("missing");
+        b.title = "View ID documents";
+        b.innerHTML = '<i class="fas fa-id-card"></i>';
+      });
+      toast(`ID uploaded for ${guest || mobile}`, "success");
+    } catch (err) {
+      btn.disabled = false;
+      btn.innerHTML = '<i class="fas fa-id-card"></i><span class="reg-doc-plus">+</span>';
+      toast(err.message || "Upload failed", "error");
     }
   }
 

@@ -420,7 +420,7 @@ function renderRooms() {
         // see the same visual treatment — only the label and handler differ.
         roomContent += `
           <button class="cleaned-btn" data-perm="room.inspection.approve"
-                  onclick="handleReadyClick(event, '${roomNumber}')"
+                  data-qc-room="${roomNumber}"
                   title="Mark room ready for next check-in">
             <i class="fas fa-check"></i> Ready
           </button>
@@ -430,7 +430,7 @@ function renderRooms() {
         // "ready_to_inspect" — the button disappears from their view because
         // there's nothing left for them to do on this room.
         roomContent += `
-          <button class="cleaned-btn" data-perm="room.cleaning.complete" onclick="handleCleanedClick(event, '${roomNumber}')">
+          <button class="cleaned-btn" data-perm="room.cleaning.complete" data-qc-room="${roomNumber}">
             <i class="fas fa-check"></i> Cleaned
           </button>
         `;

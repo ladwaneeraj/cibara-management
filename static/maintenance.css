@@ -489,6 +489,8 @@
   font-weight: 400;
   margin-left: 0.35rem;
 }
+/* desktop keeps the inline "· note" look via CSS so mobile can drop it */
+.mnt-irow-note::before { content: "· "; }
 .mnt-irow-btn {
   border: 1px solid #cbd5e0;
   background: #fff;
@@ -510,7 +512,36 @@
 .mnt-irow-btn.del.armed { background: #e53e3e; border-color: #e53e3e; color: #fff; font-weight: 800; }
 
 @media (max-width: 560px) {
-  .mnt-irow-note { display: none; } /* keep rows one line on phones */
+  /* Phones: show the comment as its own compact line under the title
+     (was display:none), wrapped and clamped to 2 lines. Titles and the
+     category label also wrap instead of truncating to "…". */
+  .mnt-irow-line {
+    gap: 0.45rem;
+    padding: 0.5rem 0.6rem 0.1rem;
+    align-items: flex-start;
+  }
+  .mnt-dot { margin-top: 0.3rem; }
+  .mnt-irow-room { font-size: 0.9rem; min-width: 2rem; }
+  .mnt-irow-label {
+    font-size: 0.86rem;
+    white-space: normal;      /* wrap the full title */
+    line-height: 1.35;
+  }
+  .mnt-irow-label small { margin-left: 0.3rem; }
+  .mnt-irow-note {
+    display: -webkit-box;     /* own line, max 2 lines, then … */
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    white-space: normal;
+    margin-left: 0;
+    margin-top: 0.1rem;
+    font-size: 0.74rem;
+    line-height: 1.35;
+  }
+  .mnt-irow-note::before { content: ""; }
+  .mnt-irow-status { font-size: 0.64rem; margin-top: 0.35rem; }
+  .mnt-irow-btn { width: 28px; height: 26px; }
 }
 
 /* Keep the + Log button compact (global .action-btn is full-width) */

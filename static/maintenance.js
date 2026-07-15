@@ -658,7 +658,7 @@
           '    <span class="mnt-irow-label">' + esc(iss.item_label) +
           '      <small>' + TRADES[trade] + "</small>" +
           (iss.description
-            ? '<span class="mnt-irow-note">· ' + esc(iss.description) + "</span>"
+            ? '<span class="mnt-irow-note">' + esc(iss.description) + "</span>"
             : "") +
           "    </span>" +
           '    <span class="mnt-irow-status st-' + esc(iss.status) + '">' +

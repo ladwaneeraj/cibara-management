@@ -1,0 +1,311 @@
+/* ──────────────────────────────────────────────────────────────────────────
+ * Daily Insights (static/daily-insights.js) — minimal inline panel shown in
+ * the Rooms tab below the room cards while the "Cleaning" filter is active.
+ * One accent colour (#2b6cb0), flat surfaces, whitespace over borders.
+ * ──────────────────────────────────────────────────────────────────────── */
+
+#di-inline {
+  margin-top: 1.25rem;
+  background: #fff;
+  border: 1px solid #e8edf3;
+  border-radius: 12px;
+  padding: 0.9rem 1.1rem 1rem;
+}
+#di-inline.hidden { display: none; }
+
+/* ── top bar: title + range controls ── */
+.di-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+.di-title {
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: #2d3748;
+  margin-right: auto;
+}
+.di-bar-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  flex-wrap: wrap;
+}
+.di-chip {
+  border: none;
+  background: transparent;
+  color: #718096;
+  border-radius: 6px;
+  padding: 0.28rem 0.55rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.di-chip:hover { background: #f1f5f9; }
+.di-chip.active { background: #ebf4ff; color: #2b6cb0; }
+/* covers the native input AND flatpickr's altInput (which inherits nothing) */
+.di-bar-controls input {
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  padding: 0.22rem 0.4rem;
+  font-size: 0.74rem;
+  color: #4a5568;
+  background: #fff;
+  width: 108px;
+}
+.di-icon-btn {
+  border: none;
+  background: transparent;
+  color: #a0aec0;
+  padding: 0.28rem 0.45rem;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.8rem;
+}
+.di-icon-btn:hover { color: #2b6cb0; background: #f1f5f9; }
+
+/* small spinner shown while fetching */
+.di-spin {
+  width: 14px;
+  height: 14px;
+  border: 2px solid #e2e8f0;
+  border-top-color: #2b6cb0;
+  border-radius: 50%;
+  animation: di-rot 0.7s linear infinite;
+}
+.di-spin.hidden { display: none; }
+@keyframes di-rot { to { transform: rotate(360deg); } }
+
+/* body dims while a new window loads (stale-while-loading) */
+#di-body { transition: opacity 0.15s ease; }
+#di-body.di-busy { opacity: 0.45; pointer-events: none; }
+
+.di-empty {
+  text-align: center;
+  color: #a0aec0;
+  padding: 1.75rem 0;
+  font-size: 0.85rem;
+}
+
+/* ── live "cleaning now" strip ── */
+.di-live {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+  margin-top: 0.75rem;
+}
+.di-live-label {
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #a0aec0;
+  margin-right: 0.2rem;
+}
+.di-live-chip {
+  background: #fffaf0;
+  color: #975a16;
+  border-radius: 6px;
+  padding: 0.18rem 0.5rem;
+  font-size: 0.76rem;
+  font-weight: 600;
+}
+.di-live-chip.overdue { background: #fff5f5; color: #c53030; }
+
+/* ── headline stats ── */
+.di-stats {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 0.5rem;
+  margin: 1rem 0 0.2rem;
+  text-align: center;
+}
+.di-stat-num {
+  font-size: 1.45rem;
+  font-weight: 700;
+  color: #1a202c;
+  line-height: 1.15;
+  white-space: nowrap;
+}
+.di-stat-label {
+  font-size: 0.68rem;
+  color: #a0aec0;
+  margin-top: 0.1rem;
+}
+.di-substats {
+  font-size: 0.74rem;
+  color: #a0aec0;
+  text-align: center;
+  margin: 0.35rem 0 0.9rem;
+}
+.di-center { text-align: center; }
+
+/* ── charts ── */
+.di-chart-wrap {
+  position: relative;
+  height: 200px;
+  margin-bottom: 0.4rem;
+}
+.di-chart-sm { height: 150px; margin: 0.75rem 0; }
+
+/* ── collapsible sections (button-toggled divs, not native <details>) ── */
+.di-sec {
+  border-top: 1px solid #edf2f7;
+  margin-top: 0.5rem;
+}
+.di-sec-head {
+  width: 100%;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  padding: 0.65rem 0.15rem;
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: #4a5568;
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  text-align: left;
+  user-select: none;
+}
+.di-sec-head.di-static { cursor: default; }
+.di-caret {
+  margin-left: auto;
+  color: #cbd5e0;
+  font-size: 1rem;
+  transition: transform 0.15s ease;
+  display: inline-block;
+}
+.di-caret.open { transform: rotate(90deg); }
+.di-count {
+  background: #edf2f7;
+  color: #718096;
+  border-radius: 999px;
+  padding: 0.05rem 0.45rem;
+  font-size: 0.68rem;
+  font-weight: 700;
+}
+.di-sec-body { padding: 0.1rem 0.15rem 0.9rem; }
+.di-sec-body.hidden { display: none; }
+
+/* insight lines */
+.di-insight {
+  font-size: 0.8rem;
+  line-height: 1.5;
+  color: #4a5568;
+  padding: 0.4rem 0.6rem 0.4rem 0.85rem;
+  border-left: 3px solid #cbd5e0;
+  margin-bottom: 0.4rem;
+  border-radius: 0 6px 6px 0;
+  background: #fafbfc;
+}
+.di-insight.warn { border-left-color: #ed8936; }
+.di-insight.good { border-left-color: #48bb78; }
+.di-insight.info { border-left-color: #90cdf4; }
+
+/* ── day navigator ── */
+.di-daynav {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6rem;
+  margin: 0.25rem 0 0.35rem;
+}
+.di-daynav button {
+  border: none;
+  background: #f1f5f9;
+  color: #4a5568;
+  border-radius: 6px;
+  width: 26px;
+  height: 26px;
+  cursor: pointer;
+  font-size: 0.95rem;
+  line-height: 1;
+}
+.di-daynav button:disabled { opacity: 0.3; cursor: default; }
+.di-daynav .di-daylabel {
+  font-weight: 700;
+  color: #2d3748;
+  font-size: 0.88rem;
+  min-width: 150px;
+  text-align: center;
+}
+
+/* ── funnel ── */
+.di-funnel { display: grid; gap: 0.3rem; margin: 0.5rem 0; }
+.di-funnel-row {
+  display: grid;
+  grid-template-columns: 92px 1fr 36px;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.76rem;
+  color: #718096;
+}
+.di-funnel-track {
+  background: #f1f5f9;
+  border-radius: 4px;
+  height: 12px;
+  overflow: hidden;
+}
+.di-funnel-bar {
+  height: 100%;
+  border-radius: 4px;
+  background: #90cdf4;
+  min-width: 2px;
+}
+.di-funnel-row:nth-child(3) .di-funnel-bar { background: #48bb78; }
+.di-funnel-num { font-weight: 700; text-align: right; color: #2d3748; }
+
+/* ── tables ── */
+.di-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.78rem;
+  margin-top: 0.75rem;
+}
+.di-table th {
+  text-align: left;
+  font-size: 0.66rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #a0aec0;
+  font-weight: 700;
+  padding: 0.3rem 0.45rem;
+  border-bottom: 1px solid #edf2f7;
+  white-space: nowrap;
+}
+.di-table td {
+  padding: 0.38rem 0.45rem;
+  border-bottom: 1px solid #f7fafc;
+  color: #2d3748;
+  white-space: nowrap;
+}
+.di-table tr:last-child td { border-bottom: none; }
+
+.di-badge {
+  display: inline-block;
+  border-radius: 999px;
+  padding: 0.08rem 0.45rem;
+  font-size: 0.64rem;
+  font-weight: 700;
+}
+.di-badge.slow { background: #fff5f5; color: #c53030; }
+.di-badge.stale { background: #edf2f7; color: #a0aec0; }
+.di-badge.onestep { background: #ebf8ff; color: #2b6cb0; }
+
+.di-footnote {
+  font-size: 0.66rem;
+  color: #cbd5e0;
+  text-align: center;
+  margin-top: 0.9rem;
+}
+
+@media (max-width: 560px) {
+  .di-stats { grid-template-columns: repeat(2, 1fr); row-gap: 0.9rem; }
+  .di-stat-num { font-size: 1.25rem; }
+  .di-chart-wrap { height: 170px; }
+  .di-funnel-row { grid-template-columns: 74px 1fr 32px; }
+  .di-table-wrap, .di-table { display: block; overflow-x: auto; }
+}

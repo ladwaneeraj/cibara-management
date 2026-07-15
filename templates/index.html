@@ -26,6 +26,7 @@
     <link rel="stylesheet" href="/static/laundry.css" />
     <link rel="stylesheet" href="/static/banking.css" />
     <link rel="stylesheet" href="/static/maintenance.css" />
+    <link rel="stylesheet" href="{{ asset_url('daily-insights.css') }}" />
     <link
       rel="stylesheet"
       href="https://cdnjs.cloudflare.com/ajax/libs/flatpickr/4.6.13/flatpickr.min.css"
@@ -808,6 +809,12 @@
               <p>Loading rooms...</p>
             </div>
           </div>
+
+          <!-- Daily Insights — admin-only operations analytics rendered
+               inline below the cleaning cards while the "Cleaning" filter is
+               active (populated by daily-insights.js). Server enforces
+               analytics.view on /insights/*; data-perm hides it client-side. -->
+          <div id="di-inline" class="hidden" data-perm="analytics.view"></div>
         </div>
 
         <!-- Transactions Tab Content -->
@@ -3197,6 +3204,7 @@
           <i class="fas fa-tools"></i>
           <span>Deep Check</span>
         </div>
+
       </div>
     </div>
     <!-- Checkout Confirmation Modal -->
@@ -5000,6 +5008,8 @@
     <script defer src="/static/laundry.js"></script>
     <!-- Deep-check maintenance (rounds, issues, analytics) -->
     <script defer src="{{ asset_url('maintenance.js') }}"></script>
+    <!-- Daily Insights dashboard (admin-only; requires analytics.view) -->
+    <script defer src="{{ asset_url('daily-insights.js') }}"></script>
     <!-- Role-aware housekeeping bootstrap (no-op for non-housekeeping roles) -->
     <script defer src="/static/housekeeping-mode.js"></script>
     <!-- Admin: user management page (admin-only; UI does its own role check) -->

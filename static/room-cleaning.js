@@ -335,7 +335,9 @@ function setupPremiumModalListeners() {
     const roomNumber = document.getElementById(
       "premium-room-number",
     ).textContent;
-    await completeRoomCleaning(roomNumber);
+    approveBtn.disabled = true;   // no double-fire while request is in flight
+    try { await completeRoomCleaning(roomNumber); }
+    finally { approveBtn.disabled = false; }
   });
 }
 
@@ -366,7 +368,9 @@ function setupStandardModalListeners() {
     const roomNumber = document.getElementById(
       "standard-room-number",
     ).textContent;
-    await completeRoomCleaning(roomNumber);
+    approveBtn.disabled = true;   // no double-fire while request is in flight
+    try { await completeRoomCleaning(roomNumber); }
+    finally { approveBtn.disabled = false; }
   });
 }
 
@@ -395,7 +399,9 @@ function setupRegularModalListeners() {
     const roomNumber = document.getElementById(
       "regular-room-number",
     ).textContent;
-    await completeRoomCleaning(roomNumber);
+    approveBtn.disabled = true;   // no double-fire while request is in flight
+    try { await completeRoomCleaning(roomNumber); }
+    finally { approveBtn.disabled = false; }
   });
 }
 
@@ -565,7 +571,25 @@ async function markRoomAsCleaned(roomNumber) {
 //       Skips the inspection wait and clears the room to vacant in one
 //       step. Works whether the room is currently in_progress or
 //       ready_to_inspect.
+//
+// In-flight guard: a double-tap on the QC approve button used to fire two
+// racing requests, producing duplicate audit entries (rooms then showed up
+// twice in Daily Insights). Repeat calls for the same room are ignored
+// until the first request settles. The server also rejects the loser via
+// a transactional claim — this guard just avoids the wasted round-trip.
+var _cleaningInflight = {};
+
 async function completeRoomCleaning(roomNumber) {
+  if (_cleaningInflight[roomNumber]) return false;
+  _cleaningInflight[roomNumber] = true;
+  try {
+    return await _completeRoomCleaningInner(roomNumber);
+  } finally {
+    delete _cleaningInflight[roomNumber];
+  }
+}
+
+async function _completeRoomCleaningInner(roomNumber) {
   try {
     const _auth = window.CibaraAuth;
     const _canApprove = _auth && _auth.userCan && _auth.userCan("room.inspection.approve");

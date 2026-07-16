@@ -123,6 +123,34 @@ class TestPairing:
         ])
         assert cycles[0]["excluded_from_stats"] is True
 
+    def test_exact_duplicate_events_deduped(self):
+        # A double-tap race used to write two identical audit docs.
+        cycles = pair_cleaning_cycles([
+            _checkout("210", "2026-07-15 09:00:00"),
+            _approved("210", "2026-07-15 09:30:00"),
+            _approved("210", "2026-07-15 09:30:00"),   # exact duplicate doc
+        ])
+        assert len(cycles) == 1
+
+    def test_replayed_approve_seconds_later_not_double_counted(self):
+        # Duplicate approve lands a couple of seconds after the first
+        # (request retry) — must NOT create a second orphan cycle.
+        cycles = pair_cleaning_cycles([
+            _checkout("211", "2026-07-15 09:00:00"),
+            _approved("211", "2026-07-15 09:30:00"),
+            _approved("211", "2026-07-15 09:30:02"),
+        ])
+        complete = [c for c in cycles if c["complete"]]
+        assert len(complete) == 1
+        assert complete[0]["total_min"] == 30.0
+
+    def test_duplicate_checkout_events_deduped_in_counters(self):
+        out = compute_daily_insights([
+            _checkout("212", "2026-07-15 10:00:00"),
+            _checkout("212", "2026-07-15 10:00:00"),   # exact duplicate doc
+        ], "2026-07-15", "2026-07-15")
+        assert out["days"][0]["checkouts"] == 1
+
     def test_unparseable_timestamp_ignored(self):
         cycles = pair_cleaning_cycles([
             _checkout("108", "not-a-date"),

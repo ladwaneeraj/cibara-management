@@ -2695,46 +2695,60 @@ def mark_room_ready_for_checkin():
         qc_skipped = bool(data_json.get("checklist_skipped"))
         qc_notes = (data_json.get("notes") or "").strip()
 
-        room_doc = rooms_ref.document(room).get()
-        if not room_doc.exists:
-            return jsonify(success=False, message="Room not found")
-
-        room_data = room_doc.to_dict()
-        prev_state = room_data.get("cleaning_status")
-
-        if room_data.get("status") != "cleaning":
-            return jsonify(success=False, message="This room is not in cleaning status")
-
         # Vacate + clear all guest-related fields. Same shape as the old
         # mark_room_cleaned final write, with the cleaning workflow fields
         # also cleared.
+        #
+        # ATOMIC CLAIM (same pattern as check-in's _claim_room): the status
+        # check and the vacate-update run inside one transaction so two
+        # racing requests (e.g. a double-tap on the QC approve button) can
+        # never BOTH pass the "is it in cleaning?" check. The loser raises
+        # ValueError and, crucially, writes no duplicate audit entry —
+        # duplicate audit entries were double-counting rooms in the
+        # Daily Insights cleaning history.
         _insp_user = (_safe_user() or {}).get("userId") or "system"
         _insp_now = datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S")
-        rooms_ref.document(room).update({
-            "status": "vacant",
-            "cleaning_status": None,
-            "cleaning_start_time": None,
-            "cleaning_done_at": None,
-            "inspected_at": _insp_now,
-            "guest": None,
-            "checkin_time": None,
-            "balance": 0,
-            "add_ons": [],
-            "discounts": [],
-            "renewal_count": 0,
-            "last_renewal_time": None,
-            "last_renewal_date": None,
-            # Clear revert-window pointers — once the room is approved
-            # and ready for the next guest, the previous checkout is no
-            # longer eligible for undo.
-            "last_bill_id":     None,
-            "last_checkout_at": None,
-            # Attribution — who approved the room ready for the next guest
-            "inspectedBy":       _insp_user,
-            "inspectedAt":       _insp_now,
-            "lastModifiedBy":    _insp_user,
-            "lastModifiedAt":    _insp_now,
-        })
+
+        @firestore.transactional
+        def _claim_ready(txn, ref):
+            snap = ref.get(transaction=txn)
+            if not snap.exists:
+                raise ValueError("Room not found")
+            data = snap.to_dict() or {}
+            if data.get("status") != "cleaning":
+                raise ValueError("This room is not in cleaning status")
+            txn.update(ref, {
+                "status": "vacant",
+                "cleaning_status": None,
+                "cleaning_start_time": None,
+                "cleaning_done_at": None,
+                "inspected_at": _insp_now,
+                "guest": None,
+                "checkin_time": None,
+                "balance": 0,
+                "add_ons": [],
+                "discounts": [],
+                "renewal_count": 0,
+                "last_renewal_time": None,
+                "last_renewal_date": None,
+                # Clear revert-window pointers — once the room is approved
+                # and ready for the next guest, the previous checkout is no
+                # longer eligible for undo.
+                "last_bill_id":     None,
+                "last_checkout_at": None,
+                # Attribution — who approved the room ready for the next guest
+                "inspectedBy":       _insp_user,
+                "inspectedAt":       _insp_now,
+                "lastModifiedBy":    _insp_user,
+                "lastModifiedAt":    _insp_now,
+            })
+            return data
+
+        try:
+            room_data = _claim_ready(db.transaction(), rooms_ref.document(room))
+        except ValueError as ve:
+            return jsonify(success=False, message=str(ve))
+        prev_state = room_data.get("cleaning_status")
 
         invalidate_rooms_and_totals()
 

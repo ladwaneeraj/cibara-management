@@ -135,6 +135,25 @@ def _avg(values):
     return round(sum(vals) / len(vals), 1) if vals else None
 
 
+def _dedupe_events(events):
+    """
+    Drop exact duplicate audit entries: same (action, room, timestamp).
+    A frontend double-tap used to race two identical requests past the
+    endpoint's status check, writing two audit docs for one human action.
+    The endpoint is transactional now, but history still contains dupes.
+    """
+    seen = set()
+    out = []
+    for ev in (events or []):
+        key = (ev.get("action"), str(ev.get("targetId")),
+               str(ev.get("timestamp")))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(ev)
+    return out
+
+
 # ── cycle pairing ───────────────────────────────────────────────────────────
 
 def _new_cycle(room):
@@ -173,7 +192,7 @@ def pair_cleaning_cycles(events):
     irrelevant ones are skipped).  Returns a list of cycle dicts.
     """
     by_room = defaultdict(list)
-    for ev in (events or []):
+    for ev in _dedupe_events(events):
         action = ev.get("action")
         if action not in (ACTION_CHECKOUT, ACTION_CLEANED, ACTION_APPROVED,
                           ACTION_REVERT):
@@ -190,6 +209,7 @@ def pair_cleaning_cycles(events):
     for room, evs in by_room.items():
         evs.sort(key=lambda pair: pair[0])
         open_cycle = None
+        room_completed = False  # room already had a completed cycle in stream
 
         for ts, ev in evs:
             action = ev.get("action")
@@ -221,6 +241,14 @@ def pair_cleaning_cycles(events):
 
             elif action == ACTION_APPROVED:
                 if open_cycle is None:
+                    # An approve for an already-vacant room (no checkout in
+                    # between) is a duplicate/replayed request — counting it
+                    # would double the day's cleanings. Only treat it as an
+                    # orphan completion when this is the room's FIRST
+                    # sighting in the stream (checkout predates the fetch
+                    # window, or its audit write was lost).
+                    if room_completed:
+                        continue
                     open_cycle = _new_cycle(room)
                 open_cycle["ready_ts"] = ev.get("timestamp")
                 open_cycle["inspected_by"] = user
@@ -230,6 +258,7 @@ def pair_cleaning_cycles(events):
                 open_cycle["complete"] = True
                 cycles.append(_finalise_durations(open_cycle))
                 open_cycle = None
+                room_completed = True
 
             elif action == ACTION_REVERT:
                 # Checkout reverted → the cleaning cycle never really
@@ -321,6 +350,10 @@ def compute_daily_insights(events, window_from, window_to, *,
     """
     if now is None:
         now = datetime.now()
+
+    # Collapse exact duplicate audit entries (double-tap races) so raw
+    # counters (checkouts, check-ins, hourly) aren't inflated either.
+    events = _dedupe_events(events)
 
     day_index = {d: _empty_day(d) for d in _day_list(window_from, window_to)}
 

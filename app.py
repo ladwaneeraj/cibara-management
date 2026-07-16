@@ -71,7 +71,7 @@ for _var in ["API_KEY"]:
 # role checks are applied via @requires_permission inside each blueprint.
 # ---------------------------------------------------------------------------
 _PUBLIC_PREFIXES = ("/static/", "/uploads/", "/firebase-config.js")
-_PUBLIC_EXACT    = ("/", "/login", "/health", "/verify-pin")
+_PUBLIC_EXACT    = ("/", "/login", "/health", "/verify-pin", "/sw.js", "/manifest.webmanifest")
 
 @app.before_request
 def _serve_static():
@@ -185,6 +185,27 @@ def index():
         api_key=os.environ.get("API_KEY", ""),
         ui_config=ui_cfg,
     )
+
+@app.route("/sw.js")
+def service_worker():
+    """Serve the service worker from the site root so its scope covers the
+    whole origin (a SW's scope is limited to the path it's served from).
+    Sent with a JS mimetype, Service-Worker-Allowed: / and no-cache so the
+    browser re-checks it on each load and picks up new versions promptly."""
+    resp = send_from_directory(STATIC_DIR, "sw.js", mimetype="application/javascript")
+    resp.headers["Service-Worker-Allowed"] = "/"
+    resp.headers["Cache-Control"] = "no-cache"
+    return resp
+
+
+@app.route("/manifest.webmanifest")
+def web_manifest():
+    """PWA manifest, served at root with the correct mimetype."""
+    resp = send_from_directory(STATIC_DIR, "manifest.webmanifest",
+                               mimetype="application/manifest+json")
+    resp.headers["Cache-Control"] = "no-cache"
+    return resp
+
 
 @app.route("/uploads/<path:filename>")
 def uploaded_file(filename):

@@ -2,6 +2,8 @@
 PDF Service — manages bill PDF storage in Firebase Storage.
 
 Storage path:  bills/{safe_invoice_no}/v{n}.pdf
+               (placeholder numbers like "-" fall back to bill_id — see
+               _safe_folder; a shared folder rotates tokens and 403s old URLs)
 Firestore:     bills/{bill_id}.pdf_url  (latest URL)
                bills/{bill_id}.versions (audit trail array)
 
@@ -35,6 +37,37 @@ def init(db):
 # PUBLIC API
 # ---------------------------------------------------------------------------
 
+def _is_placeholder(value) -> bool:
+    """True when a bill number is missing or a placeholder like "-" / "N/A".
+
+    Placeholder numbers ("-") are minted for no-bill cash stays, pure MMT OTA
+    stays, and deferred-number checkouts. They MUST NOT be used as a Storage
+    folder: every such bill would share bills/-/v1.pdf, and each upload
+    overwrites the object and rotates the download token — 403ing every
+    previously saved URL.
+    """
+    if not value:
+        return True
+    return not any(c.isalnum() for c in str(value))
+
+
+def _safe_folder(invoice_no: str, doc_bill_number: str, bill_id: str) -> str:
+    """
+    Resolve a unique, Storage-safe folder name for a bill's PDFs.
+
+    Priority: caller-supplied invoice_no → bill_number on the Firestore doc
+    (may have been stamped after the caller captured its stale copy) →
+    bill_id (always unique). Placeholders are rejected at each step.
+    """
+    for candidate in (invoice_no, doc_bill_number, bill_id):
+        if not _is_placeholder(candidate):
+            safe = str(candidate).replace("/", "_").replace(" ", "_")
+            safe = "".join(c for c in safe if c.isalnum() or c in "._-")
+            if not _is_placeholder(safe):
+                return safe
+    return bill_id  # unreachable in practice: bill_id is a Firestore doc id
+
+
 def upload_bill_pdf(bill_id: str, invoice_no: str, pdf_bytes: bytes) -> dict:
     """
     Upload a PDF to Firebase Storage and save the URL in the bill document.
@@ -57,16 +90,19 @@ def upload_bill_pdf(bill_id: str, invoice_no: str, pdf_bytes: bytes) -> dict:
             logger.error(f"PdfService: bill {bill_id} not found in Firestore")
             return {"url": "", "version": 0}
 
-        existing_versions = bill_snap.to_dict().get("versions", []) or []
+        bill_doc = bill_snap.to_dict() or {}
+        existing_versions = bill_doc.get("versions", []) or []
         next_version = len(existing_versions) + 1
 
-        # Sanitise invoice_no for use in a Storage path
+        # Resolve a unique Storage folder. Placeholder numbers ("-") fall
+        # back to the doc's bill_number, then bill_id — never a shared path.
         # e.g. "INV/2026/03/00045" → "INV_2026_03_00045"
-        safe_no = (invoice_no or bill_id).replace("/", "_").replace(" ", "_")
+        safe_no = _safe_folder(invoice_no, bill_doc.get("bill_number") or "", bill_id)
         filename = f"v{next_version}.pdf"
         blob_path = f"bills/{safe_no}/{filename}"
 
-        url = _store_pdf(blob_path, pdf_bytes)
+        url = _store_pdf(blob_path, pdf_bytes,
+                         download_name=f"Invoice_{safe_no}_v{next_version}.pdf")
         if not url:
             return {"url": "", "version": 0}
 
@@ -128,13 +164,17 @@ def upload_filing_attachment(period: str, filename: str, data: bytes,
 # INTERNAL HELPERS
 # ---------------------------------------------------------------------------
 
-def _store_pdf(blob_path: str, pdf_bytes: bytes) -> str:
+def _store_pdf(blob_path: str, pdf_bytes: bytes, download_name: str = "") -> str:
     """
     Upload PDF bytes to Firebase Storage.
     Returns a token-based download URL, or "" on failure.
 
     Mirrors customer_service._store_image() — same URL format, same token
     approach so the link works even with uniform bucket-level access enabled.
+
+    download_name: when set, stored as `inline; filename="..."` so the PDF
+    previews in the browser but downloads with a proper invoice filename
+    instead of "v1.pdf".
     """
     try:
         from firebase_admin import storage as _fb_storage
@@ -149,6 +189,8 @@ def _store_pdf(blob_path: str, pdf_bytes: bytes) -> str:
         # Set download token BEFORE upload (single multipart request)
         download_token = str(_uuid.uuid4())
         blob.metadata = {"firebaseStorageDownloadTokens": download_token}
+        if download_name:
+            blob.content_disposition = f'inline; filename="{download_name}"'
 
         blob.upload_from_string(pdf_bytes, content_type="application/pdf")
 

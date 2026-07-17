@@ -109,7 +109,7 @@ def main() -> int:
             new_url = (bills_ref.document(doc_id).get().to_dict() or {}).get("pdf_url") or ""
             if new_url and "bills%2F-%2F" not in new_url:
                 ok += 1
-                print(f"  REPAIRED {doc_id} → ...{new_url[-50:]}")
+                print(f"  REPAIRED {doc_id} -> ...{new_url[-50:]}")
             else:
                 failed += 1
                 print(f"  FAILED   {doc_id} (pdf_url={new_url!r}) — see app logs")

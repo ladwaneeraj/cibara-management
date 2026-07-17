@@ -1729,7 +1729,10 @@
     const isAdmin = !!(_auth && _auth.isAdmin && _auth.isAdmin());
     const billNo = (b.bill_number || "").trim();
     const hasNumber = billNo && billNo !== "-";
-    const hasPdf = !!b.pdf_url;
+    // A pdf_url into the shared bills/-/ folder is dead (overwritten +
+    // token rotated → 403) — treat it as missing so the button shows and
+    // the server regenerates under the real number.
+    const hasPdf = !!b.pdf_url && b.pdf_url.indexOf("bills%2F-%2F") === -1;
     const completed = b.status === "completed" || b.status === "pending_settlement";
     let recent = false, sameMonth = false;
     const coDate = (b.checkout_time || "").slice(0, 10);

@@ -200,7 +200,8 @@ def _store_pdf(blob_path: str, pdf_bytes: bytes, download_name: str = "") -> str
             f"{bucket.name}/o/{encoded_path}"
             f"?alt=media&token={download_token}"
         )
-        logger.info(f"PdfService: Storage upload OK → {blob_path}")
+        # ASCII arrow: Windows cp1252 log handlers can't encode U+2192
+        logger.info(f"PdfService: Storage upload OK -> {blob_path}")
         return url
 
     except Exception as e:

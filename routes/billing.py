@@ -2967,11 +2967,17 @@ def auto_generate_bill_pdf(bill_id: str, bill_record: dict):
         if not bill_id or not bill_record:
             return
         # Skip if a PDF already exists (shouldn't happen on fresh checkout,
-        # but guard against duplicate calls)
+        # but guard against duplicate calls). A URL into the shared bills/-/
+        # folder does NOT count: that path was overwritten by every
+        # placeholder-numbered bill (token rotated → 403), so regenerate.
         bill_snap = bills_ref.document(bill_id).get()
-        if bill_snap.exists and (bill_snap.to_dict() or {}).get("pdf_url"):
+        existing_url = ((bill_snap.to_dict() or {}).get("pdf_url") or "") if bill_snap.exists else ""
+        if existing_url and "bills%2F-%2F" not in existing_url:
             logger.info(f"[auto_pdf] Bill {bill_id} already has a PDF, skipping.")
             return
+        if existing_url:
+            logger.info(f"[auto_pdf] Bill {bill_id} pdf_url points to the dead "
+                        f"shared bills/-/ folder — regenerating.")
 
         html_body  = _build_bill_html(bill_record)
         full_html  = _build_pdf_html(html_body)
@@ -3163,7 +3169,11 @@ def render_bill_pdf():
         if not bill_number:
             bill_number = bill_data.get("bill_number") or ""
 
-        existing_url = bill_data.get("pdf_url")
+        existing_url = bill_data.get("pdf_url") or ""
+        # Never serve a cached URL into the dead shared bills/-/ folder
+        # (overwritten + token rotated → 403); fall through and regenerate.
+        if "bills%2F-%2F" in existing_url:
+            existing_url = ""
         if existing_url and not force and not html_body:
             # No fresh HTML to render and force not requested — return cached.
             logger.info(f"render_bill_pdf: PDF already exists for {bill_id}, skipping")
@@ -4180,7 +4190,11 @@ def generate_invoice(entry_id):
 
         bill_number = (bill.get("bill_number") or "").strip()
         has_number = bool(bill_number) and bill_number != "-"
-        has_pdf = bool(bill.get("pdf_url"))
+        _pdf_url = bill.get("pdf_url") or ""
+        # A URL into the shared bills/-/ folder is dead (each placeholder bill
+        # overwrote it and rotated the token → 403) — treat as missing so the
+        # PDF is regenerated instead of returning the broken link.
+        has_pdf = bool(_pdf_url) and "bills%2F-%2F" not in _pdf_url
 
         if not has_number:
             # No invoice number yet (same-day cash / OTA checkout). Mint one
@@ -4205,6 +4219,18 @@ def generate_invoice(entry_id):
                 return jsonify(success=False,
                                message=f"Could not allocate an invoice number: {me}"), 500
             fresh = (bills_ref.document(entry_id).get().to_dict() or {})
+            # A PDF generated at checkout (before the number existed) lives
+            # under a placeholder folder and shows no invoice number; the
+            # shared bills/-/ variant also 403s once overwritten. Clear it so
+            # auto_generate_bill_pdf re-renders under the minted CC/ number
+            # (its skip-guard re-reads the doc, so the clear must hit
+            # Firestore first).
+            if fresh.get("pdf_url"):
+                bills_ref.document(entry_id).update({
+                    "pdf_url": "",
+                    "pdf_status": "regenerate_after_mint",
+                })
+                fresh["pdf_url"] = ""
             auto_generate_bill_pdf(entry_id, fresh)
             fresh = (bills_ref.document(entry_id).get().to_dict() or {})
             write_log("bill.invoice.generate", target_collection="bills",

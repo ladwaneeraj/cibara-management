@@ -36,12 +36,16 @@ def init(db):
 # WRITE
 # ---------------------------------------------------------------------------
 
-def write_expense(expense_data: dict, *, sync: bool = False) -> bool:
+def write_expense(expense_data: dict, *, sync: bool = False):
     """
     Write a single expense document to the `expenses` collection.
 
-    sync=True  → blocking write (use in migration / tests)
-    sync=False → async background write (default, never blocks HTTP response)
+    sync=True  → blocking write; returns the new Firestore doc ID (str) on
+                 success so the caller can echo the stored row back to the
+                 client (smooth-insert without a refetch), or False on
+                 failure. A str is truthy, so bool-style callers keep working.
+    sync=False → async background write (default, never blocks HTTP
+                 response); returns True immediately.
     """
     if _expenses_ref is None:
         return False
@@ -50,8 +54,9 @@ def write_expense(expense_data: dict, *, sync: bool = False) -> bool:
 
     if sync:
         try:
-            _expenses_ref.document().set(doc)
-            return True
+            ref = _expenses_ref.document()
+            ref.set(doc)
+            return ref.id
         except Exception as e:
             logger.error(f"ExpenseService sync-write failed: {e}")
             return False

@@ -676,6 +676,79 @@
         background: #e8f0fe;
       }
     </style>
+    <!-- ── Portrait lock (mobile) ─────────────────────────────────────────
+         Three layers, because no single mechanism covers every case:
+         1. manifest.webmanifest "orientation": "portrait" — hard lock when
+            the app is installed to the home screen (Android).
+         2. screen.orientation.lock() below — best-effort; works in
+            installed/fullscreen contexts, silently unavailable in normal
+            browser tabs and on iOS.
+         3. CSS overlay — phones in landscape (height ≤ 520px) get a
+            full-screen "rotate back" prompt so the UI is never used
+            sideways. Tablets/desktops are unaffected. -->
+    <style>
+      #portrait-lock-overlay { display: none; }
+      @media screen and (orientation: landscape) and (max-height: 520px) {
+        #portrait-lock-overlay {
+          display: flex;
+          position: fixed;
+          inset: 0;
+          z-index: 2147483647;
+          background: #0f172a;
+          color: #fff;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          gap: 0.75rem;
+          text-align: center;
+          font-size: 1rem;
+          padding: 1rem;
+        }
+        #portrait-lock-overlay .plo-icon {
+          font-size: 2.2rem;
+          animation: plo-tilt 1.6s ease-in-out infinite;
+        }
+        @keyframes plo-tilt {
+          0%, 100% { transform: rotate(0deg); }
+          50%      { transform: rotate(-90deg); }
+        }
+      }
+    </style>
+    <script>
+      (function () {
+        // Layer 3: inject the rotate-back overlay once the DOM exists.
+        function addOverlay() {
+          if (document.getElementById("portrait-lock-overlay")) return;
+          var el = document.createElement("div");
+          el.id = "portrait-lock-overlay";
+          el.innerHTML =
+            '<div class="plo-icon">📱</div>' +
+            "<div><strong>Please rotate your phone</strong><br>" +
+            "This app works in portrait mode only.</div>";
+          document.body.appendChild(el);
+        }
+        if (document.readyState === "loading") {
+          document.addEventListener("DOMContentLoaded", addOverlay);
+        } else {
+          addOverlay();
+        }
+
+        // Layer 2: best-effort API lock (installed PWA / fullscreen only).
+        function tryLock() {
+          try {
+            if (screen.orientation && screen.orientation.lock) {
+              screen.orientation.lock("portrait").catch(function () {
+                /* not permitted in this context — overlay covers it */
+              });
+            }
+          } catch (e) { /* older browsers — overlay covers it */ }
+        }
+        tryLock();
+        // Re-attempt when entering standalone/fullscreen (e.g. PWA launch).
+        document.addEventListener("fullscreenchange", tryLock);
+        window.addEventListener("orientationchange", tryLock);
+      })();
+    </script>
   </head>
   <body{% if ui_config and ui_config.incognito_mode %} class="incognito-mode"{% endif %}>
     <div class="app-container">
@@ -3594,6 +3667,30 @@
               >
                 Enable AC ?
               </label>
+            </div>
+          </div>
+
+          <!-- Apply today's rate difference (cross-category shifts only) -->
+          <div id="transfer-diff-section" style="display: none" class="form-group">
+            <div
+              class="checkbox-wrapper"
+              style="display: flex; align-items: center; gap: 0.5rem"
+            >
+              <input type="checkbox" id="transfer-apply-diff" checked />
+              <label
+                class="form-label"
+                for="transfer-apply-diff"
+                style="margin: 0"
+              >
+                Apply new rate from today
+              </label>
+            </div>
+            <div
+              class="form-helper"
+              style="font-size: 0.8rem; color: var(--gray); margin-top: 0.25rem"
+            >
+              Turn off to keep today at the old rate — the new rate then
+              starts from the next rent.
             </div>
           </div>
 

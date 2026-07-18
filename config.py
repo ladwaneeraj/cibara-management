@@ -78,6 +78,49 @@ def room_category(room_number):
     rooms fall back to "other" — matching the JS helper."""
     return _ROOM_CATEGORY_MAP.get(str(room_number), "other")
 
+
+# ── Server-side room pricing ────────────────────────────────────────────────
+# Python mirror of roomPricing.calculatePrice() in static/script.js.
+# KEEP IN SYNC with the JS map — the server is authoritative for
+# cross-category transfers (/transfer_room re-rates the stay from here).
+# AC surcharge: +₹600/night, only meaningful for "premium" (200–206).
+AC_SURCHARGE = 600
+
+
+def room_base_price(room_number, guest_count=1):
+    """Standard per-night rate (non-AC base) for a room + guest count.
+
+    Mirrors static/script.js roomPricing.calculatePrice(). Returns an int.
+    The AC surcharge is NOT included — callers add AC_SURCHARGE when the
+    stay is premium with the AC toggle on.
+    """
+    key = str(room_number)
+    try:
+        guests = int(guest_count or 1)
+    except (TypeError, ValueError):
+        guests = 1
+    if guests < 1:
+        guests = 1
+    cat = room_category(key)
+
+    if cat == "single-non-attach":
+        return 250
+    if cat == "double-non-attach":
+        return 300 if guests == 1 else 500
+    if cat == "premium":
+        return 1200 + max(0, guests - 2) * 300
+    if cat == "regular":
+        # 220–222 are priced differently from the rest of Regular.
+        if key in ("220", "221", "222"):
+            return 700 + max(0, guests - 1) * 300
+        return 450 if guests == 1 else 700 + max(0, guests - 2) * 300
+    if cat == "deluxe":
+        return 900 + max(0, guests - 2) * 300
+    if cat == "single-attach":
+        return 450 if guests == 1 else 700
+    # party-hall / other — same fallback as the JS helper.
+    return 500
+
 # Global cache for frequently accessed data
 _cache = {}
 _cache_lock = threading.Lock()
@@ -1002,8 +1045,16 @@ def create_bill_record(room, room_data, checkout_time, batch=None,
             try:
                 _transfer_dt = datetime.strptime(last_transfer_date, "%Y-%m-%d").date()
                 days_in_current_room = (checkout_dt.date() - _transfer_dt).days
-                if days_in_current_room < 1:
-                    days_in_current_room = 1
+                # Same-day checkout after a shift normally still bills 1 night
+                # in the new room. EXCEPT when the transfer folded the
+                # in-progress day into the old segment ("apply today's
+                # difference" OFF in /transfer_room) — that day is already
+                # billed at the old rate inside pre_transfer_charges, and
+                # forcing 1 here would double-charge it.
+                _prebilled = guest.get("transfer_day_prebilled")
+                _min_days = 0 if (_prebilled and _prebilled == last_transfer_date) else 1
+                if days_in_current_room < _min_days:
+                    days_in_current_room = _min_days
             except (ValueError, TypeError):
                 # Fallback to renewal_count logic if date is malformed
                 days_in_current_room = max(1, (renewal_count + 1) - transfer_day_offset)
@@ -2143,18 +2194,18 @@ def compute_daily_folio(
         if day_total < 0:
             day_total = 0.0
 
-        # GST slab is determined by the TARIFF (the per-night rate the
-        # hotel actually charges), NOT the post-discount net. Under
-        # CBIC Notification 11/2017-CTR as amended, the slab follows
-        # the value-of-supply BEFORE discount is applied; the discount
-        # is then treated as a deduction (Section 15(3)).
+        # GST slab follows the POST-discount value of supply.
         #
-        # Previously this used `day_total` (post-discount). That broke
-        # for fully-discounted nights: a ₹1800 room with a ₹1800 disc
-        # would reclassify to Exempt (post-discount net = ₹0), even
-        # though the tariff is firmly in the 5% bracket. Same row would
-        # then show Rate=Exempt while Taxable=₹1800 — visibly broken.
-        day_gst_rate = _slab_for_value(entry["pre_discount_total"])
+        # Basis: the "declared tariff" concept is gone (Notif. 05/2025-CTR,
+        # eff. 1 Apr 2025; transaction-value basis since the 2019
+        # amendments), and Section 15(3)(a) CGST Act EXCLUDES an on-invoice
+        # discount from the value of supply. The slab thresholds
+        # (₹1,000 / ₹7,500 per unit per day) therefore apply to the amount
+        # actually charged for the night AFTER the allocated discount.
+        # e.g. ₹1,200 room − ₹400 on-invoice discount = ₹800 → Exempt,
+        # not 5% on ₹800. A fully discounted night is likewise Exempt
+        # (value of supply ₹0) — that is correct, not a display bug.
+        day_gst_rate = _slab_for_value(day_total)
         if day_gst_rate > 0 and day_total > 0:
             divisor = 100 + day_gst_rate
             day_gst = round(day_total * day_gst_rate / divisor, 2)

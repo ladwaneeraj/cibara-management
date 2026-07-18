@@ -1900,9 +1900,12 @@ def edit_bill_room_price():
                 elif price <= 7500:
                     return 5
                 return 18
-            gst_rate   = _gst_rate_for_price(new_price)
             _accom     = room_charges_total + accommodation_addons_total
             _eff_accom = _accom - min(total_discounts, _accom)
+            # Slab from the POST-discount per-night value of supply
+            # (Section 15(3)(a); transaction-value basis) — mirrors
+            # compute_daily_folio.
+            gst_rate   = _gst_rate_for_price(_eff_accom / max(days_stayed, 1))
             divisor    = 100 + gst_rate if gst_rate else 100
             gst_amount = round(_eff_accom * gst_rate / divisor, 2) if gst_rate else 0.0
             accommodation_taxable = round(_eff_accom - gst_amount, 2)

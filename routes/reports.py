@@ -614,7 +614,10 @@ def add_expense():
             expense_entry.update(commission_fields)
 
         # ── Primary write → expenses collection (sync so doc exists before counter) ──
-        expense_service.write_expense(expense_entry, sync=True)
+        # write_expense(sync=True) returns the new doc ID — echoed back in the
+        # response so the client can smooth-insert the row (with working
+        # edit/delete buttons) without waiting for a refetch.
+        _new_doc_id = expense_service.write_expense(expense_entry, sync=True)
 
         # ── Update totals counter for transaction expenses ───────────────────
         # Done AFTER the expense doc is confirmed written (sync=True above),
@@ -629,7 +632,13 @@ def add_expense():
         invalidate_rooms_and_totals()
 
         logger.info(f"Expense added: {description}, Category: {category}, Amount: ₹{amount}")
-        return jsonify(success=True, message=f"Expense of ₹{amount} added successfully")
+        # Echo the stored row (with _doc_id, the key the transaction log's
+        # edit/delete handlers match on) for the client's smooth-insert.
+        _stored_row = dict(expense_entry)
+        _stored_row["_doc_id"] = _new_doc_id if isinstance(_new_doc_id, str) else ""
+        return jsonify(success=True,
+                       message=f"Expense of ₹{amount} added successfully",
+                       expense=_stored_row)
 
     except Exception as e:
         logger.error(f"Error adding expense: {str(e)}")

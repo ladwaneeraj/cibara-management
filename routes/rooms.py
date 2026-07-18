@@ -22,7 +22,7 @@ from config import (
     store_transaction_metadata, create_bill_record, BillCreationError,
     allocate_and_finalize_bill,
     find_serial_number_for_checkin, _build_active_entry_fast, _find_serial_fast,
-    _batch_fill_serials, room_category
+    _batch_fill_serials, room_category, room_base_price, AC_SURCHARGE
 )
 from services import payment_service, customer_service, expense_service, bills_service
 from services import system_alerts
@@ -1886,6 +1886,31 @@ def shorten_stay():
                     409,
                 )
 
+            # ── Price-segment boundary guard ─────────────────────────────────
+            # After a transfer / re-rate, days before the boundary were
+            # accrued at a PREVIOUS rate (snapshotted in pre_transfer_charges,
+            # cumulative day count = transfer_day_offset). Reversing at
+            # today's guest.price would refund the wrong amount for those
+            # days — cap the reversal at the current price segment.
+            _g = rd.get("guest") or {}
+            _seg_offset = int(_g.get("transfer_day_offset", 0) or 0)
+            if _seg_offset and (_g.get("pre_transfer_charges") or []):
+                # Cycles accrued so far = renewal_count + 1 (cycle 1 is funded
+                # at check-in). Cycles 1.._seg_offset belong to earlier
+                # segments; the rest are at the current rate (the transfer's
+                # shift-day adjustment re-rated any straddling cycle).
+                _reversible = (current_count + 1) - _seg_offset
+                if days_to_reverse > max(0, _reversible):
+                    return (
+                        "err",
+                        f"Cannot reverse {days_to_reverse} day(s): only "
+                        f"{max(0, _reversible)} renewal(s) belong to the "
+                        f"current rate segment (earlier days were billed at "
+                        f"a previous room's rate). Adjust those via a "
+                        f"discount / price edit instead.",
+                        409,
+                    )
+
             price_in_txn = int((rd.get("guest") or {}).get("price", 0) or 0)
             if price_in_txn <= 0:
                 return ("err", "Room rate missing on guest record", 409)
@@ -2411,6 +2436,11 @@ def transfer_room():
         new_room = str(data_json["new_room"])
         new_price = data_json.get("new_price")
         is_ac = data_json.get("is_ac", False)
+        # Cross-category only: True (default) → the shift day is billed at
+        # the NEW rate and the difference lands on the balance (due/refund).
+        # False → the shift day stays at the OLD rate; the new rate starts
+        # from the next rent cycle (no balance change today).
+        apply_today_diff = bool(data_json.get("apply_today_diff", True))
 
         rooms_dict = get_all_rooms()
 
@@ -2423,22 +2453,54 @@ def transfer_room():
         if rooms_dict[new_room]["status"] != "vacant":
             return jsonify(success=False, message="Destination room is not vacant.")
 
-        # ── Same-category guard ──────────────────────────────────────────────
-        # A transfer must stay within the same rate-slab category so the stay's
-        # billing doesn't change mid-stay. Cross-category moves (genuine
-        # upgrade/downgrade) are a different operation and are blocked here as
-        # defense-in-depth behind the filtered dropdown in shift.js.
+        # ── Category resolution ──────────────────────────────────────────────
+        # Same-category transfers keep the guest's tariff unchanged (physical
+        # move only — legacy behaviour). Cross-category transfers RE-RATE the
+        # stay from the shift day onward: prior nights are snapshotted into
+        # pre_transfer_charges at the old rate, guest.price moves to the new
+        # room's rate, and the daily folio bills each night at its own
+        # segment's rate. Destination categories without a published tariff
+        # (party-hall / unmapped) are blocked for cross-category moves.
         _old_cat = room_category(old_room)
         _new_cat = room_category(new_room)
-        if _old_cat != _new_cat:
+        cross_category = _old_cat != _new_cat
+        if cross_category and _new_cat in ("party-hall", "other"):
             return jsonify(
                 success=False,
                 message=(
-                    f"Transfer not allowed: Room {old_room} ({_old_cat}) and "
-                    f"Room {new_room} ({_new_cat}) are different categories. "
-                    "Transfers are only permitted within the same category."
+                    f"Room {new_room} ({_new_cat}) has no standard nightly "
+                    "tariff — cross-category transfer into it is not allowed."
                 ),
             ), 400
+
+        # ── Role gate: cross-category is admin-only ──────────────────────────
+        # Managers hold "room.transfer" (same-category physical moves).
+        # Re-rating a stay (upgrade/downgrade) requires
+        # "room.transfer.cross_category", granted only via the admin
+        # wildcard. Checked inline (not as a decorator) so same-category
+        # transfers keep their existing access rules.
+        if cross_category:
+            from services.auth_service import load_current_user
+            from services.permissions import role_has_permission
+            _cur_user = load_current_user()
+            if not _cur_user:
+                return jsonify(success=False,
+                               message="Authentication required"), 401
+            if not role_has_permission(_cur_user["role"],
+                                       "room.transfer.cross_category"):
+                logger.info(
+                    f"transfer_room: cross-category denied for "
+                    f"{_cur_user['userId']} ({_cur_user['role']}) "
+                    f"{old_room}({_old_cat}) → {new_room}({_new_cat})"
+                )
+                return jsonify(
+                    success=False,
+                    message=(
+                        "Cross-category transfers (upgrade/downgrade) need "
+                        "admin access. You can shift only within the same "
+                        "room category."
+                    ),
+                ), 403
 
         guest_name = rooms_dict[old_room]["guest"]["name"]
         guest_mobile = rooms_dict[old_room]["guest"]["mobile"]
@@ -2468,6 +2530,25 @@ def transfer_room():
         # Days in THIS (old) room = completed cycles − days already captured
         old_days = max(0, _completed_cycles - existing_offset)
 
+        # ── "Don't apply today's difference" (cross-category only) ──────────
+        # When the operator opts NOT to charge/refund the shift-day rate
+        # difference, every cycle ACCRUED so far (day 1 at check-in +
+        # renewals) is folded into the old segment at the OLD rate — the
+        # folio then bills today at the old price and the new rate starts
+        # from the next cycle, keeping balance == folio with zero
+        # adjustment. transfer_day_prebilled marks that the in-progress day
+        # is already covered by the segment, so checkout's minimum-1-day
+        # rule must not double-bill it on a same-day checkout.
+        _is_ota = (new_room_data["guest"].get("payment") == "ota") or (
+            new_room_data.get("booking_source") in ("mmt", "ota"))
+        transfer_day_prebilled = False
+        if cross_category and not _is_ota and not apply_today_diff:
+            _renewals_now = int(new_room_data.get("renewal_count", 0) or 0)
+            _fold_days = max(0, (_renewals_now + 1) - existing_offset)
+            if _fold_days > old_days:
+                transfer_day_prebilled = True
+                old_days = _fold_days
+
         existing_pre_transfer = list(new_room_data["guest"].get("pre_transfer_charges", []) or [])
         if old_days > 0:
             existing_pre_transfer.append({
@@ -2481,29 +2562,90 @@ def transfer_room():
         new_room_data["guest"]["transfer_day_offset"] = existing_offset + old_days
         # Store the transfer date so checkout can compute current-room days by date
         new_room_data["guest"]["last_transfer_date"] = _transfer_now.strftime("%Y-%m-%d")
+        # Stamp / clear the prebilled marker (clear guards against a stale
+        # flag carried over from an earlier "difference off" shift).
+        if transfer_day_prebilled:
+            new_room_data["guest"]["transfer_day_prebilled"] = \
+                _transfer_now.strftime("%Y-%m-%d")
+        else:
+            new_room_data["guest"].pop("transfer_day_prebilled", None)
         # renewal_count carries over unchanged — still used for non-transfer stays
         # ────────────────────────────────────────────────────────────────────────
 
-        # ── A transfer NEVER re-rates the stay ──────────────────────────────────
-        # Policy: shifting changes only the physical room, never the tariff. The
-        # guest's existing price carries over unchanged (new_room_data is a copy
-        # of the old room, so guest["price"] is already correct), so there is no
-        # price difference and the room balance is never adjusted on transfer.
-        # Same-category enforcement above guarantees the destination is on the
-        # same rate slab anyway. Any client-supplied new_price / is_ac is
-        # intentionally ignored — the server is authoritative here.
-        balance_adjustment = 0
+        # ── Tariff on transfer ───────────────────────────────────────────────
+        # SAME category  → physical move only, tariff carries over unchanged
+        #                  (legacy policy; client-supplied price/AC ignored).
+        # CROSS category → the stay is re-rated from the shift day onward:
+        #                  guest.price moves to the destination tariff, and
+        #                  the daily folio bills prior nights at the old
+        #                  segment's rate (pre_transfer_charges snapshot above).
+        # OTA / MMT stays are prepaid and settled with the OTA — the desk
+        # never charges or refunds the guest for a room change, so their
+        # tariff NEVER changes regardless of category.
+        _guest = new_room_data["guest"]   # _is_ota computed in snapshot block
+        _dest_is_premium = _new_cat == "premium"
+        renewal_count    = int(new_room_data.get("renewal_count", 0) or 0)
 
-        # isAC carries over unchanged. Defensive only: if the destination is
-        # somehow not AC-capable (cannot happen under same-category, since AC
-        # lives within the "premium" category), drop a stale AC flag so the
-        # room card doesn't show a phantom AC indicator.
-        try:
-            _new_room_num = int(new_room)
-        except (TypeError, ValueError):
-            _new_room_num = -1
-        if not (200 <= _new_room_num <= 206):
-            new_room_data["guest"]["isAC"] = False
+        balance_adjustment = 0
+        price_overridden   = False
+        new_price_final    = old_price
+
+        if cross_category and not _is_ota:
+            # Standard tariff for the destination (guest-count aware).
+            _guests = _guest.get("guests", 1)
+            std_price = room_base_price(new_room, _guests)
+            _want_ac  = bool(is_ac) and _dest_is_premium
+            if _want_ac:
+                std_price += AC_SURCHARGE
+
+            # Client may override the standard price (negotiated rate).
+            # Validate: positive int, hard cap as a fat-finger guard.
+            new_price_final = std_price
+            if new_price is not None:
+                try:
+                    _np = int(new_price)
+                except (TypeError, ValueError):
+                    _np = -1
+                if 1 <= _np <= 100000:
+                    new_price_final = _np
+                    price_overridden = _np != std_price
+                else:
+                    return jsonify(
+                        success=False,
+                        message=f"Invalid new_price {new_price!r} — must be a "
+                                f"positive amount (standard is ₹{std_price}).",
+                    ), 400
+
+            _guest["price"] = new_price_final
+            _guest["isAC"]  = _want_ac
+
+            # ── Shift-day re-rate: keep balance in sync with the folio ──────
+            # Rent is accrued per 24h cycle: day 1 at check-in, later cycles
+            # via /renew_rent — always at the price current AT THAT MOMENT.
+            # The folio bills cycles AFTER the completed ones at the NEW rate,
+            # so any cycle already accrued at the old rate but billed at the
+            # new rate needs the difference applied to the running balance:
+            #   accrued cycles          = renewal_count + 1
+            #   cycles billed at OLD    = _completed_cycles (this + prior segments)
+            #   over-accrued at old rate = max(0, accrued − completed)
+            # Normally 1 (the in-progress day); 0 if today's renewal hasn't
+            # been clicked yet (that renewal will charge the new rate).
+            # Cycles accrued beyond those captured into segments. When
+            # "apply today's difference" is OFF, the fold above already
+            # covers them (offset == accrued), so this is 0 and no
+            # adjustment is applied.
+            _offset_after = existing_offset + old_days
+            _over_accrued = max(0, (renewal_count + 1) - _offset_after)
+            balance_adjustment = (new_price_final - old_price) * _over_accrued
+            if balance_adjustment:
+                new_room_data["balance"] = int(
+                    new_room_data.get("balance", 0) or 0) + balance_adjustment
+        else:
+            # Same-category (or OTA): tariff unchanged. Defensive: outside the
+            # premium range an AC flag is meaningless — drop it so the room
+            # card doesn't show a phantom AC indicator.
+            if not _dest_is_premium:
+                _guest["isAC"] = False
 
         # Stamp shift attribution on the destination room so the room-history
         # popover can show "Shifted A → B by <user>" for THIS stay. Carried on
@@ -2517,6 +2659,12 @@ def transfer_room():
         batch = db.batch()
 
         batch.set(rooms_ref.document(new_room), new_room_data)
+
+        # Cross-category re-rate: mirror the room-balance delta on the global
+        # totals counter (same pattern as /renew_rent and /shorten_stay).
+        if balance_adjustment:
+            batch.update(totals_ref.document("current_totals"),
+                         {"balance": firestore.Increment(balance_adjustment)})
 
         current_checkin_time = datetime.strptime(checkin_time, "%Y-%m-%d %H:%M")
 
@@ -2569,10 +2717,38 @@ def transfer_room():
             "stay_room_key": f"{new_room}_{checkin_time}",
             "mobile": guest_mobile,
         }
+        if cross_category:
+            _shift_payload["note"] = (
+                f"Category change {_old_cat}→{_new_cat}: "
+                f"₹{old_price}/night → ₹{new_price_final}/night"
+                + (" (AC)" if _guest.get("isAC") else "")
+            )
         if _stay_id_for_transfer:
             payment_service.write_payment_with_stay(_stay_id_for_transfer, _shift_payload)
         else:
             payment_service.write_payment(_shift_payload)
+
+        # Audit row for the shift-day re-rate so the per-stay payment history
+        # explains the balance change. type is NOT a receipt/discount/refund
+        # type, so checkout's payment sums ignore it (like renewal rows).
+        if balance_adjustment:
+            _adj_payload = {
+                "room": new_room, "name": guest_name,
+                "amount": balance_adjustment, "method": "balance",
+                "type": "room_shift_adjustment",
+                "transaction_type": "room_shift_adjustment",
+                "date": datetime.now(IST).strftime("%Y-%m-%d"),
+                "time": datetime.now(IST).strftime("%H:%M"),
+                "old_room": old_room,
+                "note": (f"Shift-day rate difference "
+                         f"(₹{old_price} → ₹{new_price_final})"),
+                "stay_room_key": f"{new_room}_{checkin_time}",
+                "mobile": guest_mobile,
+            }
+            if _stay_id_for_transfer:
+                payment_service.write_payment_with_stay(_stay_id_for_transfer, _adj_payload)
+            else:
+                payment_service.write_payment(_adj_payload)
 
         logger.info(f"Guest {guest_name} transferred from Room {old_room} to Room {new_room}")
 
@@ -2585,12 +2761,32 @@ def transfer_room():
                 "to_room": str(new_room),
                 "guest": guest_name,
                 "balance_adjustment": balance_adjustment,
+                "cross_category": cross_category,
+                "old_category": _old_cat,
+                "new_category": _new_cat,
+                "old_price": old_price,
+                "new_price": new_price_final,
+                "price_overridden": price_overridden,
+                "is_ac": bool(_guest.get("isAC")),
+                "apply_today_diff": apply_today_diff,
+                "transfer_day_prebilled": transfer_day_prebilled,
             },
         )
+        _msg = (f"Guest transferred successfully from Room {old_room} "
+                f"to Room {new_room}.")
+        if cross_category and new_price_final != old_price:
+            _msg += (f" Rate changed ₹{old_price} → ₹{new_price_final}/night"
+                     + (" (AC)" if _guest.get("isAC") else "") + ".")
+            if not apply_today_diff:
+                _msg += (" Today stays at the previous rate; the new rate "
+                         "applies from the next rent cycle.")
         return jsonify(
             success=True,
-            message=f"Guest transferred successfully from Room {old_room} to Room {new_room}.",
+            message=_msg,
             balance_adjustment=balance_adjustment,
+            new_price=new_price_final,
+            is_ac=bool(_guest.get("isAC")),
+            cross_category=cross_category,
         )
 
     except Exception as e:

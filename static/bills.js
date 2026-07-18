@@ -940,11 +940,15 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
     const accomDisc = grossAll > 0
       ? Math.min(discAll * (accomIncl / grossAll), accomIncl) : 0;
     const net = Math.max(accomIncl - accomDisc, 0);
-    const pct = gross.cgstRate * 2;
+    // Slab follows the POST-discount value of supply per night
+    // (Section 15(3)(a); transaction-value basis) — mirrors
+    // config.compute_daily_folio.
+    const netPerNight = net / (days || 1);
+    const pct = netPerNight < 1000 ? 0 : netPerNight <= 7500 ? 5 : 18;
     if (pct > 0) {
       const base = net / (1 + pct / 100);
       const g = net - base;
-      return { taxable: base, cgst: g / 2, sgst: g - g / 2, cgstRate: gross.cgstRate };
+      return { taxable: base, cgst: g / 2, sgst: g - g / 2, cgstRate: pct / 2 };
     }
     return { taxable: net, cgst: 0, sgst: 0, cgstRate: 0 };
   }

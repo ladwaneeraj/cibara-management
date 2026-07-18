@@ -61,6 +61,10 @@ PERMISSIONS = frozenset(
         "room.checkout",
         "room.update",
         "room.transfer",
+        # Cross-category transfer (upgrade/downgrade — re-rates the stay).
+        # Admin-only (wildcard); manager's room.transfer covers only
+        # same-category physical moves.
+        "room.transfer.cross_category",
         # Rooms — housekeeping
         "room.cleaning.view",
         "room.cleaning.complete",
@@ -129,6 +133,8 @@ ROLE_PERMISSIONS: dict[str, FrozenSet[str]] = {
             "room.checkin",
             "room.checkout",
             "room.update",
+            # Same-category physical moves only — cross-category
+            # (room.transfer.cross_category) stays admin-only.
             "room.transfer",
             "room.cleaning.view",
             "room.cleaning.complete",

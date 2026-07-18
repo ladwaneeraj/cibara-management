@@ -1290,6 +1290,25 @@ async function submitExpense(e) {
       _expenseEditMode = false;
       _expenseEditDocId = null;
 
+      // ── Smooth-insert: show the new expense on its date INSTANTLY ────────
+      // The server echoes the stored row (incl. _doc_id, so the row's
+      // edit/delete buttons work immediately). Patch the in-memory logs
+      // cache and re-render right away; the background refresh below then
+      // reconciles with authoritative server data (the cache is replaced
+      // wholesale, so no duplicate rows are possible).
+      if (!wasEdit && result.expense && result.expense._doc_id) {
+        try {
+          if (typeof logs !== "undefined" && logs && Array.isArray(logs.expenses)) {
+            logs.expenses.push(result.expense);
+          }
+          if (typeof window.renderEnhancedLogs === "function") {
+            window.renderEnhancedLogs();
+          }
+        } catch (e) {
+          console.warn("Expense smooth-insert skipped:", e);
+        }
+      }
+
       // Extended-range aware refresh so an edit/add to a PAST day (Last 3 days /
       // custom range) re-pulls from the server instead of leaving the stale row
       // on screen. Falls back to debouncedFetchData (Today view / older bundle).

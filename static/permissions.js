@@ -30,6 +30,9 @@
       "room.checkin",
       "room.checkout",
       "room.update",
+      // Same-category physical moves only. Cross-category transfers
+      // (upgrade/downgrade, permission "room.transfer.cross_category")
+      // are admin-only via the wildcard — do NOT add them here.
       "room.transfer",
       "room.cleaning.view",
       "room.cleaning.complete",

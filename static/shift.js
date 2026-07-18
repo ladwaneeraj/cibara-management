@@ -17,6 +17,18 @@ function _roomCategoryOf(roomNumber) {
   }
 }
 
+// True when the signed-in user may re-rate a stay (cross-category shift).
+// Managers hold only "room.transfer" (same-category moves); the
+// cross-category permission comes via the admin wildcard. Fails CLOSED if
+// the auth helper isn't loaded yet — the server enforces the same rule.
+function _canCrossCategoryShift() {
+  return !!(
+    window.CibaraAuth &&
+    typeof window.CibaraAuth.userCan === "function" &&
+    window.CibaraAuth.userCan("room.transfer.cross_category")
+  );
+}
+
 function initQuickTransferButton() {
   const quickTransferBtn = document.getElementById("quick-transfer-btn");
   if (!quickTransferBtn) {
@@ -73,6 +85,8 @@ function showQuickTransferModal() {
   const newRoomPriceInput = document.getElementById("new-room-price");
   const acToggleSection = document.getElementById("ac-toggle-section");
   const newRoomAcToggle = document.getElementById("new-room-ac-toggle");
+  const diffSection = document.getElementById("transfer-diff-section");
+  const applyDiffToggle = document.getElementById("transfer-apply-diff");
 
   if (!sourceRoomSelect || !destRoomSelect) {
     console.error("Quick transfer form elements not found");
@@ -84,6 +98,8 @@ function showQuickTransferModal() {
   quickBalanceInfo.style.display = "none";
   if (roomPriceSection) roomPriceSection.style.display = "none";
   if (acToggleSection) acToggleSection.style.display = "none";
+  if (diffSection) diffSection.style.display = "none";
+  if (applyDiffToggle) applyDiffToggle.checked = true;
 
   // Populate source room dropdown.
   // Eligibility rule for quick transfer:
@@ -134,6 +150,7 @@ function showQuickTransferModal() {
       quickBalanceInfo.style.display = "none";
       if (roomPriceSection) roomPriceSection.style.display = "none";
       if (acToggleSection) acToggleSection.style.display = "none";
+      if (diffSection) diffSection.style.display = "none";
       destRoomSelect.innerHTML =
         '<option value="">Select destination room</option>';
       destRoomSelect.disabled = true;
@@ -159,27 +176,41 @@ function showQuickTransferModal() {
       quickBalanceInfo.style.display = "block";
     }
 
-    // Populate destination room dropdown — only VACANT rooms in the SAME
-    // category as the source room. A transfer must not change the room's rate
-    // slab; otherwise the stay's billing shifts mid-stay (refund/excess). Genuine
-    // upgrades/downgrades are a different operation (check out + fresh check-in).
+    // Populate destination room dropdown — ALL vacant rooms.
+    //   Same category  → physical move, tariff carries over (legacy).
+    //   Cross category → the stay is re-rated from the shift day; the server
+    //                    bills prior nights at the old rate via the folio
+    //                    segments, so billing stays exact.
+    // Party hall / unmapped rooms have no standard tariff and are excluded
+    // as cross-category destinations.
     destRoomSelect.innerHTML =
       '<option value="">Select destination room</option>';
     destRoomSelect.disabled = false;
 
     const _srcCat = _roomCategoryOf(selectedRoom);
+    const _allowCross = _canCrossCategoryShift();
 
     let vacantRoomCount = 0;
 
     Object.entries(rooms).forEach(([roomNum, info]) => {
       if (roomNum === selectedRoom || info.status !== "vacant") return;
-      // Same-category gate. If the category helper isn't available (load order),
-      // fall back to allowing all vacant rooms rather than blocking transfers.
-      if (_srcCat !== null && _roomCategoryOf(roomNum) !== _srcCat) return;
+      const _cat = _roomCategoryOf(roomNum);
+      const _isCross = _srcCat !== null && _cat !== null && _cat !== _srcCat;
+      // Cross-category (upgrade/downgrade) is admin-only.
+      if (_isCross && !_allowCross) return;
+      if (_isCross && (_cat === "party-hall" || _cat === "other")) return;
 
       const option = document.createElement("option");
       option.value = roomNum;
-      option.textContent = `Room ${roomNum}`;
+      let _label = `Room ${roomNum}`;
+      if (_cat !== null && typeof roomPricing !== "undefined") {
+        const _catLabel =
+          (roomPricing.CATEGORY_LABELS && roomPricing.CATEGORY_LABELS[_cat]) ||
+          _cat;
+        _label += ` — ${_catLabel}`;
+        if (_isCross) _label += " ▲ category change";
+      }
+      option.textContent = _label;
       destRoomSelect.appendChild(option);
       vacantRoomCount++;
     });
@@ -187,58 +218,88 @@ function showQuickTransferModal() {
     if (vacantRoomCount === 0) {
       const option = document.createElement("option");
       option.disabled = true;
-      option.textContent = "No vacant rooms in the same category";
+      option.textContent = _allowCross
+        ? "No vacant rooms available"
+        : "No vacant rooms in the same category";
       destRoomSelect.appendChild(option);
       destRoomSelect.disabled = true;
 
       showNotification(
-        "No vacant rooms available in the same category for transfer",
+        _allowCross
+          ? "No vacant rooms available for transfer"
+          : "No vacant same-category rooms (category changes need admin)",
         "warning",
       );
     }
   };
 
-  // Helper — show upgrade/downgrade balance hint for same-24hr-cycle transfers
-  function updateTransferBalanceHint(sourceRoom, newPrice) {
+  // Standard per-night tariff for a destination room, honoring the AC
+  // toggle. Mirrors config.room_base_price + AC_SURCHARGE on the server
+  // (the server remains authoritative and re-validates on submit).
+  function _standardShiftPrice(destRoom, guestCount, acOn) {
+    if (
+      typeof roomPricing === "undefined" ||
+      typeof roomPricing.calculatePrice !== "function"
+    ) {
+      return null;
+    }
+    let p = roomPricing.calculatePrice(destRoom, guestCount || 1);
+    const n = parseInt(destRoom, 10);
+    if (acOn && n >= 200 && n <= 206) p += 600; // AC_SURCHARGE
+    return p;
+  }
+
+  // Cross-category rate hint — explains the nightly rate change and the
+  // shift-day balance effect. The server applies the actual adjustment.
+  function _updateCrossShiftHint(sourceRoom) {
     const hintEl = document.getElementById("transfer-balance-hint");
     if (!hintEl) return;
-
     const roomData = rooms[sourceRoom];
-    if (!roomData) { hintEl.style.display = "none"; return; }
-
-    // MMT / OTA stays are prepaid and settled with the OTA later — the guest is
-    // never charged or refunded at the desk for a room change, so don't show an
-    // upgrade-balance / downgrade-refund hint for them.
-    if (roomData.guest && roomData.guest.payment === "ota") {
-      hintEl.style.display = "none";
-      return;
-    }
-
-    // Only relevant when guest hasn't completed a full 24-hr cycle yet
-    // (renewal_count == 0 means no full cycle has been manually renewed)
-    const renewalCount = (roomData.renewal_count !== undefined)
-      ? roomData.renewal_count
-      : (roomData.guest && roomData.guest.renewal_count !== undefined ? roomData.guest.renewal_count : 0);
-
-    if (renewalCount !== 0) { hintEl.style.display = "none"; return; }
-
-    const oldPrice = (roomData.guest && roomData.guest.price) ? roomData.guest.price : 0;
+    const guest = (roomData && roomData.guest) || {};
+    const oldPrice = guest.price || 0;
+    const newPrice = parseInt(newRoomPriceInput && newRoomPriceInput.value, 10) || 0;
+    if (!newPrice) { hintEl.style.display = "none"; return; }
     const diff = newPrice - oldPrice;
 
-    if (diff === 0) { hintEl.style.display = "none"; return; }
+    const applyDiff = !applyDiffToggle || applyDiffToggle.checked;
 
-    if (diff > 0) {
-      // Upgrade — guest owes more
+    // Has today's rent already been charged? (day 1 is charged at check-in;
+    // later days via the daily renew click). Mirrors the server's
+    // over-accrued check — server stays authoritative.
+    let todayCharged = true;
+    try {
+      const _ci = new Date(String(roomData.checkin_time || "").replace(" ", "T"));
+      const _completed = Math.floor((Date.now() - _ci.getTime()) / 86400000);
+      const _rc = Number(roomData.renewal_count || 0);
+      todayCharged = _rc + 1 > _completed;
+    } catch (e) { /* keep default */ }
+
+    if (diff === 0) {
+      hintEl.style.background = "#e9ecef";
+      hintEl.style.color = "#41464b";
+      hintEl.style.border = "1px solid #ced4da";
+      hintEl.textContent = `Same rate (₹${oldPrice}/night) — nothing changes.`;
+    } else if (!applyDiff) {
+      hintEl.style.background = "#e9ecef";
+      hintEl.style.color = "#41464b";
+      hintEl.style.border = "1px solid #ced4da";
+      hintEl.textContent =
+        `Today keeps the old rate (₹${oldPrice}). ` +
+        `₹${newPrice}/night starts from the next rent.`;
+    } else if (diff > 0) {
       hintEl.style.background = "#fff3cd";
       hintEl.style.color = "#856404";
       hintEl.style.border = "1px solid #ffc107";
-      hintEl.textContent = `Same-day upgrade: ₹${diff} balance will be added (₹${oldPrice} → ₹${newPrice})`;
+      hintEl.textContent = todayCharged
+        ? `₹${diff} will be added to the balance. New rate ₹${newPrice}/night from today.`
+        : `New rate ₹${newPrice}/night from today (today's rent not charged yet).`;
     } else {
-      // Downgrade — refund due
       hintEl.style.background = "#d1e7dd";
       hintEl.style.color = "#0f5132";
       hintEl.style.border = "1px solid #198754";
-      hintEl.textContent = `Same-day downgrade: ₹${Math.abs(diff)} refund due (₹${oldPrice} → ₹${newPrice})`;
+      hintEl.textContent = todayCharged
+        ? `₹${Math.abs(diff)} refund will be shown. New rate ₹${newPrice}/night from today.`
+        : `New rate ₹${newPrice}/night from today (today's rent not charged yet).`;
     }
     hintEl.style.display = "block";
   }
@@ -248,14 +309,79 @@ function showQuickTransferModal() {
   // across repeated modal opens — this was the cause of the intermittent
   // AC-toggle-missing bug.
   destRoomSelect.onchange = function () {
-    // A transfer never changes the tariff — the guest's existing price carries
-    // over to the new room. There is therefore no editable price field, AC
-    // toggle, or upgrade/refund hint to show; keep them all hidden.
+    const srcRoom = sourceRoomSelect.value;
+    const destRoom = destRoomSelect.value;
+    const hintEl = document.getElementById("transfer-balance-hint");
+
+    // Reset the enhanced controls on every change.
     if (roomPriceSection) roomPriceSection.style.display = "none";
     if (acToggleSection) acToggleSection.style.display = "none";
-    const hintEl = document.getElementById("transfer-balance-hint");
+    if (diffSection) diffSection.style.display = "none";
     if (hintEl) hintEl.style.display = "none";
-    if (newRoomAcToggle) newRoomAcToggle.onchange = null;
+    if (newRoomAcToggle) {
+      newRoomAcToggle.checked = false;
+      newRoomAcToggle.onchange = null;
+    }
+    if (applyDiffToggle) {
+      applyDiffToggle.checked = true;
+      applyDiffToggle.onchange = null;
+    }
+
+    if (!srcRoom || !destRoom) return;
+
+    const _srcCat = _roomCategoryOf(srcRoom);
+    const _dstCat = _roomCategoryOf(destRoom);
+    const isCross = _srcCat !== null && _dstCat !== null && _srcCat !== _dstCat;
+    // Same category: tariff carries over unchanged — nothing to configure.
+    if (!isCross) return;
+
+    const guest = (rooms[srcRoom] && rooms[srcRoom].guest) || {};
+
+    // OTA/MMT stays are prepaid — a room change never re-rates the tariff.
+    if (guest.payment === "ota") {
+      if (hintEl) {
+        hintEl.style.background = "#cfe2ff";
+        hintEl.style.color = "#084298";
+        hintEl.style.border = "1px solid #9ec5fe";
+        hintEl.textContent =
+          "OTA/MMT stay — the room changes but the tariff stays as settled " +
+          "with the OTA. No charge or refund at the desk.";
+        hintEl.style.display = "block";
+      }
+      return;
+    }
+
+    const guestCount = parseInt(guest.guests, 10) || 1;
+    const destNum = parseInt(destRoom, 10);
+    const destIsPremium = destNum >= 200 && destNum <= 206;
+
+    const refreshPrice = function () {
+      const acOn = !!(
+        destIsPremium && newRoomAcToggle && newRoomAcToggle.checked
+      );
+      const std = _standardShiftPrice(destRoom, guestCount, acOn);
+      if (newRoomPriceInput && std !== null) newRoomPriceInput.value = std;
+      _updateCrossShiftHint(srcRoom);
+    };
+
+    if (destIsPremium && acToggleSection) {
+      acToggleSection.style.display = "block";
+      if (newRoomAcToggle) newRoomAcToggle.onchange = refreshPrice;
+    }
+    if (roomPriceSection) {
+      roomPriceSection.style.display = "block";
+      if (newRoomPriceInput) {
+        newRoomPriceInput.oninput = function () { _updateCrossShiftHint(srcRoom); };
+      }
+    }
+    if (diffSection) {
+      diffSection.style.display = "block";
+      if (applyDiffToggle) {
+        applyDiffToggle.checked = true;
+        applyDiffToggle.onchange = function () { _updateCrossShiftHint(srcRoom); };
+      }
+    }
+    refreshPrice();
   };
 
   // Set up form submission
@@ -275,30 +401,59 @@ function showQuickTransferModal() {
         return;
       }
 
-      // Same-category guard at submit time (defends against a stale dropdown
-      // left open before this rule shipped, or manual DOM tampering).
+      // (24-hour quick-transfer window removed — long-staying guests can be
+      // transferred via the quick path too. The backend bills multi-day stays
+      // correctly across the move.)
+
+      // Same-category: tariff carries over — send no price/AC (server ignores
+      // them anyway). Cross-category: send the (possibly edited) nightly
+      // price and AC choice; the server validates and re-rates from today.
       const _oldCat = _roomCategoryOf(oldRoom);
       const _newCat = _roomCategoryOf(newRoom);
-      if (_oldCat !== null && _newCat !== null && _oldCat !== _newCat) {
+      const _isCross =
+        _oldCat !== null && _newCat !== null && _oldCat !== _newCat;
+
+      // Defense-in-depth: the dropdown never offers cross-category rooms
+      // to non-admins, but guard against a stale dropdown / DOM tampering.
+      // The server enforces the same rule with a 403.
+      if (_isCross && !_canCrossCategoryShift()) {
         showNotification(
-          "Room transfer is allowed only within the same room category.",
+          "Category changes (upgrade/downgrade) need admin access. " +
+            "You can shift only within the same room category.",
           "error",
         );
         return;
       }
 
-      // (24-hour quick-transfer window removed — long-staying guests can be
-      // transferred via the quick path too. The backend bills multi-day stays
-      // correctly across the move.)
+      let _sendPrice = null;
+      let _sendAc = false;
+      let _sendApplyDiff = true;
+      if (_isCross) {
+        const _guest = (rooms[oldRoom] && rooms[oldRoom].guest) || {};
+        if (_guest.payment !== "ota") {
+          const _n = parseInt(newRoom, 10);
+          _sendAc = !!(
+            _n >= 200 && _n <= 206 &&
+            newRoomAcToggle && newRoomAcToggle.checked
+          );
+          _sendApplyDiff = !applyDiffToggle || applyDiffToggle.checked;
+          _sendPrice = parseInt(
+            newRoomPriceInput && newRoomPriceInput.value, 10);
+          if (!_sendPrice || _sendPrice < 1) {
+            showNotification(
+              "Enter a valid nightly price for the new room", "error");
+            return;
+          }
+        }
+      }
 
-      // Price/AC are never changed by a transfer — the server carries the
-      // guest's existing tariff over, so we send no new price or AC flag.
       processEnhancedRoomTransfer(
         oldRoom,
         newRoom,
-        null,
-        false,
-        quickTransferModal
+        _sendPrice,
+        _sendAc,
+        quickTransferModal,
+        _sendApplyDiff
       );
     };
   }
@@ -313,7 +468,8 @@ async function processEnhancedRoomTransfer(
   newRoom,
   newPrice = null,
   isAC = false,
-  modalElement = null
+  modalElement = null,
+  applyTodayDiff = true
 ) {
   console.log(
     `Processing enhanced room transfer from ${oldRoom} to ${newRoom}`
@@ -352,6 +508,10 @@ async function processEnhancedRoomTransfer(
     if (newPrice) {
       transferData.new_price = newPrice;
     }
+
+    // Whether today's rate difference is applied to the balance (cross-
+    // category only; the server ignores it for same-category / OTA moves).
+    transferData.apply_today_diff = !!applyTodayDiff;
 
     // Add AC status for premium rooms (200-206 — matches the modal toggle
     // visibility above and the room-card AC indicator).
@@ -400,20 +560,16 @@ async function processEnhancedRoomTransfer(
       // Refresh data in background (modals already closed above)
       debouncedFetchData();
 
-      let successMessage = `Guest transferred from Room ${oldRoom} to Room ${newRoom}`;
-      if (newPrice) {
-        successMessage += ` (Price updated to ₹${newPrice})`;
-      }
-      const _successRoomNum = parseInt(newRoom, 10);
-      if (_successRoomNum >= 200 && _successRoomNum <= 206) {
-        successMessage += isAC ? " (AC)" : " (Non-AC)";
-      }
-      // Show balance/refund notice after same-cycle transfer
+      // The server message already describes any rate change; append the
+      // balance effect so the desk knows what to collect / credit.
+      let successMessage =
+        result.message ||
+        `Guest transferred from Room ${oldRoom} to Room ${newRoom}`;
       const adj = result.balance_adjustment || 0;
       if (adj > 0) {
-        successMessage += `. Balance due: ₹${adj}`;
+        successMessage += ` Balance increased by ₹${adj} (collect at desk or checkout).`;
       } else if (adj < 0) {
-        successMessage += `. Refund due: ₹${Math.abs(adj)}`;
+        successMessage += ` Balance reduced by ₹${Math.abs(adj)}.`;
       }
 
       showNotification(successMessage, "success");

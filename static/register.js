@@ -1294,8 +1294,13 @@
       const _accomDisc = _grossAll > 0
         ? Math.min(discounts * (accomTotal / _grossAll), accomTotal) : 0;
       const _accomNet  = Math.max(accomTotal - _accomDisc, 0);
-      if (gstRatePct > 0) {
-        const _gNet = _accomNet * gstRatePct / (100 + gstRatePct);
+      // Slab follows the POST-discount value of supply per night
+      // (Section 15(3)(a); transaction-value basis) — mirrors
+      // config.compute_daily_folio.
+      const _netPerNight = _accomNet / (days || 1);
+      const _netRate = _netPerNight < 1000 ? 0 : _netPerNight <= 7500 ? 5 : 18;
+      if (_netRate > 0) {
+        const _gNet = _accomNet * _netRate / (100 + _netRate);
         taxCgst = _gNet / 2; taxSgst = _gNet - _gNet / 2;
         taxAccomBase = _accomNet - _gNet;
       } else {
@@ -1508,11 +1513,46 @@
       : "";
 
     // ── Tax Summary by HSN/SAC ────────────────────────────────────────────────
-    // Aggregates per (HSN/SAC, rate). Register tab uses the simple model:
-    // one accommodation row at gstRatePct (or "Exempt" when 0).
+    // Folio bills: group accommodation by each day's OWN GST rate, mirroring
+    // the server-side PDF renderer. A mixed-rate stay (e.g. ₹1200 night @5%
+    // plus a ₹900 night that's exempt after a cross-category shift) must show
+    // one row per rate — lumping the exempt night's value into the 5% row
+    // made rate × taxable ≠ tax and would misstate the rate-wise breakup.
+    // Legacy bills without a folio keep the simple single-row model.
     const _taxSumRows = [];
-    let _totTaxable = taxAccomBase, _totCgst = taxCgst, _totSgst = taxSgst, _totIgst = 0;
-    if (taxAccomBase > 0 || (taxCgst + taxSgst) > 0) {
+    let _totTaxable = 0, _totCgst = 0, _totSgst = 0, _totIgst = 0;
+    const _tsFolio = Array.isArray(b.daily_folio) ? b.daily_folio : [];
+    if (_tsFolio.length > 0) {
+      const _byRate = {};
+      for (const e of _tsFolio) {
+        const r = Number(e.day_gst_rate || 0);
+        if (!_byRate[r]) _byRate[r] = { taxable: 0, cgst: 0, sgst: 0, igst: 0 };
+        _byRate[r].taxable += Number(e.day_taxable || 0);
+        _byRate[r].cgst    += Number(e.day_cgst || 0);
+        _byRate[r].sgst    += Number(e.day_sgst || 0);
+        _byRate[r].igst    += Number(e.day_igst || 0);
+      }
+      const _rates = Object.keys(_byRate).map(Number).sort((x, y) => x - y);
+      for (const r of _rates) {
+        const g = _byRate[r];
+        _totTaxable += g.taxable;
+        _totCgst    += g.cgst;
+        _totSgst    += g.sgst;
+        _totIgst    += g.igst;
+        _taxSumRows.push(`<tr>
+        <td>996311</td><td>Accommodation</td>
+        <td class="b-tr">${r > 0 ? `${r}%` : "Exempt"}</td>
+        <td class="b-tr">${fix2(g.taxable)}</td>
+        <td class="b-tr">${fix2(g.cgst)}</td>
+        <td class="b-tr">${fix2(g.sgst)}</td>
+        <td class="b-tr">${fix2(g.igst)}</td>
+        <td class="b-tr">${fix2(g.cgst + g.sgst + g.igst)}</td>
+      </tr>`);
+      }
+    } else if (taxAccomBase > 0 || (taxCgst + taxSgst) > 0) {
+      _totTaxable = taxAccomBase;
+      _totCgst = taxCgst;
+      _totSgst = taxSgst;
       const rateDisp = gstRatePct > 0 ? `${gstRatePct}%` : "Exempt";
       _taxSumRows.push(`<tr>
         <td>996311</td><td>Accommodation</td>
@@ -1571,8 +1611,8 @@
               <td class="b-tr">${fix2(_totTaxable)}</td>
               <td class="b-tr">${fix2(_totCgst)}</td>
               <td class="b-tr">${fix2(_totSgst)}</td>
-              <td class="b-tr">0.00</td>
-              <td class="b-tr">${fix2(_totCgst + _totSgst)}</td>
+              <td class="b-tr">${fix2(_totIgst)}</td>
+              <td class="b-tr">${fix2(_totCgst + _totSgst + _totIgst)}</td>
             </tr>
           </tbody>
         </table>`

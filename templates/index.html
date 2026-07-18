@@ -676,61 +676,78 @@
         background: #e8f0fe;
       }
     </style>
-    <!-- ── Portrait lock (mobile) ─────────────────────────────────────────
-         Three layers, because no single mechanism covers every case:
-         1. manifest.webmanifest "orientation": "portrait" — hard lock when
-            the app is installed to the home screen (Android).
-         2. screen.orientation.lock() below — best-effort; works in
-            installed/fullscreen contexts, silently unavailable in normal
-            browser tabs and on iOS.
-         3. CSS overlay — phones in landscape (height ≤ 520px) get a
-            full-screen "rotate back" prompt so the UI is never used
-            sideways. Tablets/desktops are unaffected. -->
+    <!-- ── Portrait lock (mobile) — content stays portrait ALWAYS ─────────
+         Three layers:
+         1. manifest.webmanifest "orientation": "portrait" — true OS-level
+            lock when the app is installed to the home screen (Android).
+         2. screen.orientation.lock() — best-effort API lock; works in
+            installed/fullscreen contexts, unavailable in plain tabs / iOS.
+         3. Forced-portrait counter-rotation — when a PHONE viewport goes
+            landscape anyway, the whole app is rotated 90° the opposite way
+            and sized to a virtual portrait viewport (width:100vh ×
+            height:100vw), so the UI stays upright and portrait no matter
+            how the device is held. Direction (cw/ccw) follows
+            screen.orientation.angle so it's never upside-down.
+            Tablets/desktops (shorter side > 550px) are untouched. -->
     <style>
-      #portrait-lock-overlay { display: none; }
-      @media screen and (orientation: landscape) and (max-height: 520px) {
-        #portrait-lock-overlay {
-          display: flex;
-          position: fixed;
-          inset: 0;
-          z-index: 2147483647;
-          background: #0f172a;
-          color: #fff;
-          flex-direction: column;
-          align-items: center;
-          justify-content: center;
-          gap: 0.75rem;
-          text-align: center;
-          font-size: 1rem;
-          padding: 1rem;
-        }
-        #portrait-lock-overlay .plo-icon {
-          font-size: 2.2rem;
-          animation: plo-tilt 1.6s ease-in-out infinite;
-        }
-        @keyframes plo-tilt {
-          0%, 100% { transform: rotate(0deg); }
-          50%      { transform: rotate(-90deg); }
-        }
+      html.plo-force { overflow: hidden; }
+      html.plo-force body {
+        position: absolute;
+        width: 100vh;   /* real viewport height = portrait width  */
+        height: 100vw;  /* real viewport width  = portrait height */
+        overflow-x: hidden;
+        overflow-y: auto;
+      }
+      /* Device rotated one way (angle 90) — counter-rotate content -90° */
+      html.plo-ccw body {
+        transform: rotate(-90deg);
+        transform-origin: left top;
+        top: 100%;
+        left: 0;
+      }
+      /* Device rotated the other way (angle 270) — counter-rotate +90° */
+      html.plo-cw body {
+        transform: rotate(90deg);
+        transform-origin: left top;
+        top: 0;
+        left: 100%;
       }
     </style>
     <script>
       (function () {
-        // Layer 3: inject the rotate-back overlay once the DOM exists.
-        function addOverlay() {
-          if (document.getElementById("portrait-lock-overlay")) return;
-          var el = document.createElement("div");
-          el.id = "portrait-lock-overlay";
-          el.innerHTML =
-            '<div class="plo-icon">📱</div>' +
-            "<div><strong>Please rotate your phone</strong><br>" +
-            "This app works in portrait mode only.</div>";
-          document.body.appendChild(el);
+        // Layer 3: forced-portrait counter-rotation for phone viewports.
+        function applyForcedPortrait() {
+          var de = document.documentElement;
+          var isLandscape =
+            window.matchMedia("(orientation: landscape)").matches;
+          // Phones only: shorter hardware side ≤ 550px. screen.width/height
+          // may or may not swap on rotation depending on platform — min()
+          // is stable either way.
+          var isPhone =
+            Math.min(screen.width || 0, screen.height || 0) <= 550;
+          de.classList.remove("plo-force", "plo-ccw", "plo-cw");
+          if (!isLandscape || !isPhone) return;
+          var angle = 90;
+          try {
+            if (screen.orientation &&
+                typeof screen.orientation.angle === "number") {
+              angle = screen.orientation.angle;
+            } else if (typeof window.orientation === "number") {
+              angle = (window.orientation + 360) % 360;
+            }
+          } catch (e) { /* keep default */ }
+          de.classList.add("plo-force", angle === 270 ? "plo-cw" : "plo-ccw");
         }
+        window.addEventListener("orientationchange", function () {
+          // Some browsers fire before new dimensions settle — re-check twice.
+          setTimeout(applyForcedPortrait, 50);
+          setTimeout(applyForcedPortrait, 350);
+        });
+        window.addEventListener("resize", applyForcedPortrait);
         if (document.readyState === "loading") {
-          document.addEventListener("DOMContentLoaded", addOverlay);
+          document.addEventListener("DOMContentLoaded", applyForcedPortrait);
         } else {
-          addOverlay();
+          applyForcedPortrait();
         }
 
         // Layer 2: best-effort API lock (installed PWA / fullscreen only).
@@ -738,13 +755,12 @@
           try {
             if (screen.orientation && screen.orientation.lock) {
               screen.orientation.lock("portrait").catch(function () {
-                /* not permitted in this context — overlay covers it */
+                /* not permitted here — counter-rotation covers it */
               });
             }
-          } catch (e) { /* older browsers — overlay covers it */ }
+          } catch (e) { /* older browsers — counter-rotation covers it */ }
         }
         tryLock();
-        // Re-attempt when entering standalone/fullscreen (e.g. PWA launch).
         document.addEventListener("fullscreenchange", tryLock);
         window.addEventListener("orientationchange", tryLock);
       })();

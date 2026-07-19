@@ -75,6 +75,9 @@ PERMISSIONS = frozenset(
         "settings.view",
         "settings.update",
         "laundry.price.edit",
+        # Laundry data locking — freeze past months/dates in the laundry
+        # grid against edits. Admin-only (wildcard).
+        "laundry.lock.manage",
         # Settle-later / OTA settlements
         "settle_later.use",
         "settlement.manage",

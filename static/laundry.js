@@ -21,6 +21,9 @@
   let _gridMonth  = _todayMonth();      // "YYYY-MM"
   let _gridLogs   = {};                 // date → log doc
   let _editingIds = new Set();          // doc_ids currently unlocked for edit
+  // Admin data locks — a locked month/date renders read-only and the server
+  // rejects writes for it (423). See routes/laundry.py laundry_locks.
+  let _gridLocks  = { monthLocked: false, dates: new Set() };
   let _monthlyData = null;
   let _allBills    = [];
   let _expenseType   = "transaction";
@@ -96,6 +99,8 @@
       _selectedBillMonth = _todayMonth();
       const mp = document.getElementById("laundry-bill-month");
       if (mp) mp.value = _selectedBillMonth;
+      const d = _billRangeDefaults(_selectedBillMonth);
+      _setBillRangeInputs(d.from, d.to);
       _loadMonthlyData(_selectedBillMonth);
     }
   }
@@ -153,11 +158,224 @@
     if (foot) foot.innerHTML = "";
 
     try {
-      const res = await _fetch(`/laundry/logs?month=${month}`);
+      const [res, lockRes] = await Promise.all([
+        _fetch(`/laundry/logs?month=${month}`),
+        _fetch(`/laundry/locks?month=${month}`).catch(() => null),
+      ]);
       (res.logs || []).forEach(log => { _gridLogs[log.date] = log; });
+      _gridLocks = {
+        monthLocked: !!(lockRes && lockRes.month_locked),
+        dates: new Set((lockRes && lockRes.locked_dates) || []),
+      };
       _renderGrid(month);
     } catch (e) {
       if (body) body.innerHTML = `<tr><td colspan="12" class="laundry-empty-state">Error loading</td></tr>`;
+    }
+  }
+
+  // ── Data-lock helpers (admin only) ────────────────────────────────────────
+  function _canManageLaundryLocks() {
+    return !!(window.CibaraAuth &&
+      typeof window.CibaraAuth.userCan === "function" &&
+      window.CibaraAuth.userCan("laundry.lock.manage"));
+  }
+  function _dateIsLocked(date) {
+    return _gridLocks.monthLocked || _gridLocks.dates.has(date);
+  }
+  async function _setLaundryLock(action, date) {
+    const locking = action.indexOf("lock_") === 0 && action.indexOf("un") !== 0;
+    const target  = date || _monthLabel(_gridMonth);
+    const msg = locking
+      ? `Lock ${target}? No one will be able to change this data until an admin unlocks it.`
+      : `Unlock ${target}? Edits will be allowed again.`;
+    if (!confirm(msg)) return;
+    try {
+      const res = await _fetch("/laundry/lock", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ month: _gridMonth, action, date: date || "" }),
+      });
+      if (res.success) {
+        _notify("✓ " + (res.message || "Done"));
+        _loadGrid(_gridMonth);
+      } else {
+        _notify(res.message || "Failed", "error");
+      }
+    } catch (e) {
+      _notify("Error updating lock", "error");
+    }
+  }
+  window.laundryToggleDateLock = function (date, isLocked) {
+    _setLaundryLock(isLocked ? "unlock_date" : "lock_date", date);
+  };
+
+  // Month lock/unlock button next to the grid's month label (admin only).
+  function _ensureMonthLockBtn() {
+    const lbl = document.getElementById("laundry-grid-month-label");
+    if (!lbl || !lbl.parentNode) return;
+    let btn = document.getElementById("laundry-month-lock-btn");
+    if (!_canManageLaundryLocks()) { if (btn) btn.remove(); return; }
+    if (!btn) {
+      btn = document.createElement("button");
+      btn.id = "laundry-month-lock-btn";
+      btn.className = "laundry-tbl-btn";
+      btn.style.cssText = "margin-left:0.6rem;padding:0.25rem 0.6rem;";
+      lbl.parentNode.insertBefore(btn, lbl.nextSibling);
+    }
+    btn.textContent = _gridLocks.monthLocked ? "🔓 Unlock Month" : "🔒 Lock Month";
+    btn.title = _gridLocks.monthLocked
+      ? "Allow edits to this month again"
+      : "Freeze every date in this month against edits";
+    btn.onclick = function () {
+      _setLaundryLock(_gridLocks.monthLocked ? "unlock_month" : "lock_month", null);
+    };
+
+    // Calendar picker button — select multiple dates and lock/unlock in one go.
+    let calBtn = document.getElementById("laundry-date-lock-btn");
+    if (!calBtn) {
+      calBtn = document.createElement("button");
+      calBtn.id = "laundry-date-lock-btn";
+      calBtn.className = "laundry-tbl-btn";
+      calBtn.style.cssText = "margin-left:0.4rem;padding:0.25rem 0.6rem;";
+      btn.parentNode.insertBefore(calBtn, btn.nextSibling);
+    }
+    calBtn.textContent = "📅 Lock Dates";
+    calBtn.title = "Pick dates on a calendar to lock or unlock them";
+    calBtn.onclick = _openLockCalendar;
+  }
+
+  // ── Calendar lock picker (admin) ──────────────────────────────────────────
+  // Tap dates to select (dark = already locked), then Lock/Unlock Selected.
+  let _lockCalSelected = new Set();
+
+  function _ensureLockCalDom() {
+    if (document.getElementById("llk-overlay")) return;
+    const style = document.createElement("style");
+    style.id = "llk-styles";
+    style.textContent = `
+      #llk-overlay{position:fixed;inset:0;background:rgba(15,23,42,.55);display:none;align-items:center;justify-content:center;z-index:10070;}
+      #llk-overlay.show{display:flex;}
+      .llk-box{background:#fff;border-radius:12px;max-width:380px;width:94%;padding:1rem 1.1rem;box-shadow:0 10px 40px rgba(0,0,0,.25);}
+      .llk-title{font-weight:700;font-size:1rem;margin-bottom:.3rem;color:#0f172a;}
+      .llk-sub{font-size:.76rem;color:#64748b;margin-bottom:.65rem;line-height:1.35;}
+      .llk-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:4px;}
+      .llk-dow{font-size:.68rem;color:#64748b;text-align:center;font-weight:700;padding:2px 0;}
+      .llk-day{border:1px solid #e2e8f0;border-radius:8px;padding:.5rem 0;text-align:center;font-size:.85rem;cursor:pointer;user-select:none;background:#fff;color:#0f172a;}
+      .llk-day.disabled{opacity:.35;cursor:not-allowed;}
+      .llk-day.locked{background:#475569;color:#fff;border-color:#475569;}
+      .llk-day.selected{outline:3px solid #0ea5e9;outline-offset:-2px;font-weight:700;}
+      .llk-legend{display:flex;gap:.8rem;font-size:.7rem;color:#64748b;margin-top:.55rem;align-items:center;flex-wrap:wrap;}
+      .llk-chip{display:inline-block;width:12px;height:12px;border-radius:4px;vertical-align:-2px;margin-right:4px;}
+      .llk-foot{display:flex;gap:.5rem;margin-top:.8rem;}
+      .llk-btn{flex:1;border:0;border-radius:8px;padding:.55rem .5rem;font-weight:600;cursor:pointer;font-size:.82rem;}
+      .llk-lockb{background:#0f172a;color:#fff;}
+      .llk-unlockb{background:#e2e8f0;color:#0f172a;}
+      .llk-closeb{background:transparent;color:#64748b;flex:0 0 auto;padding:.55rem .8rem;}
+    `;
+    document.head.appendChild(style);
+
+    const ov = document.createElement("div");
+    ov.id = "llk-overlay";
+    ov.innerHTML = `<div class="llk-box">
+      <div class="llk-title" id="llk-title">Lock dates</div>
+      <div class="llk-sub">Tap dates to select, then lock or unlock them.
+        Locked dates can't be edited by anyone until an admin unlocks them.</div>
+      <div class="llk-grid" id="llk-grid"></div>
+      <div class="llk-legend">
+        <span><span class="llk-chip" style="background:#475569;"></span>Locked</span>
+        <span><span class="llk-chip" style="background:#fff;border:2px solid #0ea5e9;"></span>Selected</span>
+        <span><span class="llk-chip" style="background:#e2e8f0;"></span>Future (n/a)</span>
+      </div>
+      <div class="llk-foot">
+        <button class="llk-btn llk-lockb"   id="llk-lock-btn">🔒 Lock selected</button>
+        <button class="llk-btn llk-unlockb" id="llk-unlock-btn">🔓 Unlock selected</button>
+        <button class="llk-btn llk-closeb"  id="llk-close-btn">✕</button>
+      </div></div>`;
+    document.body.appendChild(ov);
+
+    ov.addEventListener("click", (e) => {
+      if (e.target === ov) ov.classList.remove("show");
+    });
+    document.getElementById("llk-close-btn").onclick =
+      () => ov.classList.remove("show");
+    document.getElementById("llk-lock-btn").onclick   = () => _applyCalLock(true);
+    document.getElementById("llk-unlock-btn").onclick = () => _applyCalLock(false);
+  }
+
+  function _openLockCalendar() {
+    if (!_canManageLaundryLocks()) return;
+    if (_gridLocks.monthLocked) {
+      _notify("The whole month is locked — unlock the month first to manage single dates.", "error");
+      return;
+    }
+    _ensureLockCalDom();
+    _lockCalSelected = new Set();
+
+    const title = document.getElementById("llk-title");
+    if (title) title.textContent = `Lock dates — ${_monthLabel(_gridMonth)}`;
+
+    const grid  = document.getElementById("llk-grid");
+    const today = _todayDate();
+    const dows  = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
+    let html = dows.map(d => `<div class="llk-dow">${d}</div>`).join("");
+
+    // Leading blanks so day 1 lands on its weekday column.
+    const [y, m] = _gridMonth.split("-").map(Number);
+    const firstDow = new Date(y, m - 1, 1).getDay();
+    for (let i = 0; i < firstDow; i++) html += `<div></div>`;
+
+    _daysInMonth(_gridMonth).forEach(date => {
+      const dayNum   = parseInt(date.slice(8), 10);
+      const isFuture = date > today;
+      const locked   = _gridLocks.dates.has(date);
+      const cls = ["llk-day",
+                   isFuture ? "disabled" : "",
+                   locked ? "locked" : ""].filter(Boolean).join(" ");
+      html += `<div class="${cls}" data-date="${date}">${dayNum}</div>`;
+    });
+    grid.innerHTML = html;
+
+    grid.querySelectorAll(".llk-day:not(.disabled)").forEach(cell => {
+      cell.onclick = function () {
+        const d = cell.dataset.date;
+        if (_lockCalSelected.has(d)) {
+          _lockCalSelected.delete(d);
+          cell.classList.remove("selected");
+        } else {
+          _lockCalSelected.add(d);
+          cell.classList.add("selected");
+        }
+      };
+    });
+
+    document.getElementById("llk-overlay").classList.add("show");
+  }
+
+  async function _applyCalLock(lock) {
+    const dates = Array.from(_lockCalSelected).sort();
+    if (!dates.length) {
+      _notify("Tap at least one date first", "error");
+      return;
+    }
+    try {
+      const res = await _fetch("/laundry/lock", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          month:  _gridMonth,
+          action: lock ? "lock_dates" : "unlock_dates",
+          dates:  dates,
+        }),
+      });
+      if (res.success) {
+        _notify(`✓ ${dates.length} date(s) ${lock ? "locked" : "unlocked"}`);
+        document.getElementById("llk-overlay")?.classList.remove("show");
+        _loadGrid(_gridMonth);
+      } else {
+        _notify(res.message || "Failed", "error");
+      }
+    } catch (e) {
+      _notify("Error updating locks", "error");
     }
   }
 
@@ -183,7 +401,9 @@
       const isFuture = date > today;
       const hasData  = !!log;
       const received = log?.status === "received";
-      const editing  = log && _editingIds.has(log.doc_id);
+      const isLocked = _dateIsLocked(date);
+      // A locked row is always read-only, even if it was mid-edit.
+      const editing  = !isLocked && log && _editingIds.has(log.doc_id);
 
       // accumulate totals
       if (hasData) {
@@ -199,29 +419,31 @@
 
       const dateLbl = _fmtDate(date);
 
-      // Item cells
+      // Item cells — locked rows render read-only values, never inputs.
       const itemCells = ITEMS.map(item => {
-        if (!hasData || editing) {
+        if (!isLocked && (!hasData || editing)) {
           // Editable input — empty by default so typing replaces nothing
           const val = editing ? (log[item.key] || "") : "";
           return `<td><input type="number" class="laundry-cell-input" data-date="${date}" data-key="${item.key}" data-docid="${log?.doc_id || ""}" value="${val}" min="0" placeholder="0" /></td>`;
         } else {
-          const v = log[item.key] || 0;
+          const v = (log && log[item.key]) || 0;
           return `<td><span class="laundry-cell-val ${v === 0 ? "zero" : ""}">${v === 0 ? "−" : v}</span></td>`;
         }
       }).join("");
 
       // Total cell
       let totalCell;
-      if (!hasData || editing) {
+      if (!isLocked && (!hasData || editing)) {
         totalCell = `<td class="cell-total" id="row-total-${date}">0</td>`;
       } else {
-        totalCell = `<td class="cell-total">${log.total || 0}</td>`;
+        totalCell = `<td class="cell-total">${(log && log.total) || 0}</td>`;
       }
 
-      // Status cell
+      // Status cell — the lock takes display priority.
       let statusCell;
-      if (!hasData) {
+      if (isLocked) {
+        statusCell = `<td><span class="laundry-status-badge" style="background:#475569;color:#fff;">🔒 Locked</span></td>`;
+      } else if (!hasData) {
         statusCell = isFuture
           ? `<td><span class="laundry-status-badge empty">—</span></td>`
           : `<td><span class="laundry-status-badge empty">Not sent</span></td>`;
@@ -232,8 +454,19 @@
       }
 
       // Action cell
+      const _adminLocks = _canManageLaundryLocks();
       let actionCell;
-      if (!hasData && !isFuture) {
+      if (isLocked) {
+        // Only an admin can unlock; a month lock is undone via the month
+        // button, a date lock via the row button.
+        if (_adminLocks && !_gridLocks.monthLocked) {
+          actionCell = `<td>
+            <button class="laundry-tbl-btn" style="background:#475569;color:#fff;" onclick="laundryToggleDateLock('${date}', true)">🔓 Unlock</button>
+          </td>`;
+        } else {
+          actionCell = `<td></td>`;
+        }
+      } else if (!hasData && !isFuture) {
         // New row — Save button
         actionCell = `<td>
           <button class="laundry-tbl-btn save" onclick="laundrySaveRow('${date}', this)">Save</button>
@@ -255,6 +488,13 @@
         </td>`;
       } else {
         actionCell = `<td></td>`;
+      }
+      // Admin: per-date lock button on unlocked, non-future rows.
+      if (!isLocked && !isFuture && _adminLocks) {
+        actionCell = actionCell.replace(
+          "</td>",
+          ` <button class="laundry-tbl-btn" title="Lock this date against edits" style="opacity:.75;" onclick="laundryToggleDateLock('${date}', false)">🔒</button></td>`
+        );
       }
 
       return `<tr class="${rowClass}" id="grid-row-${date}" data-date="${date}">
@@ -291,6 +531,9 @@
       });
     });
 
+    // Month lock/unlock control (admin only)
+    _ensureMonthLockBtn();
+
     // Scroll today into view
     const todayRow = document.getElementById(`grid-row-${today}`);
     if (todayRow) setTimeout(() => todayRow.scrollIntoView({ block: "center", behavior: "smooth" }), 150);
@@ -318,6 +561,10 @@
 
   // ── Save new row ──────────────────────────────────────────────────────────
   window.laundrySaveRow = async function (date, btn) {
+    if (_dateIsLocked(date)) {
+      _notify("This date is locked by admin — data can't be changed.", "error");
+      return;
+    }
     const { data, total } = _getRowData(date);
     if (total === 0) { _notify("Enter at least one item", "error"); return; }
     btn.disabled = true; btn.textContent = "Saving…";
@@ -342,6 +589,10 @@
 
   // ── Edit row — no password, freely editable once modal is open ───────────
   window.laundryEditRow = function (docId, date) {
+    if (_dateIsLocked(date)) {
+      _notify("This date is locked by admin — data can't be changed.", "error");
+      return;
+    }
     _unlockRow(docId, date);
   };
 
@@ -356,6 +607,10 @@
 
   // ── Update existing row ───────────────────────────────────────────────────
   window.laundryUpdateRow = async function (docId, date, btn) {
+    if (_dateIsLocked(date)) {
+      _notify("This date is locked by admin — data can't be changed.", "error");
+      return;
+    }
     const { data, total } = _getRowData(date);
     if (total === 0) { _notify("Enter at least one item", "error"); return; }
     btn.disabled = true; btn.textContent = "Saving…";
@@ -439,16 +694,30 @@
       return;
     }
 
+    const cur = _getBillRange();
     wrap.innerHTML = _allBills.map(b => {
-      const isSel = b.month === _selectedBillMonth;
+      // Period bill = carries a period narrower than its full month.
+      const d = b.month ? _billRangeDefaults(b.month) : null;
+      const hasPeriod = !!(b.period_start && b.period_end && d &&
+        !(b.period_start === d.from && b.period_end === d.to));
+      const isSel = b.month === _selectedBillMonth &&
+        (hasPeriod
+          ? (b.period_start === cur.from && b.period_end === cur.to)
+          : (cur.from === (d && d.from) && cur.to === (d && d.to)));
+      const label = hasPeriod
+        ? `${_fmtDate(b.period_start)}–${_fmtDate(b.period_end)}`
+        : _fmtMonthShort(b.month);
+      const click = hasPeriod
+        ? `laundrySelectBillPeriod('${b.month}','${b.period_start}','${b.period_end}')`
+        : `laundrySelectBillMonth('${b.month}')`;
       const bal   = b.balance || 0;
       const paid  = b.paid_total != null ? b.paid_total : (b.paid_amount || 0);
       const count = (b.payments || []).length;
       const countBadge = count > 1
         ? ` <span style="font-size:0.62rem;color:#64748b;font-weight:500">(${count} payments)</span>`
         : "";
-      return `<tr class="${isSel ? "selected-hist" : ""}" style="cursor:pointer" onclick="laundrySelectBillMonth('${b.month}')">
-        <td class="col-month">${_fmtMonthShort(b.month)}</td>
+      return `<tr class="${isSel ? "selected-hist" : ""}" style="cursor:pointer" onclick="${click}">
+        <td class="col-month" style="white-space:nowrap">${label}</td>
         <td>${_inr(b.bill_amount)}</td>
         <td>${_inr(paid)}${countBadge}</td>
         <td class="col-bal ${bal === 0 ? "zero" : ""}">${_inr(bal)}</td>
@@ -457,19 +726,262 @@
     }).join("");
   }
 
+  // Open a specific PERIOD bill from the history list.
+  window.laundrySelectBillPeriod = function (month, from, to) {
+    _selectedBillMonth = month;
+    const mp = document.getElementById("laundry-bill-month");
+    if (mp) mp.value = month;
+    _setBillRangeInputs(from, to);
+    _renderBillHistory();
+    _loadMonthlyData(month, true);
+  };
+
   window.laundrySelectBillMonth = function (month) {
     _selectedBillMonth = month;
     const mp = document.getElementById("laundry-bill-month");
     if (mp) mp.value = month;
+    const d = _billRangeDefaults(month);
+    _setBillRangeInputs(d.from, d.to);
     _renderBillHistory();
     _loadMonthlyData(month);
   };
 
-  async function _loadMonthlyData(month) {
+  // ── Billing period (from → to) ────────────────────────────────────────────
+  // The bill amount is calculated only for this range (defaults to the full
+  // month). The response echoes the range so the UI can show exactly which
+  // dates the totals cover; the range is saved on the bill doc.
+  function _billRangeDefaults(month) {
+    return {
+      from: `${month}-01`,
+      to:   `${month}-${String(_monthDays(month)).padStart(2, "0")}`,
+    };
+  }
+  function _getBillRange() {
+    const d = _billRangeDefaults(_selectedBillMonth);
+    return {
+      from: document.getElementById("laundry-bill-from")?.value || d.from,
+      to:   document.getElementById("laundry-bill-to")?.value   || d.to,
+    };
+  }
+  function _setBillRangeInputs(from, to) {
+    const f = document.getElementById("laundry-bill-from");
+    const t = document.getElementById("laundry-bill-to");
+    if (f) f.value = from;
+    if (t) t.value = to;
+    // Single-selector button label
+    const btn = document.getElementById("laundry-bill-range-btn");
+    if (btn) {
+      const d = _billRangeDefaults(_selectedBillMonth);
+      btn.textContent = (from === d.from && to === d.to)
+        ? "📅 Full month"
+        : `📅 ${_fmtDate(from)} → ${_fmtDate(to)}`;
+    }
+  }
+
+  // ── Single range-picker calendar (tap start, tap end) ────────────────────
+  let _lbrView  = _todayMonth();   // month shown in the picker
+  let _lbrStart = null;
+  let _lbrEnd   = null;
+
+  function _ensureBillRangeCalDom() {
+    if (document.getElementById("lbr-overlay")) return;
+    const style = document.createElement("style");
+    style.textContent = `
+      #lbr-overlay{position:fixed;inset:0;background:rgba(15,23,42,.55);display:none;align-items:center;justify-content:center;z-index:10070;}
+      #lbr-overlay.show{display:flex;}
+      .lbr-box{background:#fff;border-radius:12px;max-width:380px;width:94%;padding:1rem 1.1rem;box-shadow:0 10px 40px rgba(0,0,0,.25);}
+      .lbr-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:.4rem;}
+      .lbr-title{font-weight:700;color:#0f172a;}
+      .lbr-nav{border:1px solid #e2e8f0;background:#fff;border-radius:8px;padding:.2rem .6rem;cursor:pointer;font-size:1rem;}
+      .lbr-hint{font-size:.76rem;color:#1d4ed8;background:#eff6ff;border-radius:6px;padding:.3rem .55rem;margin-bottom:.55rem;font-weight:600;}
+      .lbr-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:3px;}
+      .lbr-dow{font-size:.68rem;color:#64748b;text-align:center;font-weight:700;padding:2px 0;}
+      .lbr-day{border:1px solid #e2e8f0;border-radius:8px;padding:.5rem 0;text-align:center;font-size:.85rem;cursor:pointer;user-select:none;background:#fff;color:#0f172a;}
+      /* Payment status of the bill covering the day (before range/endpoint
+         so an active selection still shows blue on top). */
+      .lbr-day.paid{background:#dcfce7;border-color:#86efac;color:#166534;}
+      .lbr-day.due{background:#fee2e2;border-color:#fca5a5;color:#991b1b;}
+      .lbr-day.range{background:#dbeafe;border-color:#bfdbfe;color:#0f172a;}
+      .lbr-day.endpoint{background:#1d4ed8;color:#fff;border-color:#1d4ed8;font-weight:700;}
+      .lbr-legend{display:flex;gap:.8rem;font-size:.7rem;color:#64748b;margin-top:.55rem;align-items:center;flex-wrap:wrap;}
+      .lbr-chip{display:inline-block;width:12px;height:12px;border-radius:4px;vertical-align:-2px;margin-right:4px;}
+      .lbr-foot{display:flex;gap:.5rem;margin-top:.8rem;}
+      .lbr-btn{flex:1;border:0;border-radius:8px;padding:.55rem .5rem;font-weight:600;cursor:pointer;font-size:.82rem;}
+      .lbr-full{background:#e2e8f0;color:#0f172a;}
+      .lbr-cancel{background:transparent;color:#64748b;flex:0 0 auto;padding:.55rem .8rem;}
+    `;
+    document.head.appendChild(style);
+
+    const ov = document.createElement("div");
+    ov.id = "lbr-overlay";
+    ov.innerHTML = `<div class="lbr-box">
+      <div class="lbr-head">
+        <button class="lbr-nav" id="lbr-prev">‹</button>
+        <div class="lbr-title" id="lbr-title"></div>
+        <button class="lbr-nav" id="lbr-next">›</button>
+      </div>
+      <div class="lbr-hint" id="lbr-hint"></div>
+      <div class="lbr-grid" id="lbr-grid"></div>
+      <div class="lbr-legend">
+        <span><span class="lbr-chip" style="background:#dcfce7;border:1px solid #86efac;"></span>Paid</span>
+        <span><span class="lbr-chip" style="background:#fee2e2;border:1px solid #fca5a5;"></span>Balance due</span>
+        <span><span class="lbr-chip" style="background:#fff;border:1px solid #e2e8f0;"></span>Not billed</span>
+      </div>
+      <div class="lbr-foot">
+        <button class="lbr-btn lbr-full" id="lbr-full-btn">Full month</button>
+        <button class="lbr-btn lbr-cancel" id="lbr-cancel-btn">Cancel</button>
+      </div></div>`;
+    document.body.appendChild(ov);
+
+    ov.addEventListener("click", (e) => {
+      if (e.target === ov) ov.classList.remove("show");
+    });
+    document.getElementById("lbr-cancel-btn").onclick =
+      () => ov.classList.remove("show");
+    document.getElementById("lbr-prev").onclick = () => _lbrShiftMonth(-1);
+    document.getElementById("lbr-next").onclick = () => _lbrShiftMonth(1);
+    document.getElementById("lbr-full-btn").onclick = function () {
+      const d = _billRangeDefaults(_selectedBillMonth);
+      _applyBillRange(d.from, d.to);
+    };
+  }
+
+  // Payment status of the bill covering a date: "paid" (balance settled),
+  // "due" (billed, balance outstanding), or null (no bill covers the day).
+  // Legacy month bills without a period count as full-month coverage.
+  function _dayBillStatus(date) {
+    for (const b of _allBills) {
+      let s = b.period_start, e = b.period_end;
+      if (!s || !e) {
+        if (!b.month) continue;
+        const d = _billRangeDefaults(b.month);
+        s = d.from; e = d.to;
+      }
+      if (date >= s && date <= e) {
+        // Compare payments against the bill's OWN amount — NOT the running
+        // balance, which includes old balance carried from earlier bills.
+        // Otherwise one unpaid old bill would paint every later day red
+        // even when that day's own amount is fully paid. The shortfall
+        // stays red on the days of the bill that actually owes it.
+        const own  = (b.bill_amount != null) ? b.bill_amount : 0;
+        const paid = (b.paid_total != null) ? b.paid_total : (b.paid_amount || 0);
+        return paid >= own ? "paid" : "due";
+      }
+    }
+    return null;
+  }
+
+  function _lbrShiftMonth(delta) {
+    const [y, m] = _lbrView.split("-").map(Number);
+    const dt = new Date(y, m - 1 + delta, 1);
+    _lbrView = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}`;
+    _renderBillRangeCal();
+  }
+
+  function _renderBillRangeCal() {
+    const title = document.getElementById("lbr-title");
+    const hint  = document.getElementById("lbr-hint");
+    const grid  = document.getElementById("lbr-grid");
+    if (!grid) return;
+    if (title) title.textContent = _monthLabel(_lbrView);
+    if (hint) {
+      hint.textContent = !_lbrStart
+        ? "Tap the START date"
+        : `Start: ${_fmtDate(_lbrStart)} — now tap the END date`;
+    }
+
+    const dows = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
+    let html = dows.map(d => `<div class="lbr-dow">${d}</div>`).join("");
+    const [y, m] = _lbrView.split("-").map(Number);
+    const firstDow = new Date(y, m - 1, 1).getDay();
+    for (let i = 0; i < firstDow; i++) html += `<div></div>`;
+
+    _daysInMonth(_lbrView).forEach(date => {
+      const dayNum = parseInt(date.slice(8), 10);
+      const isEndpoint = date === _lbrStart || date === _lbrEnd;
+      const inRange = _lbrStart && _lbrEnd &&
+        date > _lbrStart && date < _lbrEnd;
+      const payStatus = _dayBillStatus(date);   // paid | due | null
+      const cls = ["lbr-day",
+                   payStatus || "",
+                   inRange ? "range" : "",
+                   isEndpoint ? "endpoint" : ""].filter(Boolean).join(" ");
+      html += `<div class="${cls}" data-date="${date}">${dayNum}</div>`;
+    });
+    grid.innerHTML = html;
+
+    grid.querySelectorAll(".lbr-day").forEach(cell => {
+      cell.onclick = function () {
+        const d = cell.dataset.date;
+        if (!_lbrStart || (_lbrStart && _lbrEnd)) {
+          // Fresh selection (or restart after a completed one)
+          _lbrStart = d;
+          _lbrEnd = null;
+          _renderBillRangeCal();
+        } else {
+          // Second tap — end date. Earlier than start? Swap.
+          _lbrEnd = d;
+          if (_lbrEnd < _lbrStart) {
+            const t = _lbrStart; _lbrStart = _lbrEnd; _lbrEnd = t;
+          }
+          _applyBillRange(_lbrStart, _lbrEnd);
+        }
+      };
+    });
+  }
+
+  function _applyBillRange(from, to) {
+    document.getElementById("lbr-overlay")?.classList.remove("show");
+    _setBillRangeInputs(from, to);
+    _loadMonthlyData(_selectedBillMonth, true);
+  }
+
+  function _openBillRangeCal() {
+    _ensureBillRangeCalDom();
+    const { from, to } = _getBillRange();
+    _lbrStart = from;
+    _lbrEnd   = to;
+    _lbrView  = from.slice(0, 7);
+    _renderBillRangeCal();
+    document.getElementById("lbr-overlay").classList.add("show");
+  }
+  function _updateBillPeriodLabel(res) {
+    const el = document.getElementById("laundry-bill-period-label");
+    if (!el) return;
+    if (!res || !res.period_start) { el.style.display = "none"; return; }
+    const pieces = (res.totals && res.totals.grand) || 0;
+    const days = res.period_days || 0;
+    el.textContent =
+      `Calculated from ${_fmtDate(res.period_start)} to ${_fmtDate(res.period_end)} ` +
+      `(${days} day${days === 1 ? "" : "s"} · ${pieces} pieces)`;
+    el.style.display = "block";
+  }
+
+  async function _loadMonthlyData(month, skipRestore) {
     try {
-      const res = await _fetch(`/laundry/monthly/${month}`);
+      const { from, to } = _getBillRange();
+      const res = await _fetch(
+        `/laundry/monthly/${month}?start=${from}&end=${to}`);
+      if (res.success === false) {
+        _notify(res.message || "Failed to load month", "error");
+        return;
+      }
       _monthlyData = res;
+
+      // Reopening a saved bill: if it carries its own billing period and the
+      // user hasn't picked one (inputs still at the full-month default),
+      // restore the saved range once so the form shows what was billed.
+      const d = _billRangeDefaults(month);
+      if (!skipRestore && res.bill &&
+          res.bill.period_start && res.bill.period_end &&
+          from === d.from && to === d.to &&
+          (res.bill.period_start !== from || res.bill.period_end !== to)) {
+        _setBillRangeInputs(res.bill.period_start, res.bill.period_end);
+        return _loadMonthlyData(month, true);
+      }
+
       _renderMonthlySummary(res.totals || {});
+      _updateBillPeriodLabel(res);
       _populateBillForm(res.bill);
       _recalcAutoAmount();
       _updateMonthlyCalc();
@@ -498,7 +1010,11 @@
       set("laundry-bill-amount", "");
       set("laundry-bill-date",   "");
       set("laundry-paid-amount", "");
-      set("laundry-old-balance", _getPrevBalance(_selectedBillMonth));
+      // Opening balance chains from the PREVIOUS period bill (server walks
+      // all bills by period_end). Falls back to the legacy month walk.
+      const _sug = _monthlyData ? _monthlyData.suggested_old_balance : null;
+      set("laundry-old-balance",
+          (_sug != null) ? _sug : _getPrevBalance(_selectedBillMonth));
       _renderPaymentHistory(null);
       _updateMonthlyCalc();
       return;
@@ -595,6 +1111,11 @@
     const payments = (bill && bill.payments) || [];
     const paidTotal = payments.reduce((s, p) => s + (p.amount || 0), 0);
     const month     = bill && bill.month;
+    // Which dates these payments settle — shown in the header so every
+    // payment is unambiguously tied to its billed period.
+    const periodTxt = (bill && bill.period_start && bill.period_end)
+      ? ` <span style="font-weight:500;color:#64748b">· for ${_fmtDate(bill.period_start)} → ${_fmtDate(bill.period_end)}</span>`
+      : "";
 
     if (!bill) {
       host.innerHTML = "";
@@ -606,7 +1127,7 @@
     if (!payments.length) {
       host.innerHTML = `
         <div class="lph-header">
-          <span><i class="fas fa-history"></i> Payment History</span>
+          <span><i class="fas fa-history"></i> Payment History${periodTxt}</span>
           <span class="lph-totals">No payments yet</span>
         </div>
         <div class="lph-empty">Use "Paying Now" above to record the first payment.</div>
@@ -628,7 +1149,7 @@
         ? "" // Legacy seeded entries have no real expense_id — hide delete
         : `<button class="lph-del"
                    title="Remove this payment (manager password required)"
-                   onclick="laundryDeletePayment('${month}','${p.id}')">
+                   onclick="laundryDeletePayment('${month}','${p.id}','${(bill && bill.period_key) || ""}')">
              <i class="fas fa-times"></i>
            </button>`;
       return `<li class="lph-row ${isLegacy ? "legacy" : ""}">
@@ -642,7 +1163,7 @@
     host.innerHTML = `
       <div class="lph-header">
         <span><i class="fas fa-history"></i> Payment History
-          <span style="font-weight:500;color:#64748b">(${payments.length})</span>
+          <span style="font-weight:500;color:#64748b">(${payments.length})</span>${periodTxt}
         </span>
         <span class="lph-totals">Paid: <strong>${_inr(paidTotal)}</strong></span>
       </div>
@@ -651,7 +1172,7 @@
   }
 
   // Triggered by the trash icon on a payment-history row.
-  window.laundryDeletePayment = async function (month, paymentId) {
+  window.laundryDeletePayment = async function (month, paymentId, periodKey) {
     if (!month || !paymentId) return;
     const password = window.prompt(
       "Manager password to remove this payment:",
@@ -666,7 +1187,8 @@
       const res = await _fetch("/laundry/payment/delete", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ month, payment_id: paymentId, password }),
+        body: JSON.stringify({ month, payment_id: paymentId, password,
+                               period_key: periodKey || "" }),
       });
       if (res.success) {
         _notify(res.message || "Payment removed");
@@ -740,6 +1262,7 @@
     }
 
     const totals  = _monthlyData?.totals || {};
+    const _range  = _getBillRange();
     const payload = {
       month,
       bill_date:      document.getElementById("laundry-bill-date")?.value || "",
@@ -748,6 +1271,9 @@
       paid_amount:    paidAmt,
       payment_method: _paymentMethod,
       expense_type:   _expenseType,
+      // The date range the amount was calculated for — shown on the bill.
+      period_start:   _range.from,
+      period_end:     _range.to,
     };
     ITEMS.forEach(item => {
       payload[`total_${item.key}`] = totals[item.key] || 0;
@@ -824,12 +1350,18 @@
       _loadGrid(_gridMonth);
     });
 
-    // Bill month picker
+    // Bill month picker — switching months resets the range to the full month
     document.getElementById("laundry-bill-month")?.addEventListener("change", e => {
       _selectedBillMonth = e.target.value;
+      const d = _billRangeDefaults(e.target.value);
+      _setBillRangeInputs(d.from, d.to);
       _renderBillHistory();
       _loadMonthlyData(e.target.value);
     });
+
+    // Billing period — single range selector (tap start, tap end)
+    document.getElementById("laundry-bill-range-btn")
+      ?.addEventListener("click", _openBillRangeCal);
 
     // Bill amount / old bal / paid — live calc
     ["laundry-bill-amount", "laundry-old-balance", "laundry-paid-amount"].forEach(id =>

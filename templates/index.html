@@ -5673,6 +5673,16 @@
                 <label style="font-size:0.8rem;font-weight:600;color:var(--text-muted);white-space:nowrap">Month:</label>
                 <input type="month" class="lbill-month-inp" id="laundry-bill-month" />
               </div>
+              <!-- Billing period — single from→to range selector. Opens a
+                   calendar: tap start date, tap end date. The bill amount is
+                   calculated only for this range (defaults to full month). -->
+              <div class="lbill-month-wrap" id="laundry-bill-range-wrap">
+                <label style="font-size:0.8rem;font-weight:600;color:var(--text-muted);white-space:nowrap">Period:</label>
+                <button type="button" class="lbill-month-inp" id="laundry-bill-range-btn"
+                  style="cursor:pointer;white-space:nowrap;text-align:left">📅 Full month</button>
+                <input type="hidden" id="laundry-bill-from" />
+                <input type="hidden" id="laundry-bill-to" />
+              </div>
               <button class="laundry-prices-toggle" id="laundry-prices-toggle"
                 style="margin:0;width:auto;padding:0.3rem 0.75rem;font-size:0.75rem;display:flex;align-items:center;gap:0.35rem">
                 <i class="fas fa-lock"></i> Edit Prices
@@ -5715,6 +5725,9 @@
                   <div class="laundry-bill-summary-grid" id="laundry-bill-summary-grid">
                     <div style="color:var(--text-muted);font-size:0.82rem;grid-column:span 4">Select a month…</div>
                   </div>
+                  <!-- Which dates the totals above were calculated for -->
+                  <div id="laundry-bill-period-label"
+                    style="margin-top:0.45rem;font-size:0.76rem;font-weight:600;color:#1d4ed8;background:#eff6ff;border:1px solid #bfdbfe;border-radius:6px;padding:0.35rem 0.6rem;display:none"></div>
                 </div>
               </div>
 

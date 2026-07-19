@@ -51,6 +51,43 @@ laundry_bp = Blueprint("laundry", __name__)
 _laundry_daily_ref    = lambda: db.collection("laundry_daily")
 _laundry_bills_ref    = lambda: db.collection("laundry_bills")
 _laundry_settings_ref = lambda: db.collection("settings").document("laundry_prices")
+_laundry_locks_ref    = lambda: db.collection("laundry_locks")
+
+
+# -- Data locking ------------------------------------------------------------
+# laundry_locks/{YYYY-MM}:
+#   month_locked  bool                 — whole month frozen
+#   locked_dates  ["YYYY-MM-DD", ...]  — individually frozen dates
+#   updated_by / updated_at            — last change attribution
+#   history       [{action, target, by, at}] — full lock/unlock trail
+# A locked date/month rejects /laundry/send and /laundry/update (counts).
+# Receiving a batch (/laundry/receive) stays allowed — it only marks the
+# batch returned, it never changes the counts a lock protects.
+
+def _laundry_lock_state(month: str) -> dict:
+    snap = _laundry_locks_ref().document(month).get()
+    d = (snap.to_dict() or {}) if snap.exists else {}
+    return {
+        "month_locked": bool(d.get("month_locked")),
+        "locked_dates": list(d.get("locked_dates") or []),
+    }
+
+
+def _laundry_date_locked(date_str: str) -> bool:
+    if not date_str or len(date_str) < 10:
+        return False
+    st = _laundry_lock_state(date_str[:7])
+    return st["month_locked"] or date_str in st["locked_dates"]
+
+
+def _locked_response(date_str: str):
+    return jsonify(
+        success=False,
+        locked=True,
+        message=(f"Laundry data for {date_str} is locked by admin — "
+                 f"past entries can't be changed. Ask an admin to unlock "
+                 f"the date/month first."),
+    ), 423
 
 # -- Item keys (order matters -- must match frontend) ------------------------
 ITEM_KEYS = ["single", "double", "pillow", "towel",
@@ -157,6 +194,68 @@ def _find_laundry_expense_rows_for_month(month):
     return out
 
 
+def _find_laundry_expense_rows_for_period(period_key):
+    """
+    Expense rows belonging to a PERIOD bill — exact lookup on the
+    `laundry_bill_period` stamp ("YYYY-MM-DD_YYYY-MM-DD"). Same row shape
+    as _find_laundry_expense_rows_for_month.
+    """
+    if not period_key:
+        return []
+    out = []
+    try:
+        for d in (
+            db.collection("expenses")
+            .where(filter=FieldFilter("laundry_bill_period", "==", period_key))
+            .stream()
+        ):
+            data = d.to_dict() or {}
+            out.append({
+                "id":           d.id,
+                "amount":       int(data.get("amount") or 0),
+                "method":       data.get("payment_method", "cash"),
+                "date":         data.get("date", ""),
+                "time":         data.get("time", ""),
+                "expense_type": data.get("expense_type", "transaction"),
+                "description":  data.get("description", ""),
+                "source":       "new",
+            })
+    except Exception as e:
+        logger.warning(f"_find_laundry_expense_rows_for_period failed for "
+                       f"{period_key}: {e}")
+    out.sort(key=lambda r: (r.get("date") or "", r.get("time") or ""))
+    return out
+
+
+def _full_month_bounds(month):
+    """(first_day, last_day) of YYYY-MM, or ("", "") if malformed."""
+    try:
+        import calendar as _cal
+        y, m = int(month[:4]), int(month[5:7])
+        return f"{month}-01", f"{month}-{str(_cal.monthrange(y, m)[1]).zfill(2)}"
+    except (ValueError, TypeError, IndexError):
+        return "", ""
+
+
+def _payment_rows_for_bill(month, period_key, is_full_month):
+    """
+    The payment rows that belong to one bill.
+
+    Period bills: exact period lookup. Full-month bills: month lookup
+    (covers legacy rows) merged with period-stamped rows, deduped —
+    payments recorded before AND after the period stamping both appear.
+    """
+    if period_key and not is_full_month:
+        return _find_laundry_expense_rows_for_period(period_key)
+    rows = _find_laundry_expense_rows_for_month(month) if month else []
+    if period_key:
+        seen = {r["id"] for r in rows}
+        rows += [r for r in _find_laundry_expense_rows_for_period(period_key)
+                 if r["id"] not in seen]
+        rows.sort(key=lambda r: (r.get("date") or "", r.get("time") or ""))
+    return rows
+
+
 def _with_payment_totals(bill_dict):
     """
     Attach `payments`, `paid_total`, and `balance` to a bill dict.
@@ -175,8 +274,14 @@ def _with_payment_totals(bill_dict):
     if bill_dict is None:
         return bill_dict
 
-    month = bill_dict.get("month")
-    expense_rows = _find_laundry_expense_rows_for_month(month) if month else []
+    month      = bill_dict.get("month")
+    period_key = bill_dict.get("period_key") or ""
+    _fm_start, _fm_end = _full_month_bounds(month or "")
+    _is_full_month = (not period_key) or (
+        bill_dict.get("period_start") == _fm_start
+        and bill_dict.get("period_end") == _fm_end
+    )
+    expense_rows = _payment_rows_for_bill(month, period_key, _is_full_month)
 
     if expense_rows:
         payments = [{
@@ -272,6 +377,9 @@ def send_laundry():
         data = request.json or {}
         date = data.get("date", datetime.now(IST).strftime("%Y-%m-%d"))
 
+        if _laundry_date_locked(date):
+            return _locked_response(date)
+
         items = {}
         total = 0
         for k in ITEM_KEYS:
@@ -321,6 +429,13 @@ def update_laundry(doc_id):
     """Edit an existing daily entry (password verified client-side)."""
     try:
         data = request.json or {}
+
+        # Lock guard — the doc's own date decides (never the request body).
+        _snap = _laundry_daily_ref().document(doc_id).get()
+        _doc_date = ((_snap.to_dict() or {}).get("date") or "") if _snap.exists else ""
+        if _doc_date and _laundry_date_locked(_doc_date):
+            return _locked_response(_doc_date)
+
         items = {}
         total = 0
         for k in ITEM_KEYS:
@@ -336,6 +451,111 @@ def update_laundry(doc_id):
         return jsonify(success=True, message="Updated")
     except Exception as e:
         logger.error(f"update_laundry error: {e}")
+        return jsonify(success=False, message=str(e)), 500
+
+
+# ---------------------------------------------------------------------------
+# DATA LOCKS -- admin-only month/date freeze of the daily grid
+# ---------------------------------------------------------------------------
+
+@laundry_bp.route("/laundry/locks", methods=["GET"])
+def get_laundry_locks():
+    """Lock state for a month — read by the grid to render locked rows."""
+    try:
+        month = request.args.get("month", datetime.now(IST).strftime("%Y-%m"))
+        st = _laundry_lock_state(month)
+        return jsonify(success=True, month=month,
+                       month_locked=st["month_locked"],
+                       locked_dates=st["locked_dates"])
+    except Exception as e:
+        logger.error(f"get_laundry_locks error: {e}")
+        return jsonify(success=False, message=str(e)), 500
+
+
+@laundry_bp.route("/laundry/lock", methods=["POST"])
+@requires_permission("laundry.lock.manage")
+def set_laundry_lock():
+    """
+    Admin: lock/unlock a whole month or a single date of the laundry grid.
+
+    Body: { month:  "YYYY-MM",
+            action: "lock_month" | "unlock_month" | "lock_date" |
+                    "unlock_date" | "lock_dates" | "unlock_dates",
+            date:   "YYYY-MM-DD"          (for *_date actions),
+            dates:  ["YYYY-MM-DD", ...]   (for *_dates batch actions —
+                                           calendar picker) }
+
+    A locked date/month rejects /laundry/send and /laundry/update with 423.
+    Full lock/unlock history is kept on the month doc + the audit log.
+    """
+    try:
+        import re as _re
+        from services.audit_log import write_log, _safe_user
+
+        data   = request.json or {}
+        month  = (data.get("month") or "").strip()
+        action = (data.get("action") or "").strip()
+        date   = (data.get("date") or "").strip()
+        dates  = data.get("dates") or []
+
+        if not _re.match(r"^\d{4}-(0[1-9]|1[0-2])$", month):
+            return jsonify(success=False, message="month must be YYYY-MM"), 400
+        if action not in ("lock_month", "unlock_month",
+                          "lock_date", "unlock_date",
+                          "lock_dates", "unlock_dates"):
+            return jsonify(success=False, message="invalid action"), 400
+        if action.endswith("_date") and (
+                len(date) != 10 or not date.startswith(month)):
+            return jsonify(success=False,
+                           message="date must be YYYY-MM-DD inside the month"), 400
+        if action.endswith("_dates"):
+            dates = [str(d).strip() for d in dates if d]
+            if not dates or any(
+                    len(d) != 10 or not d.startswith(month) for d in dates):
+                return jsonify(success=False, message=(
+                    "dates must be a non-empty list of YYYY-MM-DD inside "
+                    "the month")), 400
+
+        ref  = _laundry_locks_ref().document(month)
+        snap = ref.get()
+        doc  = (snap.to_dict() or {}) if snap.exists else {}
+        month_locked = bool(doc.get("month_locked"))
+        locked_dates = set(doc.get("locked_dates") or [])
+
+        if action == "lock_month":
+            month_locked = True
+        elif action == "unlock_month":
+            month_locked = False
+        elif action == "lock_date":
+            locked_dates.add(date)
+        elif action == "unlock_date":
+            locked_dates.discard(date)
+        elif action == "lock_dates":
+            locked_dates.update(dates)
+        else:  # unlock_dates
+            locked_dates.difference_update(dates)
+
+        _user = (_safe_user() or {}).get("userId") or "admin"
+        now   = datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S")
+        entry = {"action": action,
+                 "target": ",".join(dates) if dates else (date or month),
+                 "by": _user, "at": now}
+        history = (list(doc.get("history") or []) + [entry])[-100:]
+
+        ref.set({
+            "month_locked": month_locked,
+            "locked_dates": sorted(locked_dates),
+            "updated_by":   _user,
+            "updated_at":   now,
+            "history":      history,
+        })
+        write_log("laundry.lock", target_collection="laundry_locks",
+                  target_id=month, metadata=entry)
+        return jsonify(success=True, month=month, month_locked=month_locked,
+                       locked_dates=sorted(locked_dates),
+                       message=action.replace("_", " ").capitalize() + " done")
+    except Exception as e:
+        logger.error(f"set_laundry_lock error: {e}")
         return jsonify(success=False, message=str(e)), 500
 
 
@@ -426,16 +646,41 @@ def get_monthly_laundry(month):
     month: YYYY-MM
     Returns item-wise totals + the existing bill record (with payments[]
     normalised so the frontend can always rely on the same shape).
+
+    Optional query params `start` / `end` (YYYY-MM-DD, both inclusive)
+    restrict the aggregation to that date range instead of the full month
+    — used by the Bill tab's from→to selector so the bill amount is
+    computed only for the chosen period. The response echoes
+    period_start / period_end / period_days so the UI can show exactly
+    which dates the calculation covers. The bill doc itself stays keyed
+    by month.
     """
     try:
-        start = f"{month}-01"
+        import calendar as _cal
+
         year, mon = int(month[:4]), int(month[5:7])
-        end = f"{year + 1}-01-01" if mon == 12 else f"{year}-{str(mon + 1).zfill(2)}-01"
+        default_start = f"{month}-01"
+        default_end   = f"{month}-{str(_cal.monthrange(year, mon)[1]).zfill(2)}"
+
+        def _valid_date(s):
+            try:
+                datetime.strptime(s, "%Y-%m-%d")
+                return True
+            except (ValueError, TypeError):
+                return False
+
+        q_start = (request.args.get("start") or "").strip()
+        q_end   = (request.args.get("end") or "").strip()
+        period_start = q_start if _valid_date(q_start) else default_start
+        period_end   = q_end   if _valid_date(q_end)   else default_end
+        if period_end < period_start:
+            return jsonify(success=False,
+                           message="'From' date must be on or before 'To' date"), 400
 
         docs = (
             _laundry_daily_ref()
-            .where(filter=FieldFilter("date", ">=", start))
-            .where(filter=FieldFilter("date", "<", end))
+            .where(filter=FieldFilter("date", ">=", period_start))
+            .where(filter=FieldFilter("date", "<=", period_end))
             .stream()
         )
 
@@ -450,18 +695,64 @@ def get_monthly_laundry(month):
 
         totals["grand"] = sum(totals[k] for k in ITEM_KEYS)
 
+        period_days = (
+            datetime.strptime(period_end, "%Y-%m-%d")
+            - datetime.strptime(period_start, "%Y-%m-%d")
+        ).days + 1
+
+        # ── Locate the bill for THIS period ──────────────────────────────────
+        # Period bills are keyed by period_key; a full-month period falls
+        # back to the legacy month-keyed doc (bills saved before periods).
+        period_key    = f"{period_start}_{period_end}"
+        is_full_month = (period_start == default_start
+                         and period_end == default_end)
+
         bill_docs = list(
             _laundry_bills_ref()
-            .where(filter=FieldFilter("month", "==", month))
+            .where(filter=FieldFilter("period_key", "==", period_key))
             .limit(1).stream()
         )
+        if not bill_docs and is_full_month:
+            bill_docs = [
+                s for s in _laundry_bills_ref()
+                .where(filter=FieldFilter("month", "==", month))
+                .limit(5).stream()
+                if not (s.to_dict() or {}).get("period_key")
+            ][:1]
         bill = None
         if bill_docs:
             bill = bill_docs[0].to_dict()
             bill["doc_id"] = bill_docs[0].id
             _with_payment_totals(bill)
 
-        return jsonify(success=True, totals=totals, bill=bill, daily_rows=daily_rows)
+        # ── Suggested opening balance ────────────────────────────────────────
+        # Balance carries bill-to-bill: the most recent bill whose period
+        # ENDS before this period STARTS (legacy month bills count as
+        # full-month periods). Advisory — the Old Balance field stays
+        # editable.
+        suggested_old_balance = 0
+        try:
+            _best = None
+            for s in _laundry_bills_ref().stream():
+                bd = s.to_dict() or {}
+                p_end = bd.get("period_end") or ""
+                if not p_end:
+                    p_end = _full_month_bounds(bd.get("month") or "")[1]
+                if p_end and p_end < period_start:
+                    if _best is None or p_end > _best[0]:
+                        _best = (p_end, s)
+            if _best is not None:
+                prev_bill = _best[1].to_dict() or {}
+                _with_payment_totals(prev_bill)
+                suggested_old_balance = int(prev_bill.get("balance") or 0)
+        except Exception as _sb_e:
+            logger.warning(f"get_monthly_laundry: suggested balance failed: {_sb_e}")
+
+        return jsonify(success=True, totals=totals, bill=bill,
+                       daily_rows=daily_rows,
+                       period_start=period_start, period_end=period_end,
+                       period_days=period_days,
+                       suggested_old_balance=suggested_old_balance)
     except Exception as e:
         logger.error(f"get_monthly_laundry error: {e}")
         return jsonify(success=False, message=str(e)), 500
@@ -510,12 +801,30 @@ def save_monthly_bill():
         now_ist = datetime.now(IST)
         now_utc_iso = datetime.now(timezone.utc).isoformat()
 
+        # -- Billing period (defaults to the full month) ----------------------
+        _def_start, _def_end = _full_month_bounds(month)
+        period_start = (data.get("period_start") or "").strip() or _def_start
+        period_end   = (data.get("period_end") or "").strip() or _def_end
+        period_key   = f"{period_start}_{period_end}"
+        is_full_month = (period_start == _def_start and period_end == _def_end)
+        period_label = (f"{_fmt_date_short(period_start)} to "
+                        f"{_fmt_date_short(period_end)}")
+
         # -- Locate or create the bill doc -----------------------------------
+        # One bill per PERIOD. A full-month period reuses the legacy
+        # month-keyed doc if one exists (it gets the period stamp on save).
         existing_q = list(
             _laundry_bills_ref()
-            .where(filter=FieldFilter("month", "==", month))
+            .where(filter=FieldFilter("period_key", "==", period_key))
             .limit(1).stream()
         )
+        if not existing_q and is_full_month:
+            existing_q = [
+                s for s in _laundry_bills_ref()
+                .where(filter=FieldFilter("month", "==", month))
+                .limit(5).stream()
+                if not (s.to_dict() or {}).get("period_key")
+            ][:1]
         if existing_q:
             bill_ref = _laundry_bills_ref().document(existing_q[0].id)
         else:
@@ -528,16 +837,29 @@ def save_monthly_bill():
             month_label = _month_label(month)
             today_str   = now_ist.strftime("%Y-%m-%d")
             time_str    = now_ist.strftime("%H:%M")
+            # The description carries the billed period so anyone reading the
+            # expense later knows exactly which dates this payment covered.
+            _desc = (
+                f"Laundry Payment - {month_label} (paid {_fmt_date_short(today_str)})"
+                if is_full_month else
+                f"Laundry Payment - {period_label} (paid {_fmt_date_short(today_str)})"
+            )
             expense_entry = {
                 "date":           today_str,
                 "time":           time_str,
                 "category":       "laundry",
-                "description":    f"Laundry Payment - {month_label} (paid {_fmt_date_short(today_str)})",
+                "description":    _desc,
                 "amount":         new_payment_amount,
                 "payment_method": payment_method,
                 "expense_type":   expense_type,
-                "laundry_bill_month": month,
+                # Period stamp — the bill this payment belongs to. Full-month
+                # bills also keep the legacy month stamp for old readers.
+                "laundry_bill_period": period_key,
+                "laundry_bill_period_start": period_start,
+                "laundry_bill_period_end":   period_end,
             }
+            if is_full_month:
+                expense_entry["laundry_bill_month"] = month
             try:
                 db.collection("expenses").document().set(expense_entry)
             except Exception as exp_err:
@@ -555,13 +877,19 @@ def save_monthly_bill():
                 _update_expense_totals(new_payment_amount, payment_method, now_ist)
 
         # -- Compute totals from the live expense rows ----------------------
-        rows = _find_laundry_expense_rows_for_month(month)
+        rows = _payment_rows_for_bill(month, period_key, is_full_month)
         paid_total = sum(r["amount"] for r in rows)
         balance    = grand_total - paid_total
 
         bill_doc = {
             "month":          month,
             "bill_date":      bill_date,
+            # The date range this bill's amount was calculated for (from→to,
+            # inclusive). period_key is the bill's identity — one bill per
+            # period; balance chains bill-to-bill by period_end order.
+            "period_start":   period_start,
+            "period_end":     period_end,
+            "period_key":     period_key,
             **{f"total_{k}": item_totals[k] for k in ITEM_KEYS},
             **{f"price_{k}":  prices[k]     for k in ITEM_KEYS},
             "bill_amount":    bill_amount,
@@ -633,9 +961,12 @@ def delete_laundry_payment():
 
         # Sanity: refuse to delete an expense that does not belong to the
         # claimed month -- protects against a UI bug passing the wrong id.
+        _req_period = (data.get("period_key") or "").strip()
         belongs = (
             exp_data.get("laundry_bill_month") == month
             or _month_label(month) in str(exp_data.get("description") or "")
+            or (_req_period and
+                exp_data.get("laundry_bill_period") == _req_period)
         )
         if not belongs:
             return jsonify(
@@ -660,17 +991,29 @@ def delete_laundry_payment():
         # Refresh the bill's cached summary fields (best-effort -- not
         # critical, since reads re-derive from expenses).
         try:
-            bill_q = list(
-                _laundry_bills_ref()
-                .where(filter=FieldFilter("month", "==", month))
-                .limit(1).stream()
-            )
+            bill_q = []
+            if _req_period:
+                bill_q = list(
+                    _laundry_bills_ref()
+                    .where(filter=FieldFilter("period_key", "==", _req_period))
+                    .limit(1).stream()
+                )
+            if not bill_q:
+                bill_q = list(
+                    _laundry_bills_ref()
+                    .where(filter=FieldFilter("month", "==", month))
+                    .limit(1).stream()
+                )
             if bill_q:
                 bill = bill_q[0].to_dict() or {}
                 bill_amount = int(bill.get("bill_amount") or 0)
                 old_balance = int(bill.get("old_balance") or 0)
                 grand_total = bill_amount + old_balance
-                rows = _find_laundry_expense_rows_for_month(month)
+                _pk = bill.get("period_key") or ""
+                _fs, _fe = _full_month_bounds(bill.get("month") or "")
+                _ifm = (not _pk) or (bill.get("period_start") == _fs
+                                     and bill.get("period_end") == _fe)
+                rows = _payment_rows_for_bill(bill.get("month"), _pk, _ifm)
                 paid_total = sum(r["amount"] for r in rows)
                 balance    = grand_total - paid_total
                 _laundry_bills_ref().document(bill_q[0].id).update({
@@ -707,7 +1050,10 @@ def get_all_bills():
             row["doc_id"] = d.id
             _with_payment_totals(row)
             results.append(row)
-        results.sort(key=lambda x: x.get("month", ""), reverse=True)
+        # Period bills within the same month order by period_end desc.
+        results.sort(key=lambda x: (x.get("month", ""),
+                                    x.get("period_end") or ""),
+                     reverse=True)
         return jsonify(success=True, bills=results)
     except Exception as e:
         logger.error(f"get_all_bills error: {e}")

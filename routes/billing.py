@@ -466,6 +466,14 @@ def get_register_data():
                     "bill_number": bill_data.get("bill_number", "-"),
                     "guest_name": bill_data.get("guest_name", "Unknown"),
                     "guest_mobile": bill_data.get("guest_mobile", ""),
+                    # Activity trail (denormalised counters for the row badges;
+                    # the full timeline lives in audit_logs). Shape:
+                    #   activity.whatsapp = {count, last_by, last_by_id, last_at}
+                    #   activity.print    = {count, last_by, last_by_id, last_at}
+                    "activity": bill_data.get("activity", {}),
+                    # Last guest-detail correction (drives the "edited" badge).
+                    #   {by, by_id, at}  or  None
+                    "last_guest_edit": bill_data.get("last_guest_edit"),
                     "room": str(bill_data.get("room", "")),
                     "checkin_time": checkin_time,
                     "checkout_time": checkout_time,
@@ -3496,6 +3504,174 @@ def update_bill_gst():
 
     except Exception as e:
         logger.error(f"update_bill_gst error: {e}", exc_info=True)
+        return jsonify(success=False, message=f"Error: {str(e)}"), 500
+
+
+@billing_bp.route("/update_bill_guest", methods=["POST"])
+@requires_permission("bill.guest.edit")
+def update_bill_guest():
+    """
+    Correct the guest NAME and/or MOBILE on an existing bill.
+
+    Non-financial only — this endpoint never touches amounts, tax heads, or
+    GST recipient (B2B) details. Every change is written to the append-only
+    audit log (action "bill.guest.edit") with a before/after snapshot and
+    attributed to the signed-in user (admin or manager). The corrected
+    values are denormalised back onto the bill and a background PDF
+    regenerate is triggered so a re-downloaded invoice shows them.
+    """
+    try:
+        data    = request.get_json(silent=True) or {}
+        bill_id = (data.get("bill_id") or "").strip()
+        if not bill_id:
+            return jsonify(success=False, message="bill_id is required"), 400
+
+        has_name   = "guest_name" in data
+        has_mobile = "guest_mobile" in data
+        if not has_name and not has_mobile:
+            return jsonify(
+                success=False,
+                message="Nothing to update (guest_name / guest_mobile)",
+            ), 400
+
+        bill_snap = bills_ref.document(bill_id).get()
+        if not bill_snap.exists:
+            return jsonify(success=False, message="Bill not found"), 404
+        bill = bill_snap.to_dict() or {}
+
+        update = {}
+        before = {}
+        after  = {}
+
+        if has_name:
+            new_name = (data.get("guest_name") or "").strip()
+            if not new_name:
+                return jsonify(success=False, message="Guest name cannot be empty"), 400
+            if len(new_name) > 120:
+                return jsonify(success=False, message="Guest name is too long"), 400
+            if new_name != (bill.get("guest_name") or ""):
+                before["guest_name"] = bill.get("guest_name")
+                after["guest_name"]  = new_name
+                update["guest_name"] = new_name
+
+        if has_mobile:
+            raw    = (data.get("guest_mobile") or "").strip()
+            digits = "".join(ch for ch in raw if ch.isdigit())
+            # Accept a blank number (clearing it) or a 10-digit Indian mobile.
+            if digits and len(digits) != 10:
+                return jsonify(
+                    success=False,
+                    message="Mobile must be a 10-digit number (or blank)",
+                ), 400
+            if digits != (bill.get("guest_mobile") or ""):
+                before["guest_mobile"] = bill.get("guest_mobile")
+                after["guest_mobile"]  = digits
+                update["guest_mobile"] = digits
+
+        if not update:
+            # Submitted values matched what is already stored — no-op.
+            return jsonify(
+                success=True, message="No changes",
+                guest_name=bill.get("guest_name"),
+                guest_mobile=bill.get("guest_mobile"),
+            )
+
+        user = _safe_user()
+        now  = datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S")
+        update["last_guest_edit"] = {
+            "by":    user.get("name") or user.get("userId") or "system",
+            "by_id": user.get("userId") or "system",
+            "at":    now,
+        }
+        update.update(attribution_update())
+
+        bills_ref.document(bill_id).update(update)
+
+        write_log(
+            "bill.guest.edit",
+            target_collection="bills",
+            target_id=str(bill_id),
+            before=before,
+            after=after,
+            metadata={"bill_number": bill.get("bill_number")},
+        )
+
+        # Keep the saved PDF consistent with the corrected details. Best-effort:
+        # a PDF hiccup must not fail an edit that already persisted + logged.
+        try:
+            _trigger_bill_pdf_refresh(bill_id, bill, update)
+        except Exception as _pdf_e:
+            logger.warning(f"update_bill_guest: PDF refresh skipped: {_pdf_e}")
+
+        return jsonify(
+            success=True,
+            message="Guest details updated",
+            bill_id=bill_id,
+            guest_name=update.get("guest_name", bill.get("guest_name")),
+            guest_mobile=update.get("guest_mobile", bill.get("guest_mobile")),
+            last_guest_edit=update["last_guest_edit"],
+        )
+    except Exception as e:
+        logger.error(f"update_bill_guest error: {e}", exc_info=True)
+        return jsonify(success=False, message=f"Error: {str(e)}"), 500
+
+
+@billing_bp.route("/log_bill_activity", methods=["POST"])
+@requires_permission("app.access")
+def log_bill_activity():
+    """
+    Record that a bill was PRINTED or SHARED ON WHATSAPP.
+
+    Both are front-desk actions with no other server round-trip, so they are
+    logged here explicitly. Any signed-in user may log one. Two effects:
+      1. Append an audit_logs entry (action "bill.print" / "bill.whatsapp.sent")
+         attributed to the signed-in user — source of truth for the timeline.
+      2. Bump a denormalised counter on the bill doc so the Bills-tab row can
+         show an at-a-glance badge without a per-row audit query.
+    """
+    try:
+        data    = request.get_json(silent=True) or {}
+        bill_id = (data.get("bill_id") or "").strip()
+        kind    = (data.get("kind") or "").strip().lower()
+        if not bill_id:
+            return jsonify(success=False, message="bill_id is required"), 400
+        if kind not in ("print", "whatsapp"):
+            return jsonify(success=False, message="kind must be 'print' or 'whatsapp'"), 400
+
+        bill_snap = bills_ref.document(bill_id).get()
+        if not bill_snap.exists:
+            return jsonify(success=False, message="Bill not found"), 404
+        bill = bill_snap.to_dict() or {}
+
+        user  = _safe_user()
+        uname = user.get("name") or user.get("userId") or "system"
+        uid   = user.get("userId") or "system"
+        now   = datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S")
+
+        # Dotted field paths update the nested `activity.<kind>` map in place;
+        # Increment creates the map/counter if it does not exist yet.
+        bills_ref.document(bill_id).update({
+            f"activity.{kind}.count":      firestore.Increment(1),
+            f"activity.{kind}.last_by":    uname,
+            f"activity.{kind}.last_by_id": uid,
+            f"activity.{kind}.last_at":    now,
+        })
+
+        action = "bill.print" if kind == "print" else "bill.whatsapp.sent"
+        meta   = {"bill_number": bill.get("bill_number")}
+        _to = (data.get("to") or "").strip()
+        if _to:
+            meta["to"] = _to
+        write_log(
+            action,
+            target_collection="bills",
+            target_id=str(bill_id),
+            metadata=meta,
+        )
+
+        return jsonify(success=True)
+    except Exception as e:
+        logger.error(f"log_bill_activity error: {e}", exc_info=True)
         return jsonify(success=False, message=f"Error: {str(e)}"), 500
 
 

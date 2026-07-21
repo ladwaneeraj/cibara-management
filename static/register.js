@@ -2583,6 +2583,18 @@
           document.body.classList.remove("bl-printing");
           clone.remove();
         }
+        // Record the print on the bill's activity trail (fire-and-forget).
+        // The bill doc's denormalised counter is bumped server-side and the
+        // Bills tab picks it up via its Firestore snapshot listener.
+        try {
+          if (_regOpenBillId && typeof window.apiFetch === "function") {
+            window.apiFetch("/log_bill_activity", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ bill_id: _regOpenBillId, kind: "print" }),
+            }).catch(function () {});
+          }
+        } catch (_e) { /* never break printing */ }
       });
     }
 
@@ -4040,4 +4052,19 @@
   } else {
     bootWhenReady();
   }
+
+  // ── Public refresh contract ───────────────────────────────────────────────
+  // Consumed by the global header Refresh button (static/script.js).
+  //   invalidate() clears the loaded-range marker so the NEXT time the tab is
+  //     shown, watchTab()'s MutationObserver-driven loadData(false) misses the
+  //     cache and re-fetches from the server. Used for the non-active tab.
+  //   refresh() forces an immediate re-fetch of the current range (identical
+  //     to clicking the in-tab refresh button). Used when this is the active
+  //     tab.
+  //   isLoaded() reports whether a range has ever been fetched this session.
+  window.CibaraRegister = Object.freeze({
+    invalidate: function () { state.lastLoadedRange = null; },
+    refresh:    function () { return loadData(true); },
+    isLoaded:   function () { return state.lastLoadedRange !== null; },
+  });
 })();

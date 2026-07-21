@@ -38,6 +38,9 @@
       "room.cleaning.complete",
       "room.inspection.approve",
       "register.view",
+      // Correct guest name / mobile on a bill (non-financial only). Amounts,
+      // taxes and GST recipient details stay admin-only.
+      "bill.guest.edit",
       // Banking — manager can view + assemble drafts; cannot confirm,
       // reconcile, reverse, create adjustments, or manage accounts.
       "banking.view",

@@ -56,13 +56,37 @@
   flex-shrink: 0;
   flex-wrap: wrap;
 }
+/* Month navigator: [‹] [ July 2026 ▾ ] [›] as one tight group. */
+.laundry-grid-nav {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+/* The month pill is the single selector — a transparent month input overlays
+   it (below), so tapping anywhere opens the native picker. */
+.laundry-grid-monthpick {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  min-width: 140px;
+  padding: 0.3rem 0.7rem;
+  border: 1px solid var(--border, #e2e8f0);
+  border-radius: 8px;
+  background: var(--bg, #fff);
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.laundry-grid-monthpick:hover { background: var(--bg-secondary, #f7fafc); }
 .laundry-grid-month-label {
-  font-size: 1rem;
+  font-size: 0.92rem;
   font-weight: 700;
   color: var(--text, #2d3748);
-  min-width: 130px;
   text-align: center;
+  white-space: nowrap;
 }
+.laundry-grid-caret { font-size: 0.62rem; color: var(--text-muted, #94a3b8); }
 .laundry-nav-btn {
   background: var(--bg, #fff);
   border: 1px solid var(--border, #e2e8f0);
@@ -75,18 +99,28 @@
   align-items: center;
   justify-content: center;
   transition: background 0.15s;
+  flex-shrink: 0;
 }
 .laundry-nav-btn:hover { background: var(--border, #e2e8f0); }
+/* Transparent, full-cover month input — taps open the native picker. */
 .laundry-grid-month-inp {
-  border: 1px solid var(--border, #e2e8f0);
-  border-radius: 6px;
-  padding: 0.25rem 0.4rem;
-  font-size: 0.8rem;
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  opacity: 0;
+  cursor: pointer;
 }
+/* Single Lock / Unlock control, pushed to the right edge of the toolbar. */
+.laundry-grid-lock-btn { margin-left: auto; }
+/* Legend drops to its own row under the navigator for a clean two-row bar. */
 .laundry-grid-legend {
   display: flex;
   gap: 0.75rem;
-  margin-left: auto;
+  flex-basis: 100%;
   align-items: center;
   flex-wrap: wrap;
 }
@@ -536,6 +570,32 @@
   max-width: 160px;
 }
 .lbill-month-inp:focus { outline: 2px solid #3182ce; }
+
+/* Mobile: the inline Month / Period / Edit-Prices row crams onto one line and
+   truncates on narrow screens (month value clipped, controls overlapping).
+   Stack the three into full-width rows so nothing is clipped and each control
+   is easy to tap. The month input and period button expand to fill the row. */
+@media (max-width: 560px) {
+  .lbill-top-bar {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.5rem;
+    padding: 0.6rem;
+  }
+  .lbill-top-bar .lbill-month-wrap {
+    flex: 0 0 auto;
+    width: 100%;
+  }
+  .lbill-top-bar .lbill-month-inp {
+    flex: 1 1 auto;
+    max-width: none;
+  }
+  .lbill-top-bar .laundry-prices-toggle {
+    width: 100% !important;
+    justify-content: center;
+    text-align: center;
+  }
+}
 
 /* Side-by-side row: item totals card + payment history card */
 /* On desktop → side by side. On mobile → stacked. */

@@ -47,6 +47,10 @@ PERMISSIONS = frozenset(
         # and Section 34 credit-note issuance. Admin-only by default.
         "bill.gst.edit",
         "credit_note.issue",
+        # Bill — correct the guest name / mobile on an existing bill
+        # (non-financial fields only; does not touch amounts or tax heads).
+        # Granted to manager as well as admin. Every edit is audit-logged.
+        "bill.guest.edit",
         # GST month locking — freeze a filed month against bill mutations
         # (see services/gst_lock_service.py). Admin-only (wildcard).
         "gst.lock.manage",
@@ -143,6 +147,9 @@ ROLE_PERMISSIONS: dict[str, FrozenSet[str]] = {
             "room.cleaning.complete",
             "room.inspection.approve",
             "register.view",
+            # Correct guest name / mobile on a bill (non-financial). Amounts,
+            # taxes and GST recipient details remain admin-only.
+            "bill.guest.edit",
             # Banking — manager can VIEW the deposit screens and
             # ASSEMBLE a draft deposit, but CANNOT confirm/reconcile/
             # reverse a deposit or create cash adjustments. Those are

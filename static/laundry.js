@@ -209,44 +209,39 @@
     _setLaundryLock(isLocked ? "unlock_date" : "lock_date", date);
   };
 
-  // Month lock/unlock button next to the grid's month label (admin only).
+  // Single Lock / Unlock control next to the grid's month label (admin only).
+  // Opens the calendar picker, where the admin locks/unlocks individual dates
+  // OR the whole month — a single entry point that replaces the former two
+  // separate "Lock Month" and "Lock Dates" buttons.
   function _ensureMonthLockBtn() {
-    const lbl = document.getElementById("laundry-grid-month-label");
-    if (!lbl || !lbl.parentNode) return;
-    let btn = document.getElementById("laundry-month-lock-btn");
+    const nav = document.querySelector(".laundry-grid-nav");
+    if (!nav) return;
+    // Drop legacy buttons from earlier builds so only the single control shows.
+    ["laundry-month-lock-btn", "laundry-date-lock-btn"].forEach((id) => {
+      const el = document.getElementById(id);
+      if (el) el.remove();
+    });
+
+    let btn = document.getElementById("laundry-lock-btn");
     if (!_canManageLaundryLocks()) { if (btn) btn.remove(); return; }
     if (!btn) {
       btn = document.createElement("button");
-      btn.id = "laundry-month-lock-btn";
-      btn.className = "laundry-tbl-btn";
-      btn.style.cssText = "margin-left:0.6rem;padding:0.25rem 0.6rem;";
-      lbl.parentNode.insertBefore(btn, lbl.nextSibling);
+      btn.id = "laundry-lock-btn";
+      btn.className = "laundry-tbl-btn laundry-grid-lock-btn";
+      btn.style.cssText = "padding:0.25rem 0.7rem;";
+      // Right side of the toolbar, clear of the month arrows.
+      nav.insertAdjacentElement("afterend", btn);
     }
-    btn.textContent = _gridLocks.monthLocked ? "🔓 Unlock Month" : "🔒 Lock Month";
-    btn.title = _gridLocks.monthLocked
-      ? "Allow edits to this month again"
-      : "Freeze every date in this month against edits";
-    btn.onclick = function () {
-      _setLaundryLock(_gridLocks.monthLocked ? "unlock_month" : "lock_month", null);
-    };
-
-    // Calendar picker button — select multiple dates and lock/unlock in one go.
-    let calBtn = document.getElementById("laundry-date-lock-btn");
-    if (!calBtn) {
-      calBtn = document.createElement("button");
-      calBtn.id = "laundry-date-lock-btn";
-      calBtn.className = "laundry-tbl-btn";
-      calBtn.style.cssText = "margin-left:0.4rem;padding:0.25rem 0.6rem;";
-      btn.parentNode.insertBefore(calBtn, btn.nextSibling);
-    }
-    calBtn.textContent = "📅 Lock Dates";
-    calBtn.title = "Pick dates on a calendar to lock or unlock them";
-    calBtn.onclick = _openLockCalendar;
+    btn.textContent = "🔒 Locks";
+    btn.title = "Lock or unlock dates — or the whole month — against edits";
+    btn.onclick = _openLockCalendar;
   }
 
   // ── Calendar lock picker (admin) ──────────────────────────────────────────
-  // Tap dates to select (dark = already locked), then Lock/Unlock Selected.
-  let _lockCalSelected = new Set();
+  // Range selector: tap a start date, tap an end date (or act on a single day
+  // with just the start). Then Lock / Unlock selected. Dark = already locked.
+  let _lockStart = null;
+  let _lockEnd   = null;
 
   function _ensureLockCalDom() {
     if (document.getElementById("llk-overlay")) return;
@@ -256,16 +251,25 @@
       #llk-overlay{position:fixed;inset:0;background:rgba(15,23,42,.55);display:none;align-items:center;justify-content:center;z-index:10070;}
       #llk-overlay.show{display:flex;}
       .llk-box{background:#fff;border-radius:12px;max-width:380px;width:94%;padding:1rem 1.1rem;box-shadow:0 10px 40px rgba(0,0,0,.25);}
-      .llk-title{font-weight:700;font-size:1rem;margin-bottom:.3rem;color:#0f172a;}
+      .llk-head{display:flex;align-items:flex-start;justify-content:space-between;gap:.5rem;margin-bottom:.3rem;}
+      .llk-title{font-weight:700;font-size:1rem;color:#0f172a;}
+      .llk-x{background:none;border:0;font-size:1.35rem;line-height:1;color:#94a3b8;cursor:pointer;padding:0 .15rem;}
+      .llk-x:hover{color:#475569;}
       .llk-sub{font-size:.76rem;color:#64748b;margin-bottom:.65rem;line-height:1.35;}
       .llk-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:4px;}
       .llk-dow{font-size:.68rem;color:#64748b;text-align:center;font-weight:700;padding:2px 0;}
       .llk-day{border:1px solid #e2e8f0;border-radius:8px;padding:.5rem 0;text-align:center;font-size:.85rem;cursor:pointer;user-select:none;background:#fff;color:#0f172a;}
       .llk-day.disabled{opacity:.35;cursor:not-allowed;}
       .llk-day.locked{background:#475569;color:#fff;border-color:#475569;}
-      .llk-day.selected{outline:3px solid #0ea5e9;outline-offset:-2px;font-weight:700;}
+      .llk-day.range{background:#dbeafe;border-color:#bfdbfe;color:#0f172a;}
+      .llk-day.endpoint{background:#1d4ed8;color:#fff;border-color:#1d4ed8;font-weight:700;}
+      .llk-hint{font-size:.76rem;color:#1d4ed8;background:#eff6ff;border-radius:6px;padding:.35rem .55rem;margin-bottom:.55rem;font-weight:600;}
       .llk-legend{display:flex;gap:.8rem;font-size:.7rem;color:#64748b;margin-top:.55rem;align-items:center;flex-wrap:wrap;}
       .llk-chip{display:inline-block;width:12px;height:12px;border-radius:4px;vertical-align:-2px;margin-right:4px;}
+      .llk-monthbtn{width:100%;border:1px solid #cbd5e1;border-radius:8px;padding:.55rem;font-weight:600;font-size:.82rem;cursor:pointer;background:#f8fafc;color:#0f172a;margin-bottom:.7rem;display:flex;align-items:center;justify-content:center;gap:.4rem;}
+      .llk-monthbtn:hover{background:#eef2f7;}
+      .llk-note{font-size:.74rem;color:#b45309;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:.45rem .6rem;margin-bottom:.6rem;display:none;}
+      .llk-note.show{display:block;}
       .llk-foot{display:flex;gap:.5rem;margin-top:.8rem;}
       .llk-btn{flex:1;border:0;border-radius:8px;padding:.55rem .5rem;font-weight:600;cursor:pointer;font-size:.82rem;}
       .llk-lockb{background:#0f172a;color:#fff;}
@@ -277,19 +281,25 @@
     const ov = document.createElement("div");
     ov.id = "llk-overlay";
     ov.innerHTML = `<div class="llk-box">
-      <div class="llk-title" id="llk-title">Lock dates</div>
-      <div class="llk-sub">Tap dates to select, then lock or unlock them.
-        Locked dates can't be edited by anyone until an admin unlocks them.</div>
+      <div class="llk-head">
+        <div class="llk-title" id="llk-title">Lock dates</div>
+        <button class="llk-x" id="llk-close-btn" aria-label="Close">&times;</button>
+      </div>
+      <div class="llk-sub">Lock the whole month with the button below, or tap
+        individual dates and lock/unlock just those. Locked data can't be
+        edited by anyone until an admin unlocks it.</div>
+      <button class="llk-monthbtn" id="llk-month-btn">🔒 Lock whole month</button>
+      <div class="llk-note" id="llk-note"></div>
+      <div class="llk-hint" id="llk-hint"></div>
       <div class="llk-grid" id="llk-grid"></div>
       <div class="llk-legend">
         <span><span class="llk-chip" style="background:#475569;"></span>Locked</span>
         <span><span class="llk-chip" style="background:#fff;border:2px solid #0ea5e9;"></span>Selected</span>
         <span><span class="llk-chip" style="background:#e2e8f0;"></span>Future (n/a)</span>
       </div>
-      <div class="llk-foot">
+      <div class="llk-foot" id="llk-foot">
         <button class="llk-btn llk-lockb"   id="llk-lock-btn">🔒 Lock selected</button>
         <button class="llk-btn llk-unlockb" id="llk-unlock-btn">🔓 Unlock selected</button>
-        <button class="llk-btn llk-closeb"  id="llk-close-btn">✕</button>
       </div></div>`;
     document.body.appendChild(ov);
 
@@ -300,21 +310,73 @@
       () => ov.classList.remove("show");
     document.getElementById("llk-lock-btn").onclick   = () => _applyCalLock(true);
     document.getElementById("llk-unlock-btn").onclick = () => _applyCalLock(false);
+    // Whole-month lock/unlock (folds in the former standalone Lock Month
+    // button). Close the picker first; _setLaundryLock reloads the grid.
+    document.getElementById("llk-month-btn").onclick = () => {
+      const ov = document.getElementById("llk-overlay");
+      if (ov) ov.classList.remove("show");
+      _setLaundryLock(_gridLocks.monthLocked ? "unlock_month" : "lock_month", null);
+    };
   }
 
   function _openLockCalendar() {
     if (!_canManageLaundryLocks()) return;
-    if (_gridLocks.monthLocked) {
-      _notify("The whole month is locked — unlock the month first to manage single dates.", "error");
-      return;
-    }
     _ensureLockCalDom();
-    _lockCalSelected = new Set();
+    _lockStart = null;
+    _lockEnd   = null;
+
+    const monthLocked = !!_gridLocks.monthLocked;
 
     const title = document.getElementById("llk-title");
-    if (title) title.textContent = `Lock dates — ${_monthLabel(_gridMonth)}`;
+    if (title) title.textContent = `Locks — ${_monthLabel(_gridMonth)}`;
 
-    const grid  = document.getElementById("llk-grid");
+    // Whole-month toggle (replaces the former standalone Lock Month button).
+    const mbtn = document.getElementById("llk-month-btn");
+    if (mbtn) mbtn.textContent = monthLocked
+      ? "🔓 Unlock whole month"
+      : "🔒 Lock whole month";
+
+    // While the whole month is locked, single dates can't be managed (the
+    // server rejects it). Show a note and hide the per-date action buttons.
+    const note         = document.getElementById("llk-note");
+    const lockSelBtn   = document.getElementById("llk-lock-btn");
+    const unlockSelBtn = document.getElementById("llk-unlock-btn");
+    const foot         = document.getElementById("llk-foot");
+    if (note) {
+      note.textContent = monthLocked
+        ? "The whole month is locked. Unlock it above to manage single dates."
+        : "";
+      note.classList.toggle("show", monthLocked);
+    }
+    if (lockSelBtn)   lockSelBtn.style.display   = monthLocked ? "none" : "";
+    if (unlockSelBtn) unlockSelBtn.style.display = monthLocked ? "none" : "";
+    if (foot)         foot.style.display         = monthLocked ? "none" : "";
+
+    _renderLockCal();
+    document.getElementById("llk-overlay").classList.add("show");
+  }
+
+  // Renders the lock calendar for the current _lockStart/_lockEnd range.
+  // Re-called on every tap so the range highlight updates live.
+  function _renderLockCal() {
+    const monthLocked = !!_gridLocks.monthLocked;
+
+    const hint = document.getElementById("llk-hint");
+    if (hint) {
+      if (monthLocked) {
+        hint.style.display = "none";
+      } else {
+        hint.style.display = "";
+        hint.textContent = !_lockStart
+          ? "Tap a date. Tap a second date for a range."
+          : (!_lockEnd
+              ? `${_fmtDate(_lockStart)} selected — tap another for a range, or Lock / Unlock below.`
+              : `Range: ${_fmtDate(_lockStart)} → ${_fmtDate(_lockEnd)}`);
+      }
+    }
+
+    const grid = document.getElementById("llk-grid");
+    if (!grid) return;
     const today = _todayDate();
     const dows  = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
     let html = dows.map(d => `<div class="llk-dow">${d}</div>`).join("");
@@ -324,13 +386,23 @@
     const firstDow = new Date(y, m - 1, 1).getDay();
     for (let i = 0; i < firstDow; i++) html += `<div></div>`;
 
+    // Normalised range for highlighting the in-between days.
+    let rs = _lockStart, re = _lockEnd;
+    if (rs && re && re < rs) { const t = rs; rs = re; re = t; }
+
     _daysInMonth(_gridMonth).forEach(date => {
-      const dayNum   = parseInt(date.slice(8), 10);
-      const isFuture = date > today;
-      const locked   = _gridLocks.dates.has(date);
+      const dayNum     = parseInt(date.slice(8), 10);
+      const isFuture   = date > today;
+      const locked     = monthLocked || _gridLocks.dates.has(date);
+      // Selection is disabled for future dates and while the month is locked.
+      const disabled   = isFuture || monthLocked;
+      const isEndpoint = date === _lockStart || date === _lockEnd;
+      const inRange    = rs && re && date > rs && date < re;
       const cls = ["llk-day",
-                   isFuture ? "disabled" : "",
-                   locked ? "locked" : ""].filter(Boolean).join(" ");
+                   disabled ? "disabled" : "",
+                   locked ? "locked" : "",
+                   inRange ? "range" : "",
+                   isEndpoint ? "endpoint" : ""].filter(Boolean).join(" ");
       html += `<div class="${cls}" data-date="${date}">${dayNum}</div>`;
     });
     grid.innerHTML = html;
@@ -338,23 +410,33 @@
     grid.querySelectorAll(".llk-day:not(.disabled)").forEach(cell => {
       cell.onclick = function () {
         const d = cell.dataset.date;
-        if (_lockCalSelected.has(d)) {
-          _lockCalSelected.delete(d);
-          cell.classList.remove("selected");
+        if (!_lockStart || (_lockStart && _lockEnd)) {
+          // Fresh start (or restart after a completed range).
+          _lockStart = d;
+          _lockEnd   = null;
         } else {
-          _lockCalSelected.add(d);
-          cell.classList.add("selected");
+          // Second tap = end date (swap if before the start).
+          _lockEnd = d;
+          if (_lockEnd < _lockStart) {
+            const t = _lockStart; _lockStart = _lockEnd; _lockEnd = t;
+          }
         }
+        _renderLockCal();
       };
     });
-
-    document.getElementById("llk-overlay").classList.add("show");
   }
 
   async function _applyCalLock(lock) {
-    const dates = Array.from(_lockCalSelected).sort();
+    if (!_lockStart) {
+      _notify("Tap a date first", "error");
+      return;
+    }
+    let s = _lockStart, e = _lockEnd || _lockStart;
+    if (e < s) { const t = s; s = e; e = t; }
+    // Expand the (single-month) range to the inclusive list of dates.
+    const dates = _daysInMonth(_gridMonth).filter(d => d >= s && d <= e);
     if (!dates.length) {
-      _notify("Tap at least one date first", "error");
+      _notify("No dates selected", "error");
       return;
     }
     try {
@@ -374,7 +456,7 @@
       } else {
         _notify(res.message || "Failed", "error");
       }
-    } catch (e) {
+    } catch (e2) {
       _notify("Error updating locks", "error");
     }
   }
@@ -938,10 +1020,12 @@
 
   function _openBillRangeCal() {
     _ensureBillRangeCalDom();
-    const { from, to } = _getBillRange();
-    _lbrStart = from;
-    _lbrEnd   = to;
-    _lbrView  = from.slice(0, 7);
+    // Open with NOTHING pre-selected — the user taps a fresh start, then end.
+    // The current range still drives the bill until a new one is applied (or
+    // "Full month" is tapped). Show the month currently selected for billing.
+    _lbrStart = null;
+    _lbrEnd   = null;
+    _lbrView  = (_selectedBillMonth || _todayMonth());
     _renderBillRangeCal();
     document.getElementById("lbr-overlay").classList.add("show");
   }

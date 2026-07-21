@@ -5618,10 +5618,18 @@
 
           <!-- Toolbar: month navigation -->
           <div class="laundry-grid-toolbar">
-            <button class="laundry-nav-btn" id="laundry-grid-prev" title="Previous month">&#8249;</button>
-            <span class="laundry-grid-month-label" id="laundry-grid-month-label">—</span>
-            <button class="laundry-nav-btn" id="laundry-grid-next" title="Next month">&#8250;</button>
-            <input type="month" class="laundry-grid-month-inp" id="laundry-grid-month-inp" title="Jump to month" />
+            <div class="laundry-grid-nav">
+              <button class="laundry-nav-btn" id="laundry-grid-prev" title="Previous month">&#8249;</button>
+              <!-- Single month selector: the label IS the picker. A transparent
+                   month input overlays the pill, so tapping it opens the native
+                   month picker; the arrows step month-by-month. -->
+              <div class="laundry-grid-monthpick" title="Tap to jump to a month">
+                <span class="laundry-grid-month-label" id="laundry-grid-month-label">—</span>
+                <i class="fas fa-chevron-down laundry-grid-caret" aria-hidden="true"></i>
+                <input type="month" class="laundry-grid-month-inp" id="laundry-grid-month-inp" aria-label="Jump to month" />
+              </div>
+              <button class="laundry-nav-btn" id="laundry-grid-next" title="Next month">&#8250;</button>
+            </div>
             <div class="laundry-grid-legend">
               <span class="laundry-legend-item"><span class="laundry-legend-dot" style="background:#fefcbf;border:1px solid #f6e05e"></span>Sent</span>
               <span class="laundry-legend-item"><span class="laundry-legend-dot" style="background:#c6f6d5;border:1px solid #9ae6b4"></span>Received</span>

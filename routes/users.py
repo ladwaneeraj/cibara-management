@@ -577,6 +577,59 @@ def latest_audit_for_doc(collection: str, doc_id: str):
                        message="audit lookup unavailable (index missing or error)")
 
 
+@users_bp.route("/api/audit-logs/doc/<collection>/<doc_id>/all", methods=["GET"])
+@requires_role("admin", "manager", "housekeeping")
+def audit_for_doc_all(collection: str, doc_id: str):
+    """
+    Return the recent audit-log entries for a single target document, newest
+    first, for the per-bill / per-room activity TIMELINE popover. Companion to
+    latest_audit_for_doc (which returns only the single most recent entry).
+
+    Fails OPEN exactly like latest_audit_for_doc: on a missing composite index
+    or any query error we return HTTP 200 with entries=[] so the timeline UI
+    degrades to "no history yet" rather than surfacing a 500.
+    """
+    if not collection or not doc_id:
+        return jsonify(success=False, message="collection and doc_id required"), 400
+    try:
+        limit = int(request.args.get("limit", 20))
+    except (TypeError, ValueError):
+        limit = 20
+    limit = max(1, min(limit, 50))
+    try:
+        # Single equality filter on targetId (a unique doc id) is served by
+        # Firestore's automatic single-field index — NO composite index
+        # required. This deliberately avoids the (targetCollection, targetId,
+        # server_ts) composite index that the order_by version needs, so the
+        # timeline works even if that index was never created. We filter by
+        # targetCollection and sort newest-first in Python. `timestamp` is an
+        # IST string "YYYY-MM-DD HH:MM:SS" which sorts lexicographically =
+        # chronologically. A single doc has few audit rows, so this is cheap.
+        q = db.collection(AUDIT_COLLECTION).where("targetId", "==", str(doc_id))
+        rows = []
+        for doc in q.stream():
+            d = doc.to_dict() or {}
+            if collection and d.get("targetCollection") != collection:
+                continue
+            rows.append({
+                "action":    d.get("action"),
+                "userId":    d.get("userId"),
+                "userName":  d.get("userName"),
+                "userRole":  d.get("userRole"),
+                "timestamp": d.get("timestamp"),
+                "metadata":  d.get("metadata") or {},
+            })
+        rows.sort(key=lambda r: r.get("timestamp") or "", reverse=True)
+        return jsonify(success=True, entries=rows[:limit])
+    except Exception as e:
+        logger.warning(
+            f"audit_for_doc_all({collection}/{doc_id}) "
+            f"falling back to entries=[] due to: {e}"
+        )
+        return jsonify(success=True, entries=[], degraded=True,
+                       message="audit lookup unavailable (error)")
+
+
 # ─── Per-stay history ─────────────────────────────────────────────────────
 # Returns the audit trail for a single stay, scoped to the room and the
 # stay's time window. The audit log is the source of truth — querying it

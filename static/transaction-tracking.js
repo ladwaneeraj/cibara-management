@@ -776,9 +776,21 @@ class TransactionLogManager {
           </button>`;
       }
 
+      // Print voucher — only for a GST expense that has a receipt photo.
+      let printHtml = "";
+      if (log.has_gst && log.invoice_photo_url && log._doc_id) {
+        printHtml = `<button type="button"
+          class="txn-exp-print-btn"
+          data-doc-id="${String(log._doc_id).replace(/"/g, "&quot;")}"
+          title="Print invoice photo"
+          style="margin-left:5px;background:none;border:1px solid #cbd5e0;border-radius:5px;padding:1px 7px;font-size:0.7rem;color:#475569;cursor:pointer;line-height:1.6;">
+          <i class="fas fa-print"></i>
+        </button>`;
+      }
+
       titleContent = `<strong>${expenseLabel}</strong>
         <span style="font-size:0.7rem;background:#fed7d7;color:#c53030;border-radius:4px;padding:1px 6px;margin-left:4px;font-weight:500;">${catDisplay}</span>
-        ${gstBadge}${photoHtml}${adminActionsHtml}`;
+        ${gstBadge}${photoHtml}${printHtml}${adminActionsHtml}`;
     } else {
       titleContent = `Room ${log.room} - ${log.name}`;
     }
@@ -1593,6 +1605,59 @@ function addTransactionTrackingStyles() {
   document.head.appendChild(styleSheet);
 }
 
+// ── Print the attached invoice / receipt photo ──────────────────────────────
+function _escExpHtml(s) {
+  return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+    return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+  });
+}
+function _buildPhotoPrintHtml(url) {
+  // Print JUST the photo the user attached — scaled to fill the page while
+  // fitting on it. No header, tables, or voucher chrome.
+  return `<!DOCTYPE html><html><head><meta charset="utf-8" />
+    <title>Invoice photo</title>
+    <style>
+      @page { margin: 8mm; }
+      html, body { margin: 0; padding: 0; height: 100%; }
+      .wrap { width: 100%; height: 100%; display: flex; align-items: flex-start; justify-content: center; }
+      img { max-width: 100%; max-height: 98vh; object-fit: contain; }
+    </style></head>
+    <body><div class="wrap"><img src="${_escExpHtml(url)}" alt="Invoice photo" /></div></body></html>`;
+}
+// Print via a hidden iframe (no pop-up window, so it isn't blocked). Waits for
+// the photo to load before printing, with a safety timeout.
+function _printExpensePhoto(log) {
+  const url = log && log.invoice_photo_url;
+  if (!url) return;
+  const html = _buildPhotoPrintHtml(url);
+  const existing = document.getElementById("txn-exp-print-frame");
+  if (existing) existing.remove();
+  const ifr = document.createElement("iframe");
+  ifr.id = "txn-exp-print-frame";
+  ifr.setAttribute("aria-hidden", "true");
+  ifr.style.cssText = "position:fixed;right:0;bottom:0;width:0;height:0;border:0;visibility:hidden;";
+  document.body.appendChild(ifr);
+  const doc = ifr.contentWindow.document;
+  doc.open();
+  doc.write(html);
+  doc.close();
+  const win = ifr.contentWindow;
+  let printed = false;
+  const doPrint = () => {
+    if (printed) return;
+    printed = true;
+    try { win.focus(); win.print(); } catch (_e) { /* ignore */ }
+  };
+  const img = doc.querySelector("img");
+  if (img && !img.complete) {
+    img.addEventListener("load", doPrint);
+    img.addEventListener("error", doPrint);
+    setTimeout(doPrint, 2000); // safety net if the image is slow or blocked
+  } else {
+    setTimeout(doPrint, 250);
+  }
+}
+
 let transactionTracker;
 let transactionLogManager;
 
@@ -1655,6 +1720,16 @@ document.addEventListener("DOMContentLoaded", function () {
       } else {
         console.warn("openExpenseEditModal not loaded yet");
       }
+      return;
+    }
+
+    // Print GST expense voucher (with the attached receipt photo)
+    const printBtn = e.target.closest(".txn-exp-print-btn");
+    if (printBtn) {
+      e.preventDefault();
+      e.stopPropagation();
+      const log = _findLogByDocId(printBtn.getAttribute("data-doc-id"));
+      if (log) _printExpensePhoto(log);
       return;
     }
 

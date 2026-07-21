@@ -342,6 +342,67 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
 .bl-wa-btn.bl-wa-pending { background: #c8e6c9; color: #388e3c; cursor: pointer; }
 .bl-wa-btn.bl-wa-loading { background: #e0e0e0; color: #9e9e9e; cursor: wait; }
 
+/* ── Edit-guest action button (in table rows) ── */
+.bl-edit-btn {
+  width: 28px; height: 28px; padding: 0; border: none;
+  border-radius: 6px; cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 0.8rem; background: #e2e8f0; color: #475569;
+  transition: background .15s, color .15s; flex-shrink: 0;
+}
+.bl-edit-btn:hover { background: #cbd5e1; color: #1e293b; }
+
+/* ── Activity trail: just small colored icons under the guest name ── */
+/* Bare glyphs — WhatsApp (green), printed (blue), edited (amber). No text, no
+   chips. Sits on its own line under the name (display:flex + fit-content) and
+   is clickable to open the full timeline; who/when is in the hover tooltip. */
+.bl-act-strip { display: flex; width: fit-content; align-items: center; gap: 8px; margin-top: 4px; cursor: pointer; }
+.bl-act-i { font-size: .8rem; opacity: .85; transition: opacity .15s; }
+.bl-act-strip:hover .bl-act-i { opacity: 1; }
+.bl-act-wa    { color: #25D366; }
+.bl-act-print { color: #1e88e5; }
+.bl-act-edit  { color: #f59e0b; }
+
+.bl-edit-backdrop, .bl-hist-backdrop {
+  position: fixed; inset: 0; background: rgba(15,23,42,.45);
+  display: none; align-items: center; justify-content: center; z-index: 1200; padding: 16px;
+}
+.bl-edit-backdrop.show, .bl-hist-backdrop.show { display: flex; }
+.bl-edit-modal, .bl-hist-modal {
+  background: #fff; border-radius: 14px; width: 100%; max-width: 380px;
+  box-shadow: 0 20px 50px rgba(0,0,0,.25); padding: 18px 18px 16px; box-sizing: border-box;
+}
+.bl-edit-head, .bl-hist-head { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 4px; }
+.bl-edit-head h3, .bl-hist-head h3 { margin: 0; font-size: 1.02rem; color: #1e293b; }
+.bl-edit-x, .bl-hist-x { background: none; border: none; font-size: 1.4rem; line-height: 1; color: #94a3b8; cursor: pointer; }
+.bl-edit-sub, .bl-hist-sub { font-size: .76rem; color: #64748b; margin-bottom: 12px; }
+.bl-edit-label { display: block; font-size: .76rem; font-weight: 600; color: #475569; margin-bottom: 12px; }
+.bl-edit-label input {
+  display: block; width: 100%; margin-top: 5px; padding: 9px 11px;
+  border: 1px solid #cbd5e1; border-radius: 8px; font-size: .9rem; box-sizing: border-box;
+}
+.bl-edit-label input:focus { outline: none; border-color: #3f51b5; box-shadow: 0 0 0 3px rgba(63,81,181,.12); }
+.bl-edit-err { min-height: 16px; color: #dc2626; font-size: .74rem; margin-bottom: 8px; }
+.bl-edit-actions { display: flex; gap: 10px; justify-content: flex-end; }
+.bl-edit-cancel, .bl-edit-save { padding: 8px 16px; border-radius: 8px; font-size: .84rem; font-weight: 600; cursor: pointer; border: 1px solid transparent; }
+.bl-edit-cancel { background: #f1f5f9; color: #475569; border-color: #e2e8f0; }
+.bl-edit-save { background: #3f51b5; color: #fff; }
+.bl-edit-save:disabled { opacity: .6; cursor: wait; }
+
+.bl-hist-body { max-height: 60vh; overflow-y: auto; margin-top: 6px; }
+.bl-hist-state { color: #94a3b8; font-size: .82rem; text-align: center; padding: 22px 0; }
+.bl-hist-item { display: flex; gap: 10px; padding: 9px 2px; border-bottom: 1px solid #f1f5f9; }
+.bl-hist-item:last-child { border-bottom: none; }
+.bl-hist-dot { flex: 0 0 26px; width: 26px; height: 26px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: .72rem; background: #f1f5f9; color: #64748b; }
+.bl-hist-wa    { background: #e8f5e9; color: #2e7d32; }
+.bl-hist-print { background: #e3f2fd; color: #1565c0; }
+.bl-hist-edit  { background: #fff3e0; color: #e65100; }
+.bl-hist-pay   { background: #ede7f6; color: #5e35b1; }
+.bl-hist-gst   { background: #e0f2f1; color: #00695c; }
+.bl-hist-line { font-size: .84rem; color: #1e293b; }
+.bl-hist-to { color: #2e7d32; font-weight: 600; font-size: .78rem; }
+.bl-hist-meta { font-size: .72rem; color: #94a3b8; margin-top: 1px; }
+
 /* ── WhatsApp send modal ── */
 .bl-wa-backdrop {
   display: none; position: fixed; inset: 0;
@@ -2232,6 +2293,23 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
           return;
         }
 
+        // Edit guest name / phone
+        const editBtn = e.target.closest(".bl-edit-btn");
+        if (editBtn) {
+          e.stopPropagation();
+          const entry = state.allEntries.find((x) => x.id === editBtn.dataset.id);
+          if (entry) openEditGuestModal(entry);
+          return;
+        }
+
+        // Activity history timeline — the clickable strip under the guest name
+        const histStrip = e.target.closest(".bl-act-strip");
+        if (histStrip) {
+          e.stopPropagation();
+          openHistoryModal(histStrip.dataset.id, histStrip.dataset.billno);
+          return;
+        }
+
         const hdr = e.target.closest(".bl-date-header");
         if (hdr) toggleGroup(hdr);
       });
@@ -3027,6 +3105,9 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
     const waUrl = `https://wa.me/91${targetMobile}?text=${encoded}`;
 
     window.open(waUrl, "_blank", "noopener,noreferrer");
+    // Record the send on the bill's activity trail. Skip credit-note sends —
+    // those target a CN document, not the bill row.
+    if (!s._isCN) _logBillActivity(s.billId, "whatsapp", targetMobile);
     closeWhatsAppModal();
   }
 
@@ -3238,12 +3319,21 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
        <i class="fas fa-id-card-alt"></i>
      </button>`;
 
-    const actionCell = `<div style="display:inline-flex;gap:5px;align-items:center;flex-wrap:nowrap;justify-content:flex-end;">${collectSlot}${viewSlot}${_slot(waBtn)}${_slot(gstBtn)}</div>`;
+    // Edit guest name / phone — admin + manager via data-perm gating
+    // (auth.js hides it for anyone without bill.guest.edit).
+    const editBtn = `<button class="bl-edit-btn"
+       data-perm="bill.guest.edit"
+       data-id="${e.id}"
+       title="Edit guest name / phone">
+       <i class="fas fa-edit"></i>
+     </button>`;
+
+    const actionCell = `<div style="display:inline-flex;gap:5px;align-items:center;flex-wrap:nowrap;justify-content:flex-end;">${collectSlot}${viewSlot}${_slot(waBtn)}${_slot(gstBtn)}${_slot(editBtn)}</div>`;
 
     return `<tr class="${rowCls}" data-date-group="${dk}" data-entry-id="${e.id || ''}">
       <td style="color:#888;font-size:.75rem;">${rowIndex}</td>
       <td style="font-size:.73rem;white-space:nowrap;font-family:monospace;">${billNo}${pendingBadge}${b2bPill}${revertedPill}${cancelPill}</td>
-      <td><strong>${e.guest_name || "-"}</strong>${guestNoteHTML}</td>
+      <td><strong>${e.guest_name || "-"}</strong>${guestNoteHTML}${_activityStrip(e)}</td>
       <td style="font-size:.78rem;">${e.guest_mobile || "-"}</td>
       <td><strong>${e.room || "-"}</strong></td>
       <td style="font-size:.76rem;white-space:nowrap;">${fmtDT(e.checkin_time)}</td>
@@ -5544,10 +5634,313 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
     }
   }
 
+  // ═══════════════════════════════════════════════════════════════════════
+  //  Guest-detail edit  +  activity trail (WhatsApp / print / edits)
+  //  ---------------------------------------------------------------------
+  //  Admins & managers can correct a bill's guest name / phone, and every
+  //  row shows a compact "who did what" trail (sent on WhatsApp, printed,
+  //  edited) backed by the append-only audit log. Denormalised counters on
+  //  the bill drive the at-a-glance badges; the clock opens the full
+  //  timeline from /api/audit-logs/doc/bills/<id>/all.
+  // ═══════════════════════════════════════════════════════════════════════
+
+  function _blNotify(msg, type) {
+    if (typeof window.showNotification === "function") {
+      window.showNotification(msg, type || "info");
+    }
+  }
+
+  // Fire-and-forget: record a print / whatsapp action against a bill.
+  function _logBillActivity(billId, kind, to) {
+    if (!billId || (kind !== "print" && kind !== "whatsapp")) return;
+    try {
+      apiFetch("/log_bill_activity", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ bill_id: billId, kind: kind, to: to || "" }),
+      })
+        .then((r) => r.json())
+        .then(() => {
+          // Optimistic local bump so the badge appears immediately without
+          // waiting for the Firestore snapshot round-trip.
+          const entry = state.allEntries.find((x) => x.id === billId);
+          if (!entry) return;
+          entry.activity = entry.activity || {};
+          const slot = entry.activity[kind] || { count: 0 };
+          slot.count = (slot.count || 0) + 1;
+          entry.activity[kind] = slot;
+          applyFilters();
+        })
+        .catch(() => {});
+    } catch (_e) { /* never break the calling action */ }
+  }
+
+  // ── Row activity icons ──────────────────────────────────────────────────
+  // Just small colored icons under the guest name for what has happened on
+  // the bill: WhatsApp (green), printed (blue), edited (amber). No text, no
+  // chips. The who / when detail lives in the hover tooltip and the full
+  // timeline (click). Rows with no activity render nothing.
+  function _blRelTime(ts) {
+    if (!ts) return "";
+    const d = new Date(String(ts).replace(" ", "T"));
+    if (isNaN(d.getTime())) return "";
+    const s = Math.floor((Date.now() - d.getTime()) / 1000);
+    if (s < 60) return "just now";
+    if (s < 3600) return Math.floor(s / 60) + "m ago";
+    if (s < 86400) return Math.floor(s / 3600) + "h ago";
+    if (s < 604800) return Math.floor(s / 86400) + "d ago";
+    return d.toLocaleDateString(undefined, { day: "numeric", month: "short" });
+  }
+
+  // Plain-text summary for the hover tooltip so no info is lost with icons only.
+  function _blActTitle(e) {
+    const a = e.activity || {};
+    const lines = [];
+    if (a.whatsapp && a.whatsapp.count) {
+      lines.push("Sent on WhatsApp" + (a.whatsapp.count > 1 ? " ×" + a.whatsapp.count : "") +
+        (a.whatsapp.last_by ? " · " + a.whatsapp.last_by : "") +
+        (a.whatsapp.last_at ? " · " + _blRelTime(a.whatsapp.last_at) : ""));
+    }
+    if (a.print && a.print.count) {
+      lines.push("Printed" + (a.print.count > 1 ? " ×" + a.print.count : "") +
+        (a.print.last_by ? " · " + a.print.last_by : "") +
+        (a.print.last_at ? " · " + _blRelTime(a.print.last_at) : ""));
+    }
+    if (e.last_guest_edit) {
+      lines.push("Edited" +
+        (e.last_guest_edit.by ? " · " + e.last_guest_edit.by : "") +
+        (e.last_guest_edit.at ? " · " + _blRelTime(e.last_guest_edit.at) : ""));
+    }
+    lines.push("Click for full history");
+    return lines.join("\n");
+  }
+
+  function _activityStrip(e) {
+    const a = e.activity || {};
+    const icons = [];
+    if (a.whatsapp && a.whatsapp.count)
+      icons.push('<i class="fab fa-whatsapp bl-act-i bl-act-wa" aria-hidden="true"></i>');
+    if (a.print && a.print.count)
+      icons.push('<i class="fas fa-print bl-act-i bl-act-print" aria-hidden="true"></i>');
+    if (e.last_guest_edit)
+      icons.push('<i class="fas fa-pen bl-act-i bl-act-edit" aria-hidden="true"></i>');
+    if (!icons.length) return "";
+    const _bn = (e.bill_number || "").replace(/"/g, "&quot;");
+    return `<div class="bl-act-strip" data-id="${e.id}" data-billno="${_bn}" title="${_glockEsc(_blActTitle(e))}">${icons.join("")}</div>`;
+  }
+
+  // ── Edit guest details modal ────────────────────────────────────────────
+  const _blEdit = { billId: null };
+  function _ensureEditModal() {
+    if (dom("bl-edit-backdrop")) return;
+    const wrap = document.createElement("div");
+    wrap.className = "bl-edit-backdrop";
+    wrap.id = "bl-edit-backdrop";
+    wrap.innerHTML = `
+      <div class="bl-edit-modal" role="dialog" aria-modal="true">
+        <div class="bl-edit-head">
+          <h3>Edit guest details</h3>
+          <button type="button" class="bl-edit-x" aria-label="Close">&times;</button>
+        </div>
+        <div class="bl-edit-sub" id="bl-edit-sub"></div>
+        <label class="bl-edit-label">Guest name
+          <input type="text" id="bl-edit-name" maxlength="120" autocomplete="off" />
+        </label>
+        <label class="bl-edit-label">Mobile number
+          <input type="tel" id="bl-edit-mobile" inputmode="numeric" maxlength="10" autocomplete="off" placeholder="10-digit (or leave blank)" />
+        </label>
+        <div class="bl-edit-err" id="bl-edit-err"></div>
+        <div class="bl-edit-actions">
+          <button type="button" class="bl-edit-cancel">Cancel</button>
+          <button type="button" class="bl-edit-save">Save changes</button>
+        </div>
+      </div>`;
+    document.body.appendChild(wrap);
+    const close = () => wrap.classList.remove("show");
+    wrap.querySelector(".bl-edit-x").addEventListener("click", close);
+    wrap.querySelector(".bl-edit-cancel").addEventListener("click", close);
+    wrap.addEventListener("click", (ev) => { if (ev.target === wrap) close(); });
+    wrap.querySelector(".bl-edit-save").addEventListener("click", _saveEditGuest);
+    dom("bl-edit-mobile").addEventListener("input", (ev) => {
+      ev.target.value = ev.target.value.replace(/\D/g, "").slice(0, 10);
+    });
+  }
+
+  function openEditGuestModal(entry) {
+    _ensureEditModal();
+    _blEdit.billId = entry.id;
+    dom("bl-edit-sub").textContent =
+      "Bill " + (entry.bill_number || "—") + " · Room " + (entry.room || "—");
+    dom("bl-edit-name").value   = entry.guest_name || "";
+    dom("bl-edit-mobile").value = entry.guest_mobile || "";
+    dom("bl-edit-err").textContent = "";
+    dom("bl-edit-backdrop").classList.add("show");
+    setTimeout(() => { const n = dom("bl-edit-name"); if (n) n.focus(); }, 30);
+  }
+
+  async function _saveEditGuest() {
+    const billId = _blEdit.billId;
+    if (!billId) return;
+    const name    = (dom("bl-edit-name").value || "").trim();
+    const mobile  = (dom("bl-edit-mobile").value || "").replace(/\D/g, "");
+    const err     = dom("bl-edit-err");
+    const saveBtn = document.querySelector("#bl-edit-backdrop .bl-edit-save");
+    err.textContent = "";
+    if (!name) { err.textContent = "Guest name cannot be empty."; return; }
+    if (mobile && mobile.length !== 10) {
+      err.textContent = "Mobile must be a 10-digit number (or blank).";
+      return;
+    }
+    if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = "Saving…"; }
+    try {
+      const res = await apiFetch("/update_bill_guest", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ bill_id: billId, guest_name: name, guest_mobile: mobile }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.message || ("HTTP " + res.status));
+      const entry = state.allEntries.find((x) => x.id === billId);
+      if (entry) {
+        entry.guest_name   = data.guest_name   != null ? data.guest_name   : name;
+        entry.guest_mobile = data.guest_mobile != null ? data.guest_mobile : mobile;
+        if (data.last_guest_edit) entry.last_guest_edit = data.last_guest_edit;
+        applyFilters();
+      }
+      dom("bl-edit-backdrop").classList.remove("show");
+      _blNotify("Guest details updated", "success");
+    } catch (e2) {
+      err.textContent = (e2 && e2.message) || "Could not save changes.";
+    } finally {
+      if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = "Save changes"; }
+    }
+  }
+
+  // ── Activity history timeline modal ─────────────────────────────────────
+  function _ensureHistoryModal() {
+    if (dom("bl-hist-backdrop")) return;
+    const wrap = document.createElement("div");
+    wrap.className = "bl-hist-backdrop";
+    wrap.id = "bl-hist-backdrop";
+    wrap.innerHTML = `
+      <div class="bl-hist-modal" role="dialog" aria-modal="true">
+        <div class="bl-hist-head">
+          <div><h3>Activity history</h3><div class="bl-hist-sub" id="bl-hist-sub"></div></div>
+          <button type="button" class="bl-hist-x" aria-label="Close">&times;</button>
+        </div>
+        <div class="bl-hist-body" id="bl-hist-body"></div>
+      </div>`;
+    document.body.appendChild(wrap);
+    const close = () => wrap.classList.remove("show");
+    wrap.querySelector(".bl-hist-x").addEventListener("click", close);
+    wrap.addEventListener("click", (ev) => { if (ev.target === wrap) close(); });
+  }
+
+  const _BL_ACTION_META = {
+    "bill.print":         { label: "Printed",              icon: "fas fa-print",            kind: "print" },
+    "bill.whatsapp.sent": { label: "Sent on WhatsApp",     icon: "fab fa-whatsapp",         kind: "wa" },
+    "bill.guest.edit":    { label: "Edited guest details", icon: "fas fa-pen",              kind: "edit" },
+    "bill.gst.clear":     { label: "GST details cleared",  icon: "fas fa-id-card-alt",      kind: "gst" },
+    "payment.add":        { label: "Payment collected",    icon: "fas fa-hand-holding-usd", kind: "pay" },
+    "payment.edit":       { label: "Payment edited",       icon: "fas fa-hand-holding-usd", kind: "pay" },
+  };
+  function _blActionMeta(action) {
+    if (_BL_ACTION_META[action]) return _BL_ACTION_META[action];
+    if (action && action.indexOf("bill.gst") === 0)
+      return { label: "GST details updated", icon: "fas fa-id-card-alt", kind: "gst" };
+    return { label: action || "Activity", icon: "fas fa-info-circle", kind: "other" };
+  }
+  function _blHistTime(ts) {
+    if (!ts) return "";
+    const d = new Date(String(ts).replace(" ", "T"));
+    if (isNaN(d.getTime())) return ts;
+    return d.toLocaleString(undefined, {
+      day: "numeric", month: "short", hour: "2-digit", minute: "2-digit",
+    });
+  }
+  function _blHistItem(en) {
+    const m    = _blActionMeta(en.action);
+    const who  = en.userName || en.userId || "system";
+    const when = _blHistTime(en.timestamp);
+    let detail = "";
+    const meta = en.metadata || {};
+    if (m.kind === "wa" && meta.to) {
+      detail = ` <span class="bl-hist-to">→ +91 ${_glockEsc(String(meta.to))}</span>`;
+    }
+    return `<div class="bl-hist-item">
+      <span class="bl-hist-dot bl-hist-${m.kind}"><i class="${m.icon}"></i></span>
+      <div class="bl-hist-main">
+        <div class="bl-hist-line"><strong>${_glockEsc(m.label)}</strong>${detail}</div>
+        <div class="bl-hist-meta">${_glockEsc(who)} · ${_glockEsc(when)}</div>
+      </div>
+    </div>`;
+  }
+
+  // Fallback timeline built from the denormalised fields already on the row,
+  // used when the audit-log read returns nothing (e.g. missing index or a
+  // logging blip) so the modal still reflects the known last actions rather
+  // than showing a misleading "nothing here".
+  function _synthTimelineFromEntry(billId) {
+    const e = state.allEntries.find((x) => x.id === billId);
+    if (!e) return [];
+    const a = e.activity || {};
+    const out = [];
+    if (a.whatsapp && a.whatsapp.count)
+      out.push({ action: "bill.whatsapp.sent", userName: a.whatsapp.last_by, timestamp: a.whatsapp.last_at, metadata: {} });
+    if (a.print && a.print.count)
+      out.push({ action: "bill.print", userName: a.print.last_by, timestamp: a.print.last_at, metadata: {} });
+    if (e.last_guest_edit)
+      out.push({ action: "bill.guest.edit", userName: e.last_guest_edit.by, timestamp: e.last_guest_edit.at, metadata: {} });
+    out.sort((x, y) => String(y.timestamp || "").localeCompare(String(x.timestamp || "")));
+    return out;
+  }
+
+  async function openHistoryModal(billId, billNo) {
+    if (!billId) return;
+    _ensureHistoryModal();
+    dom("bl-hist-sub").textContent = "Bill " + (billNo || "—");
+    const body = dom("bl-hist-body");
+    body.innerHTML = `<div class="bl-hist-state">Loading…</div>`;
+    dom("bl-hist-backdrop").classList.add("show");
+    const _renderFallback = () => {
+      const synth = _synthTimelineFromEntry(billId);
+      body.innerHTML = synth.length
+        ? synth.map(_blHistItem).join("")
+        : `<div class="bl-hist-state">No activity recorded yet.</div>`;
+    };
+    try {
+      const res = await apiFetch(
+        "/api/audit-logs/doc/bills/" + encodeURIComponent(billId) + "/all?limit=25"
+      );
+      const data = await res.json();
+      const entries = (data && data.entries) || [];
+      if (!entries.length) { _renderFallback(); return; }
+      body.innerHTML = entries.map(_blHistItem).join("");
+    } catch (_e) {
+      _renderFallback();
+    }
+  }
+
   // ── Boot trigger (was missing — IIFE closer below) ────────────────────────
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", bootWhenReady);
   } else {
     bootWhenReady();
   }
+
+  // ── Public refresh contract ───────────────────────────────────────────────
+  // Consumed by the global header Refresh button (static/script.js). Mirrors
+  // register.js.
+  //   invalidate() clears the loaded-range marker so the NEXT time the tab is
+  //     shown, watchTab()'s MutationObserver-driven loadData(false) misses the
+  //     cache and re-fetches from the server. Used for the non-active tab.
+  //   refresh() forces an immediate re-fetch of the current range (identical
+  //     to clicking the in-tab refresh button). Used when this is the active
+  //     tab.
+  //   isLoaded() reports whether a range has ever been fetched this session.
+  window.CibaraBills = Object.freeze({
+    invalidate: function () { state.lastLoadedRange = null; },
+    refresh:    function () { return loadData(true); },
+    isLoaded:   function () { return state.lastLoadedRange !== null; },
+  });
 })();

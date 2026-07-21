@@ -5631,10 +5631,12 @@ document.addEventListener("DOMContentLoaded", function () {
     });
   }
 
-  // Refresh button — refreshes the currently-active tab with fresh
-  // (cache-bypassed) data. Always re-fetches the shared rooms/dashboard
-  // payload (rooms, logs, totals, upcoming bookings) and additionally
-  // delegates to the active tab's own refresh routine where one exists.
+  // Refresh button — refreshes ALL app data from the DB while preserving the
+  // current view/scroll/open modals. Always re-fetches the shared
+  // rooms/dashboard payload (rooms, logs, totals, upcoming bookings) with the
+  // cache bypassed, eagerly re-fetches the currently-visible tab, and
+  // invalidates the in-memory cache of every other data tab so the next time
+  // it is opened it re-fetches fresh from the server.
   if (refreshBtn) {
     refreshBtn.addEventListener("click", async () => {
       // Guard against double-clicks while a refresh is in flight.
@@ -5670,12 +5672,17 @@ document.addEventListener("DOMContentLoaded", function () {
       let minHoldMs = 0;
 
       const tasks = [];
-      // Always refresh the shared dashboard payload.
+      // Always refresh the shared dashboard payload (the Rooms cards AND the
+      // Transactions log both render from this).
       tasks.push(fetchData());
 
       try {
+        // 1) Eagerly refresh the CURRENTLY-VISIBLE tab so the user sees fresh
+        //    data immediately without switching away and back.
         switch (activeTab) {
           case "bookings":
+            // booking.js re-fetches on every tab open; force it now so a
+            // refresh while already on the Bookings tab updates the list.
             if (typeof window.fetchBookings === "function") {
               tasks.push(Promise.resolve(window.fetchBookings()));
             }
@@ -5699,12 +5706,40 @@ document.addEventListener("DOMContentLoaded", function () {
             }
             break;
           }
+          case "reports":
+            // The analytics report is not part of the /get_data payload, so
+            // force a regenerate when Reports is the active view.
+            if (typeof generateEnhancedReport === "function") {
+              tasks.push(Promise.resolve(generateEnhancedReport()));
+            }
+            break;
           case "transactions":
           case "rooms":
-          case "reports":
           default:
             // fetchData() already refreshes the data these views render.
             break;
+        }
+
+        // 2) Invalidate the in-memory cache of every OTHER data tab so the
+        //    next time it is opened it re-fetches from the DB. Register and
+        //    Bills each cache their loaded date-range; their own watchTab()
+        //    MutationObserver calls loadData(false) on tab-show, so clearing
+        //    the range marker turns that into a real server re-fetch. Bookings
+        //    re-fetches on every open and Reports regenerates on open, so
+        //    neither needs explicit invalidation here.
+        try {
+          if (activeTab !== "register" &&
+              window.CibaraRegister &&
+              typeof window.CibaraRegister.invalidate === "function") {
+            window.CibaraRegister.invalidate();
+          }
+          if (activeTab !== "bills" &&
+              window.CibaraBills &&
+              typeof window.CibaraBills.invalidate === "function") {
+            window.CibaraBills.invalidate();
+          }
+        } catch (invErr) {
+          console.warn("[refresh-btn] cache invalidation failed:", invErr);
         }
 
         const startedAt = Date.now();

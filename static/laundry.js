@@ -24,11 +24,13 @@
   // Admin data locks — a locked month/date renders read-only and the server
   // rejects writes for it (423). See routes/laundry.py laundry_locks.
   let _gridLocks  = { monthLocked: false, dates: new Set() };
-  let _monthlyData = null;
-  let _allBills    = [];
-  let _expenseType   = "transaction";
-  let _paymentMethod = "cash";
-  let _selectedBillMonth = _todayMonth();
+  // Billing tab — vendor account ledger (see TAB 2 section)
+  let _ledger         = null;           // /laundry/ledger response
+  let _billPanelData  = null;           // /laundry/monthly/<m> response
+  let _billPanelMonth = _todayMonth();
+  let _expenseType    = "transaction";
+  let _paymentMethod  = "cash";
+  let _adjustMode     = "add";          // "add" | "reduce" | "opening"
 
   // ── Helpers ────────────────────────────────────────────────────────────────
   function _todayMonth() { return new Date().toISOString().slice(0, 7); }
@@ -66,6 +68,7 @@
     else alert(msg);
   }
   function _inr(n) { return `₹${Number(n || 0).toLocaleString("en-IN")}`; }
+  function _num(n) { return Number(n || 0).toLocaleString("en-IN"); }
 
   async function _fetch(url, opts = {}) {
     const res = typeof apiFetch === "function"
@@ -95,13 +98,13 @@
     document.getElementById(`laundry-tab-${tab}`)?.classList.add("active");
     document.querySelector(`.laundry-tab-btn[data-tab="${tab}"]`)?.classList.add("active");
     if (tab === "bill") {
-      _loadAllBills();
-      _selectedBillMonth = _todayMonth();
-      const mp = document.getElementById("laundry-bill-month");
-      if (mp) mp.value = _selectedBillMonth;
-      const d = _billRangeDefaults(_selectedBillMonth);
+      _billPanelMonth = _todayMonth();
+      const mp = document.getElementById("lgr-bill-month");
+      if (mp) mp.value = _billPanelMonth;
+      const d = _billRangeDefaults(_billPanelMonth);
       _setBillRangeInputs(d.from, d.to);
-      _loadMonthlyData(_selectedBillMonth);
+      _showPanel(null);
+      _loadLedger();
     }
   }
 
@@ -756,76 +759,294 @@
   }
 
   // ══════════════════════════════════════════════════════════════════════════
-  // TAB 2 — MONTHLY BILL
+  // TAB 2 — BILLING (vendor account ledger)
   // ══════════════════════════════════════════════════════════════════════════
+  //
+  // One running account, like a bank passbook / hotel folio:
+  //     balance = opening + bills + adjustments − payments
+  // Bills ADD to the balance, payments SUBTRACT — partial or full makes
+  // no difference, the remainder carries forward automatically. There is
+  // no "Old Balance" field anywhere: that field was what caused the old
+  // double-counting confusion.
 
-  async function _loadAllBills() {
+  async function _loadLedger() {
+    const tbody = document.getElementById("lgr-statement-body");
+    if (tbody && !_ledger) {
+      tbody.innerHTML = `<tr><td colspan="6" class="lgr-empty">Loading…</td></tr>`;
+    }
     try {
-      const res = await _fetch("/laundry/all_bills");
-      _allBills = res.bills || [];
-      _renderBillHistory();
-    } catch (e) { console.error("loadAllBills", e); }
+      const res = await _fetch("/laundry/ledger");
+      if (res.success === false) {
+        _notify(res.message || "Failed to load ledger", "error");
+        return;
+      }
+      _ledger = res;
+      _renderLedger();
+    } catch (e) {
+      console.error("loadLedger", e);
+      if (tbody) tbody.innerHTML = `<tr><td colspan="6" class="lgr-empty">Error loading — try again</td></tr>`;
+    }
   }
 
-  function _renderBillHistory() {
-    const wrap = document.getElementById("laundry-bill-hist-body");
-    if (!wrap) return;
+  function _renderLedger() {
+    const s = (_ledger && _ledger.summary) || {};
+    const bal = s.balance || 0;
 
-    if (!_allBills.length) {
-      wrap.innerHTML = `<tr><td colspan="5" class="laundry-empty-state" style="padding:1rem">No bills yet</td></tr>`;
-      return;
+    // ── Summary strip ──
+    const balEl = document.getElementById("lgr-balance");
+    if (balEl) {
+      balEl.textContent = _inr(Math.abs(bal));
+      balEl.classList.toggle("settled", bal <= 0);
+    }
+    const lblEl = document.getElementById("lgr-balance-lbl");
+    if (lblEl) {
+      lblEl.textContent = bal < 0 ? "Advance with laundry"
+        : (bal === 0 ? "All settled" : "Balance due now");
+    }
+    const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+    set("lgr-total-billed", _inr((s.opening || 0) + (s.total_billed || 0) +
+      Math.max(0, s.total_adjustments || 0)));
+    set("lgr-total-paid",   _inr((s.total_paid || 0) +
+      Math.max(0, -(s.total_adjustments || 0))));
+
+    // ── Overlap warning (almost always a double-entered bill) ──
+    const warn = document.getElementById("lgr-overlap-warn");
+    if (warn) {
+      const ov = (_ledger && _ledger.overlaps) || [];
+      warn.hidden = !ov.length;
+      if (ov.length) {
+        const name = (id) => {
+          const b = ((_ledger && _ledger.bills) || []).find(x => x.id === id);
+          return b ? `“${_billPeriodName(b)}”` : "a bill";
+        };
+        const more = ov.length > 1 ? ` (+${ov.length - 1} more)` : "";
+        warn.innerHTML = `<b>Possible double billing:</b>
+          the bills ${name(ov[0].a)} and ${name(ov[0].b)} cover the same
+          dates${more}. If one is a mistake, delete it with the × on its row.`;
+      }
     }
 
-    const cur = _getBillRange();
-    wrap.innerHTML = _allBills.map(b => {
-      // Period bill = carries a period narrower than its full month.
-      const d = b.month ? _billRangeDefaults(b.month) : null;
-      const hasPeriod = !!(b.period_start && b.period_end && d &&
-        !(b.period_start === d.from && b.period_end === d.to));
-      const isSel = b.month === _selectedBillMonth &&
-        (hasPeriod
-          ? (b.period_start === cur.from && b.period_end === cur.to)
-          : (cur.from === (d && d.from) && cur.to === (d && d.to)));
-      const label = hasPeriod
-        ? `${_fmtDate(b.period_start)}–${_fmtDate(b.period_end)}`
-        : _fmtMonthShort(b.month);
-      const click = hasPeriod
-        ? `laundrySelectBillPeriod('${b.month}','${b.period_start}','${b.period_end}')`
-        : `laundrySelectBillMonth('${b.month}')`;
-      const bal   = b.balance || 0;
-      const paid  = b.paid_total != null ? b.paid_total : (b.paid_amount || 0);
-      const count = (b.payments || []).length;
-      const countBadge = count > 1
-        ? ` <span style="font-size:0.62rem;color:#64748b;font-weight:500">(${count} payments)</span>`
-        : "";
-      return `<tr class="${isSel ? "selected-hist" : ""}" style="cursor:pointer" onclick="${click}">
-        <td class="col-month" style="white-space:nowrap">${label}</td>
-        <td>${_inr(b.bill_amount)}</td>
-        <td>${_inr(paid)}${countBadge}</td>
-        <td class="col-bal ${bal === 0 ? "zero" : ""}">${_inr(bal)}</td>
-        <td style="font-size:0.68rem;color:var(--text-muted)">${b.bill_date || "—"}</td>
+    // ── Statement — classic ledger table (Date | Particulars | Bill | Paid | Balance)
+    const tbody = document.getElementById("lgr-statement-body");
+    if (!tbody) return;
+    const entries = (_ledger && _ledger.entries) || [];
+    const foot = document.getElementById("lgr-statement-foot");
+    if (!entries.length) {
+      tbody.innerHTML = `<tr><td colspan="6" class="lgr-empty">
+        Nothing here yet.<br>
+        <span>Use <b>Add Bill</b> when the laundry bills you, and
+        <b>Record Payment</b> when you pay.</span></td></tr>`;
+      if (foot) foot.innerHTML = "";
+      return;
+    }
+    tbody.innerHTML = entries.map(_ledgerRowHtml).join("");
+    if (foot) {
+      const billedTotal = (s.opening || 0) + (s.total_billed || 0) +
+        Math.max(0, s.total_adjustments || 0);
+      const paidTotal = (s.total_paid || 0) + Math.max(0, -(s.total_adjustments || 0));
+      foot.innerHTML = `<tr>
+        <td colspan="2">Total</td>
+        <td class="lgr-num">${_num(billedTotal)}</td>
+        <td class="lgr-num cr">${_num(paidTotal)}</td>
+        <td class="lgr-num ${bal <= 0 ? "ok" : "due"}">${bal < 0 ? "adv " : ""}${_num(Math.abs(bal))}</td>
+        <td></td>
       </tr>`;
-    }).join("");
+    }
+    // Latest entries sit at the bottom — bring them into view.
+    const scroller = document.getElementById("lgr-statement-scroll");
+    if (scroller) setTimeout(() => { scroller.scrollTop = scroller.scrollHeight; }, 60);
+
+    _updatePayPreview();
   }
 
-  // Open a specific PERIOD bill from the history list.
-  window.laundrySelectBillPeriod = function (month, from, to) {
-    _selectedBillMonth = month;
-    const mp = document.getElementById("laundry-bill-month");
-    if (mp) mp.value = month;
-    _setBillRangeInputs(from, to);
-    _renderBillHistory();
-    _loadMonthlyData(month, true);
+  // "July" for a full-month bill, "12 Jul – 21 Jul" for a part period.
+  function _billPeriodName(b) {
+    if (!b.period_start || !b.period_end) return b.month || "";
+    const d = b.month ? _billRangeDefaults(b.month) : null;
+    if (d && b.period_start === d.from && b.period_end === d.to) {
+      return _monthLabelOf(b.period_start).replace(/ \d+$/, "");
+    }
+    if (b.period_start.slice(0, 7) === b.period_end.slice(0, 7)) {
+      return `${parseInt(b.period_start.slice(8), 10)}–${_fmtDate(b.period_end)}`;
+    }
+    return `${_fmtDate(b.period_start)} – ${_fmtDate(b.period_end)}`;
+  }
+
+  function _monthLabelOf(dateStr) {
+    const d = new Date(dateStr + "T00:00:00");
+    if (isNaN(d)) return "Earlier";
+    return d.toLocaleString("en-IN", { month: "long", year: "numeric" });
+  }
+
+  function _esc(t) {
+    return String(t == null ? "" : t)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+  }
+
+  function _ledgerRowHtml(e) {
+    const when = e.date
+      ? `<span title="${e.date}">${_fmtDate(e.date)}</span>` : "—";
+    const rb = e.running_balance || 0;
+    const balCell = `<td class="lgr-num lgr-bal ${rb <= 0 ? "ok" : "due"}">${rb < 0 ? "adv " : ""}${_num(Math.abs(rb))}</td>`;
+    const dash = `<td class="lgr-num muted">—</td>`;
+
+    if (e.type === "bill") {
+      const period = _billPeriodName(e);
+      let chip;
+      if (e.status === "paid")         chip = `<span class="lgr-chip paid">Paid</span>`;
+      else if (e.status === "partial") chip = `<span class="lgr-chip partial">${_inr(e.due || 0)} left</span>`;
+      else                             chip = `<span class="lgr-chip due">Due</span>`;
+      return `<tr class="lgr-r bill">
+        <td class="lgr-when">${when}</td>
+        <td class="lgr-part">
+          <span class="lgr-part-main">Bill${period ? ` — ${period}` : ""}</span> ${chip}
+          ${e.pieces ? `<span class="lgr-part-sub">${e.pieces} pcs</span>` : ""}
+        </td>
+        <td class="lgr-num dr">${_num(e.effect)}</td>
+        ${dash}
+        ${balCell}
+        <td class="lgr-act">
+          <button class="lgr-icon-btn" title="Edit this bill"
+            onclick="laundryEditBill('${e.month}','${e.period_start}','${e.period_end}')"><i class="fas fa-pen"></i></button>
+          <button class="lgr-icon-btn danger" title="Delete this bill (payments are kept)"
+            onclick="laundryDeleteBill('${e.id}','${_esc(period)}')"><i class="fas fa-times"></i></button>
+        </td>
+      </tr>`;
+    }
+
+    if (e.type === "payment") {
+      const m = (e.method || "cash").toLowerCase();
+      const label = String(e.label || "");
+      const note = label.includes(" — ") ? label.split(" — ").slice(1).join(" — ") : "";
+      return `<tr class="lgr-r payment">
+        <td class="lgr-when">${when}</td>
+        <td class="lgr-part">
+          <span class="lgr-part-main">Payment</span>
+          <span class="lgr-part-sub">${_esc([m, note].filter(Boolean).join(" · "))}</span>
+        </td>
+        ${dash}
+        <td class="lgr-num cr">${_num(-e.effect)}</td>
+        ${balCell}
+        <td class="lgr-act">
+          <button class="lgr-icon-btn danger" title="Remove this payment"
+            onclick="laundryDeletePayment('${e.id}')"><i class="fas fa-times"></i></button>
+        </td>
+      </tr>`;
+    }
+
+    if (e.type === "adjustment") {
+      const drCell = e.effect > 0
+        ? `<td class="lgr-num dr">${_num(e.effect)}</td>` : dash;
+      const crCell = e.effect < 0
+        ? `<td class="lgr-num cr">${_num(-e.effect)}</td>` : dash;
+      return `<tr class="lgr-r adjustment">
+        <td class="lgr-when">${when}</td>
+        <td class="lgr-part">
+          <span class="lgr-part-main">Adjustment</span>
+          <span class="lgr-part-sub">${_esc(e.label || "")}</span>
+        </td>
+        ${drCell}
+        ${crCell}
+        ${balCell}
+        <td class="lgr-act">
+          <button class="lgr-icon-btn danger" title="Remove this adjustment"
+            onclick="laundryDeleteAdjustment('${e.id}')"><i class="fas fa-times"></i></button>
+        </td>
+      </tr>`;
+    }
+
+    // opening
+    return `<tr class="lgr-r opening">
+      <td class="lgr-when">${when}</td>
+      <td class="lgr-part">
+        <span class="lgr-part-main">Opening balance</span>
+      </td>
+      <td class="lgr-num dr">${_num(e.effect)}</td>
+      ${dash}
+      ${balCell}
+      <td class="lgr-act">
+        <button class="lgr-icon-btn" title="Change the opening balance"
+          onclick="laundryOpenCorrections('opening')"><i class="fas fa-pen"></i></button>
+      </td>
+    </tr>`;
+  }
+
+  // ── Panels (Add Bill / Record Payment / Corrections) ─────────────────────
+  function _showPanel(which) {
+    ["bill", "pay", "adjust"].forEach(k => {
+      const el = document.getElementById(`lgr-${k}-panel`);
+      if (el) el.hidden = (k !== which);
+    });
+    ["lgr-add-bill-btn", "lgr-add-pay-btn"].forEach(id => {
+      const b = document.getElementById(id);
+      if (b) b.classList.toggle("active",
+        (id === "lgr-add-bill-btn" && which === "bill") ||
+        (id === "lgr-add-pay-btn" && which === "pay"));
+    });
+    if (which) {
+      const el = document.getElementById(`lgr-${which}-panel`);
+      if (el) setTimeout(() => el.scrollIntoView({ block: "nearest", behavior: "smooth" }), 60);
+    }
+  }
+
+  // ── Row actions ───────────────────────────────────────────────────────────
+  window.laundryEditBill = function (month, from, to) {
+    if (month) {
+      _billPanelMonth = month;
+      const mp = document.getElementById("lgr-bill-month");
+      if (mp) mp.value = month;
+    }
+    if (from && to) _setBillRangeInputs(from, to);
+    _showPanel("bill");
+    _loadBillPanelData(true);
   };
 
-  window.laundrySelectBillMonth = function (month) {
-    _selectedBillMonth = month;
-    const mp = document.getElementById("laundry-bill-month");
-    if (mp) mp.value = month;
-    const d = _billRangeDefaults(month);
-    _setBillRangeInputs(d.from, d.to);
-    _renderBillHistory();
-    _loadMonthlyData(month);
+  window.laundryDeleteBill = async function (billId, label) {
+    if (!billId) return;
+    if (!confirm(`Delete the bill for ${label}?\n\nPayments are NOT touched — the balance simply recalculates.`)) return;
+    try {
+      const res = await _fetch("/laundry/bill/delete", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ bill_id: billId }),
+      });
+      if (res.success) { _notify(res.message || "Bill deleted"); _loadLedger(); }
+      else _notify(res.message || "Failed to delete bill", "error");
+    } catch (e) { _notify("Network error deleting bill", "error"); }
+  };
+
+  window.laundryDeletePayment = async function (paymentId) {
+    if (!paymentId) return;
+    if (!confirm("Remove this payment from the books?\n\nThe expense entry is deleted and the balance recalculates.")) return;
+    try {
+      const res = await _fetch("/laundry/payment/delete", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ payment_id: paymentId }),
+      });
+      if (res.success) { _notify(res.message || "Payment removed"); _loadLedger(); }
+      else _notify(res.message || "Failed to remove payment", "error");
+    } catch (e) { _notify("Network error removing payment", "error"); }
+  };
+
+  window.laundryDeleteAdjustment = async function (adjId) {
+    if (!adjId) return;
+    if (!confirm("Remove this adjustment?")) return;
+    try {
+      const res = await _fetch("/laundry/adjust/delete", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ adjustment_id: adjId }),
+      });
+      if (res.success) { _notify(res.message || "Adjustment removed"); _loadLedger(); }
+      else _notify(res.message || "Failed", "error");
+    } catch (e) { _notify("Network error", "error"); }
+  };
+
+  window.laundryOpenCorrections = function (mode) {
+    _showPanel("adjust");
+    _setAdjustMode(mode || "add");
   };
 
   // ── Billing period (from → to) ────────────────────────────────────────────
@@ -839,7 +1060,7 @@
     };
   }
   function _getBillRange() {
-    const d = _billRangeDefaults(_selectedBillMonth);
+    const d = _billRangeDefaults(_billPanelMonth);
     return {
       from: document.getElementById("laundry-bill-from")?.value || d.from,
       to:   document.getElementById("laundry-bill-to")?.value   || d.to,
@@ -853,7 +1074,7 @@
     // Single-selector button label
     const btn = document.getElementById("laundry-bill-range-btn");
     if (btn) {
-      const d = _billRangeDefaults(_selectedBillMonth);
+      const d = _billRangeDefaults(_billPanelMonth);
       btn.textContent = (from === d.from && to === d.to)
         ? "📅 Full month"
         : `📅 ${_fmtDate(from)} → ${_fmtDate(to)}`;
@@ -923,32 +1144,19 @@
     document.getElementById("lbr-prev").onclick = () => _lbrShiftMonth(-1);
     document.getElementById("lbr-next").onclick = () => _lbrShiftMonth(1);
     document.getElementById("lbr-full-btn").onclick = function () {
-      const d = _billRangeDefaults(_selectedBillMonth);
+      const d = _billRangeDefaults(_billPanelMonth);
       _applyBillRange(d.from, d.to);
     };
   }
 
-  // Payment status of the bill covering a date: "paid" (balance settled),
-  // "due" (billed, balance outstanding), or null (no bill covers the day).
-  // Legacy month bills without a period count as full-month coverage.
+  // Payment status of the bill covering a date: "paid" (FIFO-settled),
+  // "due" (billed, still owed), or null (no bill covers the day).
+  // Statuses come straight from the ledger — no local math.
   function _dayBillStatus(date) {
-    for (const b of _allBills) {
-      let s = b.period_start, e = b.period_end;
-      if (!s || !e) {
-        if (!b.month) continue;
-        const d = _billRangeDefaults(b.month);
-        s = d.from; e = d.to;
-      }
-      if (date >= s && date <= e) {
-        // Compare payments against the bill's OWN amount — NOT the running
-        // balance, which includes old balance carried from earlier bills.
-        // Otherwise one unpaid old bill would paint every later day red
-        // even when that day's own amount is fully paid. The shortfall
-        // stays red on the days of the bill that actually owes it.
-        const own  = (b.bill_amount != null) ? b.bill_amount : 0;
-        const paid = (b.paid_total != null) ? b.paid_total : (b.paid_amount || 0);
-        return paid >= own ? "paid" : "due";
-      }
+    for (const b of ((_ledger && _ledger.bills) || [])) {
+      const s = b.period_start, e = b.period_end;
+      if (!s || !e) continue;
+      if (date >= s && date <= e) return b.status === "paid" ? "paid" : "due";
     }
     return null;
   }
@@ -1015,7 +1223,7 @@
   function _applyBillRange(from, to) {
     document.getElementById("lbr-overlay")?.classList.remove("show");
     _setBillRangeInputs(from, to);
-    _loadMonthlyData(_selectedBillMonth, true);
+    _loadBillPanelData(true);
   }
 
   function _openBillRangeCal() {
@@ -1025,7 +1233,7 @@
     // "Full month" is tapped). Show the month currently selected for billing.
     _lbrStart = null;
     _lbrEnd   = null;
-    _lbrView  = (_selectedBillMonth || _todayMonth());
+    _lbrView  = (_billPanelMonth || _todayMonth());
     _renderBillRangeCal();
     document.getElementById("lbr-overlay").classList.add("show");
   }
@@ -1041,8 +1249,9 @@
     el.style.display = "block";
   }
 
-  async function _loadMonthlyData(month, skipRestore) {
+  async function _loadBillPanelData(skipRestore) {
     try {
+      const month = _billPanelMonth;
       const { from, to } = _getBillRange();
       const res = await _fetch(
         `/laundry/monthly/${month}?start=${from}&end=${to}`);
@@ -1050,29 +1259,44 @@
         _notify(res.message || "Failed to load month", "error");
         return;
       }
-      _monthlyData = res;
+      _billPanelData = res;
 
       // Reopening a saved bill: if it carries its own billing period and the
       // user hasn't picked one (inputs still at the full-month default),
-      // restore the saved range once so the form shows what was billed.
+      // restore the saved range once so the panel shows what was billed.
       const d = _billRangeDefaults(month);
       if (!skipRestore && res.bill &&
           res.bill.period_start && res.bill.period_end &&
           from === d.from && to === d.to &&
           (res.bill.period_start !== from || res.bill.period_end !== to)) {
         _setBillRangeInputs(res.bill.period_start, res.bill.period_end);
-        return _loadMonthlyData(month, true);
+        return _loadBillPanelData(true);
       }
 
-      _renderMonthlySummary(res.totals || {});
+      _renderBillPanelSummary(res.totals || {});
       _updateBillPeriodLabel(res);
-      _populateBillForm(res.bill);
-      _recalcAutoAmount();
-      _updateMonthlyCalc();
-    } catch (e) { console.error("loadMonthlyData", e); }
+      const auto = _recalcAutoAmount();
+
+      // Prefill: an existing bill for this exact period is being EDITED;
+      // otherwise it's a new bill, prefilled with the auto amount.
+      const set = (id, v) => { const el = document.getElementById(id); if (el) el.value = v; };
+      const note = document.getElementById("lgr-bill-editing-note");
+      if (res.bill) {
+        set("laundry-bill-amount", res.bill.bill_amount || "");
+        set("laundry-bill-date",   res.bill.bill_date || "");
+        if (note) {
+          note.hidden = false;
+          note.textContent = "A bill for this period is already saved — saving will update it.";
+        }
+      } else {
+        set("laundry-bill-amount", auto > 0 ? auto : "");
+        set("laundry-bill-date",   _todayDate());
+        if (note) note.hidden = true;
+      }
+    } catch (e) { console.error("loadBillPanelData", e); }
   }
 
-  function _renderMonthlySummary(totals) {
+  function _renderBillPanelSummary(totals) {
     const grid = document.getElementById("laundry-bill-summary-grid");
     if (!grid) return;
     grid.innerHTML = ITEMS.map(item => `
@@ -1086,311 +1310,199 @@
       </div>`;
   }
 
-  function _populateBillForm(bill) {
-    const set = (id, v) => { const el = document.getElementById(id); if (el) el.value = v; };
-    if (!bill) {
-      // Fresh month — clear bill fields so stale values from a previously
-      // viewed month don't bleed in. Only old_balance carries forward.
-      set("laundry-bill-amount", "");
-      set("laundry-bill-date",   "");
-      set("laundry-paid-amount", "");
-      // Opening balance chains from the PREVIOUS period bill (server walks
-      // all bills by period_end). Falls back to the legacy month walk.
-      const _sug = _monthlyData ? _monthlyData.suggested_old_balance : null;
-      set("laundry-old-balance",
-          (_sug != null) ? _sug : _getPrevBalance(_selectedBillMonth));
-      _renderPaymentHistory(null);
-      _updateMonthlyCalc();
-      return;
-    }
-    set("laundry-bill-amount",  bill.bill_amount  || "");
-    set("laundry-bill-date",    bill.bill_date    || "");
-    set("laundry-old-balance",  bill.old_balance  || 0);
-    // "Paying Now" is always blank when reopening an existing bill —
-    // it represents the amount paid in THIS transaction, not a running
-    // total. The running total + balance live in the payment history
-    // block below the form.
-    set("laundry-paid-amount", "");
-    if (bill.expense_type)   _setExpType(bill.expense_type);
-    if (bill.payment_method) _setPayMethod(bill.payment_method);
-    _renderPaymentHistory(bill);
-    _updateMonthlyCalc();
-  }
-
-  // ── Payment history block (per-bill list of partial payments) ─────────────
-  function _ensurePaymentHistoryContainer() {
-    let host = document.getElementById("laundry-payment-history");
-    if (host) return host;
-
-    if (!document.getElementById("laundry-payment-history-style")) {
-      const s = document.createElement("style");
-      s.id = "laundry-payment-history-style";
-      s.textContent = `
-        #laundry-payment-history {
-          margin: 0.6rem 0 0;
-          background: #ffffff;
-          border: 1px solid #e2e8f0;
-          border-radius: 8px;
-          overflow: hidden;
-          font-family: inherit;
-        }
-        .lph-header {
-          padding: 8px 12px;
-          background: #f8fafc;
-          border-bottom: 1px solid #e2e8f0;
-          font-size: 0.78rem;
-          font-weight: 600;
-          color: #334155;
-          display: flex; justify-content: space-between; align-items: center;
-        }
-        .lph-header .lph-totals { font-weight: 500; color: #64748b; font-size: 0.72rem; }
-        .lph-header .lph-totals strong { color: #0f172a; font-weight: 600; }
-        .lph-list { list-style: none; margin: 0; padding: 0; }
-        .lph-row {
-          display: grid;
-          grid-template-columns: 1fr auto auto auto;
-          gap: 10px; align-items: center;
-          padding: 7px 12px;
-          font-size: 0.78rem; color: #0f172a;
-          border-bottom: 1px solid #f1f5f9;
-        }
-        .lph-row:last-child { border-bottom: none; }
-        .lph-row .lph-when    { color: #475569; font-weight: 500; }
-        .lph-row .lph-method  {
-          font-size: 0.66rem; font-weight: 600; letter-spacing: 0.04em;
-          text-transform: uppercase;
-          padding: 2px 6px; border-radius: 4px;
-          color: #475569; background: #f1f5f9;
-        }
-        .lph-row .lph-method.cash { color: #047857; background: #ecfdf5; }
-        .lph-row .lph-method.online,
-        .lph-row .lph-method.upi  { color: #1d4ed8; background: #eff6ff; }
-        .lph-row .lph-amount { font-weight: 600; color: #0f172a; }
-        .lph-row .lph-del {
-          background: transparent; border: none; cursor: pointer;
-          color: #94a3b8; padding: 2px 6px; border-radius: 4px;
-          font-size: 0.85rem;
-        }
-        .lph-row .lph-del:hover { color: #b91c1c; background: #fef2f2; }
-        .lph-row.legacy .lph-del { display: none; }
-        .lph-empty { padding: 10px 12px; font-size: 0.76rem; color: #94a3b8; text-align: center; }
-`;
-      document.head.appendChild(s);
-    }
-
-    const totals = document.querySelector(".laundry-bill-totals");
-    host = document.createElement("div");
-    host.id = "laundry-payment-history";
-    if (totals && totals.parentNode) {
-      totals.parentNode.insertBefore(host, totals.nextSibling);
-    } else {
-      const scroll = document.querySelector(".laundry-bill-scroll, .modal-body, body");
-      (scroll || document.body).appendChild(host);
-    }
-    return host;
-  }
-
-  function _renderPaymentHistory(bill) {
-    const host = _ensurePaymentHistoryContainer();
-    const payments = (bill && bill.payments) || [];
-    const paidTotal = payments.reduce((s, p) => s + (p.amount || 0), 0);
-    const month     = bill && bill.month;
-    // Which dates these payments settle — shown in the header so every
-    // payment is unambiguously tied to its billed period.
-    const periodTxt = (bill && bill.period_start && bill.period_end)
-      ? ` <span style="font-weight:500;color:#64748b">· for ${_fmtDate(bill.period_start)} → ${_fmtDate(bill.period_end)}</span>`
-      : "";
-
-    if (!bill) {
-      host.innerHTML = "";
-      host.style.display = "none";
-      return;
-    }
-    host.style.display = "";
-
-    if (!payments.length) {
-      host.innerHTML = `
-        <div class="lph-header">
-          <span><i class="fas fa-history"></i> Payment History${periodTxt}</span>
-          <span class="lph-totals">No payments yet</span>
-        </div>
-        <div class="lph-empty">Use "Paying Now" above to record the first payment.</div>
-      `;
-      return;
-    }
-
-    const sorted = [...payments].sort((a, b) =>
-      (a.created_at || "").localeCompare(b.created_at || "")
-    );
-
-    const rows = sorted.map(p => {
-      const m = (p.method || "cash").toLowerCase();
-      const when = p.date
-        ? `${_fmtDate(p.date)}${p.time ? " " + p.time : ""}`
-        : "—";
-      const isLegacy = !!p.legacy;
-      const delBtn = isLegacy
-        ? "" // Legacy seeded entries have no real expense_id — hide delete
-        : `<button class="lph-del"
-                   title="Remove this payment (manager password required)"
-                   onclick="laundryDeletePayment('${month}','${p.id}','${(bill && bill.period_key) || ""}')">
-             <i class="fas fa-times"></i>
-           </button>`;
-      return `<li class="lph-row ${isLegacy ? "legacy" : ""}">
-        <span class="lph-when">${when}</span>
-        <span class="lph-method ${m}">${m}</span>
-        <span class="lph-amount">${_inr(p.amount || 0)}</span>
-        ${delBtn || '<span></span>'}
-      </li>`;
-    }).join("");
-
-    host.innerHTML = `
-      <div class="lph-header">
-        <span><i class="fas fa-history"></i> Payment History
-          <span style="font-weight:500;color:#64748b">(${payments.length})</span>${periodTxt}
-        </span>
-        <span class="lph-totals">Paid: <strong>${_inr(paidTotal)}</strong></span>
-      </div>
-      <ul class="lph-list">${rows}</ul>
-    `;
-  }
-
-  // Triggered by the trash icon on a payment-history row.
-  window.laundryDeletePayment = async function (month, paymentId, periodKey) {
-    if (!month || !paymentId) return;
-    const password = window.prompt(
-      "Manager password to remove this payment:",
-      ""
-    );
-    if (password === null) return;
-    if (!password) {
-      _notify("Password is required", "error");
-      return;
-    }
-    try {
-      const res = await _fetch("/laundry/payment/delete", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ month, payment_id: paymentId, password,
-                               period_key: periodKey || "" }),
-      });
-      if (res.success) {
-        _notify(res.message || "Payment removed");
-        _loadAllBills();
-        _loadMonthlyData(month);
-      } else {
-        _notify(res.message || "Failed to remove payment", "error");
-      }
-    } catch (e) {
-      _notify("Network error removing payment", "error");
-    }
-  };
-
-  function _getPrevBalance(currentMonth) {
-    // Find the bill just before currentMonth
-    const prev = _allBills
-      .filter(b => b.month < currentMonth)
-      .sort((a, b) => b.month.localeCompare(a.month))[0];
-    return prev?.balance || 0;
-  }
-
-  function _recalcAutoAmount() {
-    const totals = _monthlyData?.totals || {};
-    let auto = 0;
-    ITEMS.forEach(item => { auto += (totals[item.key] || 0) * (_prices[item.key] || 100); });
-    const hintEl = document.getElementById("laundry-auto-amount");
-    if (hintEl) hintEl.textContent = auto > 0 ? `Auto: ${_inr(auto)}` : "";
-    return auto;
-  }
-
-  function _updateMonthlyCalc() {
+  async function _submitBill() {
+    const month   = _billPanelMonth;
     const billAmt = parseInt(document.getElementById("laundry-bill-amount")?.value || 0) || 0;
-    const oldBal  = parseInt(document.getElementById("laundry-old-balance")?.value || 0) || 0;
-    const payNow  = parseInt(document.getElementById("laundry-paid-amount")?.value || 0) || 0;
-    const grand   = billAmt + oldBal;
+    if (!month)       { _notify("Select a month", "error"); return; }
+    if (billAmt <= 0) { _notify("Enter the bill amount", "error"); return; }
 
-    // Already-paid comes from the saved bill's payments[]. The live form
-    // math shows the balance AFTER this transaction would be saved.
-    const alreadyPaid = (_monthlyData?.bill?.payments || [])
-      .reduce((s, p) => s + (p.amount || 0), 0);
-    const balanceAfter = grand - alreadyPaid - payNow;
-
-    const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
-    set("laundry-bill-total-display",  _inr(billAmt));
-    set("laundry-old-bal-display",     _inr(oldBal));
-    set("laundry-grand-total-display", _inr(grand));
-    set(
-      "laundry-balance-display",
-      _inr(Math.abs(balanceAfter)) + (balanceAfter < 0 ? " (Overpaid)" : "")
-    );
-
-    const balValEl = document.getElementById("laundry-balance-display");
-    if (balValEl) balValEl.style.color = balanceAfter > 0 ? "#dc2626" : "#16a34a";
-
-    const balBox = document.getElementById("laundry-balance-box");
-    if (balBox) balBox.classList.toggle("zero", balanceAfter <= 0);
-  }
-
-  async function _submitMonthlyBill() {
-    const month   = document.getElementById("laundry-bill-month")?.value;
-    const billAmt = parseInt(document.getElementById("laundry-bill-amount")?.value || 0) || 0;
-    const oldBal  = parseInt(document.getElementById("laundry-old-balance")?.value || 0) || 0;
-    const paidAmt = parseInt(document.getElementById("laundry-paid-amount")?.value || 0) || 0;
-
-    if (!month) { _notify("Select a month", "error"); return; }
-    // Allow saving "totals only" with no payment, or a payment against an
-    // already-saved bill (billAmt may carry over from saved data).
-    const hasSavedBill = !!(_monthlyData && _monthlyData.bill);
-    if (billAmt <= 0 && !hasSavedBill) {
-      _notify("Enter bill amount", "error"); return;
-    }
-
-    const totals  = _monthlyData?.totals || {};
-    const _range  = _getBillRange();
+    const totals = _billPanelData?.totals || {};
+    const range  = _getBillRange();
     const payload = {
       month,
-      bill_date:      document.getElementById("laundry-bill-date")?.value || "",
-      bill_amount:    billAmt,
-      old_balance:    oldBal,
-      paid_amount:    paidAmt,
-      payment_method: _paymentMethod,
-      expense_type:   _expenseType,
-      // The date range the amount was calculated for — shown on the bill.
-      period_start:   _range.from,
-      period_end:     _range.to,
+      bill_date:    document.getElementById("laundry-bill-date")?.value || "",
+      bill_amount:  billAmt,
+      period_start: range.from,
+      period_end:   range.to,
     };
     ITEMS.forEach(item => {
       payload[`total_${item.key}`] = totals[item.key] || 0;
       payload[`price_${item.key}`] = _prices[item.key] || 100;
     });
 
-    const btn = document.getElementById("laundry-bill-submit-btn");
+    const btn = document.getElementById("lgr-bill-save-btn");
     if (btn) { btn.disabled = true; btn.textContent = "Saving…"; }
-
     try {
-      const res = await _fetch("/laundry/monthly", {
+      const res = await _fetch("/laundry/bill", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
       if (res.success) {
-        const balText = (res.balance != null) ? _inr(res.balance) : "—";
-        const msg = paidAmt > 0
-          ? `✓ Payment of ${_inr(paidAmt)} recorded. Balance: ${balText}`
-          : `✓ Bill saved. Balance: ${balText}`;
-        _notify(msg);
-        // Clear the "Paying Now" input so a stray re-submit doesn't double-post.
-        const pn = document.getElementById("laundry-paid-amount");
-        if (pn) pn.value = "";
-        _loadAllBills();
-        _loadMonthlyData(month);
+        const bal = res.summary ? res.summary.balance : null;
+        _notify(`✓ Bill saved${bal != null ? ` — balance now ${_inr(bal)}` : ""}`);
+        _showPanel(null);
+        _loadLedger();
       } else {
         _notify(res.message || "Failed to save bill", "error");
       }
     } catch (e) { _notify("Error saving bill", "error"); }
     finally {
-      if (btn) { btn.disabled = false; btn.textContent = "Save Bill & Record Expense"; }
+      if (btn) { btn.disabled = false; btn.textContent = "Save Bill"; }
     }
+  }
+
+  // ── Record Payment panel ──────────────────────────────────────────────────
+  function _openPayPanel() {
+    _showPanel("pay");
+    const amt = document.getElementById("lgr-pay-amount");
+    if (amt) { amt.value = ""; setTimeout(() => amt.focus(), 80); }
+    const dt = document.getElementById("lgr-pay-date");
+    if (dt) dt.value = _todayDate();
+    const note = document.getElementById("lgr-pay-note");
+    if (note) note.value = "";
+    const s = (_ledger && _ledger.summary) || {};
+    const fullBtn = document.getElementById("lgr-pay-full-btn");
+    if (fullBtn) {
+      const due = Math.max(0, s.balance || 0);
+      fullBtn.hidden = due <= 0;
+      fullBtn.textContent = `Full balance · ${_inr(due)}`;
+      fullBtn.dataset.amount = due;
+    }
+    _updatePayPreview();
+  }
+
+  // Live line under the amount: what the balance becomes after this payment.
+  function _updatePayPreview() {
+    const el = document.getElementById("lgr-pay-preview");
+    if (!el) return;
+    const s = (_ledger && _ledger.summary) || {};
+    const bal = s.balance || 0;
+    const amt = parseInt(document.getElementById("lgr-pay-amount")?.value || 0) || 0;
+    if (amt <= 0) {
+      el.textContent = bal > 0
+        ? `Balance due: ${_inr(bal)}`
+        : (bal < 0 ? `Advance with laundry: ${_inr(-bal)}` : "All settled ✓");
+      el.className = "lgr-pay-preview";
+      return;
+    }
+    const after = bal - amt;
+    if (after > 0) {
+      el.textContent = `After this payment, ${_inr(after)} stays as balance (carries forward automatically).`;
+      el.className = "lgr-pay-preview due";
+    } else if (after === 0) {
+      el.textContent = "This settles the account fully. ✓";
+      el.className = "lgr-pay-preview ok";
+    } else {
+      el.textContent = `This overpays by ${_inr(-after)} — it will show as an advance.`;
+      el.className = "lgr-pay-preview adv";
+    }
+  }
+
+  async function _submitPayment() {
+    const amt = parseInt(document.getElementById("lgr-pay-amount")?.value || 0) || 0;
+    if (amt <= 0) { _notify("Enter the amount you're paying", "error"); return; }
+    const payload = {
+      amount:         amt,
+      payment_method: _paymentMethod,
+      expense_type:   _expenseType,
+      date:           document.getElementById("lgr-pay-date")?.value || "",
+      note:           (document.getElementById("lgr-pay-note")?.value || "").trim(),
+    };
+    const btn = document.getElementById("lgr-pay-save-btn");
+    if (btn) { btn.disabled = true; btn.textContent = "Saving…"; }
+    try {
+      const res = await _fetch("/laundry/pay", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (res.success) {
+        const bal = res.summary ? res.summary.balance : null;
+        _notify(`✓ Payment of ${_inr(amt)} recorded` +
+          (bal != null
+            ? (bal > 0 ? ` — ${_inr(bal)} balance remains`
+               : (bal < 0 ? ` — ${_inr(-bal)} advance` : " — fully settled"))
+            : ""));
+        _showPanel(null);
+        _loadLedger();
+      } else {
+        _notify(res.message || "Failed to record payment", "error");
+      }
+    } catch (e) { _notify("Error recording payment", "error"); }
+    finally {
+      if (btn) { btn.disabled = false; btn.textContent = "Record Payment"; }
+    }
+  }
+
+  // ── Corrections panel (adjustments + opening balance) ────────────────────
+  function _setAdjustMode(mode) {
+    _adjustMode = mode;
+    document.querySelectorAll(".lgr-adjust-mode-btn").forEach(b => {
+      b.classList.toggle("active", b.dataset.adjmode === mode);
+    });
+    const hint = document.getElementById("lgr-adjust-hint");
+    if (hint) {
+      hint.textContent =
+        mode === "add"     ? "Adds to what you owe (e.g. a missed charge)." :
+        mode === "reduce"  ? "Reduces what you owe (e.g. a discount or counting mistake)." :
+        "The amount owed from before this ledger started. Set once; edit only to correct it.";
+    }
+    const amtEl = document.getElementById("lgr-adjust-amount");
+    if (amtEl && mode === "opening") {
+      const s = (_ledger && _ledger.summary) || {};
+      amtEl.value = s.opening || 0;
+    }
+  }
+
+  async function _submitAdjustment() {
+    const amt  = parseInt(document.getElementById("lgr-adjust-amount")?.value || 0) || 0;
+    const note = (document.getElementById("lgr-adjust-note")?.value || "").trim();
+    const date = document.getElementById("lgr-adjust-date")?.value || "";
+
+    const btn = document.getElementById("lgr-adjust-save-btn");
+    if (btn) { btn.disabled = true; btn.textContent = "Saving…"; }
+    try {
+      let res;
+      if (_adjustMode === "opening") {
+        if (amt < 0) { _notify("Opening balance can't be negative", "error"); return; }
+        res = await _fetch("/laundry/opening", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ opening_balance: amt, opening_date: date, note }),
+        });
+      } else {
+        if (amt <= 0) { _notify("Enter an amount above zero", "error"); return; }
+        if (!note)    { _notify("A short note is required — say why", "error"); return; }
+        res = await _fetch("/laundry/adjust", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            amount: _adjustMode === "reduce" ? -amt : amt,
+            note, date,
+          }),
+        });
+      }
+      if (res.success) {
+        _notify(res.message || "Saved");
+        _showPanel(null);
+        _loadLedger();
+      } else {
+        _notify(res.message || "Failed", "error");
+      }
+    } catch (e) { _notify("Error saving", "error"); }
+    finally {
+      if (btn) { btn.disabled = false; btn.textContent = "Save"; }
+    }
+  }
+
+  function _recalcAutoAmount() {
+    const totals = _billPanelData?.totals || {};
+    let auto = 0;
+    ITEMS.forEach(item => { auto += (totals[item.key] || 0) * (_prices[item.key] || 100); });
+    const hintEl = document.getElementById("laundry-auto-amount");
+    if (hintEl) hintEl.textContent = auto > 0 ? `Auto: ${_inr(auto)}` : "";
+    return auto;
   }
 
   function _setExpType(type) {
@@ -1434,30 +1546,72 @@
       _loadGrid(_gridMonth);
     });
 
-    // Bill month picker — switching months resets the range to the full month
-    document.getElementById("laundry-bill-month")?.addEventListener("change", e => {
-      _selectedBillMonth = e.target.value;
-      const d = _billRangeDefaults(e.target.value);
-      _setBillRangeInputs(d.from, d.to);
-      _renderBillHistory();
-      _loadMonthlyData(e.target.value);
+    // ── Billing tab (ledger) wiring ─────────────────────────────────────────
+    // Panel open/close buttons
+    document.getElementById("lgr-add-bill-btn")?.addEventListener("click", () => {
+      const panel = document.getElementById("lgr-bill-panel");
+      if (panel && !panel.hidden) { _showPanel(null); return; }
+      _showPanel("bill");
+      _loadBillPanelData();
     });
-
-    // Billing period — single range selector (tap start, tap end)
-    document.getElementById("laundry-bill-range-btn")
-      ?.addEventListener("click", _openBillRangeCal);
-
-    // Bill amount / old bal / paid — live calc
-    ["laundry-bill-amount", "laundry-old-balance", "laundry-paid-amount"].forEach(id =>
-      document.getElementById(id)?.addEventListener("input", _updateMonthlyCalc)
+    document.getElementById("lgr-add-pay-btn")?.addEventListener("click", () => {
+      const panel = document.getElementById("lgr-pay-panel");
+      if (panel && !panel.hidden) { _showPanel(null); return; }
+      _openPayPanel();
+    });
+    // "⋯" menu (Corrections / Edit Prices)
+    const moreBtn = document.getElementById("lgr-more-btn");
+    const moreMenu = document.getElementById("lgr-more-menu");
+    if (moreBtn && moreMenu) {
+      moreBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        moreMenu.hidden = !moreMenu.hidden;
+      });
+      moreMenu.addEventListener("click", () => { moreMenu.hidden = true; });
+      document.addEventListener("click", (e) => {
+        if (!moreMenu.hidden && !moreMenu.contains(e.target) && e.target !== moreBtn) {
+          moreMenu.hidden = true;
+        }
+      });
+    }
+    document.getElementById("lgr-corrections-btn")?.addEventListener("click", () => {
+      const panel = document.getElementById("lgr-adjust-panel");
+      if (panel && !panel.hidden) { _showPanel(null); return; }
+      window.laundryOpenCorrections("add");
+    });
+    document.querySelectorAll(".lgr-panel-close").forEach(btn =>
+      btn.addEventListener("click", () => _showPanel(null))
     );
 
-    // Use auto amount
+    // Add Bill panel — month picker resets the range to the full month
+    document.getElementById("lgr-bill-month")?.addEventListener("change", e => {
+      _billPanelMonth = e.target.value;
+      const d = _billRangeDefaults(e.target.value);
+      _setBillRangeInputs(d.from, d.to);
+      _loadBillPanelData();
+    });
+    document.getElementById("laundry-bill-range-btn")
+      ?.addEventListener("click", _openBillRangeCal);
     document.getElementById("laundry-use-auto-btn")?.addEventListener("click", () => {
       const auto = _recalcAutoAmount();
       const el = document.getElementById("laundry-bill-amount");
-      if (el) { el.value = auto; _updateMonthlyCalc(); }
+      if (el) el.value = auto;
     });
+    document.getElementById("lgr-bill-save-btn")?.addEventListener("click", _submitBill);
+
+    // Record Payment panel
+    document.getElementById("lgr-pay-amount")?.addEventListener("input", _updatePayPreview);
+    document.getElementById("lgr-pay-full-btn")?.addEventListener("click", function () {
+      const el = document.getElementById("lgr-pay-amount");
+      if (el) { el.value = this.dataset.amount || ""; _updatePayPreview(); }
+    });
+    document.getElementById("lgr-pay-save-btn")?.addEventListener("click", _submitPayment);
+
+    // Corrections panel
+    document.querySelectorAll(".lgr-adjust-mode-btn").forEach(btn =>
+      btn.addEventListener("click", () => _setAdjustMode(btn.dataset.adjmode))
+    );
+    document.getElementById("lgr-adjust-save-btn")?.addEventListener("click", _submitAdjustment);
 
     // Expense type buttons
     document.querySelectorAll(".laundry-toggle-btn[data-exptype]").forEach(btn =>
@@ -1487,9 +1641,6 @@
       }
     });
     document.getElementById("laundry-save-prices-btn")?.addEventListener("click", _savePrices);
-
-    // Submit bill
-    document.getElementById("laundry-bill-submit-btn")?.addEventListener("click", _submitMonthlyBill);
 
     // Set defaults
     _setExpType("transaction");

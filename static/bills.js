@@ -343,14 +343,6 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
 .bl-wa-btn.bl-wa-loading { background: #e0e0e0; color: #9e9e9e; cursor: wait; }
 
 /* ── Edit-guest action button (in table rows) ── */
-.bl-edit-btn {
-  width: 28px; height: 28px; padding: 0; border: none;
-  border-radius: 6px; cursor: pointer;
-  display: inline-flex; align-items: center; justify-content: center;
-  font-size: 0.8rem; background: #e2e8f0; color: #475569;
-  transition: background .15s, color .15s; flex-shrink: 0;
-}
-.bl-edit-btn:hover { background: #cbd5e1; color: #1e293b; }
 
 /* ── Activity trail: just small colored icons under the guest name ── */
 /* Bare glyphs — WhatsApp (green), printed (blue), edited (amber). No text, no
@@ -2294,19 +2286,25 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
         }
 
         // Edit guest name / phone
-        const editBtn = e.target.closest(".bl-edit-btn");
-        if (editBtn) {
-          e.stopPropagation();
-          const entry = state.allEntries.find((x) => x.id === editBtn.dataset.id);
-          if (entry) openEditGuestModal(entry);
-          return;
-        }
-
         // Activity history timeline — the clickable strip under the guest name
         const histStrip = e.target.closest(".bl-act-strip");
         if (histStrip) {
           e.stopPropagation();
           openHistoryModal(histStrip.dataset.id, histStrip.dataset.billno);
+          return;
+        }
+
+        // Guest name / mobile cell → edit modal (no icon; permission
+        // checked at click time so the cell stays inert for other roles).
+        const guestCell = e.target.closest(".bl-guest-cell");
+        if (guestCell) {
+          const can = window.CibaraAuth &&
+            typeof window.CibaraAuth.userCan === "function" &&
+            window.CibaraAuth.userCan("bill.guest.edit");
+          if (!can) return;
+          e.stopPropagation();
+          const entry = state.allEntries.find((x) => x.id === guestCell.dataset.id);
+          if (entry) openEditGuestModal(entry);
           return;
         }
 
@@ -3319,22 +3317,19 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
        <i class="fas fa-id-card-alt"></i>
      </button>`;
 
-    // Edit guest name / phone — admin + manager via data-perm gating
-    // (auth.js hides it for anyone without bill.guest.edit).
-    const editBtn = `<button class="bl-edit-btn"
-       data-perm="bill.guest.edit"
-       data-id="${e.id}"
-       title="Edit guest name / phone">
-       <i class="fas fa-edit"></i>
-     </button>`;
-
-    const actionCell = `<div style="display:inline-flex;gap:5px;align-items:center;flex-wrap:nowrap;justify-content:flex-end;">${collectSlot}${viewSlot}${_slot(waBtn)}${_slot(gstBtn)}${_slot(editBtn)}</div>`;
+    // Guest name / phone editing has no button — clicking the name or
+    // mobile CELL opens the modal (see the .bl-guest-cell delegation;
+    // permission-checked at click time via bill.guest.edit).
+    const actionCell = `<div style="display:inline-flex;gap:5px;align-items:center;flex-wrap:nowrap;justify-content:flex-end;">${collectSlot}${viewSlot}${_slot(waBtn)}${_slot(gstBtn)}</div>`;
 
     return `<tr class="${rowCls}" data-date-group="${dk}" data-entry-id="${e.id || ''}">
       <td style="color:#888;font-size:.75rem;">${rowIndex}</td>
       <td style="font-size:.73rem;white-space:nowrap;font-family:monospace;">${billNo}${pendingBadge}${b2bPill}${revertedPill}${cancelPill}</td>
-      <td><strong>${e.guest_name || "-"}</strong>${guestNoteHTML}${_activityStrip(e)}</td>
-      <td style="font-size:.78rem;">${e.guest_mobile || "-"}</td>
+      <td class="bl-guest-cell" data-id="${e.id || ''}"
+          title="Edit guest name / phone"><strong>${e.guest_name || "-"}</strong>${guestNoteHTML}${_activityStrip(e)}</td>
+      <td class="bl-guest-cell" data-id="${e.id || ''}"
+          title="Edit guest name / phone"
+          style="font-size:.78rem;">${e.guest_mobile || "-"}</td>
       <td><strong>${e.room || "-"}</strong></td>
       <td style="font-size:.76rem;white-space:nowrap;">${fmtDT(e.checkin_time)}</td>
       <td style="font-size:.76rem;white-space:nowrap;">${fmtDT(e.checkout_time)}</td>

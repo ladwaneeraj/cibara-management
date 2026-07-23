@@ -2224,6 +2224,210 @@ def update_checkin_time():
         return jsonify(success=False, message=f"Error updating check-in time: {str(e)}")
 
 
+@rooms_bp.route("/update_stay_times", methods=["POST"])
+@requires_permission("stay.times.edit")   # not granted to any non-admin role → admin-only
+def update_stay_times():
+    """
+    Edit check-in AND checkout date/time on a COMPLETED stay, from the
+    Register tab. Active stays keep using /update_checkin_time (which
+    handles the live room doc, the manager one-edit rule, and renewals).
+
+    Body: { bill_id, checkin_time "YYYY-MM-DD HH:MM",
+            checkout_time "YYYY-MM-DD HH:MM" }
+
+    What this DOES:
+      • updates the bill doc's checkin_time / checkout_time (timestamps only)
+      • moves the stay's first check-in payment (fresh_checkin /
+        booking_conversion) to the new check-in date+time, so the
+        Transactions tab and daily serials stay consistent
+      • re-ranks daily serials (#) for every affected check-in day via
+        renumber_day_serials — payments, transaction_metadata, bill docs
+        and the day counter all move together
+      • appends an audit entry on the bill (stay_time_edits[]) + audit log
+
+    What this deliberately does NOT do (loophole guards):
+      • never touches amounts — if the new dates imply a different night
+        count than billed, the response carries a `warning` and the
+        operator adjusts the price explicitly
+      • rejects edits when either the old or the new checkout month is
+        GST-locked (GSTR-1 filed)
+      • rejects moving an INVOICED bill's checkout into a different month
+        (bill numbers embed YYYY/MM and are sequential per GST)
+      • rejects future timestamps and checkout ≤ check-in
+    """
+    try:
+        data = request.json or {}
+        bill_id    = (data.get("bill_id") or "").strip()
+        new_ci_raw = (data.get("checkin_time") or "").strip()[:16]
+        new_co_raw = (data.get("checkout_time") or "").strip()[:16]
+        if not bill_id or not new_ci_raw or not new_co_raw:
+            return jsonify(success=False,
+                           message="bill_id, checkin_time and checkout_time "
+                                   "are required"), 400
+        try:
+            new_ci = datetime.strptime(new_ci_raw, "%Y-%m-%d %H:%M")
+            new_co = datetime.strptime(new_co_raw, "%Y-%m-%d %H:%M")
+        except ValueError:
+            return jsonify(success=False,
+                           message="Times must be 'YYYY-MM-DD HH:MM'"), 400
+        if new_co <= new_ci:
+            return jsonify(success=False,
+                           message="Checkout must be after check-in"), 400
+        _now_naive = datetime.now(IST).replace(tzinfo=None)
+        if new_ci > _now_naive or new_co > _now_naive:
+            return jsonify(success=False,
+                           message="Stay times can't be in the future"), 400
+
+        bill = bills_service.get(bill_id)
+        if not bill:
+            return jsonify(success=False, message="Stay not found"), 404
+        old_ci_raw = (bill.get("checkin_time") or "")[:16]
+        old_co_raw = (bill.get("checkout_time") or "")[:16]
+        status     = bill.get("status") or ""
+        if status == "cancelled":
+            return jsonify(success=False,
+                           message="This stay is cancelled — nothing to edit"), 400
+        if not old_co_raw or status in ("draft", "active"):
+            return jsonify(success=False,
+                           message="Guest is still checked in — use the "
+                                   "check-in time editor on the room card"), 400
+
+        # ── GST month locks: neither the old nor the new checkout month may
+        #    be filed. (The checkout month is the GSTR-1 period.)
+        for _d in (old_co_raw[:10], new_co_raw[:10]):
+            try:
+                if _d and is_month_locked(_d):
+                    return jsonify(success=False, locked=True,
+                                   message=f"GST period {_d[:7]} is locked "
+                                           f"(GSTR-1 filed) — stay dates in "
+                                           f"that month can't be changed."), 423
+            except Exception as _lk_e:
+                logger.warning(f"update_stay_times: lock check failed: {_lk_e}")
+
+        # ── Invoiced bills: checkout month is baked into the bill number
+        #    (CC/YYYY/MM/xxxxx, sequential). Cross-month moves are blocked.
+        bill_no = bill.get("bill_number") or "-"
+        if (bill.get("invoice_generated") and bill_no != "-"
+                and old_co_raw[:7] != new_co_raw[:7]):
+            return jsonify(success=False,
+                           message=f"Bill {bill_no} is a GST invoice for "
+                                   f"{old_co_raw[:7]} — its checkout can't "
+                                   f"move to a different month. Use a credit "
+                                   f"note for that correction."), 400
+
+        ci_changed = (old_ci_raw != new_ci_raw)
+        co_changed = (old_co_raw != new_co_raw)
+        if not ci_changed and not co_changed:
+            return jsonify(success=False, message="Nothing changed"), 400
+
+        old_ci_date = old_ci_raw[:10]
+        new_ci_date = new_ci_raw[:10]
+
+        # ── 1. Move the first check-in payment with the check-in time ──────
+        moved_payment = False
+        if ci_changed:
+            try:
+                payments_ref = db.collection("payments")
+                first_pays = []
+                # Canonical: stamped stay_id.
+                for d in (payments_ref
+                          .where(filter=FieldFilter("stay_id", "==", bill_id))
+                          .stream()):
+                    pd = d.to_dict() or {}
+                    if pd.get("transaction_type") in ("fresh_checkin",
+                                                      "booking_conversion"):
+                        first_pays.append((d.id, pd))
+                # Legacy fallback: room + old check-in date + guest name.
+                if not first_pays and old_ci_date:
+                    gname = bill.get("guest_name") or ""
+                    for d in (payments_ref
+                              .where(filter=FieldFilter("room", "==",
+                                                        str(bill.get("room") or "")))
+                              .where(filter=FieldFilter("date", "==", old_ci_date))
+                              .stream()):
+                        pd = d.to_dict() or {}
+                        if (pd.get("name") == gname and
+                                pd.get("transaction_type") in
+                                ("fresh_checkin", "booking_conversion")):
+                            first_pays.append((d.id, pd))
+                # Exactly one check-in payment per stay; take the first match.
+                for pid, pd in first_pays[:1]:
+                    _pay_update = {"date": new_ci_date,
+                                   "time": new_ci_raw[11:16]}
+                    if old_ci_date != new_ci_date:
+                        _pay_update["original_date"] = old_ci_date
+                    payments_ref.document(pid).update(_pay_update)
+                    moved_payment = True
+                    logger.info(f"update_stay_times: payment {pid} moved to "
+                                f"{new_ci_date} {new_ci_raw[11:16]}")
+            except Exception as _pe:
+                logger.warning(f"update_stay_times: payment sync failed: {_pe}")
+
+        # ── 2. Bill doc: timestamps + attribution. Amounts untouched. ──────
+        _user = (_safe_user() or {}).get("userId") or "system"
+        _now  = datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S")
+        _hist = list(bill.get("stay_time_edits") or [])[-19:]
+        _hist.append({"by": _user, "at": _now,
+                      "old_checkin": old_ci_raw,  "new_checkin": new_ci_raw,
+                      "old_checkout": old_co_raw, "new_checkout": new_co_raw})
+        ok = bills_service.update(bill_id, {
+            "checkin_time":         new_ci_raw,
+            "checkout_time":        new_co_raw,
+            "stay_time_edits":      _hist,
+            "lastStayTimesEditBy":  _user,
+            "lastStayTimesEditAt":  _now,
+        })
+        if not ok:
+            return jsonify(success=False,
+                           message="Could not update the stay record — "
+                                   "try again"), 500
+
+        # ── 3. Re-rank daily serials on every affected check-in day ────────
+        new_serial = None
+        _days = {new_ci_date}
+        if ci_changed and old_ci_date and old_ci_date != new_ci_date:
+            _days.add(old_ci_date)
+        from config import renumber_day_serials
+        for _d in sorted(_days):
+            try:
+                _order = renumber_day_serials(_d) or []
+            except Exception as _re:
+                logger.warning(f"renumber_day_serials({_d}) failed: {_re}")
+                _order = []
+            if _d == new_ci_date:
+                for _row in _order:
+                    if _row.get("stay_id") == bill_id:
+                        new_serial = _row.get("serial")
+
+        # ── 4. Nights mismatch → warn only (never touch money) ─────────────
+        implied_nights = max(1, (new_co.date() - new_ci.date()).days)
+        billed_nights  = int(bill.get("days_stayed") or 0)
+        warning = None
+        if billed_nights and implied_nights != billed_nights:
+            warning = (f"The new dates span {implied_nights} night(s) but the "
+                       f"bill was charged for {billed_nights}. Amounts were "
+                       f"NOT changed — adjust the bill manually if the price "
+                       f"should differ.")
+
+        invalidate_rooms_and_totals()
+        write_log("stay.times_update", target_collection="bills",
+                  target_id=bill_id,
+                  metadata={"old_checkin": old_ci_raw, "new_checkin": new_ci_raw,
+                            "old_checkout": old_co_raw, "new_checkout": new_co_raw,
+                            "moved_payment": moved_payment,
+                            "serial": new_serial, "warning": bool(warning)})
+
+        msg = "Stay times updated."
+        if new_serial:
+            msg += f" Serial re-ranked to #{new_serial} for {new_ci_date}."
+        return jsonify(success=True, message=msg,
+                       serial_number=new_serial, warning=warning,
+                       moved_payment=moved_payment)
+    except Exception as e:
+        logger.error(f"update_stay_times error: {e}", exc_info=True)
+        return jsonify(success=False, message=str(e)), 500
+
+
 @rooms_bp.route("/update_guest_mobile", methods=["POST"])
 def update_guest_mobile():
     """

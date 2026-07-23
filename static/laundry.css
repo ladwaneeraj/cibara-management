@@ -649,3 +649,394 @@
     grid-template-columns: 1fr;
   }
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   BILLING TAB — vendor account ledger (passbook)
+   Minimal, mobile-first. balance = opening + bills + adjustments − payments
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.laundry-bill-scroll {
+  background: #f6f8fa;
+  padding: 0.8rem;
+  gap: 0.7rem;
+}
+
+/* Base card */
+.lgr-card {
+  background: #fff;
+  border: 1px solid #e8edf3;
+  border-radius: 14px;
+  flex-shrink: 0;
+  overflow: hidden;
+}
+.lgr-card-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.6rem;
+  padding: 0.75rem 1rem 0.15rem;
+  font-size: 0.86rem;
+  font-weight: 700;
+  color: #0f172a;
+}
+.lgr-card-note { font-size: 0.68rem; font-weight: 500; color: #a3aebc; text-align: right; }
+
+/* ── Summary ── */
+.lgr-summary {
+  background: #fff;
+  border: 1px solid #e8edf3;
+  border-radius: 14px;
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+  flex-shrink: 0;
+}
+.lgr-sum-main { display: flex; flex-direction: column; }
+.lgr-sum-lbl { font-size: 0.74rem; font-weight: 600; color: #8494a7; }
+.lgr-sum-val {
+  font-size: 2rem;
+  font-weight: 800;
+  color: #dc2626;
+  line-height: 1.15;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+.lgr-sum-val.settled { color: #16a34a; }
+.lgr-sum-meta { font-size: 0.76rem; color: #8494a7; margin-top: 0.15rem; }
+.lgr-sum-meta b { color: #334155; font-weight: 600; }
+
+.lgr-actions { display: flex; gap: 0.5rem; }
+.lgr-btn {
+  min-height: 44px;
+  padding: 0 0.9rem;
+  border: 1px solid #e2e8f0;
+  border-radius: 11px;
+  background: #fff;
+  color: #334155;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  white-space: nowrap;
+}
+.lgr-btn:hover { background: #f8fafc; }
+.lgr-btn.primary { background: #16a34a; border-color: #16a34a; color: #fff; }
+.lgr-btn.primary:hover { background: #15803d; }
+.lgr-btn.icon { width: 44px; padding: 0; color: #64748b; flex-shrink: 0; }
+.lgr-btn.active { border-color: #94a3b8; background: #f1f5f9; }
+.lgr-btn.primary.active { background: #15803d; }
+.lgr-actions .lgr-btn:not(.icon) { flex: 1; }
+
+@media (min-width: 720px) {
+  .lgr-summary { flex-direction: row; align-items: center; justify-content: space-between; }
+  .lgr-actions .lgr-btn:not(.icon) { flex: 0 0 auto; }
+}
+
+/* ── Overlap warning ── */
+.lgr-overlap-warn {
+  background: #fffbeb;
+  border: 1px solid #fde68a;
+  color: #92400e;
+  border-radius: 12px;
+  padding: 0.6rem 0.8rem;
+  font-size: 0.76rem;
+  line-height: 1.5;
+  flex-shrink: 0;
+}
+
+/* ── Statement — classic ledger table ── */
+.lgr-statement-scroll { overflow: auto; max-height: 58vh; }
+.lgr-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+}
+.lgr-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: #f8fafc;
+  color: #64748b;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  text-align: left;
+  padding: 0.55rem 0.6rem;
+  border-bottom: 1px solid #e8edf3;
+  white-space: nowrap;
+}
+.lgr-table thead th.lgr-num { text-align: right; }
+.lgr-table td {
+  padding: 0.55rem 0.6rem;
+  border-bottom: 1px solid #f2f5f9;
+  vertical-align: top;
+  color: #0f172a;
+}
+.lgr-when { white-space: nowrap; color: #64748b; font-weight: 600; width: 62px; }
+.lgr-part { line-height: 1.4; }
+.lgr-part-main { font-weight: 600; color: #0f172a; }
+.lgr-part-sub { display: block; font-size: 0.7rem; color: #9aa7b6; margin-top: 1px; }
+.lgr-num {
+  text-align: right;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+.lgr-num.muted { color: #d3dae2; font-weight: 400; }
+.lgr-num.dr { color: #0f172a; }
+.lgr-num.cr { color: #16a34a; }
+.lgr-bal.due { color: #dc2626; font-weight: 700; }
+.lgr-bal.ok  { color: #16a34a; font-weight: 700; }
+.lgr-act { white-space: nowrap; width: 1%; text-align: right; }
+.lgr-table tfoot td {
+  position: sticky;
+  bottom: 0;
+  background: #f8fafc;
+  border-top: 2px solid #e8edf3;
+  border-bottom: none;
+  font-weight: 700;
+  color: #334155;
+  font-size: 0.78rem;
+}
+.lgr-icon-btn {
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  color: #cbd5e1;
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+  font-size: 0.72rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.lgr-icon-btn:hover { color: #334155; background: #f1f5f9; }
+.lgr-icon-btn.danger:hover { color: #dc2626; background: #fef2f2; }
+
+.lgr-chip {
+  display: inline-block;
+  font-size: 0.63rem;
+  font-weight: 700;
+  border-radius: 999px;
+  padding: 1px 7px;
+  line-height: 1.4;
+  vertical-align: 1px;
+}
+.lgr-chip.paid    { background: #ecfdf5; color: #15803d; }
+.lgr-chip.partial { background: #fffbeb; color: #b45309; }
+.lgr-chip.due     { background: #fef2f2; color: #dc2626; }
+
+.lgr-empty {
+  padding: 2rem 1.2rem !important;
+  text-align: center;
+  font-size: 0.86rem;
+  font-weight: 600;
+  color: #64748b;
+  line-height: 1.6;
+}
+.lgr-empty span { font-weight: 400; color: #9aa7b6; font-size: 0.78rem; }
+
+/* ── Panels (Add Bill / Record Payment / Corrections) ── */
+.lgr-panel { flex-shrink: 0; }
+.lgr-panel .laundry-form-card {
+  border-radius: 14px;
+  border-color: #e8edf3;
+  background: #fff;
+}
+.lgr-panel .laundry-form-card-title {
+  background: #fff;
+  border-bottom: 1px solid #f2f5f9;
+  padding: 0.75rem 1rem;
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: #0f172a;
+  text-transform: none;
+  letter-spacing: 0;
+}
+.lgr-panel .laundry-form-card-body { padding: 0.9rem 1rem 1rem; }
+.lgr-panel-close {
+  background: none;
+  border: 0;
+  cursor: pointer;
+  color: #a3aebc;
+  font-size: 1.4rem;
+  line-height: 1;
+  padding: 0 0.2rem;
+}
+.lgr-panel-close:hover { color: #334155; }
+
+/* Comfortable, zoom-proof inputs (16px stops iOS auto-zoom) */
+.laundry-bill-scroll .form-control {
+  font-size: 16px;
+  min-height: 46px;
+  border-radius: 11px;
+  border: 1px solid #dbe2ea;
+  padding: 0.5rem 0.8rem;
+  width: 100%;
+  box-sizing: border-box;
+}
+.laundry-bill-scroll .laundry-field-group label {
+  font-size: 0.74rem;
+  font-weight: 600;
+  color: #64748b;
+  margin-bottom: 0.3rem;
+  display: block;
+}
+.laundry-bill-scroll .action-btn {
+  min-height: 48px;
+  border-radius: 11px;
+  font-size: 0.92rem;
+  font-weight: 700;
+}
+.laundry-bill-scroll .laundry-toggle-btn { min-height: 42px; border-radius: 10px; }
+
+.lgr-field-row { display: flex; gap: 0.6rem; }
+.lgr-field-row .laundry-field-group { flex: 1; min-width: 0; }
+@media (max-width: 540px) { .lgr-field-row { flex-direction: column; gap: 0.7rem; } }
+.lgr-range-btn { cursor: pointer; text-align: left; white-space: nowrap; }
+
+.lgr-pieces-card {
+  background: #f8fafc;
+  border: 1px solid #eef2f6;
+  border-radius: 12px;
+  padding: 0.65rem 0.8rem;
+  margin: 0.7rem 0;
+}
+.lgr-pieces-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.74rem;
+  font-weight: 600;
+  color: #64748b;
+  margin-bottom: 0.45rem;
+}
+.lgr-pieces-head #laundry-auto-amount { color: #16a34a; font-weight: 700; }
+.lgr-editing-note {
+  background: #f0f7ff;
+  border: 1px solid #d4e5fa;
+  color: #1e5da8;
+  border-radius: 10px;
+  padding: 0.5rem 0.7rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  margin-bottom: 0.6rem;
+  line-height: 1.45;
+}
+
+/* Record Payment panel */
+.lgr-pay-amount { font-weight: 700; }
+.lgr-chip-btn {
+  margin-top: 0.4rem;
+  align-self: flex-start;
+  background: #ecfdf5;
+  border: 1px solid #bbeed3;
+  color: #15803d;
+  border-radius: 999px;
+  padding: 0.35rem 0.8rem;
+  font-size: 0.76rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+.lgr-chip-btn:hover { background: #d9f7e6; }
+.lgr-pay-preview {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: #64748b;
+  background: #f8fafc;
+  border-radius: 10px;
+  padding: 0.55rem 0.7rem;
+  margin-top: 0.6rem;
+  line-height: 1.5;
+}
+.lgr-pay-preview.due { color: #b45309; background: #fffbeb; }
+.lgr-pay-preview.ok  { color: #15803d; background: #ecfdf5; }
+.lgr-pay-preview.adv { color: #1e5da8; background: #f0f7ff; }
+.lgr-adjust-hint {
+  font-size: 0.75rem;
+  color: #64748b;
+  background: #f8fafc;
+  border-radius: 10px;
+  padding: 0.5rem 0.7rem;
+  margin-bottom: 0.6rem;
+  line-height: 1.5;
+}
+
+/* ── Small screens ── */
+@media (max-width: 640px) {
+  .laundry-bill-scroll { padding: 0.6rem; }
+  .lgr-sum-val { font-size: 2.2rem; }
+  .lgr-card-note { display: none; }
+  .lgr-statement-scroll { max-height: none; }
+  .lgr-table { font-size: 0.75rem; }
+  .lgr-table td, .lgr-table thead th { padding: 0.5rem 0.3rem; }
+  .lgr-table thead th { font-size: 0.62rem; }
+  .lgr-when { width: 44px; }
+  .lgr-part-sub { display: none; }        /* keep rows one line on phones */
+  /* stack row actions vertically so the table fits without side-scroll */
+  .lgr-act { width: 32px; }
+  .lgr-act .lgr-icon-btn { display: flex; margin-left: auto; width: 30px; height: 26px; }
+}
+
+/* "⋯" overflow menu — anchored to the summary card's top-right corner */
+.lgr-summary { position: relative; }
+.lgr-more-wrap { position: absolute; top: 0.55rem; right: 0.55rem; }
+.lgr-more-wrap .lgr-btn.icon {
+  border: 0;
+  background: transparent;
+  color: #8494a7;
+  width: 40px;
+  height: 40px;
+  min-height: 40px;
+  font-size: 1rem;
+}
+.lgr-more-wrap .lgr-btn.icon:hover { background: #f1f5f9; color: #334155; }
+.lgr-more-menu {
+  position: absolute;
+  right: 0;
+  top: 44px;
+  z-index: 30;
+  background: #fff;
+  border: 1px solid #e8edf3;
+  border-radius: 12px;
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.12);
+  min-width: 180px;
+  padding: 0.3rem;
+}
+.lgr-more-item {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  width: 100%;
+  min-height: 44px;
+  padding: 0 0.8rem;
+  background: none;
+  border: 0;
+  border-radius: 9px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #334155;
+  cursor: pointer;
+  text-align: left;
+}
+.lgr-more-item:hover { background: #f4f6f9; }
+.lgr-more-item i { color: #8494a7; width: 16px; text-align: center; }
+
+/* Cleaner number inputs (no spinners) */
+.laundry-bill-scroll input[type="number"]::-webkit-outer-spin-button,
+.laundry-bill-scroll input[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+.laundry-bill-scroll input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
+
+/* Comfortable touch targets on statement row actions */
+@media (max-width: 640px) {
+  .lgr-icon-btn { width: 34px; height: 34px; font-size: 0.8rem; }
+}

@@ -1,47 +1,43 @@
 """
 Laundry Management Routes
-Tracks daily items sent to / received from the laundry guy,
-stores monthly bills, and records payments as expenses.
+Tracks daily items sent to / received from the laundry guy, and runs the
+vendor's account as a LEDGER (the hotel-PMS "folio" model).
 
-Payment model
--------------
-Each monthly bill doc carries a `payments[]` array — one entry per
-partial payment. Totals are derived from the array, never overwritten.
+Billing model — one running account
+-----------------------------------
+    balance = opening + sum(bills) + sum(adjustments) - sum(payments)
 
-A payment entry:
-    {
-        "id":           uuid4 hex,
-        "amount":       int,
-        "method":       "cash" | "online",
-        "expense_type": "transaction" | "report",
-        "date":         "YYYY-MM-DD",     # IST wall-clock date of the payment
-        "time":         "HH:MM",
-        "expense_id":   <expenses doc id>,  # so we can delete the matching row
-        "created_at":   UTC iso,
-    }
+* laundry_bills        — one doc per billed period = a CHARGE.
+                         Only `bill_amount` counts. The legacy fields
+                         `old_balance` / `grand_total` / `paid_amount` /
+                         `balance` are ignored on read and no longer
+                         written (kept on old docs untouched).
+* expenses             — every laundry payment is an expense row
+                         (category="laundry"), exactly as before, so the
+                         dashboard totals keep working. A payment belongs
+                         to the ACCOUNT, not to a bill — partial or full,
+                         it simply reduces the running balance.
+* laundry_adjustments  — signed manual corrections (+ owe more / − owe
+                         less) with a note, for fixing history without
+                         editing records.
+* settings/laundry_ledger — the account's opening balance ("balance
+                         brought forward"). Auto-migrated once from the
+                         OLDEST legacy bill's `old_balance` (later bills'
+                         old_balance values were duplicates of earlier
+                         balances — the double-count this rewrite kills).
 
-Computed (always derived from payments[], never stored as the source of truth):
-    paid_total = sum(p.amount for p in payments)
-    balance    = grand_total - paid_total
-
-Backward compatibility
-----------------------
-Bills written before this change have a single `paid_amount` field and no
-`payments[]` array. On read, `_with_payment_totals` synthesises one payment
-entry from the legacy field so old bills behave the same as new ones —
-no data migration needed.
+All math lives in services/laundry_ledger.py (pure, unit-tested).
+Per-bill Paid/Partial/Due chips are FIFO-derived on read, never stored.
 """
 
 from flask import Blueprint, request, jsonify
-from datetime import datetime, timezone
-import os as _os
-import uuid as _uuid
-import pytz
+from datetime import datetime
 import logging
 from google.cloud.firestore_v1.base_query import FieldFilter
 
 from config import db, IST, totals_ref
 from services.auth_service import requires_permission, requires_role
+from services.laundry_ledger import compute_ledger
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +48,8 @@ _laundry_daily_ref    = lambda: db.collection("laundry_daily")
 _laundry_bills_ref    = lambda: db.collection("laundry_bills")
 _laundry_settings_ref = lambda: db.collection("settings").document("laundry_prices")
 _laundry_locks_ref    = lambda: db.collection("laundry_locks")
+_laundry_adjust_ref   = lambda: db.collection("laundry_adjustments")
+_laundry_ledger_ref   = lambda: db.collection("settings").document("laundry_ledger")
 
 
 # -- Data locking ------------------------------------------------------------
@@ -118,115 +116,6 @@ def _fmt_date_short(date_str):
         return date_str or ""
 
 
-def _find_laundry_expense_rows_for_month(month):
-    """
-    Return all expense docs that belong to a given laundry bill month.
-    Each item:
-        { id, amount, method, date, time, expense_type, description,
-          source: "new" | "legacy" }
-    sorted by date+time ascending. Used as the source of truth for the
-    payment history shown on the bill.
-
-    Two strategies, deduplicated:
-      1. New expense rows have `laundry_bill_month` -- exact lookup.
-      2. Legacy rows match on category=laundry + description containing
-         the month label ("April 2026").
-    """
-    if not month:
-        return []
-    expenses_ref = db.collection("expenses")
-    seen_ids = set()
-    out = []
-
-    try:
-        for d in (
-            expenses_ref
-            .where(filter=FieldFilter("laundry_bill_month", "==", month))
-            .stream()
-        ):
-            data = d.to_dict() or {}
-            if d.id in seen_ids:
-                continue
-            seen_ids.add(d.id)
-            out.append({
-                "id":           d.id,
-                "amount":       int(data.get("amount") or 0),
-                "method":       data.get("payment_method", "cash"),
-                "date":         data.get("date", ""),
-                "time":         data.get("time", ""),
-                "expense_type": data.get("expense_type", "transaction"),
-                "description":  data.get("description", ""),
-                "source":       "new",
-            })
-    except Exception as e:
-        logger.warning(f"_find_laundry_expense_rows: new-row query failed for "
-                       f"month={month}: {e}")
-
-    label = _month_label(month)
-    try:
-        for d in (
-            expenses_ref
-            .where(filter=FieldFilter("category", "==", "laundry"))
-            .stream()
-        ):
-            if d.id in seen_ids:
-                continue
-            data = d.to_dict() or {}
-            desc = str(data.get("description") or "")
-            if label and label not in desc:
-                continue
-            seen_ids.add(d.id)
-            out.append({
-                "id":           d.id,
-                "amount":       int(data.get("amount") or 0),
-                "method":       data.get("payment_method", "cash"),
-                "date":         data.get("date", ""),
-                "time":         data.get("time", ""),
-                "expense_type": data.get("expense_type", "transaction"),
-                "description":  desc,
-                "source":       "legacy",
-            })
-    except Exception as e:
-        logger.warning(f"_find_laundry_expense_rows: legacy-row query failed "
-                       f"for month={month}: {e}")
-
-    out.sort(key=lambda r: (r.get("date") or "", r.get("time") or ""))
-    return out
-
-
-def _find_laundry_expense_rows_for_period(period_key):
-    """
-    Expense rows belonging to a PERIOD bill — exact lookup on the
-    `laundry_bill_period` stamp ("YYYY-MM-DD_YYYY-MM-DD"). Same row shape
-    as _find_laundry_expense_rows_for_month.
-    """
-    if not period_key:
-        return []
-    out = []
-    try:
-        for d in (
-            db.collection("expenses")
-            .where(filter=FieldFilter("laundry_bill_period", "==", period_key))
-            .stream()
-        ):
-            data = d.to_dict() or {}
-            out.append({
-                "id":           d.id,
-                "amount":       int(data.get("amount") or 0),
-                "method":       data.get("payment_method", "cash"),
-                "date":         data.get("date", ""),
-                "time":         data.get("time", ""),
-                "expense_type": data.get("expense_type", "transaction"),
-                "description":  data.get("description", ""),
-                "source":       "new",
-            })
-    except Exception as e:
-        logger.warning(f"_find_laundry_expense_rows_for_period failed for "
-                       f"{period_key}: {e}")
-    out.sort(key=lambda r: (r.get("date") or "", r.get("time") or ""))
-    return out
-
-
 def _full_month_bounds(month):
     """(first_day, last_day) of YYYY-MM, or ("", "") if malformed."""
     try:
@@ -237,92 +126,131 @@ def _full_month_bounds(month):
         return "", ""
 
 
-def _payment_rows_for_bill(month, period_key, is_full_month):
+# ---------------------------------------------------------------------------
+# LEDGER DATA LOADERS — the account's raw entries, straight from Firestore
+# ---------------------------------------------------------------------------
+
+def _all_laundry_payment_rows():
     """
-    The payment rows that belong to one bill.
-
-    Period bills: exact period lookup. Full-month bills: month lookup
-    (covers legacy rows) merged with period-stamped rows, deduped —
-    payments recorded before AND after the period stamping both appear.
+    Every laundry payment that actually moved through the books: all
+    expense rows with category="laundry" (both the rows this module
+    writes and any recorded through the general expense screen). The
+    account ledger subtracts each one from the running balance — no
+    bill-matching heuristics anymore.
     """
-    if period_key and not is_full_month:
-        return _find_laundry_expense_rows_for_period(period_key)
-    rows = _find_laundry_expense_rows_for_month(month) if month else []
-    if period_key:
-        seen = {r["id"] for r in rows}
-        rows += [r for r in _find_laundry_expense_rows_for_period(period_key)
-                 if r["id"] not in seen]
-        rows.sort(key=lambda r: (r.get("date") or "", r.get("time") or ""))
-    return rows
+    out = []
+    try:
+        for d in (
+            db.collection("expenses")
+            .where(filter=FieldFilter("category", "==", "laundry"))
+            .stream()
+        ):
+            data = d.to_dict() or {}
+            out.append({
+                "id":           d.id,
+                "amount":       int(data.get("amount") or 0),
+                "method":       data.get("payment_method", "cash"),
+                "date":         data.get("date", ""),
+                "time":         data.get("time", ""),
+                "expense_type": data.get("expense_type", "transaction"),
+                "description":  data.get("description", ""),
+            })
+    except Exception as e:
+        logger.error(f"_all_laundry_payment_rows failed: {e}")
+    return out
 
 
-def _with_payment_totals(bill_dict):
+def _all_bill_rows():
+    """laundry_bills docs → charge rows for compute_ledger()."""
+    out = []
+    try:
+        for s in _laundry_bills_ref().stream():
+            bd = s.to_dict() or {}
+            ps = bd.get("period_start") or _full_month_bounds(bd.get("month") or "")[0]
+            pe = bd.get("period_end") or _full_month_bounds(bd.get("month") or "")[1]
+            out.append({
+                "id":           s.id,
+                "date":         bd.get("bill_date") or pe or "",
+                "bill_date":    bd.get("bill_date") or "",
+                "month":        bd.get("month") or "",
+                "period_start": ps,
+                "period_end":   pe,
+                "period_key":   bd.get("period_key") or (f"{ps}_{pe}" if ps and pe else ""),
+                "amount":       int(bd.get("bill_amount") or 0),
+                "pieces":       sum(int(bd.get(f"total_{k}") or 0) for k in ITEM_KEYS),
+            })
+    except Exception as e:
+        logger.error(f"_all_bill_rows failed: {e}")
+    return out
+
+
+def _all_adjustment_rows():
+    out = []
+    try:
+        for s in _laundry_adjust_ref().stream():
+            ad = s.to_dict() or {}
+            out.append({
+                "id":     s.id,
+                "date":   ad.get("date", ""),
+                "amount": int(ad.get("amount") or 0),
+                "note":   ad.get("note", ""),
+            })
+    except Exception as e:
+        logger.error(f"_all_adjustment_rows failed: {e}")
+    return out
+
+
+def _ensure_opening_balance():
     """
-    Attach `payments`, `paid_total`, and `balance` to a bill dict.
+    One-time, lazy auto-migration of the account's opening balance.
 
-    Source of truth is the `expenses` collection. The bill doc holds bill
-    amount / items / grand total. Payments are *always* derived by querying
-    expense rows that belong to this bill's month -- so the list shown to
-    the user is whatever actually moved through the books.
-
-    Legacy fallback: if the month has zero matching expense rows but the
-    bill carries a non-zero `paid_amount` from before this fix, we emit
-    one synthetic entry so the UI is not silently wrong. This case is
-    rare -- it only happens for bills paid before the fix where the
-    expense row was manually deleted from Firestore.
+    Legacy bills chained the balance forward by COPYING it into each new
+    bill's `old_balance` — so every old_balance after the first is a
+    duplicate of amounts already billed. Only the OLDEST bill's
+    old_balance is genuine pre-system debt; it becomes the account's
+    opening balance, stored once in settings/laundry_ledger and stable
+    from then on (editable via /laundry/opening).
     """
-    if bill_dict is None:
-        return bill_dict
+    try:
+        ref = _laundry_ledger_ref()
+        snap = ref.get()
+        d = (snap.to_dict() or {}) if snap.exists else {}
+        if "opening_balance" in d:
+            return d
+        oldest = None  # (sort_key, bill_dict)
+        for s in _laundry_bills_ref().stream():
+            bd = s.to_dict() or {}
+            key = (bd.get("period_start")
+                   or _full_month_bounds(bd.get("month") or "")[0]
+                   or "9999-99-99")
+            if oldest is None or key < oldest[0]:
+                oldest = (key, bd)
+        opening = int((oldest[1].get("old_balance") or 0)) if oldest else 0
+        d = {
+            "opening_balance": opening,
+            "opening_date":    (oldest[0] if oldest and oldest[0] != "9999-99-99"
+                                else ""),
+            "opening_note":    "Balance brought forward",
+            "migrated_at":     datetime.now(IST).isoformat(),
+        }
+        ref.set(d, merge=True)
+        logger.info(f"laundry ledger: opening balance auto-migrated = {opening}")
+        return d
+    except Exception as e:
+        logger.error(f"_ensure_opening_balance failed: {e}")
+        return {"opening_balance": 0, "opening_date": "", "opening_note": ""}
 
-    month      = bill_dict.get("month")
-    period_key = bill_dict.get("period_key") or ""
-    _fm_start, _fm_end = _full_month_bounds(month or "")
-    _is_full_month = (not period_key) or (
-        bill_dict.get("period_start") == _fm_start
-        and bill_dict.get("period_end") == _fm_end
-    )
-    expense_rows = _payment_rows_for_bill(month, period_key, _is_full_month)
 
-    if expense_rows:
-        payments = [{
-            "id":           r["id"],
-            "amount":       r["amount"],
-            "method":       r["method"],
-            "expense_type": r["expense_type"],
-            "date":         r["date"],
-            "time":         r["time"],
-            "expense_id":   r["id"],
-            "created_at":   r.get("date", "") + " " + r.get("time", ""),
-            "source":       r["source"],
-        } for r in expense_rows]
-    else:
-        legacy_paid = int(bill_dict.get("paid_amount") or 0)
-        if legacy_paid > 0:
-            payments = [{
-                "id":           "legacy-" + (month or "x"),
-                "amount":       legacy_paid,
-                "method":       bill_dict.get("payment_method", "cash"),
-                "expense_type": bill_dict.get("expense_type", "transaction"),
-                "date":         bill_dict.get("bill_date") or month or "",
-                "time":         "",
-                "expense_id":   "",
-                "created_at":   bill_dict.get("updated_at", ""),
-                "legacy":       True,
-            }]
-        else:
-            payments = []
-
-    paid_total  = sum(int(p.get("amount") or 0) for p in payments)
-    grand_total = int(bill_dict.get("grand_total")
-                      or (int(bill_dict.get("bill_amount") or 0)
-                          + int(bill_dict.get("old_balance") or 0)))
-    balance     = grand_total - paid_total
-
-    bill_dict["payments"]   = payments
-    bill_dict["paid_total"] = paid_total
-    bill_dict["balance"]    = balance
-    bill_dict["paid_amount"] = paid_total  # legacy mirror
-    return bill_dict
+def _build_ledger():
+    """Assemble the full account ledger (see services/laundry_ledger.py)."""
+    meta = _ensure_opening_balance()
+    opening = {
+        "amount": int(meta.get("opening_balance") or 0),
+        "date":   meta.get("opening_date") or "",
+        "note":   meta.get("opening_note") or "Balance brought forward",
+    }
+    return compute_ledger(opening, _all_bill_rows(),
+                          _all_adjustment_rows(), _all_laundry_payment_rows())
 
 
 # ---------------------------------------------------------------------------
@@ -636,31 +564,43 @@ def receive_laundry(doc_id):
 
 
 # ---------------------------------------------------------------------------
-# MONTHLY -- get auto-totals + bill (with normalised payments[])
+# MONTHLY -- piece totals for a period + the bill covering it (Add Bill panel)
 # ---------------------------------------------------------------------------
+
+def _find_bill_ref_for_period(month, period_key, is_full_month):
+    """
+    The bill doc for one period, or None. Period bills are keyed by
+    period_key; a full-month period falls back to the legacy month-keyed
+    doc (bills saved before periods existed).
+    """
+    docs = list(
+        _laundry_bills_ref()
+        .where(filter=FieldFilter("period_key", "==", period_key))
+        .limit(1).stream()
+    )
+    if not docs and is_full_month:
+        docs = [
+            s for s in _laundry_bills_ref()
+            .where(filter=FieldFilter("month", "==", month))
+            .limit(5).stream()
+            if not (s.to_dict() or {}).get("period_key")
+        ][:1]
+    return docs[0] if docs else None
+
 
 @laundry_bp.route("/laundry/monthly/<month>", methods=["GET"])
 @requires_role("admin")
 def get_monthly_laundry(month):
     """
-    month: YYYY-MM
-    Returns item-wise totals + the existing bill record (with payments[]
-    normalised so the frontend can always rely on the same shape).
-
-    Optional query params `start` / `end` (YYYY-MM-DD, both inclusive)
-    restrict the aggregation to that date range instead of the full month
-    — used by the Bill tab's from→to selector so the bill amount is
-    computed only for the chosen period. The response echoes
-    period_start / period_end / period_days so the UI can show exactly
-    which dates the calculation covers. The bill doc itself stays keyed
-    by month.
+    month: YYYY-MM. Item-wise piece totals for the period (query params
+    `start` / `end`, default full month) + the existing bill doc for that
+    period if one was already saved. Feeds the Add Bill panel — balances
+    and payments come from /laundry/ledger, not from here.
     """
     try:
-        import calendar as _cal
-
-        year, mon = int(month[:4]), int(month[5:7])
-        default_start = f"{month}-01"
-        default_end   = f"{month}-{str(_cal.monthrange(year, mon)[1]).zfill(2)}"
+        default_start, default_end = _full_month_bounds(month)
+        if not default_start:
+            return jsonify(success=False, message="month must be YYYY-MM"), 400
 
         def _valid_date(s):
             try:
@@ -683,16 +623,11 @@ def get_monthly_laundry(month):
             .where(filter=FieldFilter("date", "<=", period_end))
             .stream()
         )
-
         totals = {k: 0 for k in ITEM_KEYS}
-        daily_rows = []
         for d in docs:
             row = d.to_dict()
-            row["doc_id"] = d.id
-            daily_rows.append(row)
             for k in ITEM_KEYS:
                 totals[k] += int(row.get(k, 0))
-
         totals["grand"] = sum(totals[k] for k in ITEM_KEYS)
 
         period_days = (
@@ -700,225 +635,398 @@ def get_monthly_laundry(month):
             - datetime.strptime(period_start, "%Y-%m-%d")
         ).days + 1
 
-        # ── Locate the bill for THIS period ──────────────────────────────────
-        # Period bills are keyed by period_key; a full-month period falls
-        # back to the legacy month-keyed doc (bills saved before periods).
         period_key    = f"{period_start}_{period_end}"
         is_full_month = (period_start == default_start
                          and period_end == default_end)
-
-        bill_docs = list(
-            _laundry_bills_ref()
-            .where(filter=FieldFilter("period_key", "==", period_key))
-            .limit(1).stream()
-        )
-        if not bill_docs and is_full_month:
-            bill_docs = [
-                s for s in _laundry_bills_ref()
-                .where(filter=FieldFilter("month", "==", month))
-                .limit(5).stream()
-                if not (s.to_dict() or {}).get("period_key")
-            ][:1]
+        snap = _find_bill_ref_for_period(month, period_key, is_full_month)
         bill = None
-        if bill_docs:
-            bill = bill_docs[0].to_dict()
-            bill["doc_id"] = bill_docs[0].id
-            _with_payment_totals(bill)
-
-        # ── Suggested opening balance ────────────────────────────────────────
-        # Balance carries bill-to-bill: the most recent bill whose period
-        # ENDS before this period STARTS (legacy month bills count as
-        # full-month periods). Advisory — the Old Balance field stays
-        # editable.
-        suggested_old_balance = 0
-        try:
-            _best = None
-            for s in _laundry_bills_ref().stream():
-                bd = s.to_dict() or {}
-                p_end = bd.get("period_end") or ""
-                if not p_end:
-                    p_end = _full_month_bounds(bd.get("month") or "")[1]
-                if p_end and p_end < period_start:
-                    if _best is None or p_end > _best[0]:
-                        _best = (p_end, s)
-            if _best is not None:
-                prev_bill = _best[1].to_dict() or {}
-                _with_payment_totals(prev_bill)
-                suggested_old_balance = int(prev_bill.get("balance") or 0)
-        except Exception as _sb_e:
-            logger.warning(f"get_monthly_laundry: suggested balance failed: {_sb_e}")
+        if snap is not None:
+            bill = snap.to_dict() or {}
+            bill["doc_id"] = snap.id
 
         return jsonify(success=True, totals=totals, bill=bill,
-                       daily_rows=daily_rows,
                        period_start=period_start, period_end=period_end,
-                       period_days=period_days,
-                       suggested_old_balance=suggested_old_balance)
+                       period_days=period_days)
     except Exception as e:
         logger.error(f"get_monthly_laundry error: {e}")
         return jsonify(success=False, message=str(e)), 500
 
 
 # ---------------------------------------------------------------------------
-# MONTHLY BILL -- save bill totals + APPEND a partial payment
+# LEDGER -- the whole account: entries, running balance, bill statuses
+# ---------------------------------------------------------------------------
+
+@laundry_bp.route("/laundry/ledger", methods=["GET"])
+@requires_role("admin")
+def get_laundry_ledger():
+    """
+    The vendor account statement. Everything the Billing tab shows comes
+    from this one endpoint:
+      summary  — opening / total billed / total paid / balance / advance
+      entries  — chronological passbook rows with running_balance
+      bills    — each bill with FIFO-derived settled / due / status
+      overlaps — bill periods that overlap (double-entry warning)
+    """
+    try:
+        ledger = _build_ledger()
+        return jsonify(success=True, **ledger)
+    except Exception as e:
+        logger.error(f"get_laundry_ledger error: {e}", exc_info=True)
+        return jsonify(success=False, message=str(e)), 500
+
+
+# ---------------------------------------------------------------------------
+# BILL -- save a charge (adds to the account; no payment fields here)
+# ---------------------------------------------------------------------------
+
+def _upsert_bill(data):
+    """
+    Create/update one bill (charge) doc from a request payload.
+    Returns (bill_id, error_response_or_None). One bill per period_key;
+    a full-month period reuses the legacy month-keyed doc if one exists.
+    Legacy money fields (old_balance / grand_total / paid_amount /
+    balance) are NOT written — the ledger ignores them.
+    """
+    month       = data.get("month")
+    bill_date   = (data.get("bill_date") or "").strip()
+    bill_amount = int(data.get("bill_amount", 0))
+    if not month:
+        return None, (jsonify(success=False, message="Month is required"), 400)
+    if bill_amount < 0:
+        return None, (jsonify(success=False,
+                              message="Bill amount can't be negative"), 400)
+
+    _def_start, _def_end = _full_month_bounds(month)
+    if not _def_start:
+        return None, (jsonify(success=False, message="month must be YYYY-MM"), 400)
+    period_start = (data.get("period_start") or "").strip() or _def_start
+    period_end   = (data.get("period_end") or "").strip() or _def_end
+    if period_end < period_start:
+        return None, (jsonify(success=False,
+                              message="'From' date must be on or before 'To' date"), 400)
+    period_key    = f"{period_start}_{period_end}"
+    is_full_month = (period_start == _def_start and period_end == _def_end)
+
+    item_totals = {k: int(data.get(f"total_{k}", 0)) for k in ITEM_KEYS}
+    prices      = {k: int(data.get(f"price_{k}", 100)) for k in ITEM_KEYS}
+
+    snap = _find_bill_ref_for_period(month, period_key, is_full_month)
+    bill_ref = (_laundry_bills_ref().document(snap.id) if snap is not None
+                else _laundry_bills_ref().document())
+
+    bill_ref.set({
+        "month":        month,
+        "bill_date":    bill_date or datetime.now(IST).strftime("%Y-%m-%d"),
+        "period_start": period_start,
+        "period_end":   period_end,
+        "period_key":   period_key,
+        **{f"total_{k}": item_totals[k] for k in ITEM_KEYS},
+        **{f"price_{k}": prices[k]      for k in ITEM_KEYS},
+        "bill_amount":  bill_amount,
+        "updated_at":   datetime.now(IST).isoformat(),
+    }, merge=True)
+    return bill_ref.id, None
+
+
+@laundry_bp.route("/laundry/bill", methods=["POST"])
+@requires_role("admin")
+def save_laundry_bill():
+    """
+    Save/update one bill. Payload: month, bill_date, bill_amount,
+    period_start, period_end, total_*, price_*. Payments are a separate
+    action (/laundry/pay) — a bill only ADDS to the account balance.
+    """
+    try:
+        bill_id, err = _upsert_bill(request.json or {})
+        if err:
+            return err
+        ledger = _build_ledger()
+        return jsonify(success=True, message="Bill saved",
+                       bill_id=bill_id, summary=ledger["summary"])
+    except Exception as e:
+        logger.error(f"save_laundry_bill error: {e}", exc_info=True)
+        return jsonify(success=False, message=str(e)), 500
+
+
+@laundry_bp.route("/laundry/bill/delete", methods=["POST"])
+@requires_permission("payment.edit")
+def delete_laundry_bill():
+    """
+    Delete one bill (e.g. a duplicate / overlapping period entered by
+    mistake). Payments are untouched — they belong to the account. The
+    balance simply re-derives.  Body: { bill_id }
+    """
+    try:
+        bill_id = (request.json or {}).get("bill_id")
+        if not bill_id:
+            return jsonify(success=False, message="bill_id required"), 400
+        ref = _laundry_bills_ref().document(bill_id)
+        snap = ref.get()
+        if not snap.exists:
+            return jsonify(success=False, message="Bill not found"), 404
+        bd = snap.to_dict() or {}
+        ref.delete()
+        try:
+            from services.audit_log import write_log
+            write_log("laundry.bill.delete", target_collection="laundry_bills",
+                      target_id=bill_id,
+                      metadata={"month": bd.get("month"),
+                                "period_key": bd.get("period_key"),
+                                "bill_amount": bd.get("bill_amount")})
+        except Exception as le:
+            logger.warning(f"delete_laundry_bill: audit log failed: {le}")
+        ledger = _build_ledger()
+        return jsonify(success=True, message="Bill deleted",
+                       summary=ledger["summary"])
+    except Exception as e:
+        logger.error(f"delete_laundry_bill error: {e}", exc_info=True)
+        return jsonify(success=False, message=str(e)), 500
+
+
+# ---------------------------------------------------------------------------
+# PAY -- record a payment against the ACCOUNT (partial or full, no allocation)
+# ---------------------------------------------------------------------------
+
+def _record_payment(amount, method, expense_type, date_str="", note=""):
+    """
+    Write one payment as an expense row (single source of truth — the
+    dashboard reads the same collection). Returns the expense doc id.
+    """
+    now_ist = datetime.now(IST)
+    pay_date = date_str or now_ist.strftime("%Y-%m-%d")
+    desc = f"Laundry Payment (paid {_fmt_date_short(pay_date)})"
+    if note:
+        desc += f" — {note}"
+    expense_entry = {
+        "date":            pay_date,
+        "time":            now_ist.strftime("%H:%M"),
+        "category":        "laundry",
+        "description":     desc,
+        "amount":          amount,
+        "payment_method":  method,
+        "expense_type":    expense_type,
+        "laundry_payment": True,   # account-level payment stamp
+    }
+    ref = db.collection("expenses").document()
+    ref.set(expense_entry)
+    if expense_type == "transaction":
+        _update_expense_totals(amount, method, _ist_at_date(pay_date))
+    return ref.id
+
+
+@laundry_bp.route("/laundry/pay", methods=["POST"])
+@requires_role("admin")
+def pay_laundry():
+    """
+    Record a payment. Body: { amount, payment_method ("cash"|"upi"|
+    "online"), expense_type ("transaction"|"report"), date (optional,
+    default today), note (optional) }.
+
+    Partial or full makes no difference — the amount subtracts from the
+    running account balance, and whatever remains carries forward
+    automatically. Overpaying simply shows as an advance.
+    """
+    try:
+        data = request.json or {}
+        try:
+            amount = int(data.get("amount", 0))
+        except (TypeError, ValueError):
+            amount = 0
+        if amount <= 0:
+            return jsonify(success=False,
+                           message="Enter a payment amount above zero"), 400
+        method       = data.get("payment_method", "cash")
+        expense_type = data.get("expense_type", "transaction")
+        date_str     = (data.get("date") or "").strip()
+        note         = str(data.get("note") or "").strip()[:120]
+        if date_str:
+            try:
+                datetime.strptime(date_str, "%Y-%m-%d")
+            except ValueError:
+                return jsonify(success=False,
+                               message="date must be YYYY-MM-DD"), 400
+
+        try:
+            expense_id = _record_payment(amount, method, expense_type,
+                                         date_str, note)
+        except Exception as exp_err:
+            logger.error(f"pay_laundry: expense write failed "
+                         f"amount={amount}: {exp_err}", exc_info=True)
+            return jsonify(success=False,
+                           message="Payment could not be recorded — "
+                                   "please try again"), 500
+
+        ledger = _build_ledger()
+        return jsonify(success=True, message="Payment recorded",
+                       expense_id=expense_id, summary=ledger["summary"])
+    except Exception as e:
+        logger.error(f"pay_laundry error: {e}", exc_info=True)
+        return jsonify(success=False, message=str(e)), 500
+
+
+# ---------------------------------------------------------------------------
+# ADJUSTMENTS -- signed manual corrections, and the opening balance
+# ---------------------------------------------------------------------------
+
+@laundry_bp.route("/laundry/adjust", methods=["POST"])
+@requires_permission("payment.edit")
+def add_laundry_adjustment():
+    """
+    Add a correction entry. Body: { amount (signed int, non-zero:
+    + we owe more / − we owe less), note (required), date (optional) }.
+    """
+    try:
+        data = request.json or {}
+        try:
+            amount = int(data.get("amount", 0))
+        except (TypeError, ValueError):
+            amount = 0
+        note = str(data.get("note") or "").strip()[:200]
+        date_str = (data.get("date") or "").strip() \
+            or datetime.now(IST).strftime("%Y-%m-%d")
+        if amount == 0:
+            return jsonify(success=False,
+                           message="Adjustment amount can't be zero"), 400
+        if not note:
+            return jsonify(success=False,
+                           message="A note explaining the adjustment is "
+                                   "required"), 400
+        try:
+            datetime.strptime(date_str, "%Y-%m-%d")
+        except ValueError:
+            return jsonify(success=False, message="date must be YYYY-MM-DD"), 400
+
+        ref = _laundry_adjust_ref().document()
+        ref.set({"amount": amount, "note": note, "date": date_str,
+                 "created_at": datetime.now(IST).isoformat()})
+        try:
+            from services.audit_log import write_log
+            write_log("laundry.adjustment.add",
+                      target_collection="laundry_adjustments",
+                      target_id=ref.id,
+                      metadata={"amount": amount, "note": note, "date": date_str})
+        except Exception as le:
+            logger.warning(f"add_laundry_adjustment: audit log failed: {le}")
+
+        ledger = _build_ledger()
+        return jsonify(success=True, message="Adjustment added",
+                       adjustment_id=ref.id, summary=ledger["summary"])
+    except Exception as e:
+        logger.error(f"add_laundry_adjustment error: {e}", exc_info=True)
+        return jsonify(success=False, message=str(e)), 500
+
+
+@laundry_bp.route("/laundry/adjust/delete", methods=["POST"])
+@requires_permission("payment.edit")
+def delete_laundry_adjustment():
+    """Delete an adjustment entry. Body: { adjustment_id }"""
+    try:
+        adj_id = (request.json or {}).get("adjustment_id")
+        if not adj_id:
+            return jsonify(success=False, message="adjustment_id required"), 400
+        ref = _laundry_adjust_ref().document(adj_id)
+        snap = ref.get()
+        if not snap.exists:
+            return jsonify(success=False, message="Adjustment not found"), 404
+        ad = snap.to_dict() or {}
+        ref.delete()
+        try:
+            from services.audit_log import write_log
+            write_log("laundry.adjustment.delete",
+                      target_collection="laundry_adjustments",
+                      target_id=adj_id, metadata=ad)
+        except Exception as le:
+            logger.warning(f"delete_laundry_adjustment: audit log failed: {le}")
+        ledger = _build_ledger()
+        return jsonify(success=True, message="Adjustment removed",
+                       summary=ledger["summary"])
+    except Exception as e:
+        logger.error(f"delete_laundry_adjustment error: {e}", exc_info=True)
+        return jsonify(success=False, message=str(e)), 500
+
+
+@laundry_bp.route("/laundry/opening", methods=["POST"])
+@requires_permission("payment.edit")
+def set_laundry_opening():
+    """
+    Set the account's opening balance (balance brought forward from
+    before the ledger). Body: { opening_balance (int ≥ 0),
+    opening_date (optional), note (optional) }.
+    """
+    try:
+        data = request.json or {}
+        try:
+            opening = int(data.get("opening_balance", 0))
+        except (TypeError, ValueError):
+            return jsonify(success=False,
+                           message="opening_balance must be a number"), 400
+        if opening < 0:
+            return jsonify(success=False,
+                           message="Opening balance can't be negative — "
+                                   "use an adjustment for an advance"), 400
+        date_str = (data.get("opening_date") or "").strip()
+        if date_str:
+            try:
+                datetime.strptime(date_str, "%Y-%m-%d")
+            except ValueError:
+                return jsonify(success=False,
+                               message="opening_date must be YYYY-MM-DD"), 400
+        payload = {
+            "opening_balance": opening,
+            "opening_note": (str(data.get("note") or "").strip()[:200]
+                             or "Balance brought forward"),
+            "updated_at": datetime.now(IST).isoformat(),
+        }
+        if date_str:
+            payload["opening_date"] = date_str
+        _laundry_ledger_ref().set(payload, merge=True)
+        try:
+            from services.audit_log import write_log
+            write_log("laundry.opening.set", target_collection="settings",
+                      target_id="laundry_ledger", metadata=payload)
+        except Exception as le:
+            logger.warning(f"set_laundry_opening: audit log failed: {le}")
+        ledger = _build_ledger()
+        return jsonify(success=True, message="Opening balance saved",
+                       summary=ledger["summary"])
+    except Exception as e:
+        logger.error(f"set_laundry_opening error: {e}", exc_info=True)
+        return jsonify(success=False, message=str(e)), 500
+
+
+# ---------------------------------------------------------------------------
+# LEGACY COMPAT -- old clients (cached laundry.js) posting the combined form
 # ---------------------------------------------------------------------------
 
 @laundry_bp.route("/laundry/monthly", methods=["POST"])
 @requires_role("admin")
 def save_monthly_bill():
     """
-    Save / update the monthly laundry bill totals and APPEND a partial
-    payment to the bill's payments[] array.
-
-    `paid_amount` in the request body means "amount paid IN THIS
-    transaction" -- it is appended, never replaces the running total.
-    Pass paid_amount = 0 (or omit) to update bill totals only without
-    recording a payment.
-
-    Payload:
-      month, bill_date, item_totals{}, prices{},
-      bill_amount, old_balance,
-      paid_amount,            # amount paying right now
-      payment_method,         # "cash" | "online"
-      expense_type            # "transaction" | "report"
+    DEPRECATED shim for the pre-ledger UI, kept so a stale cached
+    frontend can't corrupt data. Saves the bill (old_balance is IGNORED
+    — carry-forward is automatic now) and, if paid_amount > 0, records
+    an account payment.
     """
     try:
         data = request.json or {}
-        month        = data.get("month")
-        bill_date    = data.get("bill_date", "")
-        bill_amount  = int(data.get("bill_amount", 0))
-        old_balance  = int(data.get("old_balance", 0))
-        new_payment_amount = int(data.get("paid_amount", 0))
-        grand_total  = bill_amount + old_balance
-        payment_method = data.get("payment_method", "cash")
-        expense_type   = data.get("expense_type", "transaction")
-
-        if not month:
-            return jsonify(success=False, message="Month is required"), 400
-
-        item_totals = {k: int(data.get(f"total_{k}", 0)) for k in ITEM_KEYS}
-        prices      = {k: int(data.get(f"price_{k}", 100)) for k in ITEM_KEYS}
-
-        now_ist = datetime.now(IST)
-        now_utc_iso = datetime.now(timezone.utc).isoformat()
-
-        # -- Billing period (defaults to the full month) ----------------------
-        _def_start, _def_end = _full_month_bounds(month)
-        period_start = (data.get("period_start") or "").strip() or _def_start
-        period_end   = (data.get("period_end") or "").strip() or _def_end
-        period_key   = f"{period_start}_{period_end}"
-        is_full_month = (period_start == _def_start and period_end == _def_end)
-        period_label = (f"{_fmt_date_short(period_start)} to "
-                        f"{_fmt_date_short(period_end)}")
-
-        # -- Locate or create the bill doc -----------------------------------
-        # One bill per PERIOD. A full-month period reuses the legacy
-        # month-keyed doc if one exists (it gets the period stamp on save).
-        existing_q = list(
-            _laundry_bills_ref()
-            .where(filter=FieldFilter("period_key", "==", period_key))
-            .limit(1).stream()
-        )
-        if not existing_q and is_full_month:
-            existing_q = [
-                s for s in _laundry_bills_ref()
-                .where(filter=FieldFilter("month", "==", month))
-                .limit(5).stream()
-                if not (s.to_dict() or {}).get("period_key")
-            ][:1]
-        if existing_q:
-            bill_ref = _laundry_bills_ref().document(existing_q[0].id)
-        else:
-            bill_ref = _laundry_bills_ref().document()
-
-        # -- Record the partial payment as a fresh expense row ---------------
-        # Expenses are the single source of truth for what was paid; the
-        # bill doc only stores the WHAT (items, prices, grand total).
-        if new_payment_amount > 0:
-            month_label = _month_label(month)
-            today_str   = now_ist.strftime("%Y-%m-%d")
-            time_str    = now_ist.strftime("%H:%M")
-            # The description carries the billed period so anyone reading the
-            # expense later knows exactly which dates this payment covered.
-            _desc = (
-                f"Laundry Payment - {month_label} (paid {_fmt_date_short(today_str)})"
-                if is_full_month else
-                f"Laundry Payment - {period_label} (paid {_fmt_date_short(today_str)})"
-            )
-            expense_entry = {
-                "date":           today_str,
-                "time":           time_str,
-                "category":       "laundry",
-                "description":    _desc,
-                "amount":         new_payment_amount,
-                "payment_method": payment_method,
-                "expense_type":   expense_type,
-                # Period stamp — the bill this payment belongs to. Full-month
-                # bills also keep the legacy month stamp for old readers.
-                "laundry_bill_period": period_key,
-                "laundry_bill_period_start": period_start,
-                "laundry_bill_period_end":   period_end,
-            }
-            if is_full_month:
-                expense_entry["laundry_bill_month"] = month
-            try:
-                db.collection("expenses").document().set(expense_entry)
-            except Exception as exp_err:
-                logger.error(
-                    f"save_monthly_bill: expense write failed for month={month} "
-                    f"amount={new_payment_amount}: {exp_err}",
-                    exc_info=True,
-                )
-                return jsonify(
-                    success=False,
-                    message="Payment could not be recorded -- please try again",
-                ), 500
-
-            if expense_type == "transaction":
-                _update_expense_totals(new_payment_amount, payment_method, now_ist)
-
-        # -- Compute totals from the live expense rows ----------------------
-        rows = _payment_rows_for_bill(month, period_key, is_full_month)
-        paid_total = sum(r["amount"] for r in rows)
-        balance    = grand_total - paid_total
-
-        bill_doc = {
-            "month":          month,
-            "bill_date":      bill_date,
-            # The date range this bill's amount was calculated for (from→to,
-            # inclusive). period_key is the bill's identity — one bill per
-            # period; balance chains bill-to-bill by period_end order.
-            "period_start":   period_start,
-            "period_end":     period_end,
-            "period_key":     period_key,
-            **{f"total_{k}": item_totals[k] for k in ITEM_KEYS},
-            **{f"price_{k}":  prices[k]     for k in ITEM_KEYS},
-            "bill_amount":    bill_amount,
-            "old_balance":    old_balance,
-            "grand_total":    grand_total,
-            # `paid_amount` / `balance` here are CACHED projections of the
-            # expense rows. Reads always re-derive from expenses, so these
-            # cannot drift in a way that matters to the UI -- they are
-            # kept only so legacy callers reading the bill doc directly
-            # see sane numbers.
-            "paid_amount":    paid_total,
-            "paid_total":     paid_total,
-            "balance":        balance,
-            "payment_method": payment_method,
-            "expense_type":   expense_type,
-            "updated_at":     now_ist.isoformat(),
-        }
-        bill_ref.set(bill_doc, merge=True)
-
-        return jsonify(
-            success=True,
-            message=("Payment recorded" if new_payment_amount > 0
-                     else "Bill totals saved"),
-            balance=balance,
-            paid_total=paid_total,
-            payment_count=len(rows),
-        )
+        bill_id, err = _upsert_bill(data)
+        if err:
+            return err
+        try:
+            paid = int(data.get("paid_amount", 0))
+        except (TypeError, ValueError):
+            paid = 0
+        if paid > 0:
+            _record_payment(paid, data.get("payment_method", "cash"),
+                            data.get("expense_type", "transaction"))
+        ledger = _build_ledger()
+        s = ledger["summary"]
+        return jsonify(success=True,
+                       message=("Payment recorded" if paid > 0
+                                else "Bill totals saved"),
+                       balance=s["balance"], paid_total=s["total_paid"])
     except Exception as e:
-        logger.error(f"save_monthly_bill error: {e}", exc_info=True)
+        logger.error(f"save_monthly_bill (compat) error: {e}", exc_info=True)
         return jsonify(success=False, message=str(e)), 500
 
 
@@ -930,56 +1038,44 @@ def save_monthly_bill():
 @requires_permission("payment.edit")
 def delete_laundry_payment():
     """
-    Delete one expense row that belongs to a laundry bill, then refresh
-    the bill's cached summary fields from the remaining expense rows.
+    Delete one laundry payment (an expense row) and reverse the expense
+    totals counter. The ledger re-derives — nothing else to update.
 
-    `payment_id` here is the EXPENSE doc id (this is what the UI passes
-    -- it is the same value as the `id` field on each entry in the
-    payments[] list returned by /laundry/monthly).
-
-    Body: { month, payment_id }
-    Auth: admin (via @requires_permission).
+    Body: { payment_id }   (payment_id = the expense doc id; the legacy
+    body also carried month/period_key — accepted and ignored.)
     """
     try:
         data = request.json or {}
-        month      = data.get("month")
         expense_id = data.get("payment_id")
+        if not expense_id:
+            return jsonify(success=False, message="payment_id required"), 400
 
-        if not month or not expense_id:
-            return jsonify(success=False, message="month and payment_id required"), 400
-        # Auth handled by @requires_permission decorator
-
-        # Look up the expense doc so we can reverse the totals correctly.
         exp_doc = db.collection("expenses").document(expense_id).get()
         if not exp_doc.exists:
-            return jsonify(success=False, message="Expense entry not found"), 404
+            return jsonify(success=False, message="Payment entry not found"), 404
         exp_data = exp_doc.to_dict() or {}
+
+        # Only laundry rows may be deleted through this endpoint —
+        # protects against a UI bug passing some other expense's id.
+        if (exp_data.get("category") != "laundry"
+                and not exp_data.get("laundry_payment")
+                and not exp_data.get("laundry_bill_month")
+                and not exp_data.get("laundry_bill_period")):
+            return jsonify(success=False,
+                           message="That entry is not a laundry payment"), 400
+
         deleted_amount = int(exp_data.get("amount") or 0)
         deleted_method = exp_data.get("payment_method") or "cash"
         deleted_etype  = exp_data.get("expense_type") or "transaction"
-        deleted_date   = exp_data.get("date") or datetime.now(IST).strftime("%Y-%m-%d")
-
-        # Sanity: refuse to delete an expense that does not belong to the
-        # claimed month -- protects against a UI bug passing the wrong id.
-        _req_period = (data.get("period_key") or "").strip()
-        belongs = (
-            exp_data.get("laundry_bill_month") == month
-            or _month_label(month) in str(exp_data.get("description") or "")
-            or (_req_period and
-                exp_data.get("laundry_bill_period") == _req_period)
-        )
-        if not belongs:
-            return jsonify(
-                success=False,
-                message="That expense entry does not belong to this bill",
-            ), 400
+        deleted_date   = (exp_data.get("date")
+                          or datetime.now(IST).strftime("%Y-%m-%d"))
 
         try:
             db.collection("expenses").document(expense_id).delete()
         except Exception as ee:
             logger.error(f"delete_laundry_payment: expense delete failed "
                          f"(id={expense_id}): {ee}")
-            return jsonify(success=False, message="Could not delete expense"), 500
+            return jsonify(success=False, message="Could not delete payment"), 500
 
         if deleted_etype == "transaction" and deleted_amount > 0:
             try:
@@ -988,70 +1084,56 @@ def delete_laundry_payment():
             except Exception as ee:
                 logger.warning(f"delete_laundry_payment: totals reversal failed: {ee}")
 
-        # Refresh the bill's cached summary fields (best-effort -- not
-        # critical, since reads re-derive from expenses).
         try:
-            bill_q = []
-            if _req_period:
-                bill_q = list(
-                    _laundry_bills_ref()
-                    .where(filter=FieldFilter("period_key", "==", _req_period))
-                    .limit(1).stream()
-                )
-            if not bill_q:
-                bill_q = list(
-                    _laundry_bills_ref()
-                    .where(filter=FieldFilter("month", "==", month))
-                    .limit(1).stream()
-                )
-            if bill_q:
-                bill = bill_q[0].to_dict() or {}
-                bill_amount = int(bill.get("bill_amount") or 0)
-                old_balance = int(bill.get("old_balance") or 0)
-                grand_total = bill_amount + old_balance
-                _pk = bill.get("period_key") or ""
-                _fs, _fe = _full_month_bounds(bill.get("month") or "")
-                _ifm = (not _pk) or (bill.get("period_start") == _fs
-                                     and bill.get("period_end") == _fe)
-                rows = _payment_rows_for_bill(bill.get("month"), _pk, _ifm)
-                paid_total = sum(r["amount"] for r in rows)
-                balance    = grand_total - paid_total
-                _laundry_bills_ref().document(bill_q[0].id).update({
-                    "paid_amount": paid_total,
-                    "paid_total":  paid_total,
-                    "balance":     balance,
-                    "updated_at":  datetime.now(IST).isoformat(),
-                })
-        except Exception as ee:
-            logger.warning(f"delete_laundry_payment: bill refresh failed: {ee}")
+            from services.audit_log import write_log
+            write_log("laundry.payment.delete", target_collection="expenses",
+                      target_id=expense_id,
+                      metadata={"amount": deleted_amount,
+                                "method": deleted_method,
+                                "date": deleted_date})
+        except Exception as le:
+            logger.warning(f"delete_laundry_payment: audit log failed: {le}")
 
-        return jsonify(
-            success=True,
-            message=f"Payment of {deleted_amount} removed",
-        )
+        ledger = _build_ledger()
+        return jsonify(success=True,
+                       message=f"Payment of {deleted_amount} removed",
+                       summary=ledger["summary"])
     except Exception as e:
         logger.error(f"delete_laundry_payment error: {e}", exc_info=True)
         return jsonify(success=False, message=str(e)), 500
 
 
 # ---------------------------------------------------------------------------
-# ALL BILLS -- history for the monthly bill tab
+# ALL BILLS -- ledger-derived list (kept for stale cached frontends)
 # ---------------------------------------------------------------------------
 
 @laundry_bp.route("/laundry/all_bills", methods=["GET"])
 @requires_role("admin")
 def get_all_bills():
-    """All monthly bill records, sorted by month desc, with payments[] normalised."""
+    """
+    DEPRECATED — the Billing tab reads /laundry/ledger now. Returns each
+    bill with FIFO-derived settled amounts mapped onto the legacy field
+    names so an old cached frontend still shows sane numbers.
+    """
     try:
-        docs = _laundry_bills_ref().stream()
+        ledger = _build_ledger()
         results = []
-        for d in docs:
-            row = d.to_dict()
-            row["doc_id"] = d.id
-            _with_payment_totals(row)
-            results.append(row)
-        # Period bills within the same month order by period_end desc.
-        results.sort(key=lambda x: (x.get("month", ""),
+        for b in ledger["bills"]:
+            results.append({
+                "doc_id":       b.get("id"),
+                "month":        b.get("month"),
+                "bill_date":    b.get("bill_date"),
+                "period_start": b.get("period_start"),
+                "period_end":   b.get("period_end"),
+                "period_key":   b.get("period_key"),
+                "bill_amount":  b.get("amount"),
+                "paid_total":   b.get("settled", 0),
+                "paid_amount":  b.get("settled", 0),
+                "balance":      b.get("due", b.get("amount")),
+                "status":       b.get("status"),
+                "payments":     [],
+            })
+        results.sort(key=lambda x: (x.get("month") or "",
                                     x.get("period_end") or ""),
                      reverse=True)
         return jsonify(success=True, bills=results)

@@ -52,6 +52,14 @@
 @media (min-width: 720px) {
   .reg-filter-row-single { flex-wrap: nowrap; }
 }
+/* Admin single-row layout (same one-row pattern as the Bills filter bar) —
+   search flexes to fill; the row wraps on narrow screens instead of
+   clipping, since it carries the date-range picker too. */
+.reg-filter-row-one {
+  display: flex; flex-wrap: wrap;
+  align-items: center; gap: 0.4rem;
+}
+.reg-filter-row-one .reg-search-input { flex: 1; min-width: 140px; }
 .reg-date-range-wrap {
   display: flex; align-items: center; gap: 0.3rem;
   background: #fff; border: 1px solid #d8d8d8; border-radius: 6px;
@@ -1978,22 +1986,21 @@
 
     const filterMarkup = _isAdmin
       ? `
-    <div class="reg-filter-row reg-filter-row-1">
+    <div class="reg-filter-row reg-filter-row-one">
       ${datePickerMarkup}
       ${dateButtons}
-    </div>
-    <div class="reg-filter-row reg-filter-row-2">
-      <select id="reg-status-filter">
-        <option value="all">All Status</option>
-        <option value="active">Active</option>
-        <option value="completed">Checked Out</option>
-      </select>
+      <span class="reg-filter-divider"></span>
       <select id="reg-payment-filter">
         <option value="all">All Payments</option>
         <option value="cash">Cash Only</option>
         <option value="online">Online Only</option>
         <option value="split">Split</option>
         <option value="pending">Pending Balance</option>
+      </select>
+      <select id="reg-status-filter">
+        <option value="all">All Status</option>
+        <option value="active">Active</option>
+        <option value="completed">Checked Out</option>
       </select>
       <input type="text" class="reg-search-input" id="reg-search" placeholder="Name / Room / Mobile…" />
     </div>`
@@ -2345,6 +2352,22 @@
           if (window.CibaraRoomAttribution) {
             window.CibaraRoomAttribution.openForButton(histBtn, fullEntry);
           }
+          return;
+        }
+
+        // Check-in cell click (admin) → edit this stay's check-in date/time.
+        const ciCell = e.target.closest(".reg-ci-cell");
+        if (ciCell) {
+          const can = window.CibaraAuth &&
+            typeof window.CibaraAuth.userCan === "function" &&
+            window.CibaraAuth.userCan("stay.times.edit");
+          if (!can) return;   // non-admins: cell is inert
+          e.stopPropagation();
+          const tid = ciCell.dataset.entryId;
+          const fullEntry =
+            state.filteredEntries.find((en) => en.id && en.id === tid) ||
+            state.allEntries.find((en) => en.id && en.id === tid);
+          if (fullEntry) _openStayTimesModal(fullEntry);
           return;
         }
 
@@ -2812,6 +2835,457 @@
   }
 
   // ── Render ────────────────────────────────────────────────────────────────────
+  // ── Check-in time editor (admin) ──────────────────────────────────────
+  // Opens from a click on the register row's check-in cell. Two compact
+  // steps — DATE (calendar) then TIME (clock dial) — with value chips to
+  // jump between them, so the whole modal fits one phone screen. Picking
+  // a day auto-advances to the clock. Completed stays → /update_stay_times
+  // (checkout sent back unchanged); active stays → /update_checkin_time.
+  let _stayTimesEntry = null;
+  let _rstView = "";           // "YYYY-MM" month shown in the calendar
+  let _rstDate = "";           // selected "YYYY-MM-DD"
+  let _rstH = 12, _rstM = 0;   // selected time
+  let _rstStep = "date";       // "date" | "time"
+  let _rstClockMode = "hour";  // "hour" | "min"
+
+  const _RST_R_OUTER = 78, _RST_R_INNER = 50, _RST_C = 98;
+
+  function _rstToday() {
+    const d = new Date();
+    return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") +
+      "-" + String(d.getDate()).padStart(2, "0");
+  }
+
+  function _ensureStayTimesDom() {
+    if (dom("rst-overlay")) return;
+    const style = document.createElement("style");
+    style.id = "rst-styles";
+    style.textContent = `
+      #rst-overlay{position:fixed;inset:0;background:rgba(15,23,42,.55);display:none;
+        align-items:center;justify-content:center;z-index:10080;padding:10px;}
+      #rst-overlay.show{display:flex;}
+      .rst-box{background:#fff;border-radius:16px;max-width:340px;width:100%;
+        padding:.85rem .95rem;box-shadow:0 12px 44px rgba(0,0,0,.28);
+        max-height:94vh;overflow-y:auto;}
+      .rst-head{display:flex;justify-content:space-between;align-items:center;gap:.5rem;}
+      .rst-title{font-weight:700;font-size:.95rem;color:#0f172a;}
+      .rst-sub{font-size:.7rem;color:#64748b;margin-top:1px;overflow:hidden;
+        text-overflow:ellipsis;white-space:nowrap;}
+      .rst-x{background:none;border:0;font-size:1.35rem;line-height:1;color:#94a3b8;
+        cursor:pointer;padding:0 .1rem;flex-shrink:0;}
+      .rst-x:hover{color:#475569;}
+      .rst-chips{display:flex;gap:.4rem;margin-top:.6rem;}
+      .rst-chip{flex:1;display:flex;align-items:center;justify-content:center;
+        gap:.35rem;border:1.5px solid #e2e8f0;background:#fff;border-radius:10px;
+        min-height:38px;font-size:.85rem;font-weight:700;color:#334155;
+        cursor:pointer;font-variant-numeric:tabular-nums;}
+      .rst-chip i{font-size:.72rem;color:#94a3b8;}
+      .rst-chip.on{border-color:#1d4ed8;background:#eff6ff;color:#1d4ed8;}
+      .rst-chip.on i{color:#1d4ed8;}
+      .rst-step{margin-top:.55rem;}
+      /* — calendar (compact) — */
+      .rst-cal-head{display:flex;align-items:center;justify-content:space-between;
+        margin-bottom:.35rem;}
+      .rst-cal-title{font-weight:700;color:#0f172a;font-size:.85rem;}
+      .rst-nav{border:1px solid #e2e8f0;background:#fff;border-radius:8px;
+        width:30px;height:30px;cursor:pointer;font-size:.95rem;color:#334155;}
+      .rst-nav:hover{background:#f8fafc;}
+      .rst-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:3px;}
+      .rst-dow{font-size:.6rem;color:#94a3b8;text-align:center;font-weight:700;
+        padding:1px 0;text-transform:uppercase;}
+      .rst-day{border-radius:8px;min-height:30px;display:flex;align-items:center;
+        justify-content:center;font-size:.8rem;cursor:pointer;user-select:none;
+        background:#fff;color:#0f172a;border:1px solid transparent;}
+      .rst-day:hover{background:#f1f5f9;}
+      .rst-day.today{border-color:#94a3b8;font-weight:700;}
+      .rst-day.sel{background:#1d4ed8;color:#fff;font-weight:700;}
+      .rst-day.disabled{opacity:.28;cursor:not-allowed;}
+      /* — clock (compact) — */
+      .rst-time-display{display:flex;align-items:center;justify-content:center;
+        gap:.25rem;margin-bottom:.4rem;}
+      .rst-td-seg{border:0;border-radius:9px;padding:.15rem .6rem;font-size:1.35rem;
+        font-weight:800;cursor:pointer;background:#f1f5f9;color:#334155;
+        line-height:1.3;font-variant-numeric:tabular-nums;}
+      .rst-td-seg.on{background:#dbeafe;color:#1d4ed8;}
+      .rst-td-colon{font-size:1.35rem;font-weight:800;color:#94a3b8;line-height:1;}
+      .rst-clock-wrap{display:flex;justify-content:center;}
+      .rst-clock{width:196px;height:196px;border-radius:50%;background:#f1f5f9;
+        position:relative;touch-action:none;user-select:none;cursor:pointer;}
+      .rst-hand{position:absolute;left:50%;top:50%;width:2px;background:#1d4ed8;
+        transform-origin:0 0;pointer-events:none;}
+      .rst-center-dot{position:absolute;left:50%;top:50%;width:6px;height:6px;
+        margin:-3px 0 0 -3px;border-radius:50%;background:#1d4ed8;pointer-events:none;}
+      .rst-knob{position:absolute;width:30px;height:30px;margin:-15px 0 0 -15px;
+        border-radius:50%;background:#1d4ed8;pointer-events:none;opacity:.95;}
+      .rst-lbl{position:absolute;width:26px;height:26px;margin:-13px 0 0 -13px;
+        border-radius:50%;display:flex;align-items:center;justify-content:center;
+        font-size:.74rem;font-weight:600;color:#334155;pointer-events:none;}
+      .rst-lbl.inner{font-size:.62rem;color:#94a3b8;}
+      .rst-lbl.sel{color:#fff;font-weight:700;}
+      /* — preview + footer — */
+      .rst-preview{margin-top:.55rem;font-size:.72rem;font-weight:600;color:#475569;
+        background:#f8fafc;border-radius:9px;padding:.4rem .6rem;line-height:1.45;}
+      .rst-preview .warn{color:#b45309;}
+      .rst-foot{display:flex;gap:.5rem;margin-top:.65rem;}
+      .rst-save{flex:1;min-height:42px;border-radius:10px;border:0;background:#1d4ed8;
+        color:#fff;font-weight:700;font-size:.88rem;cursor:pointer;}
+      .rst-save:hover{background:#1e40af;}
+      .rst-save:disabled{opacity:.6;cursor:default;}
+      .rst-cancel{flex:0 0 auto;background:transparent;border:0;color:#64748b;
+        cursor:pointer;padding:0 .7rem;font-weight:600;font-size:.85rem;}
+    `;
+    document.head.appendChild(style);
+
+    const ov = document.createElement("div");
+    ov.id = "rst-overlay";
+    ov.innerHTML = `
+      <div class="rst-box">
+        <div class="rst-head">
+          <div style="min-width:0;">
+            <div class="rst-title">Edit check-in</div>
+            <div class="rst-sub" id="rst-sub"></div>
+          </div>
+          <button class="rst-x" id="rst-close" aria-label="Close">&times;</button>
+        </div>
+        <div class="rst-chips">
+          <button class="rst-chip on" id="rst-chip-date">
+            <i class="fas fa-calendar-alt"></i><span id="rst-chip-date-val">—</span>
+          </button>
+          <button class="rst-chip" id="rst-chip-time">
+            <i class="fas fa-clock"></i><span id="rst-chip-time-val">—</span>
+          </button>
+        </div>
+        <div class="rst-step" id="rst-step-date">
+          <div class="rst-cal-head">
+            <button class="rst-nav" id="rst-prev">&#8249;</button>
+            <div class="rst-cal-title" id="rst-cal-title"></div>
+            <button class="rst-nav" id="rst-next">&#8250;</button>
+          </div>
+          <div class="rst-grid" id="rst-grid"></div>
+        </div>
+        <div class="rst-step" id="rst-step-time" hidden>
+          <div class="rst-time-display">
+            <button class="rst-td-seg on" id="rst-td-hour">00</button>
+            <span class="rst-td-colon">:</span>
+            <button class="rst-td-seg" id="rst-td-min">00</button>
+          </div>
+          <div class="rst-clock-wrap">
+            <div class="rst-clock" id="rst-clock"></div>
+          </div>
+        </div>
+        <div class="rst-preview" id="rst-preview">&nbsp;</div>
+        <div class="rst-foot">
+          <button class="rst-save" id="rst-save">Save</button>
+          <button class="rst-cancel" id="rst-cancel">Cancel</button>
+        </div>
+      </div>`;
+    document.body.appendChild(ov);
+    ov.addEventListener("click", (ev) => { if (ev.target === ov) ov.classList.remove("show"); });
+    dom("rst-close").addEventListener("click", () => ov.classList.remove("show"));
+    dom("rst-cancel").addEventListener("click", () => ov.classList.remove("show"));
+    dom("rst-prev").addEventListener("click", () => _rstShiftMonth(-1));
+    dom("rst-next").addEventListener("click", () => _rstShiftMonth(1));
+    dom("rst-chip-date").addEventListener("click", () => _rstShowStep("date"));
+    dom("rst-chip-time").addEventListener("click", () => _rstShowStep("time"));
+    dom("rst-td-hour").addEventListener("click", () => _rstSetClockMode("hour"));
+    dom("rst-td-min").addEventListener("click", () => _rstSetClockMode("min"));
+    _rstBindClock();
+    dom("rst-save").addEventListener("click", _submitStayTimes);
+  }
+
+  // ── Steps + value chips ──
+  function _rstShowStep(step) {
+    _rstStep = step;
+    const sd = dom("rst-step-date"), st = dom("rst-step-time");
+    if (sd) sd.hidden = step !== "date";
+    if (st) st.hidden = step !== "time";
+    dom("rst-chip-date").classList.toggle("on", step === "date");
+    dom("rst-chip-time").classList.toggle("on", step === "time");
+    if (step === "time") _rstRenderClock();
+    _rstSyncChips();
+  }
+
+  function _rstSyncChips() {
+    const dv = dom("rst-chip-date-val"), tv = dom("rst-chip-time-val");
+    if (dv) {
+      const d = _rstDate ? new Date(_rstDate + "T00:00:00") : null;
+      dv.textContent = d && !isNaN(d)
+        ? d.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })
+        : "—";
+    }
+    if (tv) tv.textContent =
+      String(_rstH).padStart(2, "0") + ":" + String(_rstM).padStart(2, "0");
+  }
+
+  // ── Calendar ──
+  function _rstMaxDate() {
+    // Latest selectable check-in DAY: today, and for completed stays never
+    // after the checkout day (check-in must stay before checkout).
+    const today = _rstToday();
+    const e = _stayTimesEntry;
+    const co = e && e.status !== "active" ? (e.checkout_time || "").slice(0, 10) : "";
+    return co && co < today ? co : today;
+  }
+
+  function _rstShiftMonth(delta) {
+    const [y, m] = _rstView.split("-").map(Number);
+    const d = new Date(y, m - 1 + delta, 1);
+    _rstView = d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0");
+    _rstRenderCal();
+  }
+
+  function _rstRenderCal() {
+    const title = dom("rst-cal-title");
+    const grid = dom("rst-grid");
+    if (!grid) return;
+    const [y, m] = _rstView.split("-").map(Number);
+    title.textContent = new Date(y, m - 1, 1)
+      .toLocaleString("en-IN", { month: "long", year: "numeric" });
+
+    const dows = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
+    let html = dows.map((d) => `<div class="rst-dow">${d}</div>`).join("");
+    const firstDow = new Date(y, m - 1, 1).getDay();
+    for (let i = 0; i < firstDow; i++) html += "<div></div>";
+
+    const nDays = new Date(y, m, 0).getDate();
+    const today = _rstToday();
+    const maxDate = _rstMaxDate();
+    for (let d = 1; d <= nDays; d++) {
+      const date = _rstView + "-" + String(d).padStart(2, "0");
+      const disabled = date > maxDate;
+      const cls = ["rst-day",
+                   disabled ? "disabled" : "",
+                   date === today ? "today" : "",
+                   date === _rstDate ? "sel" : ""].filter(Boolean).join(" ");
+      html += `<div class="${cls}" data-date="${date}">${d}</div>`;
+    }
+    grid.innerHTML = html;
+    grid.querySelectorAll(".rst-day:not(.disabled)").forEach((cell) => {
+      cell.onclick = function () {
+        _rstDate = cell.dataset.date;
+        _rstRenderCal();
+        _rstPreview();
+        // Date picked → straight on to the clock.
+        _rstClockMode = "hour";
+        _rstShowStep("time");
+      };
+    });
+  }
+
+  // ── Clock dial (Material-style, 24h) ──
+  // Hour mode: outer ring 1–12, inner ring 13–23 + 00. Minute mode: labels
+  // every 5, tap or drag anywhere snaps to the nearest minute.
+  function _rstSetClockMode(mode) {
+    _rstClockMode = mode;
+    _rstRenderClock();
+  }
+
+  function _rstRenderClock() {
+    const clock = dom("rst-clock");
+    if (!clock) return;
+    const hd = dom("rst-td-hour"), md = dom("rst-td-min");
+    if (hd) { hd.textContent = String(_rstH).padStart(2, "0");
+              hd.classList.toggle("on", _rstClockMode === "hour"); }
+    if (md) { md.textContent = String(_rstM).padStart(2, "0");
+              md.classList.toggle("on", _rstClockMode === "min"); }
+
+    let html = "";
+    let angle, radius;
+    if (_rstClockMode === "hour") {
+      angle = ((_rstH % 12) / 12) * 360 - 90;
+      radius = (_rstH === 0 || _rstH > 12) ? _RST_R_INNER : _RST_R_OUTER;
+    } else {
+      angle = (_rstM / 60) * 360 - 90;
+      radius = _RST_R_OUTER;
+    }
+    const rad = (angle * Math.PI) / 180;
+    const kx = _RST_C + radius * Math.cos(rad);
+    const ky = _RST_C + radius * Math.sin(rad);
+    html += `<div class="rst-hand" style="height:${radius - 14}px;` +
+            `transform:rotate(${angle - 90}deg);"></div>`;
+    html += `<div class="rst-knob" style="left:${kx}px;top:${ky}px;"></div>`;
+    html += `<div class="rst-center-dot"></div>`;
+
+    if (_rstClockMode === "hour") {
+      for (let i = 0; i < 12; i++) {
+        const a = (i / 12) * 360 - 90, r = (a * Math.PI) / 180;
+        const vOut = i === 0 ? 12 : i;
+        const xo = _RST_C + _RST_R_OUTER * Math.cos(r);
+        const yo = _RST_C + _RST_R_OUTER * Math.sin(r);
+        html += `<div class="rst-lbl ${vOut === _rstH ? "sel" : ""}"` +
+                ` style="left:${xo}px;top:${yo}px;">${vOut}</div>`;
+        const vIn = i === 0 ? 0 : i + 12;
+        const xi = _RST_C + _RST_R_INNER * Math.cos(r);
+        const yi = _RST_C + _RST_R_INNER * Math.sin(r);
+        html += `<div class="rst-lbl inner ${vIn === _rstH ? "sel" : ""}"` +
+                ` style="left:${xi}px;top:${yi}px;">${String(vIn).padStart(2, "0")}</div>`;
+      }
+    } else {
+      for (let i = 0; i < 12; i++) {
+        const v = i * 5;
+        const a = (v / 60) * 360 - 90, r = (a * Math.PI) / 180;
+        const x = _RST_C + _RST_R_OUTER * Math.cos(r);
+        const y = _RST_C + _RST_R_OUTER * Math.sin(r);
+        html += `<div class="rst-lbl ${v === _rstM ? "sel" : ""}"` +
+                ` style="left:${x}px;top:${y}px;">${String(v).padStart(2, "0")}</div>`;
+      }
+    }
+    clock.innerHTML = html;
+    _rstSyncChips();
+  }
+
+  function _rstClockPick(ev, finalize) {
+    const clock = dom("rst-clock");
+    if (!clock) return;
+    const rect = clock.getBoundingClientRect();
+    const x = ev.clientX - rect.left - _RST_C;
+    const y = ev.clientY - rect.top - _RST_C;
+    const dist = Math.sqrt(x * x + y * y);
+    if (dist < 16) return;                       // dead zone at the center
+    let deg = (Math.atan2(y, x) * 180) / Math.PI + 90;  // 0° at 12 o'clock
+    if (deg < 0) deg += 360;
+    if (_rstClockMode === "hour") {
+      const idx = Math.round(deg / 30) % 12;     // 0..11, 0 = top
+      const inner = dist < (_RST_R_OUTER + _RST_R_INNER) / 2;
+      _rstH = inner ? (idx === 0 ? 0 : idx + 12) : (idx === 0 ? 12 : idx);
+      _rstRenderClock();
+      if (finalize) _rstSetClockMode("min");     // hour picked → minutes
+    } else {
+      _rstM = Math.round(deg / 6) % 60;          // 1-minute snap
+      _rstRenderClock();
+    }
+    _rstPreview();
+  }
+
+  function _rstBindClock() {
+    const clock = dom("rst-clock");
+    if (!clock) return;
+    let dragging = false;
+    clock.addEventListener("pointerdown", (ev) => {
+      dragging = true;
+      clock.setPointerCapture(ev.pointerId);
+      _rstClockPick(ev, false);
+    });
+    clock.addEventListener("pointermove", (ev) => {
+      if (dragging) _rstClockPick(ev, false);
+    });
+    clock.addEventListener("pointerup", (ev) => {
+      dragging = false;
+      _rstClockPick(ev, true);
+    });
+  }
+
+  // ── Preview / open / submit ──
+  function _rstChosen() {
+    if (!_rstDate) return "";
+    return `${_rstDate} ${String(_rstH).padStart(2, "0")}:` +
+           `${String(_rstM).padStart(2, "0")}`;
+  }
+
+  function _rstPreview() {
+    const box = dom("rst-preview");
+    if (!box || !_stayTimesEntry) return;
+    const e = _stayTimesEntry;
+    const chosen = _rstChosen();
+    if (!chosen) { box.innerHTML = "Pick a date."; return; }
+    let html = "";
+    if (e.status !== "active" && e.checkout_time) {
+      const co = e.checkout_time.slice(0, 16);
+      if (chosen >= co) {
+        html = `<span class="warn">Check-in must be before checkout ` +
+               `(${fmtDT(e.checkout_time)}).</span>`;
+      } else {
+        const nights = Math.max(1, Math.round(
+          (new Date(co.slice(0, 10)) - new Date(chosen.slice(0, 10))) / 86400000));
+        const billed = Number(e.days_stayed || 0);
+        if (billed && billed !== nights) {
+          html = `<span class="warn">New dates span ${nights} night` +
+                 `${nights === 1 ? "" : "s"}, billed for ${billed} — ` +
+                 `amounts won't change.</span>`;
+        }
+      }
+    }
+    box.innerHTML = html ||
+      "First payment & serial follow the new check-in automatically.";
+  }
+
+  function _openStayTimesModal(entry) {
+    _ensureStayTimesDom();
+    _stayTimesEntry = entry;
+    const isActive = entry.status === "active";
+    dom("rst-sub").textContent =
+      `${entry.guest_name || "-"} · Room ${entry.room || "-"}` +
+      (isActive ? " · active stay"
+        : (entry.bill_number && entry.bill_number !== "-"
+            ? ` · Bill ${entry.bill_number}` : ""));
+    const cur = (entry.checkin_time || "").slice(0, 16);   // "YYYY-MM-DD HH:MM"
+    _rstDate = cur.slice(0, 10) || _rstToday();
+    _rstView = _rstDate.slice(0, 7);
+    _rstH = parseInt(cur.slice(11, 13), 10);
+    _rstM = parseInt(cur.slice(14, 16), 10);
+    if (isNaN(_rstH)) _rstH = 12;
+    if (isNaN(_rstM)) _rstM = 0;
+    _rstClockMode = "hour";
+    _rstRenderCal();
+    _rstShowStep("date");
+    _rstPreview();
+    dom("rst-overlay").classList.add("show");
+  }
+
+  async function _submitStayTimes() {
+    const e = _stayTimesEntry;
+    if (!e) return;
+    const isActive = e.status === "active";
+    const ci = _rstChosen();
+    if (!ci) { showNotification("Pick the check-in date", "error"); return; }
+    const nowStr = new Date(Date.now() - new Date().getTimezoneOffset() * 60000)
+      .toISOString().slice(0, 16).replace("T", " ");
+    if (ci > nowStr) {
+      showNotification("Check-in can't be in the future", "error"); return;
+    }
+    if (!isActive && e.checkout_time && ci >= e.checkout_time.slice(0, 16)) {
+      showNotification("Check-in must be before checkout", "error"); return;
+    }
+    const btn = dom("rst-save");
+    btn.disabled = true; btn.textContent = "Saving…";
+    try {
+      let res;
+      if (isActive) {
+        res = await apiFetch("/update_checkin_time", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ room: e.room, checkin_time: ci }),
+        });
+      } else {
+        // Checkout is sent back UNCHANGED — only check-in is edited here.
+        res = await apiFetch("/update_stay_times", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            bill_id: e.id,
+            checkin_time: ci,
+            checkout_time: (e.checkout_time || "").slice(0, 16),
+          }),
+        });
+      }
+      const data = await res.json();
+      if (!data.success) {
+        showNotification(data.message || "Could not update check-in time", "error");
+        return;
+      }
+      showNotification(data.message || "Check-in time updated", "success");
+      if (data.warning) {
+        setTimeout(() => showNotification(data.warning, "warning"), 400);
+      }
+      dom("rst-overlay").classList.remove("show");
+      loadData(true);   // serials / row order may have changed
+    } catch (err) {
+      showNotification("Network error updating check-in time", "error");
+    } finally {
+      btn.disabled = false; btn.textContent = "Save";
+    }
+  }
+
   function renderTable() {
     const tbody = dom("reg-table-body");
     if (!tbody) return;
@@ -2925,7 +3399,9 @@
       <td class="reg-td-persons">${personsCell}</td>
       <td style="font-size:.78rem;">${e.guest_mobile || "-"}</td>
       <td><strong>${e.room || "-"}</strong></td>
-      <td style="font-size:.76rem;white-space:nowrap;">${fmtDT(e.checkin_time)}</td>
+      <td class="reg-ci-cell" data-entry-id="${e.id || ''}"
+          title="Edit check-in date &amp; time for this stay"
+          style="font-size:.76rem;white-space:nowrap;">${fmtDT(e.checkin_time)}</td>
       <td style="font-size:.76rem;white-space:nowrap;">${e.checkout_time ? fmtDT(e.checkout_time) : '<span style="color:#aaa;">Active</span>'}</td>
       <td style="text-align:center;">${days}</td>
       <td>₹${inr(e.room_rent)}</td>

@@ -1479,64 +1479,106 @@
         <!-- Register Tab Content -->
         <div class="tab-content hidden" id="register-tab">
           <div class="register-container">
-            <!-- Header -->
-            <div class="register-header">
+            <!-- Header — compact, matches the Bills tab pattern -->
+            <style>
+              /* Compact register header + one-row filter bar (Bills-tab style) */
+              .reg-compact-header {
+                display: flex; justify-content: space-between; align-items: center;
+                gap: .6rem; flex-wrap: wrap; margin-bottom: .55rem;
+              }
+              .reg-compact-header h1 {
+                font-size: 1.05rem; font-weight: 700; color: var(--primary);
+                display: flex; align-items: center; gap: .4rem; margin: 0;
+              }
+              .reg-toolbar { display: flex; align-items: center; gap: .4rem; }
+              .reg-icon-btn {
+                width: 32px; height: 32px; border: none; border-radius: 6px;
+                cursor: pointer; display: flex; align-items: center;
+                justify-content: center; font-size: .85rem; transition: opacity .15s;
+                color: #fff;
+              }
+              .reg-icon-btn:hover { opacity: .78; }
+              .reg-icon-btn.export   { background: #1d6f42; }
+              .reg-icon-btn.refresh  { background: #6c757d; }
+              .reg-icon-btn.customers{ background: #3f51b5; }
+              .reg-filter-bar {
+                display: flex; flex-wrap: wrap; align-items: center; gap: .4rem;
+                margin-bottom: .6rem; background: #f4f6fb; border-radius: 10px;
+                padding: .5rem .7rem; border: 1px solid #e8eaf0;
+              }
+              .reg-date-wrap {
+                display: flex; align-items: center; gap: .3rem; background: #fff;
+                border: 1px solid #d8d8d8; border-radius: 6px; padding: .2rem .45rem;
+                height: 30px;
+              }
+              .reg-date-wrap:focus-within { border-color: var(--primary, #3f51b5); }
+              .reg-date-wrap i { color: #6c757d; font-size: .75rem; }
+              .reg-date-wrap .reg-date-sep { color: #94a3b8; font-size: .72rem; }
+              .reg-date-wrap input[type="date"] {
+                border: none; outline: none; background: transparent;
+                font-size: .8rem; color: #333; width: 118px; cursor: pointer;
+                padding: 0; height: 100%;
+              }
+              .reg-filter-bar select {
+                padding: .25rem .4rem; border: 1px solid #d8d8d8; border-radius: 6px;
+                font-size: .8rem; background: #fff; height: 30px; color: #444;
+                cursor: pointer;
+              }
+              .reg-filter-bar .reg-search {
+                flex: 1; min-width: 130px; height: 30px;
+                padding: .25rem .5rem .25rem 1.8rem;
+                border: 1px solid #d8d8d8; border-radius: 6px; font-size: .8rem;
+                background: #fff url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='13' height='13' viewBox='0 0 24 24' fill='none' stroke='%23aaa' stroke-width='2.5'%3E%3Ccircle cx='11' cy='11' r='8'%3E%3C/circle%3E%3Cline x1='21' y1='21' x2='16.65' y2='16.65'%3E%3C/line%3E%3C/svg%3E") no-repeat .45rem center;
+              }
+              .reg-filter-bar .reg-search:focus {
+                outline: none; border-color: var(--primary, #3f51b5);
+              }
+              @media (max-width: 640px) {
+                .reg-date-wrap input[type="date"] { width: 104px; }
+              }
+            </style>
+            <div class="reg-compact-header">
               <h1><i class="fas fa-book"></i> Daily Register</h1>
-              <div class="header-actions">
-                <button class="action-btn btn-primary" id="export-excel-btn" data-perm="data.export">
-                  <i class="fas fa-file-excel"></i> Export
+              <div class="reg-toolbar">
+                <button class="reg-icon-btn customers" id="open-customers-btn"
+                        data-perm="customer.manage" onclick="openCustomerManager()"
+                        title="Customers">
+                  <i class="fas fa-users"></i>
                 </button>
-                <button
-                  class="action-btn btn-secondary"
-                  id="refresh-register-btn"
-                >
-                  <i class="fas fa-sync-alt"></i> Refresh
+                <button class="reg-icon-btn export" id="export-excel-btn"
+                        data-perm="data.export" title="Export to Excel">
+                  <i class="fas fa-file-excel"></i>
+                </button>
+                <button class="reg-icon-btn refresh" id="refresh-register-btn"
+                        title="Refresh">
+                  <i class="fas fa-sync-alt"></i>
                 </button>
               </div>
             </div>
 
-            <!-- Filters -->
-            <div class="filters-section">
-              <div class="filter-group">
-                <label for="start-date">From Date:</label>
-                <input type="date" id="start-date" class="date-input" />
+            <!-- Filters — single compact row (IDs unchanged; register.js
+                 wiring untouched) -->
+            <div class="reg-filter-bar">
+              <div class="reg-date-wrap" title="Date range">
+                <i class="fas fa-calendar-alt"></i>
+                <input type="date" id="start-date" />
+                <span class="reg-date-sep">→</span>
+                <input type="date" id="end-date" />
               </div>
-              <div class="filter-group">
-                <label for="end-date">To Date:</label>
-                <input type="date" id="end-date" class="date-input" />
-              </div>
-              <div class="filter-group filter-group-search">
-                <label for="search-register">Search:</label>
-                <div class="search-with-btn">
-                  <input
-                    type="text"
-                    id="search-register"
-                    class="search-input search-input-compact"
-                    placeholder="Name, Mobile, Room..."
-                  />
-                  <button class="btn-customers" id="open-customers-btn" data-perm="customer.manage" onclick="openCustomerManager()">
-                    <i class="fas fa-users"></i> Customers
-                  </button>
-                </div>
-              </div>
-              <div class="filter-group">
-                <label for="payment-filter">Payment:</label>
-                <select id="payment-filter" class="filter-select">
-                  <option value="all">All</option>
-                  <option value="cash">Cash Only</option>
-                  <option value="online">Online Only</option>
-                  <option value="split">Split Payment</option>
-                  <option value="pending">Pending Balance</option>
-                </select>
-              </div>
-              <div class="filter-group">
-                <label for="status-filter">Status:</label>
-                <select id="status-filter" class="filter-select">
-                  <option value="all">All</option>
-                  <option value="active">Active</option>
-                  <option value="completed">Checked Out</option>
-                </select>
-              </div>
+              <input type="text" id="search-register" class="reg-search"
+                     placeholder="Search name, mobile, room…" />
+              <select id="payment-filter" title="Payment">
+                <option value="all">All Payments</option>
+                <option value="cash">Cash Only</option>
+                <option value="online">Online Only</option>
+                <option value="split">Split Payment</option>
+                <option value="pending">Pending Balance</option>
+              </select>
+              <select id="status-filter" title="Status">
+                <option value="all">All Status</option>
+                <option value="active">Active</option>
+                <option value="completed">Checked Out</option>
+              </select>
             </div>
 
             <!-- Register Table -->
@@ -1869,13 +1911,15 @@
             ></i>
           </div>
 
-          <!-- Incognito mode — single master switch (see script.js
+          <!-- Incognito mode — master switch (see script.js
                toggleIncognitoMode). ON → hides Transactions + Register tabs and
                the bill "Edit Price" button, and forces bill generation for every
-               stay (server-enforced in config.create_bill_record). ORs into
-               always_generate_bill / hide_register_tab under the hood, so those
-               two standalone cards below are intentionally hidden — Incognito is
-               the one control. -->
+               stay (server-enforced in config.create_bill_record). The
+               standalone "Bill generation" card below controls the same
+               always_generate_bill flag independently, so bills-for-all-stays
+               can be enabled WITHOUT the tab-hiding that Incognito brings;
+               while Incognito is ON the server forces generation regardless of
+               that card. Hide-Register stays folded into Incognito. -->
           <div
             id="settings-incognito-card"
             style="
@@ -1971,12 +2015,14 @@
             </label>
           </div>
 
-          <!-- Bill generation toggle — hidden: folded into Incognito (kept in
-               the DOM so its existing load/save JS stays intact). -->
+          <!-- Bill generation toggle — generate bills for ALL stays
+               regardless of payment mode (always_generate_bill). OFF skips the
+               bill for entirely-cash stays. Incognito ON overrides this to
+               always-generate on the server. -->
           <div
             id="settings-billgen-card"
             style="
-              display: none;
+              display: flex;
               align-items: center;
               gap: 1rem;
               padding: 0.85rem 1rem;
@@ -2013,7 +2059,7 @@
                   color: var(--text-primary);
                 "
               >
-                Bill generation
+                Generate bills for all stays
               </div>
               <div
                 id="settings-billgen-sub"
@@ -5674,28 +5720,38 @@
         <div class="laundry-tab-pane" id="laundry-tab-bill" data-roles="admin">
           <div class="laundry-bill-scroll">
 
-            <!-- ── Row 1: Month selector (compact inline) ────────── -->
-            <div class="lbill-top-bar">
-              <div class="lbill-month-wrap">
-                <i class="fas fa-calendar-alt" style="color:var(--text-muted);font-size:0.85rem"></i>
-                <label style="font-size:0.8rem;font-weight:600;color:var(--text-muted);white-space:nowrap">Month:</label>
-                <input type="month" class="lbill-month-inp" id="laundry-bill-month" />
+            <!-- ═══ Account summary — one number that matters ═══ -->
+            <div class="lgr-summary">
+              <div class="lgr-sum-main">
+                <span class="lgr-sum-lbl" id="lgr-balance-lbl">Balance due now</span>
+                <span class="lgr-sum-val" id="lgr-balance">₹0</span>
+                <span class="lgr-sum-meta">billed <b id="lgr-total-billed">₹0</b> &nbsp;·&nbsp; paid <b id="lgr-total-paid">₹0</b></span>
               </div>
-              <!-- Billing period — single from→to range selector. Opens a
-                   calendar: tap start date, tap end date. The bill amount is
-                   calculated only for this range (defaults to full month). -->
-              <div class="lbill-month-wrap" id="laundry-bill-range-wrap">
-                <label style="font-size:0.8rem;font-weight:600;color:var(--text-muted);white-space:nowrap">Period:</label>
-                <button type="button" class="lbill-month-inp" id="laundry-bill-range-btn"
-                  style="cursor:pointer;white-space:nowrap;text-align:left">📅 Full month</button>
-                <input type="hidden" id="laundry-bill-from" />
-                <input type="hidden" id="laundry-bill-to" />
+              <div class="lgr-actions">
+                <button class="lgr-btn primary" id="lgr-add-pay-btn">
+                  <i class="fas fa-plus"></i> Record Payment
+                </button>
+                <button class="lgr-btn" id="lgr-add-bill-btn">
+                  <i class="fas fa-file-invoice"></i> Add Bill
+                </button>
+                <div class="lgr-more-wrap">
+                  <button class="lgr-btn icon" id="lgr-more-btn" title="More options">
+                    <i class="fas fa-ellipsis-h"></i>
+                  </button>
+                  <div class="lgr-more-menu" id="lgr-more-menu" hidden>
+                    <button class="lgr-more-item" id="lgr-corrections-btn">
+                      <i class="fas fa-sliders-h"></i> Corrections
+                    </button>
+                    <button class="lgr-more-item" id="laundry-prices-toggle">
+                      <i class="fas fa-tags"></i> Edit Prices
+                    </button>
+                  </div>
+                </div>
               </div>
-              <button class="laundry-prices-toggle" id="laundry-prices-toggle"
-                style="margin:0;width:auto;padding:0.3rem 0.75rem;font-size:0.75rem;display:flex;align-items:center;gap:0.35rem">
-                <i class="fas fa-lock"></i> Edit Prices
-              </button>
             </div>
+
+            <!-- Overlapping bill periods = probable double entry -->
+            <div class="lgr-overlap-warn" id="lgr-overlap-warn" hidden></div>
 
             <!-- Price editor (password-gated, hidden by default) -->
             <div class="laundry-price-editor" id="laundry-price-editor" style="margin-bottom:0.6rem">
@@ -5720,131 +5776,188 @@
               </div>
             </div>
 
-            <!-- ── Item totals + Payment history side-by-side on desktop, stacked on mobile ── -->
-            <div class="lbill-summary-row">
-
-              <!-- Item totals from daily log -->
-              <div class="laundry-form-card" style="flex:1;min-width:0">
+            <!-- ═══ Add Bill panel (hidden until "+ Add Bill") ═══
+                 A bill only ADDS to the account balance. Payments are a
+                 separate action — no old-balance / paying-now fields here. -->
+            <div class="lgr-panel" id="lgr-bill-panel" hidden>
+              <div class="laundry-form-card">
                 <div class="laundry-form-card-title">
-                  <span><i class="fas fa-boxes" style="margin-right:0.3rem"></i>Monthly Item Totals</span>
-                  <span id="laundry-auto-amount" style="font-size:0.72rem;color:#3182ce;font-weight:600"></span>
+                  <span><i class="fas fa-file-invoice" style="margin-right:0.3rem"></i>Add / Edit Bill</span>
+                  <button class="lgr-panel-close" aria-label="Close">&times;</button>
                 </div>
                 <div class="laundry-form-card-body">
-                  <div class="laundry-bill-summary-grid" id="laundry-bill-summary-grid">
-                    <div style="color:var(--text-muted);font-size:0.82rem;grid-column:span 4">Select a month…</div>
-                  </div>
-                  <!-- Which dates the totals above were calculated for -->
-                  <div id="laundry-bill-period-label"
-                    style="margin-top:0.45rem;font-size:0.76rem;font-weight:600;color:#1d4ed8;background:#eff6ff;border:1px solid #bfdbfe;border-radius:6px;padding:0.35rem 0.6rem;display:none"></div>
-                </div>
-              </div>
 
-              <!-- Payment history -->
-              <div class="laundry-form-card lbill-hist-card">
-                <div class="laundry-form-card-title"><span><i class="fas fa-history" style="margin-right:0.3rem"></i>Payment History</span></div>
-                <div style="overflow-y:auto;max-height:160px">
-                  <table class="laundry-bill-hist-table">
-                    <thead>
-                      <tr><th>Month</th><th>Bill</th><th>Paid</th><th>Balance</th><th>Date</th></tr>
-                    </thead>
-                    <tbody id="laundry-bill-hist-body">
-                      <tr><td colspan="5" style="text-align:center;padding:0.75rem;color:var(--text-muted);font-size:0.8rem">Loading…</td></tr>
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-
-            </div><!-- end summary row -->
-
-            <!-- ── Bill Entry ─────────────────────────────────────── -->
-            <div class="laundry-form-card">
-              <div class="laundry-form-card-title"><span><i class="fas fa-file-invoice" style="margin-right:0.3rem"></i>Bill Entry</span></div>
-              <div class="laundry-form-card-body">
-
-                <div style="font-size:0.68rem;color:#475569;background:#f1f5f9;border:1px solid #e2e8f0;border-radius:6px;padding:0.4rem 0.55rem;margin-bottom:0.6rem;line-height:1.4">
-                  <i class="fas fa-pen" style="margin-right:0.3rem;color:#3182ce"></i>
-                  <b>To fix a month:</b> pick it in the Month selector above, correct the <b>Bill Amount</b>, and press Save — it updates that month's bill. To remove a wrong payment, use the <b>×</b> on its row in Payment History.
-                </div>
-
-                <!-- Bill amount + date -->
-                <div class="lbill-field-grid">
-                  <div class="laundry-field-group">
-                    <label>Bill Amount (₹) — total charged this month</label>
-                    <div style="display:flex;gap:0.4rem;align-items:center">
-                      <input type="number" class="form-control" id="laundry-bill-amount" placeholder="Total billed by laundry" min="0" style="flex:1;min-width:0" />
-                      <button class="laundry-tbl-btn save" id="laundry-use-auto-btn" style="white-space:nowrap;padding:0.3rem 0.55rem;font-size:0.72rem">Auto</button>
+                  <div class="lgr-field-row">
+                    <div class="laundry-field-group">
+                      <label>Month</label>
+                      <input type="month" class="form-control" id="lgr-bill-month" />
                     </div>
-                    <span style="font-size:0.65rem;color:#64748b">The laundry's total for the month — NOT what you're paying. Tap Auto to use the calculated total.</span>
+                    <div class="laundry-field-group">
+                      <label>Period billed</label>
+                      <button type="button" class="form-control lgr-range-btn" id="laundry-bill-range-btn">📅 Full month</button>
+                      <input type="hidden" id="laundry-bill-from" />
+                      <input type="hidden" id="laundry-bill-to" />
+                    </div>
                   </div>
-                  <div class="laundry-field-group">
-                    <label>Bill Date</label>
-                    <input type="date" class="form-control" id="laundry-bill-date" />
-                  </div>
-                  <div class="laundry-field-group">
-                    <label>Old Balance (₹)</label>
-                    <input type="number" class="form-control" id="laundry-old-balance" value="0" min="0" />
-                    <span style="font-size:0.65rem;color:#3182ce">Auto from prev month</span>
-                  </div>
-                  <div class="laundry-field-group">
-                    <label style="color:#16a34a;">Paying Now (₹) — today's payment</label>
-                    <input type="number" class="form-control" id="laundry-paid-amount" placeholder="0" min="0" style="border-color:#bbf7d0;" />
-                    <span style="font-size:0.65rem;color:#16a34a">Money you're handing over today. Leave 0 to only save/update the bill.</span>
-                  </div>
-                </div>
 
-                <!-- Totals strip -->
-                <div class="laundry-bill-totals" style="margin-top:0.6rem">
-                  <div class="laundry-bill-total-cell">
-                    <span class="lbl">Bill</span>
-                    <span class="val" id="laundry-bill-total-display">₹0</span>
+                  <!-- Piece counts from the daily log for the chosen period -->
+                  <div class="lgr-pieces-card">
+                    <div class="lgr-pieces-head">
+                      <span>Pieces sent in this period</span>
+                      <span id="laundry-auto-amount"></span>
+                    </div>
+                    <div class="laundry-bill-summary-grid" id="laundry-bill-summary-grid">
+                      <div style="color:var(--text-muted);font-size:0.82rem;grid-column:span 4">Select a month…</div>
+                    </div>
+                    <div id="laundry-bill-period-label"
+                      style="margin-top:0.45rem;font-size:0.76rem;font-weight:600;color:#1d4ed8;background:#eff6ff;border:1px solid #bfdbfe;border-radius:6px;padding:0.35rem 0.6rem;display:none"></div>
                   </div>
-                  <div class="laundry-bill-total-cell">
-                    <span class="lbl">Old Bal</span>
-                    <span class="val" id="laundry-old-bal-display">₹0</span>
+
+                  <div class="lgr-editing-note" id="lgr-bill-editing-note" hidden></div>
+
+                  <div class="lgr-field-row">
+                    <div class="laundry-field-group">
+                      <label>Bill Amount (₹) — what the laundry charged</label>
+                      <div style="display:flex;gap:0.4rem;align-items:center">
+                        <input type="number" class="form-control" id="laundry-bill-amount" placeholder="0" min="0" inputmode="numeric" style="flex:1;min-width:0" />
+                        <button class="laundry-tbl-btn save" id="laundry-use-auto-btn"
+                          title="Use pieces × prices" style="white-space:nowrap;padding:0.3rem 0.55rem;font-size:0.72rem">Auto</button>
+                      </div>
+                      <span style="font-size:0.65rem;color:#64748b">Only the charge for THIS period. Paying happens separately — old balance carries forward on its own.</span>
+                    </div>
+                    <div class="laundry-field-group">
+                      <label>Bill Date</label>
+                      <input type="date" class="form-control" id="laundry-bill-date" />
+                    </div>
                   </div>
-                  <div class="laundry-bill-total-cell highlight">
-                    <span class="lbl">Grand Total</span>
-                    <span class="val" id="laundry-grand-total-display">₹0</span>
-                  </div>
-                  <div class="laundry-bill-total-cell" id="laundry-balance-box">
-                    <span class="lbl">Balance</span>
-                    <span class="val" id="laundry-balance-display" style="color:#dc2626">₹0</span>
-                  </div>
+
+                  <button class="action-btn btn-primary" id="lgr-bill-save-btn" style="width:100%">
+                    <i class="fas fa-save"></i> Save Bill
+                  </button>
                 </div>
               </div>
             </div>
 
-            <!-- ── Payment ─────────────────────────────────────────── -->
-            <div class="laundry-form-card">
-              <div class="laundry-form-card-title"><span><i class="fas fa-rupee-sign" style="margin-right:0.3rem"></i>Record Payment</span></div>
-              <div class="laundry-form-card-body">
+            <!-- ═══ Record Payment panel (hidden until "Record Payment") ═══
+                 Partial or full — the amount subtracts from the account
+                 balance and the rest carries forward automatically. -->
+            <div class="lgr-panel" id="lgr-pay-panel" hidden>
+              <div class="laundry-form-card">
+                <div class="laundry-form-card-title">
+                  <span><i class="fas fa-rupee-sign" style="margin-right:0.3rem"></i>Record Payment</span>
+                  <button class="lgr-panel-close" aria-label="Close">&times;</button>
+                </div>
+                <div class="laundry-form-card-body">
 
-                <div class="lbill-pay-grid">
-                  <div>
-                    <div style="font-size:0.72rem;font-weight:600;color:var(--text-muted);margin-bottom:0.3rem">Expense Type</div>
-                    <div class="laundry-toggle-row">
-                      <button class="laundry-toggle-btn active-exp" data-exptype="transaction"><i class="fas fa-coins"></i> Daily</button>
-                      <button class="laundry-toggle-btn" data-exptype="report"><i class="fas fa-home"></i> Report</button>
+                  <div class="lgr-field-row">
+                    <div class="laundry-field-group" style="flex:1.4">
+                      <label style="color:#16a34a">Amount paying (₹)</label>
+                      <input type="number" class="form-control lgr-pay-amount" id="lgr-pay-amount" placeholder="0" min="0" inputmode="numeric" />
+                      <button type="button" class="lgr-chip-btn" id="lgr-pay-full-btn" hidden></button>
+                    </div>
+                    <div class="laundry-field-group">
+                      <label>Date</label>
+                      <input type="date" class="form-control" id="lgr-pay-date" />
                     </div>
                   </div>
-                  <div>
-                    <div style="font-size:0.72rem;font-weight:600;color:var(--text-muted);margin-bottom:0.3rem">Method</div>
-                    <div class="laundry-toggle-row">
-                      <button class="laundry-toggle-btn active-pay" data-paymethod="cash"><i class="fas fa-money-bill-wave"></i> Cash</button>
-                      <button class="laundry-toggle-btn" data-paymethod="upi"><i class="fas fa-mobile-alt"></i> UPI</button>
+
+                  <div class="lgr-pay-preview" id="lgr-pay-preview"></div>
+
+                  <div class="lbill-pay-grid" style="margin-top:0.6rem">
+                    <div>
+                      <div style="font-size:0.72rem;font-weight:600;color:var(--text-muted);margin-bottom:0.3rem">Method</div>
+                      <div class="laundry-toggle-row">
+                        <button class="laundry-toggle-btn active-pay" data-paymethod="cash"><i class="fas fa-money-bill-wave"></i> Cash</button>
+                        <button class="laundry-toggle-btn" data-paymethod="upi"><i class="fas fa-mobile-alt"></i> UPI</button>
+                      </div>
+                    </div>
+                    <div>
+                      <div style="font-size:0.72rem;font-weight:600;color:var(--text-muted);margin-bottom:0.3rem">Expense Type</div>
+                      <div class="laundry-toggle-row">
+                        <button class="laundry-toggle-btn active-exp" data-exptype="transaction"><i class="fas fa-coins"></i> Daily</button>
+                        <button class="laundry-toggle-btn" data-exptype="report"><i class="fas fa-home"></i> Report</button>
+                      </div>
                     </div>
                   </div>
-                </div>
 
-                <div class="laundry-balance-box" id="laundry-balance-box" style="margin-top:0.6rem">
-                  <span class="lbl">Remaining Balance</span>
-                  <span class="val" id="laundry-balance-display">₹0</span>
-                </div>
+                  <div class="laundry-field-group" style="margin-top:0.6rem">
+                    <label>Note (optional)</label>
+                    <input type="text" class="form-control" id="lgr-pay-note" maxlength="120" placeholder="e.g. paid at shop" />
+                  </div>
 
-                <button class="action-btn btn-primary" id="laundry-bill-submit-btn" style="width:100%">
-                  <i class="fas fa-save"></i> Save Bill &amp; Record Expense
-                </button>
+                  <button class="action-btn btn-primary" id="lgr-pay-save-btn" style="width:100%;margin-top:0.6rem;background:#16a34a;border-color:#16a34a">
+                    <i class="fas fa-check"></i> Record Payment
+                  </button>
+                </div>
               </div>
             </div>
 
-          </div><!-- end bil
+            <!-- ═══ Corrections panel (adjustments + opening balance) ═══ -->
+            <div class="lgr-panel" id="lgr-adjust-panel" hidden>
+              <div class="laundry-form-card">
+                <div class="laundry-form-card-title">
+                  <span><i class="fas fa-sliders-h" style="margin-right:0.3rem"></i>Corrections</span>
+                  <button class="lgr-panel-close" aria-label="Close">&times;</button>
+                </div>
+                <div class="laundry-form-card-body">
+                  <div class="laundry-toggle-row" style="margin-bottom:0.5rem">
+                    <button class="laundry-toggle-btn lgr-adjust-mode-btn active" data-adjmode="add"><i class="fas fa-plus"></i> Add to balance</button>
+                    <button class="laundry-toggle-btn lgr-adjust-mode-btn" data-adjmode="reduce"><i class="fas fa-minus"></i> Reduce balance</button>
+                    <button class="laundry-toggle-btn lgr-adjust-mode-btn" data-adjmode="opening"><i class="fas fa-flag"></i> Opening balance</button>
+                  </div>
+                  <div class="lgr-adjust-hint" id="lgr-adjust-hint">Adds to what you owe (e.g. a missed charge).</div>
+                  <div class="lgr-field-row">
+                    <div class="laundry-field-group">
+                      <label>Amount (₹)</label>
+                      <input type="number" class="form-control" id="lgr-adjust-amount" placeholder="0" min="0" inputmode="numeric" />
+                    </div>
+                    <div class="laundry-field-group">
+                      <label>Date</label>
+                      <input type="date" class="form-control" id="lgr-adjust-date" />
+                    </div>
+                  </div>
+                  <div class="laundry-field-group" style="margin-top:0.5rem">
+                    <label>Note — why?</label>
+                    <input type="text" class="form-control" id="lgr-adjust-note" maxlength="200" placeholder="e.g. discount agreed for damaged towels" />
+                  </div>
+                  <button class="action-btn btn-secondary" id="lgr-adjust-save-btn" style="width:100%;margin-top:0.6rem">
+                    <i class="fas fa-save"></i> Save
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <!-- ═══ Account statement — the passbook ═══ -->
+            <div class="lgr-card">
+              <div class="lgr-card-head">
+                <span>Statement</span>
+                <span class="lgr-card-note">bills add · payments subtract · balance carries forward</span>
+              </div>
+              <div class="lgr-statement-scroll" id="lgr-statement-scroll">
+                <table class="lgr-table">
+                  <thead>
+                    <tr>
+                      <th class="lgr-when">Date</th>
+                      <th>Particulars</th>
+                      <th class="lgr-num">Bill&nbsp;₹</th>
+                      <th class="lgr-num">Paid&nbsp;₹</th>
+                      <th class="lgr-num">Balance&nbsp;₹</th>
+                      <th class="lgr-act"></th>
+                    </tr>
+                  </thead>
+                  <tbody id="lgr-statement-body">
+                    <tr><td colspan="6" class="lgr-empty">Loading…</td></tr>
+                  </tbody>
+                  <tfoot id="lgr-statement-foot"></tfoot>
+                </table>
+              </div>
+            </div>
+
+          </div><!-- end .laundry-bill-scroll -->
+        </div><!-- end TAB 2 -->
+
+      </div><!-- /.modal-content -->
+    </div><!-- /#laundry-modal -->
+
+  </body>
+</html>

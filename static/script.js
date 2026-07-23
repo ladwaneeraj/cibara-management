@@ -4423,7 +4423,10 @@ function openSettingsModal() {
 // State lives on the server (settings/billing_config). We always read from the
 // server when the modal opens so multiple devices stay consistent.
 
+let _billGenState = false;   // last known always_generate_bill (server truth)
+
 function _setBillGenToggleUI(enabled) {
+  _billGenState = !!enabled;
   const toggle = document.getElementById("settings-billgen-toggle");
   const slider = document.getElementById("settings-billgen-slider");
   const knob   = document.getElementById("settings-billgen-knob");
@@ -4432,9 +4435,18 @@ function _setBillGenToggleUI(enabled) {
   if (slider) slider.style.background = enabled ? "#3f51b5" : "#ccc";
   if (knob)   knob.style.transform   = enabled ? "translateX(20px)" : "translateX(0)";
   if (sub) {
-    sub.textContent = enabled
-      ? "All stays generate bills"
-      : "Skip bill for entirely-cash stays";
+    // Incognito force-enables bill generation on the server regardless of
+    // this flag — say so instead of showing a misleading "skip" caption.
+    const incognitoOn = !!(typeof _uiConfigState === "object" &&
+                           _uiConfigState && _uiConfigState.incognito_mode);
+    if (incognitoOn && !enabled) {
+      sub.textContent =
+        "Forced ON while Incognito is enabled";
+    } else {
+      sub.textContent = enabled
+        ? "Every stay gets a bill, cash or online"
+        : "Entirely-cash stays skip the bill";
+    }
   }
 }
 
@@ -4612,6 +4624,11 @@ function applyUIConfig(cfg) {
   // Keep the Settings toggle UIs in sync if the modal is open or will open.
   _setHideRegisterToggleUI(!!_uiConfigState.hide_register_tab);
   _setIncognitoToggleUI(incognito);
+  // Re-paint the Bill-generation caption too — Incognito overrides it
+  // server-side, and the caption explains that while Incognito is on.
+  if (typeof _setBillGenToggleUI === "function") {
+    _setBillGenToggleUI(_billGenState);
+  }
 }
 
 async function loadUIConfig() {

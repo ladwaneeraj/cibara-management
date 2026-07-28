@@ -47,6 +47,11 @@
     <link rel="stylesheet" href="/static/laundry.css" />
     <link rel="stylesheet" href="/static/banking.css" />
     <link rel="stylesheet" href="/static/maintenance.css" />
+    <!-- asset_url appends ?v=mtime so browsers pick up new versions on the
+         next load instead of serving a 12h-cached stylesheet (the JS is
+         already busted the same way — an unbusted CSS caused the two to
+         go out of sync after a deploy). -->
+    <link rel="stylesheet" href="{{ asset_url('staff.css') }}" />
     <link rel="stylesheet" href="{{ asset_url('daily-insights.css') }}" />
     <link
       rel="stylesheet"
@@ -3361,6 +3366,15 @@
           <span>Deep Check</span>
         </div>
 
+        <!-- Staff attendance & payroll — daily full/half-day marking
+             (managers + admin, staff.view); wages, advances and salary
+             payouts are admin-only inside the modal. -->
+        <div class="quick-action-item" id="quick-staff-btn"
+             data-perm="staff.view" data-hide-roles="housekeeping">
+          <i class="fas fa-users"></i>
+          <span>Staff</span>
+        </div>
+
       </div>
     </div>
     <!-- Checkout Confirmation Modal -->
@@ -3822,6 +3836,7 @@
               <select class="form-control" id="expense-category" required style="font-size:0.88rem;padding:0.42rem 0.6rem;">
                 <option value="">Select…</option>
                 <option value="salary">Salary</option>
+                <option value="staff_advance">Staff Advance</option>
                 <option value="rent">Rent</option>
                 <option value="utilities">Utilities (Electricity / Water)</option>
                 <option value="petty_cash">Petty Cash (Tea, Small Items)</option>
@@ -3870,6 +3885,18 @@
             <label class="form-label" for="expense-paid-to" style="font-size:0.78rem;">Paid To (Staff Name)</label>
             <input type="text" class="form-control" id="expense-paid-to"
               placeholder="Employee name" style="font-size:0.88rem;padding:0.42rem 0.6rem;" />
+          </div>
+
+          <!-- Staff Advance: staff picker (populated by expense.js from
+               /staff/list). Submit routes through /staff/advance so the
+               advance is tracked in the Staff payroll ledger and deducted
+               at salary time. Admin-only (staff.advance.give). -->
+          <div class="form-group" id="staff-advance-fields" style="display:none;margin-bottom:0.75rem;">
+            <label class="form-label" for="expense-staff-select" style="font-size:0.78rem;">Staff Member</label>
+            <select class="form-control" id="expense-staff-select" style="font-size:0.88rem;padding:0.42rem 0.6rem;">
+              <option value="">Select staff member…</option>
+            </select>
+            <div id="expense-staff-hint" style="font-size:0.72rem;color:#718096;margin-top:0.3rem;"></div>
           </div>
 
           <!-- Amount -->
@@ -5171,14 +5198,14 @@
     <script defer src="{{ asset_url('script.js') }}"></script>
     <script defer src="/static/shift.js"></script>
     <script defer src="/static/analytics.js"></script>
-    <script defer src="/static/expense.js"></script>
+    <script defer src="{{ asset_url('expense.js') }}"></script>
     <script defer src="/static/expense-presets-admin.js"></script>
     <script defer src="/static/booking.js"></script>
     <script defer src="/static/settle-later.js"></script>
     <script defer src="/static/settle-later-fix.js"></script>
     <!-- revenue-protection.js removed — revenue visibility is now governed by
          the user's role (admin only). See data-perm="revenue.view" in markup. -->
-    <script defer src="/static/transaction-tracking.js"></script>
+    <script defer src="{{ asset_url('transaction-tracking.js') }}"></script>
     <script defer src="/static/room-cleaning.js"></script>
     <!-- Enhanced check-in: document capture + customer flagging -->
     <script defer src="{{ asset_url('customer-docs.js') }}"></script>
@@ -5188,6 +5215,8 @@
     <script defer src="/static/laundry.js"></script>
     <!-- Deep-check maintenance (rounds, issues, analytics) -->
     <script defer src="{{ asset_url('maintenance.js') }}"></script>
+    <!-- Staff attendance & payroll (quick action → modal) -->
+    <script defer src="{{ asset_url('staff.js') }}"></script>
     <!-- Daily Insights dashboard (admin-only; requires analytics.view) -->
     <script defer src="{{ asset_url('daily-insights.js') }}"></script>
     <!-- Role-aware housekeeping bootstrap (no-op for non-housekeeping roles) -->

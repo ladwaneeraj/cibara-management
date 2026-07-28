@@ -795,17 +795,28 @@ class TransactionLogManager {
       titleContent = `Room ${log.room} - ${log.name}`;
     }
 
-    // "Collected by" chip — staff member who recorded this payment.
-    // Resolved from log.createdBy via the user directory; hidden for
-    // legacy entries that don't have the field populated yet.
+    // "Collected by / Added by" chip — who recorded this row.
+    // Payments carry log.createdBy (a userId, resolved via the user
+    // directory). Expenses carry log.created_by = {userId, name} with the
+    // name embedded (audit stamp written by routes/reports.py and the
+    // Staff module), so no directory lookup is needed for them. Hidden
+    // for legacy entries that predate either field.
     let byChip = "";
+    let _byName = "";
+    let _byVerb = "Collected by";
     if (log.createdBy && window.CibaraUsers) {
-      const _by = window.CibaraUsers.nameOf(log.createdBy);
-      const _safe = String(_by).replace(/[<&>"']/g, function (c) {
+      _byName = window.CibaraUsers.nameOf(log.createdBy);
+    } else if (log.created_by && log.created_by.name &&
+               log.created_by.name !== "system") {
+      _byName = log.created_by.name;
+      _byVerb = "Added by";
+    }
+    if (_byName) {
+      const _safe = String(_byName).replace(/[<&>"']/g, function (c) {
         return { "<": "&lt;", "&": "&amp;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
       });
       byChip =
-        ' <span class="txn-added-by" title="Collected by ' + _safe +
+        ' <span class="txn-added-by" title="' + _byVerb + " " + _safe +
         '"><i class="fas fa-user"></i> ' + _safe + '</span>';
     }
     titleContent += byChip;

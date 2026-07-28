@@ -22,6 +22,7 @@ from routes.agoda_ingest import agoda_ingest_bp
 from routes.bank_settlement import bank_settlement_bp
 from routes.maintenance import maintenance_bp
 from routes.insights import insights_bp
+from routes.staff import staff_bp
 from services.auth_service import load_current_user
 from flask import g
 import os
@@ -300,6 +301,7 @@ app.register_blueprint(agoda_ingest_bp, url_prefix="")  # /agoda/ingest, /agoda/
 app.register_blueprint(bank_settlement_bp, url_prefix="")  # /bank/settlements/ingest
 app.register_blueprint(maintenance_bp)   # /maintenance/* — deep-check rounds, issues, analytics
 app.register_blueprint(insights_bp)      # /insights/* — admin-only daily operations analytics
+app.register_blueprint(staff_bp)         # /staff/* — attendance, advances, salary payroll
 
 # ---------------------------------------------------------------------------
 # Error handlers

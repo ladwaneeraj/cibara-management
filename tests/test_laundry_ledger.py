@@ -5,6 +5,23 @@ dicts out.
 
 Run:  pytest tests/test_laundry_ledger.py -q
 """
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+# In a full-suite run (pytest tests/), earlier test modules (e.g.
+# test_expense_split.py) replace sys.modules["services"] with a stub whose
+# __path__ is [] so they can import routes without Firebase. Any submodule
+# import through that stub fails. If the cached "services" package cannot
+# see the real services/ directory, drop it so Python re-imports the real
+# one; the earlier modules keep their already-bound stub references.
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_svc = sys.modules.get("services")
+if _svc is not None and os.path.join(_REPO_ROOT, "services") not in list(
+        getattr(_svc, "__path__", []) or []):
+    del sys.modules["services"]
+
 from services.laundry_ledger import compute_ledger
 
 

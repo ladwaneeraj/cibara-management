@@ -50,6 +50,15 @@
       "maintenance.view",
       "maintenance.inspect",
       "maintenance.issue.fix",
+      // Staff — manager marks daily attendance and can settle salaries /
+      // hand out advances FROM COUNTER CASH ONLY (staff.pay.account =
+      // bank/UPI payouts stays admin-only). Adding/editing staff, wages
+      // and reversing payments stay admin-only via staff.manage.
+      "staff.view",
+      "staff.attendance.mark",
+      "staff.payroll.view",
+      "staff.salary.pay",
+      "staff.advance.give",
       // Manager does NOT get: settings.view, discount.apply,
       // settlement.manage, transaction.history.full, payment.edit,
       // data.export, customer.manage, booking.revert, revenue.view,

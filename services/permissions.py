@@ -122,6 +122,18 @@ PERMISSIONS = frozenset(
         "maintenance.issue.verify",      # admin-only (wildcard)
         "maintenance.checklist.manage",  # admin-only (wildcard)
         "maintenance.manage",            # admin-only (wildcard) — destructive ops
+        # Staff attendance & payroll (routes/staff.py). Manager marks the
+        # daily attendance; everything that touches money — wages,
+        # advances, salary payouts and their ₹ figures — is admin-only.
+        "staff.view",                    # staff list + attendance (no ₹)
+        "staff.attendance.mark",         # mark full / half / absent
+        "staff.manage",                  # admin-only — add/edit staff, wages,
+                                         # and REVERSING advances/salaries
+        "staff.payroll.view",            # see ₹ figures (manager + admin)
+        "staff.advance.give",            # record advances (manager + admin)
+        "staff.salary.pay",              # pay salaries (manager + admin)
+        "staff.pay.account",             # admin-only — pay from bank/UPI;
+                                         # managers pay from counter cash only
     }
 )
 
@@ -163,6 +175,17 @@ ROLE_PERMISSIONS: dict[str, FrozenSet[str]] = {
             "maintenance.view",
             "maintenance.inspect",
             "maintenance.issue.fix",
+            # Staff — the manager on duty marks daily attendance and can
+            # settle salaries / hand out advances FROM COUNTER CASH ONLY
+            # (staff.pay.account, i.e. bank/UPI payouts, stays admin-only —
+            # same custody principle as banking.deposit.confirm). Adding/
+            # editing staff, wages, and reversing payments stay admin-only
+            # via staff.manage.
+            "staff.view",
+            "staff.attendance.mark",
+            "staff.payroll.view",
+            "staff.salary.pay",
+            "staff.advance.give",
             # Manager DOES NOT get: settings.view, discount.apply,
             # settlement.manage, transaction.history.full, payment.edit,
             # data.export, customer.manage, booking.revert, revenue.view,

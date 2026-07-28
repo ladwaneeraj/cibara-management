@@ -546,6 +546,7 @@ def add_expense():
         time_str = datetime.now(IST).strftime("%H:%M")
 
         # ── Build expense document ───────────────────────────────────────────
+        _actor = load_current_user() or {}
         expense_entry = {
             "date":           date,
             "time":           time_str,
@@ -554,6 +555,10 @@ def add_expense():
             "amount":         amount,
             "payment_method": payment_method,
             "expense_type":   expense_type,
+            # Audit: who recorded this expense. Set before the split branch
+            # below so split legs inherit the same stamp.
+            "created_by":     {"userId": _actor.get("userId", "system"),
+                               "name": _actor.get("name", "system")},
         }
 
         # Salary: capture paid_to
@@ -792,6 +797,17 @@ def edit_expense(doc_id):
         if not old:
             return jsonify(success=False, message="Expense not found"), 404
 
+        # Staff-payroll rows are managed from the Staff module only. An
+        # inline edit here would desync the linked advance / salary-payment
+        # document (and the outstanding-advance arithmetic derived from it).
+        if old.get("staff_advance") or old.get("staff_salary_payment"):
+            return jsonify(
+                success=False,
+                message=("This entry is linked to Staff payroll. Manage it "
+                         "from the Staff section so the advance/salary "
+                         "records stay in sync."),
+            ), 409
+
         # Vendor GSTIN hygiene on edit: normalize + format-check whenever the
         # field is being changed. (The GSTIN-mandatory-with-GST rule is
         # enforced at creation; edits only need to never INTRODUCE a
@@ -876,6 +892,13 @@ def edit_expense(doc_id):
             for f in ("commission_amount", "commission_gst"):
                 fields[f] = 0
 
+        # Audit: who last edited this expense (creation stamp is preserved —
+        # created_by is not in _EDITABLE_FIELDS so it can never be patched).
+        _editor = load_current_user() or {}
+        fields["updated_by"] = {"userId": _editor.get("userId", "system"),
+                                "name": _editor.get("name", "system")}
+        fields["updated_at"] = datetime.now(IST).isoformat()
+
         ok = expense_service.update_expense(doc_id, fields)
         if not ok:
             return jsonify(success=False, message="Update failed"), 500
@@ -914,6 +937,18 @@ def delete_expense_route(doc_id):
         old = expense_service.get_expense(doc_id)
         if not old:
             return jsonify(success=False, message="Expense not found"), 404
+
+        # Staff-payroll rows are managed from the Staff module only —
+        # deleting the expense leg here would orphan the linked advance /
+        # salary-payment doc and silently corrupt the outstanding-advance
+        # balance. The Staff section deletes both sides atomically.
+        if old.get("staff_advance") or old.get("staff_salary_payment"):
+            return jsonify(
+                success=False,
+                message=("This entry is linked to Staff payroll. Delete it "
+                         "from the Staff section (it removes the payroll "
+                         "record and this expense together)."),
+            ), 409
 
         # ── Split-group delete ───────────────────────────────────────────
         # Deleting ANY leg of a split removes the WHOLE group atomically so

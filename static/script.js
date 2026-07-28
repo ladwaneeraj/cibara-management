@@ -1773,6 +1773,13 @@ function updateCheckoutModal(roomNumber) {
     checkoutRoomNumber.textContent = roomNumber;
   }
 
+  // The payment buttons are shared DOM — sync them to THIS room's own
+  // pending-write state, so another room's in-flight payment/checkout can
+  // never freeze this room's buttons on "Processing…".
+  if (typeof _syncPaymentBtnsForRoom === "function") {
+    _syncPaymentBtnsForRoom(roomNumber);
+  }
+
   const checkoutGuestName = document.getElementById("checkout-guest-name");
   if (checkoutGuestName) {
     const isMmtCheckout = roomInfo.guest && roomInfo.guest.payment === "ota";
@@ -3655,6 +3662,37 @@ async function processRefund() {
   }
 }
 
+// ── Per-room pending-payment lock ───────────────────────────────────────────
+// The checkout modal's payment buttons are SHARED DOM across every room.
+// They must stay disabled while THAT room's payment write is in flight
+// (double-post protection), but a different room opened in the meantime
+// must get live buttons immediately — previously the buttons stayed frozen
+// on "Processing…" until the previous room's write settled (~5s when the
+// server was busy generating a bill). The lock is a per-room Set, and the
+// shared buttons are re-synced from it whenever the modal points at a room.
+const _pendingPaymentRooms = new Set();
+
+function _checkoutModalRoom() {
+  const el = document.getElementById("checkout-room-number");
+  return el ? el.textContent.trim() : "";
+}
+
+function _syncPaymentBtnsForRoom(roomNumber) {
+  const pending = _pendingPaymentRooms.has(roomNumber);
+  const spinner =
+    '<span class="loader" style="width: 14px; height: 14px;"></span> Processing...';
+  [
+    ["add-payment-btn", '<i class="fas fa-plus-circle"></i> Add Payment'],
+    ["checkout-cash-btn", '<i class="fas fa-money-bill"></i> Cash'],
+    ["checkout-online-btn", '<i class="fas fa-mobile-alt"></i> Online'],
+  ].forEach(([id, idle]) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.disabled = pending;
+    el.innerHTML = pending ? spinner : idle;
+  });
+}
+
 async function addPayment(mode) {
   try {
     const roomNumberElement = document.getElementById("checkout-room-number");
@@ -3673,30 +3711,12 @@ async function addPayment(mode) {
       return;
     }
 
-    // Find which button to use based on mode
-    let btn = null;
-
-    // First try to get the add payment button
-    const addPaymentBtn = document.getElementById("add-payment-btn");
-    if (addPaymentBtn) {
-      btn = addPaymentBtn;
-    } else {
-      // Fall back to individual payment buttons
-      btn = document.getElementById(`checkout-${mode}-btn`);
-    }
-
-    // Show loading state if the button exists
-    let originalContent = "";
-    if (btn) {
-      originalContent = btn.innerHTML;
-      btn.disabled = true;
-      btn.innerHTML =
-        '<span class="loader" style="width: 14px; height: 14px;"></span> Processing...';
-    } else {
-      console.warn(
-        `Button for payment mode ${mode} not found, proceeding anyway`,
-      );
-    }
+    // Lock the payment buttons for THIS room only. If the operator opens
+    // another room's checkout while this write is settling, that room's
+    // updateCheckoutModal() re-syncs the shared buttons to ITS (unlocked)
+    // state, so back-to-back checkouts never wait on each other.
+    _pendingPaymentRooms.add(roomNumber);
+    _syncPaymentBtnsForRoom(roomNumber);
 
     // ── Capture balance NOW, before the async API call ─────────────────────
     // Firestore onSnapshot (WebSocket) can fire and update rooms[room].balance
@@ -3708,16 +3728,14 @@ async function addPayment(mode) {
       : 0;
     // ────────────────────────────────────────────────────────────────────────
 
-    // Re-enable helper. For money-in, the trigger button stays disabled until
-    // the background write settles so a double-click can't post the same
-    // payment twice; the balance + modal update instantly.
+    // Settle helper. For money-in, THIS room stays locked until the
+    // background write settles so a double-click can't post the same
+    // payment twice. The shared buttons are then re-synced to whichever
+    // room the modal is showing NOW (it may have moved on to another room
+    // whose state must not be clobbered).
     const _reenablePaymentBtns = () => {
-      const ap = document.getElementById("add-payment-btn");
-      const cb = document.getElementById("checkout-cash-btn");
-      const ob = document.getElementById("checkout-online-btn");
-      if (ap) { ap.disabled = false; ap.innerHTML = '<i class="fas fa-plus-circle"></i> Add Payment'; }
-      if (cb) { cb.disabled = false; cb.innerHTML = '<i class="fas fa-money-bill"></i> Cash'; }
-      if (ob) { ob.disabled = false; ob.innerHTML = '<i class="fas fa-mobile-alt"></i> Online'; }
+      _pendingPaymentRooms.delete(roomNumber);
+      _syncPaymentBtnsForRoom(_checkoutModalRoom());
     };
 
     // Defensive fallback: if optimistic.js failed to load, use the old flow.
@@ -3784,12 +3802,10 @@ async function addPayment(mode) {
   } catch (error) {
     console.error("Error adding payment:", error);
     showNotification(`Error adding payment: ${error.message}`, "error");
-    const ap = document.getElementById("add-payment-btn");
-    if (ap) { ap.disabled = false; ap.innerHTML = '<i class="fas fa-plus-circle"></i> Add Payment'; }
-    const cb = document.getElementById("checkout-cash-btn");
-    if (cb) { cb.disabled = false; cb.innerHTML = '<i class="fas fa-money-bill"></i> Cash'; }
-    const ob = document.getElementById("checkout-online-btn");
-    if (ob) { ob.disabled = false; ob.innerHTML = '<i class="fas fa-mobile-alt"></i> Online'; }
+    // A synchronous throw means no write is in flight for the shown room —
+    // clear any lock it holds and restore the buttons.
+    _pendingPaymentRooms.delete(_checkoutModalRoom());
+    _syncPaymentBtnsForRoom(_checkoutModalRoom());
   }
 }
 

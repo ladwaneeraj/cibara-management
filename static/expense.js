@@ -8,6 +8,7 @@
 // commission  → Booking.com commission fields
 const CATEGORY_TIER = {
   salary:             "salary",
+  staff_advance:      "staff_advance",
   rent:               "tier1",
   petty_cash:         "tier1",
   utilities:          "tier2",
@@ -106,6 +107,71 @@ function invalidateExpensePresetsCache() {
   _expensePresetsCacheStale = true;
 }
 window.invalidateExpensePresetsCache = invalidateExpensePresetsCache;
+
+// ─── Staff quick-pick tiles (Staff Advance & Salary categories) ─────────────
+// Renders the staff directory as tap-tiles in the quick-pick row. For
+// staff_advance a tap selects the person (hidden #expense-staff-select
+// carries the value for submit). For salary a tap CLOSES this modal and
+// opens the Staff module's quick-pay panel for that person, so salaries
+// always run through payroll (attendance × wage, advance deduction) rather
+// than a loose free-text expense.
+async function _renderStaffTiles(category, wrapper, tilesEl, countEl) {
+  wrapper.style.display = "block";
+  if (countEl) countEl.textContent = "";
+  const manageBtn = document.getElementById("expense-preset-manage-btn");
+  if (manageBtn) manageBtn.style.display = "none";   // preset-only affordance
+
+  tilesEl.innerHTML = '<div class="exp-preset-empty">Loading staff…</div>';
+  const staff = (await _loadStaffOptions()).filter((s) => s.active !== false);
+  // The category may have changed while the list loaded.
+  if ((document.getElementById("expense-category")?.value || "") !== category) return;
+
+  tilesEl.innerHTML = "";
+  if (!staff.length) {
+    tilesEl.innerHTML =
+      '<div class="exp-preset-empty">No staff added yet — add your team in the Staff section (quick actions ⚡).</div>';
+    return;
+  }
+  if (countEl) countEl.textContent = `(${staff.length} staff)`;
+
+  staff.forEach((s) => {
+    const tile = document.createElement("button");
+    tile.type = "button";
+    tile.className = "exp-preset-tile";
+    tile.title = s.designation || "";
+    tile.innerHTML = `<span>${_escHtml(s.name || "")}</span>`;
+    tile.addEventListener("click", () => {
+      if (category === "salary") {
+        // Hand over to payroll: close this modal, open that staff member's
+        // quick-pay panel (period pre-filled, advance deduction included).
+        document.getElementById("expense-modal")?.classList.remove("show");
+        window.openStaffQuickPay(s.id);
+        return;
+      }
+      // staff_advance: select this person
+      tilesEl.querySelectorAll(".exp-preset-tile.is-selected")
+        .forEach((t) => t.classList.remove("is-selected"));
+      tile.classList.add("is-selected");
+      const sel = document.getElementById("expense-staff-select");
+      if (sel) sel.value = s.id;
+      const hint = document.getElementById("expense-staff-hint");
+      if (hint) {
+        hint.innerHTML = "<b>" + _escHtml(s.name) + "</b> selected — the advance " +
+          "links to their ledger and is deducted at salary time.";
+      }
+    });
+    tilesEl.appendChild(tile);
+  });
+
+  if (category === "salary") {
+    const note = document.createElement("div");
+    note.className = "exp-preset-empty";
+    note.style.flexBasis = "100%";
+    note.textContent =
+      "Tap a name to pay their salary through Staff payroll (days × wage, advance auto-deducted).";
+    tilesEl.appendChild(note);
+  }
+}
 
 // ─── Initialize ──────────────────────────────────────────────────────────────
 function initializeExpense() {
@@ -224,10 +290,56 @@ function initializeExpense() {
 // Categories that don't get an invoice-photo attach option. These are
 // either pure cash transactions (no vendor invoice) or recurring fixed
 // payments where a photo adds no value:
-//   - salary     → paid to staff, recorded by name
-//   - rent       → fixed monthly account-level cost
-//   - petty_cash → small everyday items, no bill expected
-const NO_PHOTO_CATEGORIES = ["salary", "rent", "petty_cash"];
+//   - salary        → paid to staff, recorded by name
+//   - staff_advance → cash handed to staff, tracked in the Staff ledger
+//   - rent          → fixed monthly account-level cost
+//   - petty_cash    → small everyday items, no bill expected
+const NO_PHOTO_CATEGORIES = ["salary", "staff_advance", "rent", "petty_cash"];
+
+// ─── Staff picker cache (for the "Staff Advance" category) ───────────────────
+// Loaded lazily the first time the category is selected; staff.js
+// invalidates it (window.invalidateExpenseStaffCache) after staff edits.
+let _staffListCache = null;
+
+async function _loadStaffOptions() {
+  if (_staffListCache) return _staffListCache;
+  try {
+    const res = await apiFetch("/staff/list", { method: "GET" });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const data = await res.json();
+    _staffListCache = (data && data.success && data.staff) || [];
+  } catch (e) {
+    console.warn("staff list load failed (non-fatal):", e);
+    _staffListCache = [];
+  }
+  return _staffListCache;
+}
+window.invalidateExpenseStaffCache = function () { _staffListCache = null; };
+
+async function _populateStaffSelect() {
+  const sel = document.getElementById("expense-staff-select");
+  if (!sel) return;
+  const staff = await _loadStaffOptions();
+  const prev = sel.value;
+  sel.innerHTML =
+    '<option value="">Select staff member…</option>' +
+    staff
+      .filter((s) => s.active !== false)
+      .map(
+        (s) =>
+          `<option value="${_escHtml(s.id)}">${_escHtml(s.name)}` +
+          (s.designation ? ` — ${_escHtml(s.designation)}` : "") +
+          `</option>`
+      )
+      .join("");
+  if (prev) sel.value = prev;
+  const hint = document.getElementById("expense-staff-hint");
+  if (hint) {
+    hint.innerHTML = staff.length
+      ? 'The advance links to this staff member\'s ledger and is deducted at salary time.'
+      : 'No staff added yet — add staff from the <b>Staff</b> section (quick actions ⚡) first.';
+  }
+}
 
 // ─── Preset tile rendering ────────────────────────────────────────────────────
 // Render the admin-configured quick-pick tiles for the current category.
@@ -244,6 +356,29 @@ function _renderPresetTiles(category) {
   if (!category) {
     wrapper.style.display = "none";
     return;
+  }
+
+  // Staff Advance / Salary: the quick-pick row shows STAFF NAMES (from the
+  // Staff module) instead of admin presets — tap a name to pick the person.
+  // For Salary the tap hands over to the payroll flow entirely.
+  const _canQuickSalary = window.CibaraAuth
+    && typeof window.CibaraAuth.userCan === "function"
+    && window.CibaraAuth.userCan("staff.salary.pay")
+    && typeof window.openStaffQuickPay === "function"
+    && !_expenseEditMode;
+  if (category === "staff_advance" || (category === "salary" && _canQuickSalary)) {
+    _renderStaffTiles(category, wrapper, tilesEl, countEl);
+    return;
+  }
+
+  // Manage-list is a PRESET affordance — restore its visibility here since
+  // the staff-tile path above hides it.
+  const manageBtn = document.getElementById("expense-preset-manage-btn");
+  if (manageBtn) {
+    const isPresetAdmin = window.CibaraAuth
+      && typeof window.CibaraAuth.userCan === "function"
+      && window.CibaraAuth.userCan("expense.presets.manage");
+    manageBtn.style.display = isPresetAdmin ? "inline-flex" : "none";
   }
 
   const items = (_expensePresetsCache && _expensePresetsCache[category]) || [];
@@ -334,6 +469,7 @@ function _onCategoryChange() {
   _renderPresetTiles(category);
 
   _setDisplay("salary-fields", false);
+  _setDisplay("staff-advance-fields", false);
   _setDisplay("has-bill-group", false);
   _setDisplay("bill-fields", false);
   _setDisplay("gst-fields", false);
@@ -375,12 +511,43 @@ function _onCategoryChange() {
       paidToInput.removeEventListener("input", paidToInput._salaryListener);
       paidToInput.addEventListener("input", paidToInput._salaryListener);
     }
+  } else if (tier === "staff_advance") {
+    // Staff Advance: pick the staff member from the ledger; description
+    // becomes an optional note. Submit routes to /staff/advance (NOT
+    // /add_expense) so the advance and its expense row are written
+    // together — see submitExpense.
+    _setDisplay("staff-advance-fields", true);
+    _populateStaffSelect();
+    // The visible picker is the staff TILE row (quick-pick area) — the
+    // select stays in the DOM, hidden, purely as the submit value holder.
+    const staffSel = document.getElementById("expense-staff-select");
+    if (staffSel) staffSel.style.display = "none";
+    const staffLbl = document.querySelector("#staff-advance-fields label");
+    if (staffLbl) staffLbl.style.display = "none";
+    const descContainer = document.getElementById("expense-description-container");
+    const descInput     = document.getElementById("expense-description");
+    if (descContainer) {
+      descContainer.style.display = "block";
+      const lbl = descContainer.querySelector("label");
+      if (lbl) lbl.textContent = "Note (optional)";
+    }
+    if (descInput) {
+      descInput.removeAttribute("required");
+      descInput.placeholder = "e.g. festival advance, medical need";
+    }
   } else {
     // Restore description field for non-salary categories
     const descContainer = document.getElementById("expense-description-container");
     const descInput     = document.getElementById("expense-description");
-    if (descContainer) descContainer.style.display = "block";
-    if (descInput) descInput.setAttribute("required", "required");
+    if (descContainer) {
+      descContainer.style.display = "block";
+      const lbl = descContainer.querySelector("label");
+      if (lbl) lbl.textContent = "Description / Notes";
+    }
+    if (descInput) {
+      descInput.setAttribute("required", "required");
+      descInput.placeholder = "e.g. Ramu salary April, Electricity bill March";
+    }
   }
 
   if (tier === "tier1") {
@@ -977,6 +1144,7 @@ function showExpenseModal(type, options) {
   }
 
   _setDisplay("salary-fields", false);
+  _setDisplay("staff-advance-fields", false);
   _setDisplay("has-bill-group", false);
   _setDisplay("bill-fields", false);
   _setDisplay("gst-fields", false);
@@ -986,7 +1154,11 @@ function showExpenseModal(type, options) {
   // Always restore description field on modal open
   const descContainer = document.getElementById("expense-description-container");
   const descInput     = document.getElementById("expense-description");
-  if (descContainer) descContainer.style.display = "block";
+  if (descContainer) {
+    descContainer.style.display = "block";
+    const lbl = descContainer.querySelector("label");
+    if (lbl) lbl.textContent = "Description / Notes";
+  }
   if (descInput) descInput.setAttribute("required", "required");
 
   const hasBillChk = document.getElementById("expense-has-bill");
@@ -1065,6 +1237,15 @@ function showExpenseModal(type, options) {
         opt.hidden   = (type === "transaction");
         opt.disabled = (type === "transaction");
       }
+      // Staff Advance goes through the Staff payroll ledger — only users
+      // who may give advances (admin) see the option. Server-enforced too.
+      if (opt.value === "staff_advance") {
+        const mayAdvance = window.CibaraAuth
+          && typeof window.CibaraAuth.userCan === "function"
+          && window.CibaraAuth.userCan("staff.advance.give");
+        opt.hidden   = opt.hidden || !mayAdvance || _expenseEditMode;
+        opt.disabled = opt.disabled || !mayAdvance || _expenseEditMode;
+      }
     });
     // If a hidden category was previously selected, reset
     if (type === "transaction" && _txnHidden.includes(catSelect.value)) {
@@ -1101,7 +1282,10 @@ async function submitExpense(e) {
   const paymentMethod = document.getElementById("expense-payment-method")?.value;
   const type          = document.getElementById("expense-type")?.value;
 
-  if (!date || !category || !description || !amountRaw || !paymentMethod) {
+  // Description is optional for Staff Advance (it becomes the note on the
+  // advance record); required for every other category.
+  if (!date || !category || !amountRaw || !paymentMethod
+      || (!description && category !== "staff_advance")) {
     showNotification("Please fill all required fields", "error");
     return;
   }
@@ -1166,6 +1350,65 @@ async function submitExpense(e) {
   }
 
   try {
+    // ── Staff Advance → routed through the Staff payroll ledger ──────────────
+    // POSTs to /staff/advance instead of /add_expense: the server writes the
+    // advance record and its expense row in ONE atomic batch, so the amount
+    // shows up both in the day's expenses and against the staff member's
+    // outstanding advance (deducted at salary time, remainder carried
+    // forward). Never used in edit mode — payroll rows are edited from the
+    // Staff section only (the server enforces this with a 409).
+    if (category === "staff_advance" && !_expenseEditMode) {
+      const staffId = document.getElementById("expense-staff-select")?.value || "";
+      if (!staffId) {
+        showNotification("Select the staff member taking the advance", "error");
+        document.getElementById("expense-staff-select")?.focus();
+        return;
+      }
+      const advResponse = await apiFetch("/staff/advance", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          staff_id: staffId,
+          amount: amount,
+          date: date,
+          payment_method: paymentMethod,
+          expense_type: type,
+          note: description || "",
+        }),
+      });
+      const advResult = await advResponse.json().catch(() => null);
+      if (!advResult) throw new Error(`Server error: ${advResponse.status}`);
+      if (!advResult.success) {
+        showNotification(advResult.message || "Error saving advance", "error");
+        return;
+      }
+      document.getElementById("expense-modal")?.classList.remove("show");
+      // Smooth-insert the echoed expense row (same shape as /add_expense).
+      if (advResult.expense && advResult.expense._doc_id) {
+        try {
+          if (typeof logs !== "undefined" && logs && Array.isArray(logs.expenses)) {
+            logs.expenses.push(advResult.expense);
+          }
+          if (typeof window.renderEnhancedLogs === "function") {
+            window.renderEnhancedLogs();
+          }
+        } catch (err) {
+          console.warn("Advance smooth-insert skipped:", err);
+        }
+      }
+      if (typeof window.refreshTransactionsView === "function") {
+        window.refreshTransactionsView();
+      } else {
+        debouncedFetchData();
+      }
+      // The Staff module's cards show outstanding advances — refresh if open.
+      if (typeof window.refreshStaffModule === "function") {
+        window.refreshStaffModule();
+      }
+      showNotification(advResult.message || "Advance recorded", "success");
+      return;
+    }
+
     // ── Upload photo if one was selected ──────────────────────────────────────
     if (_pendingInvoiceFile) {
       if (submitBtn) submitBtn.innerHTML =
@@ -1369,7 +1612,7 @@ function _isSplitEnabled() {
 
 // Categories that are account-level (not daily counter cash) — must mirror
 // _SPLIT_INELIGIBLE_CATEGORIES in routes/reports.py.
-const SPLIT_INELIGIBLE_CATEGORIES = ["rent", "booking_commission"];
+const SPLIT_INELIGIBLE_CATEGORIES = ["rent", "booking_commission", "staff_advance"];
 
 // Decide whether the split toggle should be offered, given the current
 // form state. Eligible only for: admin, a Daily Expense (transaction),

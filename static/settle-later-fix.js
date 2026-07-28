@@ -128,27 +128,81 @@
               : "online"
             : null;
 
-        try {
-          console.log("Sending checkout request to server");
-          const response = await apiFetch("/checkout", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              room: roomNumber,
-              final_checkout: true,
-              refund_method: refundMethod,
-              settle_later: settleLaterEnabled,
-              settlement_notes: settlementNotes,
-            }),
-          });
+        // ── Optimistic checkout ────────────────────────────────────────────
+        // All validation above is synchronous and has passed. Close the
+        // modals and flip the room NOW — the operator moves straight to the
+        // next room — then persist in the background (bill generation takes
+        // seconds server-side). One request per click is preserved (this
+        // remains the ONLY /checkout handler; see the bill-number-gap note
+        // in settle-later.js), and a failure rolls the room back loudly.
 
-          if (!response.ok) {
-            throw new Error(`Server responded with status: ${response.status}`);
-          }
+        // Snapshot for rollback, then flip the room locally.
+        const prevRoomState = rooms[roomNumber] ? { ...rooms[roomNumber] } : null;
+        if (rooms[roomNumber]) {
+          rooms[roomNumber].status = "cleaning";
+          rooms[roomNumber].guest = null;
+        }
+        if (typeof renderRooms === "function") renderRooms();
 
-          const result = await response.json();
-          if (result.success) {
+        // Close both modals immediately.
+        this.closeConfirmationModal();
+        const checkoutModalEl = document.getElementById("checkout-modal");
+        if (checkoutModalEl) {
+          checkoutModalEl.classList.remove("show");
+        }
+
+        // Button + shared flag are free again for the next room right away.
+        this.resetButton();
+
+        console.log("Sending checkout request to server (background)");
+        const _doCheckout = () => apiFetch("/checkout", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            room: roomNumber,
+            final_checkout: true,
+            refund_method: refundMethod,
+            settle_later: settleLaterEnabled,
+            settlement_notes: settlementNotes,
+            room_data: prevRoomState, // lets the server skip a Firestore read
+          }),
+        });
+
+        // Route through the per-room write queue so a payment still settling
+        // for THIS room lands before the bill is computed. Other rooms'
+        // queues are independent — nothing cross-blocks.
+        (window.cibaraWrites && typeof window.cibaraWrites.enqueue === "function"
+          ? window.cibaraWrites.enqueue(roomNumber, _doCheckout)
+          : _doCheckout())
+          .then(async (response) => {
+            if (!response.ok) {
+              throw new Error(`Server responded with status: ${response.status}`);
+            }
+            const result = await response.json();
+            if (!result.success) {
+              throw new Error(result.message || "Error during checkout");
+            }
             console.log("Checkout successful");
+
+            // Success message (settle-later variant keeps its specific text)
+            if (settleLaterEnabled && balance > 0) {
+              showNotification(
+                `Checkout completed with 'Settle Later' option. Payment of ₹${balance} added to pending settlements.`,
+                "success"
+              );
+            } else {
+              showNotification(result.message || "Checkout successful!", "success");
+            }
+
+            debouncedFetchData(); // authoritative background sync
+
+            // Auto-generate & store the bill PDF in the background
+            if (result.bill_id && typeof window._cibaraBillsAutoGenerate === "function") {
+              window._cibaraBillsAutoGenerate(result.bill_id);
+            }
+
+            // Notify register & bills modules to refresh live
+            window.dispatchEvent(new CustomEvent("cibaraRoomUpdate", { detail: { type: "checkout", room: roomNumber } }));
 
             // ── Save customer flag if checkbox was ticked ─────────────────
             if (shouldFlag && checkoutMobile) {
@@ -174,45 +228,19 @@
                 })
                 .catch((err) => console.warn("[flag] Network error saving flag:", err));
             }
-
-            // Close both modals
-            this.closeConfirmationModal();
-            const checkoutModal = document.getElementById("checkout-modal");
-            if (checkoutModal) {
-              checkoutModal.classList.remove("show");
-            }
-
-            // Mark room locally for immediate UI update
-            if (rooms[roomNumber]) {
-              rooms[roomNumber].status = "cleaning";
-              rooms[roomNumber].guest = null;
-            }
+          })
+          .catch((error) => {
+            // Roll back the optimistic flip and tell the operator loudly —
+            // the room is restored exactly as it was, ready to retry.
+            console.error("Error during checkout:", error);
+            if (prevRoomState) rooms[roomNumber] = prevRoomState;
             if (typeof renderRooms === "function") renderRooms();
-            debouncedFetchData(); // background sync
-
-            // Notify register & bills modules to refresh live
-            window.dispatchEvent(new CustomEvent("cibaraRoomUpdate", { detail: { type: "checkout", room: roomNumber } }));
-
-            // Show appropriate success message
-            if (settleLaterEnabled && balance > 0) {
-              showNotification(
-                `Checkout completed with 'Settle Later' option. Payment of ₹${balance} added to pending settlements.`,
-                "success"
-              );
-            }
-          } else {
-            console.error("Checkout failed:", result.message);
             showNotification(
-              result.message || "Error during checkout",
-              "error"
+              `Checkout of room ${roomNumber} FAILED: ${error.message} — the room has been restored, please retry.`,
+              "error",
+              8000
             );
-          }
-        } catch (error) {
-          console.error("Error during checkout:", error);
-          showNotification(`Error during checkout: ${error.message}`, "error");
-        } finally {
-          this.resetButton();
-        }
+          });
       });
 
       // Add helper methods to the button element

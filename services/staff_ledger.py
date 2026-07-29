@@ -8,10 +8,15 @@ unit-testable in isolation (tests/test_staff_ledger.py).
 
 Concepts
 ────────
-attendance   One record per (staff, date):
-                 {staff_id, date "YYYY-MM-DD", status "full"|"half"|"absent"}
+attendance   One record per (staff, date), or per (staff, date, shift) for
+             dual-shift staff:
+                 {staff_id, date "YYYY-MM-DD", status "full"|"half"|"absent",
+                  shift "D"|"N" (optional — only dual-shift staff have it)}
              Unmarked days simply have no record. A half day counts as 0.5
-             worked days, a full day as 1.0, absent/unmarked as 0.
+             worked days, a full day as 1.0, absent/unmarked as 0. A
+             dual-shift staff member's day is the SUM of their D and N
+             records (so a full-D + full-N day is worth 2.0 worked-day
+             units) — see attendance_summary().
 
 advance      Money handed to a staff member ahead of salary:
                  {id, staff_id, date, amount (int ₹)}
@@ -77,19 +82,25 @@ def attendance_summary(attendance: list, start: str, end: str,
     Summarise attendance records that fall inside [start, end] (inclusive).
 
     Records with a missing/malformed date or an unknown status are ignored.
-    Duplicate records for the same date keep the LAST one seen (the caller
-    normally can't produce duplicates — doc id is staff_id__date — but the
-    math must not double-count if it ever happens).
+    Duplicate records for the same (date, shift) keep the LAST one seen
+    (the caller normally can't produce duplicates — doc id is
+    staff_id__date, or staff_id__date__shift for dual-shift staff — but
+    the math must not double-count if it ever happens). Single-shift
+    records key on date alone (shift is absent/None); a dual-shift staff
+    member's D and N records key separately, so BOTH contribute to the
+    totals below — a full-D + full-N day counts as two full days.
 
-    `exclude` (set of dates) drops those days entirely — used to skip days
-    an earlier salary payment already covered, so a mid-period payout never
-    causes double pay OR a hard block.
+    `exclude` (set of dates) drops those days entirely, regardless of
+    shift — used to skip days an earlier salary payment already covered,
+    so a mid-period payout never causes double pay OR a hard block.
 
     Returns {full_days, half_days, absent_days, days_worked, marked_days}.
-    days_worked is a float (halves), e.g. 12 full + 3 half → 13.5.
+    days_worked is a float (halves), e.g. 12 full + 3 half → 13.5. For a
+    dual-shift staff member, days_worked/full_days/etc. count SHIFTS, not
+    calendar days, so they can exceed the number of days in the period.
     """
     exclude = exclude or set()
-    by_date: dict = {}
+    by_key: dict = {}
     for rec in attendance or []:
         d = str((rec or {}).get("date") or "")
         status = (rec or {}).get("status")
@@ -101,17 +112,18 @@ def attendance_summary(attendance: list, start: str, end: str,
             continue
         if d in exclude:
             continue
-        by_date[d] = status
+        shift = (rec or {}).get("shift") or None
+        by_key[(d, shift)] = status
 
-    full = sum(1 for s in by_date.values() if s == STATUS_FULL)
-    half = sum(1 for s in by_date.values() if s == STATUS_HALF)
-    absent = sum(1 for s in by_date.values() if s == STATUS_ABSENT)
+    full = sum(1 for s in by_key.values() if s == STATUS_FULL)
+    half = sum(1 for s in by_key.values() if s == STATUS_HALF)
+    absent = sum(1 for s in by_key.values() if s == STATUS_ABSENT)
     return {
         "full_days": full,
         "half_days": half,
         "absent_days": absent,
         "days_worked": full + 0.5 * half,
-        "marked_days": len(by_date),
+        "marked_days": len(by_key),
     }
 
 

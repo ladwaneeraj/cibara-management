@@ -40,6 +40,10 @@ def _att(date, status):
     return {"staff_id": "s1", "date": date, "status": status}
 
 
+def _att_shift(date, status, shift):
+    return {"staff_id": "s1", "date": date, "status": status, "shift": shift}
+
+
 def _adv(amount, date="2026-07-05"):
     return {"staff_id": "s1", "date": date, "amount": amount}
 
@@ -90,6 +94,50 @@ def test_summary_ignores_junk_and_never_double_counts():
     s = attendance_summary(att, "2026-07-01", "2026-07-31")
     assert s["marked_days"] == 1
     assert s["days_worked"] == 0.5
+
+
+# ── Dual-shift attendance (staff who work both a Day and Night shift) ──────
+
+def test_summary_dual_shift_day_counts_as_two_full_days():
+    att = [_att_shift("2026-07-01", "full", "D"),
+           _att_shift("2026-07-01", "full", "N")]
+    s = attendance_summary(att, "2026-07-01", "2026-07-31")
+    assert s["full_days"] == 2
+    assert s["days_worked"] == 2.0
+    assert s["marked_days"] == 2
+
+
+def test_summary_dual_shift_one_shift_marked_counts_once():
+    att = [_att_shift("2026-07-01", "full", "D")]
+    s = attendance_summary(att, "2026-07-01", "2026-07-31")
+    assert s["full_days"] == 1
+    assert s["days_worked"] == 1.0
+
+
+def test_summary_dual_shift_mixed_full_and_half():
+    att = [_att_shift("2026-07-01", "full", "D"),
+           _att_shift("2026-07-01", "half", "N")]
+    s = attendance_summary(att, "2026-07-01", "2026-07-31")
+    assert s["full_days"] == 1
+    assert s["half_days"] == 1
+    assert s["days_worked"] == 1.5
+
+
+def test_summary_shift_and_shiftless_records_key_independently():
+    # A shift-tagged record and a plain (no-shift) record on the SAME date
+    # must not collide/dedup against each other — different staff shapes.
+    att = [_att("2026-07-01", "full"), _att_shift("2026-07-01", "full", "D")]
+    s = attendance_summary(att, "2026-07-01", "2026-07-31")
+    assert s["marked_days"] == 2
+    assert s["days_worked"] == 2.0
+
+
+def test_summary_duplicate_shift_record_still_last_wins():
+    att = [_att_shift("2026-07-01", "half", "D"),
+           _att_shift("2026-07-01", "full", "D")]   # same (date, shift)
+    s = attendance_summary(att, "2026-07-01", "2026-07-31")
+    assert s["marked_days"] == 1
+    assert s["days_worked"] == 1.0
 
 
 # ── Salary computation ──────────────────────────────────────────────────────

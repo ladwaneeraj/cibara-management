@@ -149,17 +149,21 @@ def get_attendance():
 @staff_bp.route("/attendance/mark", methods=["POST"])
 @requires_permission("staff.attendance.mark")
 def mark_attendance():
-    """Body: { staff_id, date, status: full|half|absent|clear }"""
+    """Body: { staff_id, date, status: full|half|absent|clear,
+    shift?: D|N }. shift is required for dual-shift staff, and must be
+    omitted for everyone else."""
     try:
         data = request.json or {}
+        shift = (data.get("shift") or "").strip().upper() or None
         rec = svc.mark_attendance(
             data.get("staff_id", ""), str(data.get("date", "")).strip(),
-            data.get("status", ""), g.current_user)
+            data.get("status", ""), g.current_user, shift=shift)
         write_log("staff.attendance.mark",
                   target_collection="staff_attendance",
-                  target_id="{}__{}".format(data.get("staff_id"),
-                                            data.get("date")),
-                  metadata={"status": data.get("status")})
+                  target_id="{}__{}{}".format(
+                      data.get("staff_id"), data.get("date"),
+                      "__" + shift if shift else ""),
+                  metadata={"status": data.get("status"), "shift": shift})
         return jsonify(success=True, record=rec)
     except ValueError as ve:
         return _fail(ve, 409 if "already paid" in str(ve) else 400)

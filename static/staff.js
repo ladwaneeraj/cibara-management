@@ -25,8 +25,13 @@
     includeInactive: false,
 
     gridMonth: null,        // "YYYY-MM" shown in the attendance grid
-    gridData: {},           // staff_id -> { date -> status }
-    gridMeta: {},           // staff_id -> { date -> {by, at, prev} } audit info
+    // staff_id -> { date -> status }                    (single-shift staff)
+    // staff_id -> { date -> { D: status, N: status } }  (dual-shift staff —
+    //   staff.is_dual_shift; whichever shifts exist just aren't set)
+    gridData: {},
+    // staff_id -> { date -> {by, at, prev} }             (single-shift staff)
+    // staff_id -> { date -> { D: {by,at,prev}, N: {...} } } (dual-shift staff)
+    gridMeta: {},
     gridPaid: {},           // staff_id -> [{start, end}] settled periods
     gridScroll: null,       // {left, top} preserved across cell-tap re-renders
 
@@ -358,6 +363,55 @@
     });
   }
 
+  // ── gridData/gridMeta accessors — the cell value is a plain status
+  // string for single-shift staff, or a { D: status, N: status } object
+  // for dual-shift staff (shift is always passed as null for the former,
+  // "D"/"N" for the latter, so callers never need to branch on staff type
+  // themselves — these helpers do it once, based on the shift argument). ──
+
+  function _gridGetStatus(sid, date, shift) {
+    var cell = (state.gridData[sid] || {})[date];
+    if (shift) return (cell && typeof cell === "object") ? (cell[shift] || "") : "";
+    return typeof cell === "string" ? cell : "";
+  }
+
+  function _gridSetStatus(sid, date, shift, status) {
+    var row = (state.gridData[sid] = state.gridData[sid] || {});
+    if (shift) {
+      var cell = (row[date] = (row[date] && typeof row[date] === "object") ? row[date] : {});
+      if (status) cell[shift] = status; else delete cell[shift];
+    } else if (status) {
+      row[date] = status;
+    } else {
+      delete row[date];
+    }
+  }
+
+  function _gridGetMeta(sid, date, shift) {
+    var cell = (state.gridMeta[sid] || {})[date];
+    if (shift) return (cell && typeof cell === "object") ? cell[shift] : null;
+    return cell || null;
+  }
+
+  function _gridSetMeta(sid, date, shift, rec) {
+    var metaRow = (state.gridMeta[sid] = state.gridMeta[sid] || {});
+    var val = (rec && rec.status) ? _attMeta(rec) : null;
+    if (shift) {
+      var metaCell = (metaRow[date] = (metaRow[date] && typeof metaRow[date] === "object") ? metaRow[date] : {});
+      if (val) metaCell[shift] = val; else delete metaCell[shift];
+    } else if (val) {
+      metaRow[date] = val;
+    } else {
+      delete metaRow[date];
+    }
+  }
+
+  // Authoritative write from a server record (initial load, mark_all).
+  function _setGridRecord(sid, date, shift, status, rec) {
+    _gridSetStatus(sid, date, shift, status);
+    _gridSetMeta(sid, date, shift, rec);
+  }
+
   function loadGrid() {
     var pane = document.getElementById("stf-pane-attendance");
     state.gridScroll = null;   // fresh load → auto-scroll to today
@@ -377,8 +431,7 @@
         state.gridData = {};
         state.gridMeta = {};
         (results[1].attendance || []).forEach(function (a) {
-          (state.gridData[a.staff_id] = state.gridData[a.staff_id] || {})[a.date] = a.status;
-          (state.gridMeta[a.staff_id] = state.gridMeta[a.staff_id] || {})[a.date] = _attMeta(a);
+          _setGridRecord(a.staff_id, a.date, a.shift, a.status, a);
         });
         state.gridPaid = results[1].paid_periods || {};
         state._gridLoadedMonth = month;
@@ -449,29 +502,60 @@
       (canPay ? '<th class="stf-grid-pay-h" title="Pay salary / advance">₹</th>' : "") +
       "</tr></thead><tbody>";
 
-    // ── one line per staff ──
+    // ── one (or two) line(s) per staff ──
+    // Dual-shift staff (is_dual_shift) get TWO real grid rows — a Day row
+    // and a Night row — each behaving exactly like a normal staff row
+    // (full-size cells, same tap-to-mark interaction). A small D/N tag
+    // next to the name is the only visual difference; everything else
+    // (click handling, popover, optimistic update) is shift-agnostic and
+    // shared with single-shift staff via the `shift` value on each row.
     var dayTotals = new Array(r.lastDay + 1).fill(0);
+    var gridRows = [];
     staff.forEach(function (s) {
-      var row = state.gridData[s.id] || {};
+      if (s.is_dual_shift) {
+        gridRows.push({ s: s, shift: "D", pairFirst: true });
+        gridRows.push({ s: s, shift: "N", pairSecond: true });
+      } else {
+        gridRows.push({ s: s, shift: null });
+      }
+    });
+
+    gridRows.forEach(function (gr) {
+      var s = gr.s, shift = gr.shift;
       var worked = 0;
-      var advDue = state.payrollVisible && Number(s.outstanding_advance || 0) > 0
+      // Ledger-open / pay actions live only on a staff member's FIRST row
+      // (their only row, or the Day row of a dual-shift pair) — showing
+      // the same ₹ button twice per person would be confusing.
+      var showActions = !gr.pairSecond;
+      var advDue = showActions && state.payrollVisible &&
+          Number(s.outstanding_advance || 0) > 0
         ? '<b class="advdue" title="Advance to recover from salary">' +
           rup(s.outstanding_advance) + " adv</b>"
         : "";
-      var nameAttrs = can("staff.payroll.view")
+      var nameAttrs = showActions && can("staff.payroll.view")
         ? ' data-open="' + esc(s.id) + '" title="Open ' + esc(s.name) + "'s ledger\""
         : "";
-      html += '<tr data-sid="' + esc(s.id) + '">' +
+      var shiftTag = shift
+        ? '<span class="stf-shift-tag ' + (shift === "D" ? "day" : "night") +
+          '" title="' + (shift === "D" ? "Day shift" : "Night shift") + '">' +
+          shift + "</span>"
+        : "";
+      html += '<tr data-sid="' + esc(s.id) + '"' +
+        (shift ? ' data-shift="' + shift + '"' : "") +
+        (gr.pairFirst ? ' class="stf-pair-first"' : "") +
+        (gr.pairSecond ? ' class="stf-pair-second"' : "") + ">" +
         '<td class="stf-grid-name' + (nameAttrs ? " clickable" : "") + '"' +
-        nameAttrs + '><span class="nm">' + esc(s.name) + "</span>" +
-        ((s.designation || advDue)
+        nameAttrs + ">" +
+        '<span class="nm">' +
+        (gr.pairSecond ? shiftTag : esc(s.name) + shiftTag) + "</span>" +
+        (showActions && (s.designation || advDue)
           ? '<span class="ds">' + esc(s.designation || "") +
             (s.designation && advDue ? " · " : "") + advDue + "</span>"
           : "") +
         "</td>";
       for (var d2 = 1; d2 <= r.lastDay; d2++) {
         var ds = _dstr(state.gridMonth, d2);
-        var st = row[ds] || "";
+        var st = _gridGetStatus(s.id, ds, shift);
         if (st === "full") { worked += 1; dayTotals[d2] += 1; }
         if (st === "half") { worked += 0.5; dayTotals[d2] += 0.5; }
         var cls = ["stf-grid-cell"];
@@ -488,15 +572,18 @@
         if (future) cls.push("is-future");
         if (locked) cls.push("is-locked");
         html += '<td class="' + cls.join(" ") + '" data-date="' + ds + '"' +
+          (shift ? ' data-shift="' + shift + '"' : "") +
           (locked ? ' title="Salary paid for this day — locked"' : "") + ">" +
           (st ? '<span class="m">' + CELL_LABEL[st] + "</span>" : "") + "</td>";
       }
       html += '<td class="stf-grid-total">' + fmtDays(worked) + "</td>" +
         (canPay
-          ? '<td class="stf-grid-pay' +
-            (state.quickPay && state.quickPay.staffId === s.id ? " on" : "") +
-            '" data-pay="' + esc(s.id) + '" title="Pay salary / give advance">' +
-            '<i class="fas fa-money-bill-wave"></i></td>'
+          ? (showActions
+              ? '<td class="stf-grid-pay' +
+                (state.quickPay && state.quickPay.staffId === s.id ? " on" : "") +
+                '" data-pay="' + esc(s.id) + '" title="Pay salary / give advance">' +
+                '<i class="fas fa-money-bill-wave"></i></td>'
+              : '<td class="stf-grid-pay stf-grid-pay-empty"></td>')
           : "") +
         "</tr>";
     });
@@ -521,9 +608,16 @@
       '  <span><span class="dot" style="background:#fed7d7;border:1px solid #feb2b2;"></span>A — absent</span>' +
       '  <span><span class="dot" style="background:#fff;border:1px solid #e2e8f0;"></span>blank — not marked</span>' +
       "  <span>🔒 salary paid (locked)</span>" +
+      (staff.some(function (s) { return s.is_dual_shift; })
+        ? "  <span>D / N — Day &amp; Night shift row, marked independently</span>"
+        : "") +
       "</div>" +
       (canMark
-        ? '<div class="stf-cal-legend"><span>Tap a blank day to mark Present. Tapping an already-marked day asks before changing it.</span></div>'
+        ? '<div class="stf-cal-legend"><span>Tap a blank day to mark Present. Tapping an already-marked day asks before changing it.' +
+          (staff.some(function (s) { return s.is_dual_shift; })
+            ? " Two-shift staff get a separate D row and N row to mark."
+            : "") +
+          "</span></div>"
         : "");
 
     pane.innerHTML = html;
@@ -593,10 +687,8 @@
       post("/staff/attendance/mark_all", { date: _todayStr() })
         .then(function (json) {
           (json.marked || []).forEach(function (rec) {
-            (state.gridData[rec.staff_id] =
-              state.gridData[rec.staff_id] || {})[rec.date] = rec.status;
-            (state.gridMeta[rec.staff_id] =
-              state.gridMeta[rec.staff_id] || {})[rec.date] = _attMeta(rec);
+            _setGridRecord(rec.staff_id, rec.date, rec.shift || null,
+                           rec.status, rec);
           });
           var parts = [(json.marked || []).length + " marked"];
           if (json.already_marked) parts.push(json.already_marked + " already marked");
@@ -614,12 +706,14 @@
     var tr = cell.closest("tr");
     var sid = tr && tr.dataset.sid;
     var d = cell.dataset.date;
+    var shift = cell.dataset.shift || null;   // set on dual-shift staff's D/N row cells only
     if (!sid || !d) return;
     if (d > _todayStr()) return;                       // future — not markable
 
     // While the quick-pay panel targets this staff, taps on THEIR row pick
     // the salary period (calendar-style: first tap = start, second = end)
     // instead of marking attendance. Other rows keep marking normally.
+    // (Date-range selection ignores which shift cell was tapped.)
     var qp = state.quickPay;
     if (qp && qp.mode === "pay" && qp.staffId === sid) {
       if (!qp.anchor) {
@@ -646,25 +740,23 @@
       return;
     }
 
-    var row = (state.gridData[sid] = state.gridData[sid] || {});
-    var prev = row[d] || "";
+    var prev = _gridGetStatus(sid, d, shift);
 
     if (!prev) {
-      // Blank day → one tap marks Present (the fast path for the daily
-      // register stays one tap per person).
-      _commitMark(sid, d, "full");
+      // Blank day/shift → one tap marks Present (the fast path for the
+      // daily register stays one tap per person, or per shift).
+      _commitMark(sid, d, "full", shift);
       return;
     }
 
     // Already-marked day: a stray tap must NOT silently change it. Open a
     // small chooser instead — nothing changes until an option is picked;
     // tapping anywhere else just closes it.
-    _openCellPop(cell, sid, d, prev);
+    _openCellPop(cell, sid, d, prev, shift);
   }
 
-  function _commitMark(sid, d, next) {
-    var row = (state.gridData[sid] = state.gridData[sid] || {});
-    var prev = row[d] || "";
+  function _commitMark(sid, d, next, shift) {
+    var prev = _gridGetStatus(sid, d, shift);
     if ((next || "") === prev) return;
 
     function keepScroll() {
@@ -673,20 +765,18 @@
     }
 
     // Optimistic update, revert on server rejection.
-    if (next) row[d] = next; else delete row[d];
+    _gridSetStatus(sid, d, shift, next);
     keepScroll();
     renderGrid();
     post("/staff/attendance/mark", {
       staff_id: sid, date: d, status: next || "clear",
+      shift: shift || undefined,
     }).then(function (json) {
       // Keep the audit info fresh so the popover shows the real marker
       // without a full reload.
-      var rec = json && json.record;
-      var meta = (state.gridMeta[sid] = state.gridMeta[sid] || {});
-      if (rec && rec.status) meta[d] = _attMeta(rec);
-      else delete meta[d];
+      _gridSetMeta(sid, d, shift, json && json.record);
     }).catch(function (e) {
-      if (prev) row[d] = prev; else delete row[d];
+      _gridSetStatus(sid, d, shift, prev);
       keepScroll();
       renderGrid();
       notify(e.message, "error");
@@ -706,10 +796,11 @@
     if (pop && !pop.contains(e.target)) _closeCellPop();
   }
 
-  function _openCellPop(cell, sid, d, current) {
+  function _openCellPop(cell, sid, d, current, shift) {
     _closeCellPop();
     var s = state.staff.find(function (x) { return x.id === sid; });
     var CUR_LABEL = { full: "Full day", half: "Half day", absent: "Absent" };
+    var SHIFT_LABEL = { D: "Day shift", N: "Night shift" };
 
     function opt(val, cls, label) {
       var isCur = val === current;
@@ -719,7 +810,7 @@
     }
     // Audit line: who set this mark (and, if it was changed, what it was
     // before and who set that). Old records without a stamp show nothing.
-    var meta = (state.gridMeta[sid] || {})[d];
+    var meta = _gridGetMeta(sid, d, shift);
     var audit = "";
     if (meta && meta.by && meta.by !== "system") {
       audit = "Marked by <b>" + esc(meta.by) + "</b>" +
@@ -733,7 +824,9 @@
 
     var html =
       '<div class="stf-cell-pop" id="stf-cell-pop">' +
-      '  <div class="t">' + esc((s && s.name) || "") + " · " + esc(fmtDShort(d)) +
+      '  <div class="t">' + esc((s && s.name) || "") +
+      (shift ? " · " + esc(SHIFT_LABEL[shift] || shift) : "") +
+      " · " + esc(fmtDShort(d)) +
       '     <span>' + esc(CUR_LABEL[current] || "") + "</span></div>" +
       (audit ? '<div class="audit">' + audit + "</div>" : "") +
       '  <div class="opts">' +
@@ -760,7 +853,7 @@
       b.addEventListener("click", function () {
         var v = b.dataset.set;
         _closeCellPop();
-        _commitMark(sid, d, v === "clear" ? "" : v);
+        _commitMark(sid, d, v === "clear" ? "" : v, shift);
       });
     });
     // Defer the outside-close listener so the opening tap doesn't close it.
@@ -1660,13 +1753,17 @@
       "  </div>" +
       '  <div class="form-group"><label class="form-label">Notes</label>' +
       '    <input class="form-control" id="stf-f-notes" maxlength="300" value="' + esc(s.notes || "") + '" placeholder="Optional"></div>' +
+      '  <div class="form-group"><label class="stf-inactive-toggle" style="font-size:0.85rem;">' +
+      '<input type="checkbox" id="stf-f-dual"' + (s.is_dual_shift ? " checked" : "") + "> Works two shifts (Day &amp; Night) " +
+      '<span style="opacity:0.7;">(attendance grid gets a separate D row and N row for this person)</span></label></div>' +
       (isEdit
         ? '<div class="form-group"><label class="stf-inactive-toggle" style="font-size:0.85rem;">' +
           '<input type="checkbox" id="stf-f-active"' + (s.active !== false ? " checked" : "") + "> Active " +
           '<span style="opacity:0.7;">(untick when someone leaves — history is kept)</span></label></div>'
         : "") +
       '  <div style="font-size:0.72rem;color:#718096;margin-bottom:0.7rem;">' +
-      "    A half day pays half the daily wage. Wage changes apply from the next salary payment." +
+      "    A half day pays half the daily wage. Wage changes apply from the next salary payment. " +
+      "Two-shift staff earn up to two days' wage per day worked (one per shift)." +
       "  </div>" +
       '  <button class="stf-btn primary block" id="stf-f-save">' +
       (isEdit ? "Save Changes" : "Add Staff") + "</button>" +
@@ -1684,6 +1781,7 @@
         daily_wage: document.getElementById("stf-f-wage").value,
         joined_date: document.getElementById("stf-f-joined").value,
         notes: document.getElementById("stf-f-notes").value.trim(),
+        is_dual_shift: document.getElementById("stf-f-dual").checked,
       };
       if (!body.name) return notify("Name is required", "error");
       if (!(Number(body.daily_wage) > 0)) return notify("Enter the per-day wage", "error");

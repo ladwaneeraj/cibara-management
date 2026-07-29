@@ -12,17 +12,31 @@ staff                               (one doc per staff member)
     designation    str   ("Housekeeping", "Front desk", …, free text)
     phone          str
     daily_wage     int ₹ per full day (half day pays half)
+    is_dual_shift  bool  (works a Day AND a Night shift — gets a second
+                          attendance record per day; False for everyone
+                          else, who is marked once per day as today)
     active         bool  (soft delete — history is never removed)
     joined_date    "YYYY-MM-DD"
     notes          str
     created_at/by, updated_at/by
 
-staff_attendance                    (doc id = "<staff_id>__<date>")
+staff_attendance
+    doc id = "<staff_id>__<date>"             for single-shift staff
+    doc id = "<staff_id>__<date>__<shift>"    for dual-shift staff (shift
+                                               is "D" or "N")
     staff_id, date "YYYY-MM-DD"
+    shift          "D" | "N"  (present ONLY on dual-shift staff's records;
+                               absent/omitted = the staff member's single
+                               daily record, same as before this existed)
     status         "full" | "half" | "absent"
     marked_by      {userId, name}
     marked_at      UTC iso
-    (unmarked days simply have no doc; clearing a mark deletes the doc)
+    (unmarked days/shifts simply have no doc; clearing a mark deletes it)
+
+    Payroll note: a dual-shift staff member's day is worth the SUM of
+    their D and N records (up to 2.0 worked-day units if both are full) —
+    see services/staff_ledger.py::attendance_summary. Single-shift staff
+    are unaffected and still cap at 1.0/day exactly as before.
 
 staff_advances                      (one doc per advance given)
     staff_id, staff_name
@@ -180,6 +194,8 @@ def _clean_staff_fields(data: dict, *, partial: bool) -> dict:
         fields["joined_date"] = jd
     if "active" in data:
         fields["active"] = bool(data.get("active"))
+    if "is_dual_shift" in data:
+        fields["is_dual_shift"] = bool(data.get("is_dual_shift"))
     return fields
 
 
@@ -189,6 +205,7 @@ def create_staff(data: dict, user: Optional[dict]) -> dict:
     fields.setdefault("phone", "")
     fields.setdefault("notes", "")
     fields.setdefault("joined_date", _ist_today())
+    fields.setdefault("is_dual_shift", False)
     fields["active"] = True
     fields["created_at"] = _now_utc()
     fields["created_by"] = _user_stamp(user)
@@ -235,11 +252,23 @@ def attendance_range(start: str, end: str,
     return out
 
 
+VALID_SHIFTS = ("D", "N")
+
+
+def _attendance_doc_id(staff_id: str, date: str, shift: Optional[str]) -> str:
+    return ("{}__{}__{}".format(staff_id, date, shift) if shift
+            else "{}__{}".format(staff_id, date))
+
+
 def mark_attendance(staff_id: str, date: str, status: str,
-                    user: Optional[dict]) -> dict:
+                    user: Optional[dict], shift: Optional[str] = None) -> dict:
     """
     Idempotently set (or clear) one staff member's attendance for a date.
     status: "full" | "half" | "absent" | "clear".
+
+    shift: "D" | "N" — REQUIRED for dual-shift staff (two independent
+    records per day), and must be omitted/None for everyone else (they
+    keep the original single record-per-day scheme).
 
     Guards: staff must exist & be active, date must be valid and not in
     the future, and the date must not fall inside an already-paid salary
@@ -258,6 +287,18 @@ def mark_attendance(staff_id: str, date: str, status: str,
     if status not in ledger.ATTENDANCE_STATUSES and status != "clear":
         raise ValueError("Status must be full, half, absent or clear.")
 
+    shift = str(shift).strip().upper() if shift else None
+    is_dual = bool(staff.get("is_dual_shift"))
+    if is_dual:
+        if shift not in VALID_SHIFTS:
+            raise ValueError(
+                "This staff member works two shifts — pick Day (D) or "
+                "Night (N) before marking attendance.")
+    elif shift is not None:
+        raise ValueError(
+            "This staff member isn't set up for two shifts — mark their "
+            "single daily attendance instead.")
+
     paid = ledger.date_in_paid_period(date, salary_payments_for(staff_id))
     if paid:
         raise ValueError(
@@ -266,10 +307,11 @@ def mark_attendance(staff_id: str, date: str, status: str,
             "really need to correct it.".format(
                 paid.get("period_start"), paid.get("period_end")))
 
-    doc_id = "{}__{}".format(staff_id, date)
+    doc_id = _attendance_doc_id(staff_id, date, shift)
     if status == "clear":
         _att_ref().document(doc_id).delete()
-        return {"staff_id": staff_id, "date": date, "status": None}
+        return {"staff_id": staff_id, "date": date, "shift": shift,
+                "status": None}
 
     doc = {
         "staff_id": staff_id,
@@ -278,6 +320,8 @@ def mark_attendance(staff_id: str, date: str, status: str,
         "marked_by": _user_stamp(user),
         "marked_at": _now_utc(),
     }
+    if shift:
+        doc["shift"] = shift
     # Audit trail: when a mark is CHANGED, keep what it was and who set it
     # (last 10 changes). Settles "I was present that day" disputes.
     # Limitation: clearing a day deletes the doc, so its history goes with
@@ -302,8 +346,11 @@ def mark_all_present(date: str, user: Optional[dict]) -> dict:
     """
     Mark every ACTIVE staff member without a record on `date` as "full",
     in one batch. Staff already marked (any status) are left untouched;
-    days inside a paid salary period are skipped. Returns the new records
-    plus counts so the UI can report exactly what happened.
+    days inside a paid salary period are skipped. Dual-shift staff get
+    BOTH their Day and Night records marked (whichever of the two isn't
+    already marked) — "all present" means a full day's work, both shifts.
+    Returns the new records plus counts so the UI can report exactly what
+    happened.
     """
     if not _valid_date(date):
         raise ValueError("Date must be YYYY-MM-DD.")
@@ -311,7 +358,7 @@ def mark_all_present(date: str, user: Optional[dict]) -> dict:
         raise ValueError("Attendance cannot be marked for a future date.")
 
     staff = list_staff(include_inactive=False)
-    existing = {a.get("staff_id") for a in attendance_range(date, date)}
+    existing = {(a.get("staff_id"), a.get("shift")) for a in attendance_range(date, date)}
     paid = paid_periods_by_staff()
 
     def _locked(sid):
@@ -324,17 +371,25 @@ def mark_all_present(date: str, user: Optional[dict]) -> dict:
     batch = db.batch()
     for s in staff:
         sid = s["id"]
-        if sid in existing:
-            already += 1
-            continue
         if _locked(sid):
             skipped_locked += 1
             continue
-        doc = {"staff_id": sid, "date": date, "status": ledger.STATUS_FULL,
-               "marked_by": stamp, "marked_at": now}
-        batch.set(_att_ref().document("{}__{}".format(sid, date)), doc)
-        doc["id"] = "{}__{}".format(sid, date)
-        marked.append(doc)
+        shifts = VALID_SHIFTS if s.get("is_dual_shift") else (None,)
+        newly_marked = False
+        for shift in shifts:
+            if (sid, shift) in existing:
+                continue
+            newly_marked = True
+            doc = {"staff_id": sid, "date": date, "status": ledger.STATUS_FULL,
+                   "marked_by": stamp, "marked_at": now}
+            if shift:
+                doc["shift"] = shift
+            doc_id = _attendance_doc_id(sid, date, shift)
+            batch.set(_att_ref().document(doc_id), doc)
+            doc["id"] = doc_id
+            marked.append(doc)
+        if not newly_marked:
+            already += 1
     if marked:
         batch.commit()
     return {"marked": marked, "already_marked": already,
@@ -773,6 +828,7 @@ def staff_overview(include_inactive: bool = False,
             "phone": s.get("phone", ""),
             "active": s.get("active", True),
             "joined_date": s.get("joined_date", ""),
+            "is_dual_shift": bool(s.get("is_dual_shift")),
             "month_days_worked": summary["days_worked"],
             "month_full_days": summary["full_days"],
             "month_half_days": summary["half_days"],

@@ -359,6 +359,30 @@
   color: var(--stf-danger);
   font-weight: 700;
 }
+/* Dual-shift staff: a small D/N badge beside the name identifies which
+   of their two grid rows (Day / Night) this is. */
+.stf-shift-tag {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 15px;
+  height: 15px;
+  margin-left: 0.35rem;
+  padding: 0 0.2rem;
+  border-radius: 4px;
+  font-size: 0.6rem;
+  font-weight: 700;
+  vertical-align: middle;
+}
+.stf-shift-tag.day   { color: var(--stf-primary); background: var(--stf-primary-soft); }
+.stf-shift-tag.night { color: #6b46c1; background: #f1e9fc; }
+
+/* The Day/Night pair of rows for one dual-shift staff member: the name
+   is printed only once, on the Day row; the Night row just carries its
+   N badge (no repeated name) so the pair reads as one person, two rows. */
+.stf-pair-first td { border-bottom: none !important; }
+.stf-pair-second .stf-grid-name { text-align: right !important; }
+.stf-grid-pay-empty { cursor: default; }
 
 .stf-grid-cell {
   min-width: 34px;

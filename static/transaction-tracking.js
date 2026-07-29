@@ -2316,6 +2316,15 @@ function _expenseCarriesGst(log) {
 }
 let txnExtendedLogs = null; // cached logs from /get_transactions_range for current range
 
+// Manager-only "any date" expense browsing (see /expenses/browse in
+// routes/reports.py, gated by the expense.view permission). Non-null while
+// a manager is looking at a custom expense date range outside the normal
+// 3-day window. Deliberately scoped to expenses only — cash/online/refund/
+// settlement buckets are always empty in this payload, so the Cash/UPI/
+// Total-in analytics cards read ₹0 instead of leaking figures for dates a
+// manager isn't otherwise allowed to browse.
+let txnMgrExpenseLogs = null;
+
 function _getDateOffset(days) {
   const d = new Date();
   d.setDate(d.getDate() - days);
@@ -2464,6 +2473,109 @@ function _syncExpenseScopeVisibility() {
   if (!el) return;
   el.style.display =
     _txnIsAdmin() && txnActiveType === "expenses" ? "flex" : "none";
+}
+
+// ── Manager-only expense date range (any date, expenses only) ────────────
+// Admin already has the unclamped custom-range picker above, so this control
+// is for managers specifically: it's hidden for admin/housekeeping via
+// data-perm/data-hide-roles in index.html, and only shown by this function
+// while the Expense type filter is active.
+function _isMgrExpenseViewer() {
+  const auth = window.CibaraAuth;
+  return !!(
+    auth && auth.userCan && auth.userCan("expense.view") && !_txnIsAdmin()
+  );
+}
+
+function _resetMgrExpenseRange(renderToday) {
+  txnMgrExpenseLogs = null;
+  if (window._txnMgrExpPicker) window._txnMgrExpPicker.clear();
+  if (renderToday) {
+    const today = _localYMD();
+    document
+      .querySelectorAll(".txn-quick-btn")
+      .forEach((b) => b.classList.remove("active"));
+    const todayBtn = document.querySelector('.txn-quick-btn[data-range="today"]');
+    if (todayBtn) todayBtn.classList.add("active");
+    _triggerRender(today, today);
+  }
+}
+
+// Returns true if it already triggered a render itself (caller should skip
+// its own _triggerRender in that case, to avoid a redundant double-fetch).
+function _syncMgrExpenseRangeVisibility() {
+  const el = document.getElementById("txn-mgr-expense-range");
+  if (!el || !_isMgrExpenseViewer()) return false;
+  const shouldShow = txnActiveType === "expenses";
+  el.style.display = shouldShow ? "flex" : "none";
+  // Leaving the Expense filter while a custom manager range was active —
+  // snap back to Today rather than silently re-fetching a wide range
+  // through the clamped /get_transactions_range endpoint.
+  if (!shouldShow && txnMgrExpenseLogs) {
+    _resetMgrExpenseRange(true);
+    return true;
+  }
+  return false;
+}
+
+async function _loadMgrExpenseRange(from, to) {
+  const logEl = document.getElementById("transaction-log");
+  if (logEl)
+    logEl.innerHTML = `<div class="loading-indicator"><span class="loader"></span><p>Loading expenses…</p></div>`;
+  try {
+    const res = await apiFetch("/expenses/browse", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ start_date: from, end_date: to }),
+    });
+    const data = await res.json();
+    if (data.success) {
+      txnMgrExpenseLogs = {
+        cash: [], online: [], refunds: [], settlements: [],
+        expenses: data.expense_logs || [],
+      };
+      txnActiveDateRange = { fromDate: from, toDate: to };
+      txnExtendedLogs = txnMgrExpenseLogs;
+      _renderWithLogs(from, to, txnMgrExpenseLogs);
+    } else {
+      if (logEl)
+        logEl.innerHTML = `<div class="empty-state" style="padding:2rem;text-align:center;"><p>${data.message || "Failed to load expenses."}</p></div>`;
+    }
+  } catch (e) {
+    if (logEl)
+      logEl.innerHTML = `<div class="empty-state" style="padding:2rem;text-align:center;"><p style="color:var(--danger);">Network error: ${e.message}</p></div>`;
+  }
+}
+
+// Same picker style as the admin custom-range (flatpickr range mode over a
+// txn-date-range-input), just wired to /expenses/browse instead of
+// /get_transactions_range. Skips init entirely for non-managers so we don't
+// waste cycles on an invisible widget (mirrors the admin _isAdmin guard).
+function _wireMgrExpenseRange() {
+  const el = document.getElementById("txn-mgr-expense-range");
+  if (!el || el.dataset.wired) return;
+  if (!_isMgrExpenseViewer()) return;
+  el.dataset.wired = "1";
+  const input = document.getElementById("txn-mgr-exp-range-input");
+  if (!input || !window.flatpickr) return;
+  window._txnMgrExpPicker = flatpickr(input, {
+    mode: "range",
+    dateFormat: "Y-m-d",
+    altInput: true,
+    altFormat: "d M Y",
+    maxDate: _localYMD(),
+    disableMobile: true,
+    onChange: function (selectedDates) {
+      if (selectedDates.length === 2) {
+        const from = _localYMD(selectedDates[0]);
+        const to = _localYMD(selectedDates[1]);
+        document
+          .querySelectorAll(".txn-quick-btn")
+          .forEach((b) => b.classList.remove("active"));
+        _loadMgrExpenseRange(from, to);
+      }
+    },
+  });
 }
 
 async function _triggerRender(fromDate, toDate) {
@@ -2633,6 +2745,10 @@ function initTxnDateFilter() {
         .forEach((b) => b.classList.remove("active"));
       this.classList.add("active");
 
+      // Today / Last 3 days always means the normal clamped view — drop
+      // any manager custom expense range that was active.
+      if (txnMgrExpenseLogs) _resetMgrExpenseRange(false);
+
       const range = this.dataset.range;
       const today = _localYMD();
       // "today" → same day; "3" → last 3 days (today + 2 days back)
@@ -2652,6 +2768,8 @@ function initTxnDateFilter() {
       this.classList.add("active");
       txnActiveType = this.dataset.type;
       _syncExpenseScopeVisibility();
+      const alreadyRendered = _syncMgrExpenseRangeVisibility();
+      if (alreadyRendered) return;
       const { fromDate, toDate } = txnActiveDateRange;
       _triggerRender(fromDate, toDate);
     });
@@ -2661,6 +2779,10 @@ function initTxnDateFilter() {
   // _syncExpenseScopeVisibility builds + wires the toggle on first call,
   // so it works even if the loaded index.html predates the control.
   _syncExpenseScopeVisibility();
+
+  // ── Manager-only "any date" expense range ─────────────────────────────────
+  _wireMgrExpenseRange();
+  _syncMgrExpenseRangeVisibility();
 
   // ── Re-lock button ────────────────────────────────────────────────────────
   const relockBtn = document.getElementById("txn-relock-btn");
@@ -2705,7 +2827,12 @@ window.renderEnhancedLogs = function () {
 // Exposed globally so expense.js (add/edit) and the delete handler both use it.
 window.refreshTransactionsView = function () {
   const r = txnActiveDateRange || {};
-  if (r.fromDate && !_isWithinCache(r.fromDate)) {
+  // A manager's custom expense range must re-pull via /expenses/browse —
+  // not /get_transactions_range, which would silently clamp it back to
+  // the last 3 days on refresh.
+  if (r.fromDate && txnMgrExpenseLogs) {
+    _loadMgrExpenseRange(r.fromDate, r.toDate);
+  } else if (r.fromDate && !_isWithinCache(r.fromDate)) {
     txnExtendedLogs = null;            // force a fresh server pull
     _triggerRender(r.fromDate, r.toDate);
   } else if (typeof debouncedFetchData === "function") {

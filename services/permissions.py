@@ -113,6 +113,13 @@ PERMISSIONS = frozenset(
         # an expense (everyone with banking.adjustment.create / write
         # access to the transaction tab can create). Admin-only by default.
         "expense.manage",
+        # Browse expense history across ANY date range (routes/reports.py
+        # /expenses/browse). Granted to manager as a narrow carve-out from
+        # the normal MANAGER_VISIBLE_DAYS window (services/role_filters.py)
+        # — that route returns expense line items + expense totals ONLY,
+        # never revenue/cash/UPI/room-count figures, so it's safe to unlock
+        # the date range for it specifically.
+        "expense.view",
         # Deep-check maintenance (routes/maintenance.py). Manager runs
         # inspections and logs fixes; admin additionally verifies fixes,
         # edits the checklist template and deletes/alters records.
@@ -186,6 +193,12 @@ ROLE_PERMISSIONS: dict[str, FrozenSet[str]] = {
             "staff.payroll.view",
             "staff.salary.pay",
             "staff.advance.give",
+            # Browse expense history across any date range (dedicated
+            # expenses-only view — see routes/reports.py /expenses/browse).
+            # This is the one deliberate exception to MANAGER_VISIBLE_DAYS:
+            # every other manager-visible total stays clamped to the last
+            # 3 days.
+            "expense.view",
             # Manager DOES NOT get: settings.view, discount.apply,
             # settlement.manage, transaction.history.full, payment.edit,
             # data.export, customer.manage, booking.revert, revenue.view,

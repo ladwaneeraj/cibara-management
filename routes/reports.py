@@ -520,6 +520,75 @@ def get_reports():
         return jsonify(success=False, message=f"Error generating report: {str(e)}")
 
 
+# Permission required to browse expense history outside the normal
+# MANAGER_VISIBLE_DAYS window (services/role_filters.py). Granted to
+# manager as well as admin — see services/permissions.py.
+_EXPENSE_VIEW_PERM = "expense.view"
+
+
+@reports_bp.route("/expenses/browse", methods=["POST"])
+@requires_permission(_EXPENSE_VIEW_PERM)
+def browse_expenses():
+    """
+    Expenses-only history for any date range.
+
+    Unlike /reports and /get_transactions_range, this route never calls
+    role_filters.clamp_date_range() — its whole point is to give managers
+    a way to look at expenses beyond the normal 3-day window. In exchange
+    for that wider window, the response carries ONLY expense figures:
+    no cash/online/revenue totals, no checkins/renewals, nothing else a
+    manager isn't otherwise allowed to browse past 3 days.
+
+    Body: { "start_date": "YYYY-MM-DD", "end_date": "YYYY-MM-DD" }
+    (end_date inclusive).
+    """
+    try:
+        data_json = request.json or {}
+        start_date = (data_json.get("start_date") or "").strip()
+        end_date = (data_json.get("end_date") or "").strip()
+
+        if not start_date or not end_date:
+            return jsonify(success=False, message="Start and end dates are required.")
+
+        try:
+            start = datetime.strptime(start_date, "%Y-%m-%d")
+            end = datetime.strptime(end_date, "%Y-%m-%d")
+        except (TypeError, ValueError):
+            return jsonify(success=False, message="Dates must be in YYYY-MM-DD format."), 400
+
+        if start > end:
+            return jsonify(success=False, message="Start date must be on or before end date."), 400
+
+        end_date_exclusive = (end + timedelta(days=1)).strftime("%Y-%m-%d")
+
+        expense_logs = expense_service.query_expenses_by_date_range(
+            start_date, end_date_exclusive
+        ) or []
+
+        transaction_expense_total = sum(
+            p.get("amount", 0) for p in expense_logs
+            if p.get("expense_type") == "transaction"
+        )
+        report_expense_total = sum(
+            p.get("amount", 0) for p in expense_logs
+            if p.get("expense_type") == "report"
+        )
+        total_expense = transaction_expense_total + report_expense_total
+
+        return jsonify(
+            success=True,
+            start_date=start_date,
+            end_date=end_date,
+            expense_total=total_expense,
+            transaction_expense_total=transaction_expense_total,
+            report_expense_total=report_expense_total,
+            expense_logs=expense_logs,
+        )
+    except Exception as e:
+        logger.error(f"Error browsing expenses: {str(e)}")
+        return jsonify(success=False, message=f"Error loading expenses: {str(e)}")
+
+
 @reports_bp.route("/add_expense", methods=["POST"])
 def add_expense():
     """

@@ -59,6 +59,11 @@
       "staff.payroll.view",
       "staff.salary.pay",
       "staff.advance.give",
+      // Browse expense history across any date range — dedicated
+      // expenses-only view (routes/reports.py /expenses/browse). The one
+      // deliberate exception to the manager's 3-day visibility window;
+      // every other total stays clamped.
+      "expense.view",
       // Manager does NOT get: settings.view, discount.apply,
       // settlement.manage, transaction.history.full, payment.edit,
       // data.export, customer.manage, booking.revert, revenue.view,

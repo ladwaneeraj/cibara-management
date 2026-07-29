@@ -976,6 +976,29 @@
                 <i class="fas fa-lock"></i> Lock
               </button>
             </div>
+
+            <!-- Manager-only: browse EXPENSES for any date range
+                 (expense.view). Same picker style as the admin range
+                 control above (txn-custom-range / txn-date-range-input +
+                 flatpickr), just scoped to managers and gated on the
+                 Expense type filter being active. Hidden from admin (they
+                 already have the unclamped picker above) and
+                 housekeeping. Never widens Cash/Online/Refund — those
+                 stay clamped to the last 3 days for managers everywhere
+                 else; this control only ever calls /expenses/browse,
+                 which returns expense figures alone. -->
+            <div class="txn-mgr-expense-range txn-custom-range" id="txn-mgr-expense-range"
+                 data-perm="expense.view" data-hide-roles="admin,housekeeping"
+                 style="display:none;">
+              <i class="fas fa-calendar-alt" style="color: #6c757d; font-size: 0.8rem"></i>
+              <input
+                type="text"
+                id="txn-mgr-exp-range-input"
+                class="txn-date-range-input"
+                placeholder="Pick date range"
+                readonly
+              />
+            </div>
           </div>
 
           <!-- Type Filter -->

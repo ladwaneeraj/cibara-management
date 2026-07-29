@@ -782,6 +782,11 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
       invoiceNo: null,
       amount: 0,
       numberMode: "registered", // "registered" | "custom"
+      // Consolidated is always the default when the Share modal opens;
+      // Detailed is available as a toggle right there, before Send.
+      viewMode: "consolidated", // "consolidated" | "detailed"
+      billData: null,           // full bill record — fetched lazily if not
+                                 // handed in, needed to regenerate on toggle
     },
   };
 
@@ -1659,6 +1664,13 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
       <i class="fab fa-whatsapp" style="font-size:1.2rem;"></i> Send Invoice via WhatsApp
     </div>
 
+    <div class="bl-view-toggle" id="bl-wa-view-toggle" style="margin-bottom:.9rem;">
+      <span class="bl-view-toggle-label">View</span>
+      <button type="button" class="bl-vt-btn" id="bl-wa-vt-consolidated" data-view="consolidated">Consolidated</button>
+      <button type="button" class="bl-vt-btn" id="bl-wa-vt-detailed" data-view="detailed">Detailed</button>
+      <span class="bl-vt-hint" id="bl-wa-vt-hint"></span>
+    </div>
+
     <div class="bl-wa-section-label">Message Preview</div>
     <div class="bl-wa-msg-preview" id="bl-wa-preview"></div>
 
@@ -1888,41 +1900,22 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
       });
 
     // ── "Save & Share" button in bill modal ───────────────────────────────────
+    // Opens the WhatsApp send modal, which (re)generates a fresh Consolidated
+    // PDF by default (Detailed available there as a toggle) — passing along
+    // the bill data we already have avoids a redundant /generate_bill fetch.
     const bSave = dom("bl-bill-save-pdf");
     if (bSave) {
       bSave.addEventListener("click", async function () {
         if (!_openBillId || !_openBillData) return;
-        bSave.disabled = true;
-        bSave.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Saving PDF…';
-        try {
-          // Check if a PDF already exists (don't re-upload unnecessarily)
-          const existingEntry = state.allEntries.find(
-            (x) => x.id === _openBillId,
-          );
-          let pdfUrl = existingEntry?.pdf_url || null;
-
-          if (!pdfUrl) {
-            pdfUrl = await generateAndUploadPDF(_openBillId, _openBillData);
-          }
-
-          if (pdfUrl) {
-            // Build synthetic entry for the WhatsApp modal
-            const entry = {
-              ...(existingEntry || {}),
-              id: _openBillId,
-              pdf_url: pdfUrl,
-              guest_name: _openBillData.guest_name,
-              guest_mobile: _openBillData.guest_mobile,
-              bill_number: _openBillData.bill_number,
-              total_amount: _openBillData.total_amount,
-            };
-            closeBill();
-            openWhatsAppModal(entry);
-          }
-        } finally {
-          bSave.disabled = false;
-          bSave.innerHTML = '<i class="fab fa-whatsapp"></i> Save &amp; Share';
-        }
+        const entry = {
+          id: _openBillId,
+          guest_name: _openBillData.guest_name,
+          guest_mobile: _openBillData.guest_mobile,
+          bill_number: _openBillData.bill_number,
+          total_amount: _openBillData.total_amount,
+        };
+        closeBill();
+        await openWhatsAppModal(entry, _openBillData);
       });
     }
 
@@ -2235,53 +2228,17 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
           return;
         }
 
-        // WhatsApp share button
+        // WhatsApp share button — always opens the send modal, which
+        // itself (re)generates a fresh Consolidated PDF (Detailed available
+        // as a toggle there) rather than trusting any cached pdf_url, so
+        // the view actually sent always matches what's shown/selected.
         const waBtn = e.target.closest(".bl-wa-btn");
         if (waBtn) {
           e.stopPropagation();
           const billId = waBtn.dataset.id;
-          const pdfUrl = waBtn.dataset.pdfurl;
           const entry = state.allEntries.find((x) => x.id === billId);
           if (!entry) return;
-
-          if (pdfUrl) {
-            // PDF already saved — open modal directly
-            openWhatsAppModal(entry);
-          } else {
-            // No PDF yet — generate + upload first, then open modal
-            if (
-              !confirm(
-                "No PDF saved yet.\n\nGenerate and save a PDF now, then open WhatsApp?\n(This may take a few seconds)",
-              )
-            )
-              return;
-
-            waBtn.classList.add("bl-wa-loading");
-            waBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
-
-            // Fetch bill data from backend to generate PDF
-            try {
-              const res = await apiFetch(`/generate_bill/${billId}`);
-              const data = await res.json();
-              if (!data.success) {
-                alert("Could not load bill data.");
-                return;
-              }
-
-              const url = await generateAndUploadPDF(billId, data.bill);
-              if (url) {
-                entry.pdf_url = url;
-                renderTable(); // re-render so btn turns green
-                openWhatsAppModal(entry);
-              }
-            } catch (err) {
-              console.error("[Bills] WA btn generate error:", err);
-              alert("Error generating PDF: " + err.message);
-            } finally {
-              waBtn.classList.remove("bl-wa-loading");
-              waBtn.innerHTML = '<i class="fab fa-whatsapp"></i>';
-            }
-          }
+          openWhatsAppModal(entry);
           return;
         }
 
@@ -2347,6 +2304,16 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
         if (inp) inp.focus();
         const errEl = dom("bl-wa-error");
         if (errEl) errEl.textContent = "";
+      });
+
+    // Detailed/Consolidated toggle inside the WhatsApp modal — switching
+    // regenerates the PDF for that view before Send is re-enabled.
+    const waViewToggle = dom("bl-wa-view-toggle");
+    if (waViewToggle)
+      waViewToggle.addEventListener("click", (e) => {
+        const btn = e.target.closest(".bl-vt-btn");
+        if (!btn) return;
+        _waSetViewMode(btn.dataset.view);
       });
 
     _wireSortHeaders();
@@ -2870,7 +2837,7 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
    * No html2canvas, no DOM tricks, no blank-page issues.
    */
   // silent=true → no overlay, no alert; used when auto-triggered after checkout.
-  async function generateAndUploadPDF(billId, billData, silent = false) {
+  async function generateAndUploadPDF(billId, billData, silent = false, viewMode) {
     const folderNo = billData.bill_number || billId;
 
     if (!silent) showPdfOverlay("Generating invoice PDF…");
@@ -2884,7 +2851,7 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
         body: JSON.stringify({
           bill_id: billId,
           bill_number: folderNo,
-          html_content: buildBillHTML(billData),
+          html_content: buildBillHTML(billData, viewMode),
         }),
       });
 
@@ -2922,28 +2889,22 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
   window._cibaraBillsGeneratePDF = generateAndUploadPDF;
 
   // Single combined helper for cross-module Save-and-Share flows. Called
-  // by register.js's bill modal so the Bills and Register tabs both
-  // share the exact same code path: reuse the bill doc's stored
-  // pdf_url if present, otherwise generate+upload, then open the
-  // WhatsApp send modal. Returns true on success, false if PDF
-  // generation failed or the user cancelled.
+  // by register.js's bill modal so the Bills and Register tabs both share
+  // the exact same code path: open the WhatsApp send modal, which itself
+  // (re)generates a fresh Consolidated PDF by default (Detailed available
+  // there as a toggle) rather than trusting any cached pdf_url. Returns
+  // true once the modal is open, false only if billId/billData is missing.
   window.cibaraSaveAndShareBill = async function(billId, billData) {
     if (!billId || !billData) return false;
     try {
-      let pdfUrl = (billData && billData.pdf_url) || null;
-      if (!pdfUrl) {
-        pdfUrl = await generateAndUploadPDF(billId, billData);
-      }
-      if (!pdfUrl) return false;
       const entry = {
         id:           billId,
-        pdf_url:      pdfUrl,
         guest_name:   billData.guest_name,
         guest_mobile: billData.guest_mobile,
         bill_number:  billData.bill_number,
         total_amount: billData.total_amount,
       };
-      openWhatsAppModal(entry);
+      await openWhatsAppModal(entry, billData);
       return true;
     } catch (err) {
       console.error("[Bills] cibaraSaveAndShareBill failed:", err);
@@ -3001,15 +2962,95 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
     );
   }
 
-  function openWhatsAppModal(entry) {
+  // Detailed/Consolidated toggle inside the WhatsApp send modal. Highlights
+  // whichever mode is active and hides for credit-note sends (no view
+  // concept there).
+  function _syncWaViewToggle() {
+    const s = state.waModal;
+    const bar = dom("bl-wa-view-toggle");
+    if (!bar) return;
+    bar.style.display = s._isCN ? "none" : "flex";
+    const cBtn = dom("bl-wa-vt-consolidated");
+    const dBtn = dom("bl-wa-vt-detailed");
+    if (cBtn) cBtn.classList.toggle("bl-vt-active", s.viewMode === "consolidated");
+    if (dBtn) dBtn.classList.toggle("bl-vt-active", s.viewMode === "detailed");
+    const hint = dom("bl-wa-vt-hint");
+    if (hint) {
+      hint.textContent = s.viewMode === "consolidated"
+        ? "Room nights grouped — days with extras shown separately"
+        : "Every night itemised";
+    }
+  }
+
+  // (Re)generate the PDF for the modal's current viewMode and refresh the
+  // message preview. Always regenerates fresh — never trusts a cached
+  // pdf_url — so the Detailed/Consolidated toggle is guaranteed to send
+  // whatever is actually selected, not a stale PDF from a different view.
+  // A request sequence number guards against a rapid double-toggle: if the
+  // user flips Detailed→Consolidated before the first request lands, the
+  // stale (Detailed) response is discarded instead of overwriting the
+  // newer (Consolidated) selection.
+  async function _waRegenerate() {
+    const s = state.waModal;
+    const myReq = (s._waReqSeq = (s._waReqSeq || 0) + 1);
+    const sendBtn = dom("bl-wa-send");
+    const errEl = dom("bl-wa-error");
+    if (errEl) errEl.textContent = "";
+    if (sendBtn) {
+      sendBtn.disabled = true;
+      sendBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Preparing…';
+    }
+    try {
+      if (!s.billData) {
+        const res = await apiFetch(`/generate_bill/${s.billId}`);
+        const data = await res.json();
+        if (!data.success) throw new Error(data.message || "Could not load bill data.");
+        if (myReq !== s._waReqSeq) return;   // a newer toggle already fired
+        s.billData = data.bill;
+      }
+      const url = await generateAndUploadPDF(s.billId, s.billData, true, s.viewMode);
+      if (myReq !== s._waReqSeq) return;     // a newer toggle already fired
+      if (!url) throw new Error("PDF generation failed.");
+      s.pdfUrl = url;
+      _updateWaPreview();
+    } catch (err) {
+      if (myReq !== s._waReqSeq) return;     // a newer toggle superseded this failure
+      console.error("[Bills] WA PDF prepare failed:", err);
+      if (errEl) errEl.textContent = err.message || "Could not prepare the PDF — try again.";
+    } finally {
+      if (myReq === s._waReqSeq && sendBtn) {
+        sendBtn.disabled = false;
+        sendBtn.innerHTML = '<i class="fab fa-whatsapp"></i> Send via WhatsApp';
+      }
+    }
+  }
+
+  // Switches the modal's view and regenerates the matching PDF. A no-op if
+  // already on that view (avoids a redundant re-render/re-upload).
+  async function _waSetViewMode(mode) {
+    const s = state.waModal;
+    if ((mode !== "detailed" && mode !== "consolidated") || mode === s.viewMode) return;
+    s.viewMode = mode;
+    _syncWaViewToggle();
+    await _waRegenerate();
+  }
+
+  // entry: {id, guest_name, guest_mobile, bill_number, total_amount, ...} —
+  // billData (optional): the full bill record (with daily_folio) if the
+  // caller already has it loaded, so the Consolidated PDF can be prepared
+  // without an extra /generate_bill round-trip.
+  async function openWhatsAppModal(entry, billData) {
     const s = state.waModal;
     s.billId = entry.id;
-    s.pdfUrl = entry.pdf_url || null;
     s.guestName = entry.guest_name || "Guest";
     s.guestMobile = entry.guest_mobile || "";
     s.invoiceNo = entry.bill_number || "";
     s.amount = entry.total_amount || 0;
     s.numberMode = "registered";
+    s.billData = billData || null;
+    s.viewMode = "consolidated";
+    s.pdfUrl = null;   // force a fresh regeneration below — never trust a
+                        // pdf_url cached from a possibly different view
 
     // Update registered number label
     const regLabel = dom("bl-wa-registered-label");
@@ -3040,10 +3081,13 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
     }
     if (errEl) errEl.textContent = "";
 
+    _syncWaViewToggle();
     _updateWaPreview();
 
     const backdrop = dom("bl-wa-backdrop");
     if (backdrop) backdrop.classList.add("bl-wa-open");
+
+    await _waRegenerate();
   }
 
   function closeWhatsAppModal() {
@@ -3062,7 +3106,7 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
     if (!s.pdfUrl) {
       if (errEl)
         errEl.textContent =
-          "No PDF URL found. Please save the PDF first using the bill modal.";
+          "PDF isn't ready yet — wait a moment and try again, or re-toggle the view above.";
       return;
     }
 
@@ -3272,9 +3316,7 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
     // WhatsApp share button — green if PDF already saved, light-green "generate first" if not
     const hasPdf = !!e.pdf_url;
     const waBtnCls = hasPdf ? "bl-wa-btn" : "bl-wa-btn bl-wa-pending";
-    const waTitle = hasPdf
-      ? "Send invoice via WhatsApp"
-      : "Save PDF first, then share on WhatsApp";
+    const waTitle = "Send invoice via WhatsApp";
     const waBtn = `<button class="${waBtnCls}"
       data-id="${e.id}"
       data-pdfurl="${(e.pdf_url || "").replace(/"/g, "&quot;")}"
@@ -3786,7 +3828,7 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
   // ── Bill HTML builder ─────────────────────────────────────────────────────────
   // GST rates per 55th GST Council (eff. 22 Sep 2025) + Karnataka place of supply
   // Always shows CGST and SGST rows — 0.00 when rate is exempt (tariff < ₹1,000).
-  function buildBillHTML(b) {
+  function buildBillHTML(b, viewModeOverride) {
     const days = b.days_stayed || calcDays(b.checkin_time, b.checkout_time);
     const rate = b.room_price_per_night || b.room_rent || 0;
 
@@ -4136,7 +4178,7 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
       // only the days with extras in full. Both views sum to the identical
       // Accommodation Total — all amounts come straight from the stored
       // per-night folio fields, never recomputed.
-      const viewMode = resolveViewMode(b);
+      const viewMode = viewModeOverride || resolveViewMode(b);
 
       let allNightsTotal = 0;
       for (const e of folio) allNightsTotal += Number(e.day_total || 0);

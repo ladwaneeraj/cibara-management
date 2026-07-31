@@ -768,7 +768,7 @@ body {
   z-index: 1000;
   opacity: 0;
   pointer-events: none;
-  transition: opacity 0.3s;
+  transition: opacity 0.18s ease-out;
 }
 
 .modal-backdrop.show {
@@ -786,9 +786,9 @@ body {
   padding: 1.5rem;
   position: relative;
   box-shadow: var(--shadow-lg);
-  transform: translateY(20px);
+  transform: translateY(12px);
   opacity: 0;
-  transition: transform 0.3s, opacity 0.3s;
+  transition: transform 0.18s ease-out, opacity 0.18s ease-out;
 }
 
 .modal-backdrop.show .modal-content {
@@ -4648,8 +4648,17 @@ body.incognito-mode #profile-menu-settings {
 
 #checkout-modal .payment-btn,
 #checkout-confirm-modal .payment-btn {
-  padding: 0.65rem;
-  font-size: 0.85rem;
+  padding: 0.85rem;
+  font-size: 0.95rem;
+  border-radius: 10px;
+}
+
+/* Add Payment button (rendered inline next to Cash/Online in the
+   payment-or-refund section) — keep it the same height as the
+   Cash/Online buttons it sits beside. */
+#checkout-modal .payment-add-btn {
+  padding: 0.85rem;
+  font-size: 0.95rem;
   border-radius: 10px;
 }
 
@@ -4757,121 +4766,181 @@ body.incognito-mode #profile-menu-settings {
   background: #e0e7ff;
 }
 
-/* ---------- Compact guest-info card: a simple, safe single-column
-   list of label/value rows in a rounded card. Any row inserted
-   dynamically (e.g. the admin-only Discount row) picks up the same
-   row styling automatically since it shares the .detail-row class. ---------- */
+/* ---------- Guest-info "stat grid": each field (Check-in, Room Price,
+   Stay Status, Discount) gets its own tile with a coloured icon badge,
+   instead of a cramped single-column list. Balance Due — the one number
+   that matters most at checkout — sits below as a full-width hero
+   banner. Discount tiles are inserted into #checkout-stat-grid at
+   runtime by addDiscountToCheckoutModal() (see script.js); they pick up
+   .stat-tile styling automatically since it's the same class. ---------- */
 #checkout-modal .guest-details {
-  margin: 0.5rem 1.1rem 0.45rem;
-  padding: 0 0.65rem;
+  margin: 0.6rem 1.1rem 0.5rem;
+}
+
+#checkout-modal .stat-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.55rem;
+  margin-bottom: 0.55rem;
+}
+
+#checkout-modal .stat-tile {
   background: #f8f9fc;
   border: 1px solid #eef0f4;
-  border-radius: 10px;
-}
-
-#checkout-modal .guest-details .detail-row {
+  border-radius: 12px;
+  padding: 0.65rem 0.75rem;
   display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.18rem 0;
-  border-bottom: 1px solid #f0f1f6;
+  flex-direction: column;
+  gap: 0.35rem;
   min-width: 0;
-  min-height: 0;
-  line-height: 1.2;
 }
 
-#checkout-modal .guest-details .detail-row:last-child {
-  border-bottom: none;
-}
-
-#checkout-modal .guest-details .detail-label {
-  font-size: 0.64rem;
-  color: var(--gray);
-  flex-shrink: 0;
+#checkout-modal .stat-tile-head {
   display: flex;
   align-items: center;
   gap: 0.4rem;
+  min-width: 0;
 }
 
-/* Small round icon badge in front of every label — same muted treatment
-   for all rows, so the row's own text/value colour is what carries the
-   meaning (e.g. Balance Due), not a rainbow of label colours. */
-#checkout-modal .guest-details .detail-icon {
-  display: inline-flex;
+/* Coloured icon badge — each field gets a distinct hue so the grid reads
+   at a glance instead of everything sharing one muted grey circle. */
+#checkout-modal .stat-icon {
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  display: flex;
   align-items: center;
   justify-content: center;
-  width: 20px;
-  height: 20px;
+  font-size: 0.8rem;
   flex-shrink: 0;
-  border-radius: 50%;
-  background: #e9edf5;
-  color: #94a3b8;
-  font-size: 0.6rem;
 }
+#checkout-modal .stat-icon-blue   { background: rgba(37, 99, 235, 0.12); color: #2563eb; }
+#checkout-modal .stat-icon-purple { background: rgba(124, 58, 237, 0.12); color: #7c3aed; }
+#checkout-modal .stat-icon-teal   { background: rgba(13, 148, 136, 0.12); color: #0d9488; }
+#checkout-modal .stat-icon-amber  { background: rgba(245, 158, 11, 0.12); color: #d97706; }
 
-#checkout-modal .guest-details .detail-value {
-  font-size: 0.72rem;
+#checkout-modal .stat-label {
+  font-size: 0.74rem;
+  color: #64748b;
   font-weight: 600;
-  color: var(--dark);
-  text-align: right;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-#checkout-modal .guest-details .detail-value#checkout-stay-status {
-  white-space: normal;
+#checkout-modal .stat-value {
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--dark);
+  line-height: 1.25;
+}
+
+#checkout-modal .stat-value-row {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
   gap: 0.3rem;
+}
+
+#checkout-modal .stat-value#checkout-stay-status {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
   flex-wrap: wrap;
+  font-size: 0.88rem;
+}
+
+#checkout-modal .stat-edit-btn {
+  background: none;
+  border: none;
+  color: var(--primary);
+  cursor: pointer;
+  padding: 0.15rem;
+  font-size: 0.82rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+/* Discount "+" button lives in the tile head next to the label. */
+#checkout-modal .discount-add-btn {
+  margin-left: 0.15rem;
+}
+
+#checkout-modal .balance-hero {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.75rem 0.85rem;
+  border-radius: 12px;
+  background: #f1f5f9;
+  border: 1px solid #e2e8f0;
+}
+
+#checkout-modal .balance-hero-left {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  min-width: 0;
+}
+
+#checkout-modal .balance-hero-icon {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  background: #e2e8f0;
+  color: #64748b;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.9rem;
+  flex-shrink: 0;
+}
+
+#checkout-modal .balance-hero-title {
+  font-size: 0.82rem;
+  color: #64748b;
+  font-weight: 700;
 }
 
 #checkout-modal #checkout-balance {
-  font-size: 0.92rem;
+  font-size: 1.15rem;
   font-weight: 800;
 }
 
-/* Balance Due — the one number that matters most at checkout, so it gets
-   its own tinted "hero" treatment instead of blending into the list.
-   Colour reflects state: red = owed, green = credit, grey = settled.
+/* Colour reflects state: red = owed, green = credit, grey = settled.
    Class is toggled by updateCheckoutModal() alongside the existing
    text-colour logic — see script.js. */
-#checkout-modal .guest-details .detail-row.balance-row {
-  margin: 0.3rem -0.65rem -0.05rem;
-  padding: 0.5rem 0.65rem;
-  border-radius: 0 0 9px 9px;
-  border-bottom: none;
-  background: #eef0f4;
-}
-
-#checkout-modal .guest-details .detail-row.balance-row .detail-label {
-  font-size: 0.68rem;
-  font-weight: 700;
-  color: var(--dark);
-}
-
-#checkout-modal .guest-details .detail-row.balance-state-due {
+#checkout-modal .balance-hero.balance-state-due {
   background: rgba(230, 57, 70, 0.09);
+  border-color: rgba(230, 57, 70, 0.18);
 }
-#checkout-modal .guest-details .detail-row.balance-state-due .detail-icon {
+#checkout-modal .balance-hero.balance-state-due .balance-hero-icon {
   background: rgba(230, 57, 70, 0.16);
   color: var(--danger);
 }
 
-#checkout-modal .guest-details .detail-row.balance-state-credit {
+#checkout-modal .balance-hero.balance-state-credit {
   background: rgba(16, 185, 129, 0.1);
+  border-color: rgba(16, 185, 129, 0.2);
 }
-#checkout-modal .guest-details .detail-row.balance-state-credit .detail-icon {
+#checkout-modal .balance-hero.balance-state-credit .balance-hero-icon {
   background: rgba(16, 185, 129, 0.18);
   color: var(--success);
 }
 
-#checkout-modal .guest-details .detail-row.balance-state-zero .detail-icon {
+#checkout-modal .balance-hero.balance-state-zero .balance-hero-icon {
   background: #e2e8f0;
   color: #94a3b8;
+}
+
+/* Narrow screens: 4 tiles in 2 columns gets tight below ~340px — drop to
+   a single column so labels/values never truncate. */
+@media (max-width: 380px) {
+  #checkout-modal .stat-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 /* Discount "+" button — was a bare icon sitting inline in the label text;
@@ -4925,9 +4994,10 @@ body.incognito-mode #profile-menu-settings {
 #checkout-modal .action-row.checkout-footer-actions .action-btn,
 #checkout-confirm-modal .action-row .action-btn {
   margin-top: 0;
-  border-radius: 8px;
-  padding: 0.5rem;
-  font-size: 0.82rem;
+  border-radius: 10px;
+  padding: 1.05rem;
+  font-size: 0.98rem;
+  font-weight: 500;
   white-space: nowrap;
 }
 

@@ -3168,32 +3168,49 @@
         </div>
 
         <div class="guest-details">
-          <div class="detail-row">
-            <div class="detail-label"><span class="detail-icon"><i class="fas fa-clock"></i></span>Check-in Time</div>
-            <div class="detail-value" style="display: flex; align-items: center">
-              <span id="checkout-checkin-time"></span>
-              <button id="edit-checkin-time"
-                      style="margin-left: 8px; background: none; border: none; color: var(--primary); cursor: pointer;"
-                      aria-label="Edit check-in time"
-                      title="Edit check-in time">
-                <i class="fas fa-edit"></i>
-              </button>
+          <div class="stat-grid" id="checkout-stat-grid">
+            <div class="stat-tile">
+              <div class="stat-tile-head">
+                <span class="stat-icon stat-icon-blue"><i class="far fa-clock"></i></span>
+                <span class="stat-label">Check-in</span>
+              </div>
+              <div class="stat-value-row">
+                <span class="stat-value" id="checkout-checkin-time"></span>
+                <button id="edit-checkin-time"
+                        class="stat-edit-btn"
+                        type="button"
+                        aria-label="Edit check-in time"
+                        title="Edit check-in time">
+                  <i class="fas fa-edit"></i>
+                </button>
+              </div>
             </div>
-          </div>
-          <div class="detail-row">
-            <div class="detail-label"><span class="detail-icon"><i class="fas fa-tag"></i></span>Room Price</div>
-            <div class="detail-value" id="checkout-room-price"></div>
-          </div>
-          <div class="detail-row">
-            <div class="detail-label"><span class="detail-icon"><i class="fas fa-calendar-day"></i></span>Stay Status</div>
-            <div class="detail-value" id="checkout-stay-status">
-              <span id="checkout-day-count">Day 1</span>
-              <span id="checkout-renewal-status" class="status-tag waiting">Waiting</span>
+            <div class="stat-tile">
+              <div class="stat-tile-head">
+                <span class="stat-icon stat-icon-purple"><i class="fas fa-tag"></i></span>
+                <span class="stat-label">Room Price</span>
+              </div>
+              <div class="stat-value" id="checkout-room-price"></div>
             </div>
+            <div class="stat-tile">
+              <div class="stat-tile-head">
+                <span class="stat-icon stat-icon-teal"><i class="fas fa-calendar-day"></i></span>
+                <span class="stat-label">Stay Status</span>
+              </div>
+              <div class="stat-value" id="checkout-stay-status">
+                <span id="checkout-day-count">Day 1</span>
+                <span id="checkout-renewal-status" class="status-tag waiting">Waiting</span>
+              </div>
+            </div>
+            <!-- Discount tile inserted here at runtime by addDiscountToCheckoutModal() -->
           </div>
-          <div class="detail-row balance-row">
-            <div class="detail-label"><span class="detail-icon"><i class="fas fa-wallet"></i></span>Balance Due</div>
-            <div class="detail-value" id="checkout-balance">₹0</div>
+
+          <div class="balance-hero" id="checkout-balance-hero">
+            <div class="balance-hero-left">
+              <span class="balance-hero-icon"><i class="fas fa-wallet"></i></span>
+              <span class="balance-hero-title">Balance Due</span>
+            </div>
+            <div class="balance-hero-value" id="checkout-balance">₹0</div>
           </div>
         </div>
 

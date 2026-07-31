@@ -1953,7 +1953,7 @@ function updateCheckoutModal(roomNumber) {
   // (red = owed, green = credit, neutral = settled) via these state classes.
   const balanceEl  = document.getElementById("checkout-balance");
   const isOtaRoom  = roomInfo.guest && roomInfo.guest.payment === "ota";
-  const balanceRow = balanceEl ? balanceEl.closest(".detail-row") : null;
+  const balanceRow = balanceEl ? balanceEl.closest(".balance-hero") : null;
   if (balanceEl) {
     if (balanceRow) {
       balanceRow.classList.remove(
@@ -3251,19 +3251,27 @@ async function populateRoomDropdown() {
     return;
   }
 
-  // Clear existing options
-  dropdown.innerHTML = "";
-
   try {
-    // Get all room numbers
-    const response = await apiFetch("/get_room_numbers");
+    // Get all room numbers. A hard timeout keeps a rare hung request (bad
+    // wifi, a slow token-refresh retry in apiFetch) from leaving the
+    // dropdown stuck on stale data indefinitely — showEnhancedCheckinModal
+    // no longer waits on this call to show the modal, but this still
+    // guards the dropdown/price fields refreshing themselves reasonably
+    // promptly either way.
+    const fetchOpts = (typeof AbortSignal !== "undefined" && AbortSignal.timeout)
+      ? { signal: AbortSignal.timeout(8000) }
+      : undefined;
+    const response = await apiFetch("/get_room_numbers", fetchOpts);
     if (!response.ok) {
       throw new Error(`Server responded with status: ${response.status}`);
     }
 
     const data = await response.json();
     if (data.success) {
-      // Add room numbers to dropdown
+      // Build the fresh list first, then swap it in one shot — clearing
+      // immediately (before the fetch even started) used to leave the
+      // dropdown visibly empty for however long the request took.
+      dropdown.innerHTML = "";
       data.rooms.forEach((roomNumber) => {
         // Skip occupied rooms
         if (rooms[roomNumber] && rooms[roomNumber].status === "occupied") {
@@ -3279,6 +3287,8 @@ async function populateRoomDropdown() {
       debugLog("Failed to get room numbers: " + data.message);
     }
   } catch (error) {
+    // Leave whatever the dropdown already had (e.g. the seeded room from
+    // showEnhancedCheckinModal) rather than clearing it on failure.
     console.error("Error fetching room numbers:", error);
   }
 }
@@ -4269,12 +4279,98 @@ function showEnhancedCheckinModal(roomNumber) {
     return;
   }
 
-  // Populate room dropdown first
+  // Everything below that DOESN'T depend on the fetched room list runs
+  // synchronously and the modal is shown immediately — it used to wait on
+  // populateRoomDropdown()'s /get_room_numbers fetch before showing
+  // anything at all, so a slow connection (or apiFetch's 401 token-refresh
+  // retry, which alone adds a network round trip + a deliberate 250ms
+  // delay) made the modal appear to "not open" or open late. The room
+  // dropdown/price fields still refresh, just in the background below.
+
+  // Reset form fields
+  const checkinForm = document.getElementById("checkin-form");
+  if (checkinForm) {
+    checkinForm.reset();
+  }
+
+  // Reset photo elements
+  const photoPreviewContainer = document.getElementById(
+    "photo-preview-container",
+  );
+  if (photoPreviewContainer) {
+    photoPreviewContainer.style.display = "none";
+  }
+
+  const cameraContainer = document.getElementById("camera-container");
+  if (cameraContainer) {
+    cameraContainer.style.display = "none";
+  }
+
+  // Reset captured photo data
+  capturedPhotoData = null;
+  uploadedPhotoUrl = null;
+
+  // Make sure cash is the default active payment method
+  document.querySelectorAll(".payment-btn").forEach((btn) => {
+    btn.classList.remove("active");
+  });
+
+  const cashBtn = document.querySelector('.payment-btn[data-payment="cash"]');
+  if (cashBtn) {
+    cashBtn.classList.add("active");
+  }
+
+  const paymentMethodInput = document.getElementById("payment-method");
+  if (paymentMethodInput) {
+    paymentMethodInput.value = "cash";
+  }
+
+  // Reset user-edited flags so auto-fill works fresh on each modal open
+  const amountPaidInputReset = document.getElementById("amount-paid");
+  if (amountPaidInputReset) {
+    amountPaidInputReset.dataset.userEdited = "false";
+  }
+  const roomPriceInputReset = document.getElementById("room-price");
+  if (roomPriceInputReset) {
+    roomPriceInputReset.dataset.userEdited = "false";
+  }
+
+  // The dropdown is the same <select> reused across every open. If it
+  // already has options from a previous visit, select this room right now
+  // and run the price/category calc immediately. populateRoomDropdown()
+  // clears and rebuilds it from scratch, so if it's currently empty (very
+  // first open), seed it with just the room being checked in first — that
+  // way the control is never visibly blank while the background fetch is
+  // still in flight, it just gains the rest of the room list a moment later.
+  const dropdownNow = document.getElementById("checkin-room-dropdown");
+  if (dropdownNow) {
+    if (dropdownNow.options.length === 0) {
+      const seedOption = document.createElement("option");
+      seedOption.value = roomNumber;
+      seedOption.textContent = roomNumber;
+      dropdownNow.appendChild(seedOption);
+    }
+    const optionNow = Array.from(dropdownNow.options).find(
+      (opt) => opt.value === roomNumber,
+    );
+    if (optionNow) {
+      dropdownNow.value = roomNumber;
+    } else if (dropdownNow.options.length > 0) {
+      dropdownNow.selectedIndex = 0;
+    }
+    document.dispatchEvent(new Event("checkinModalOpened"));
+  }
+
+  // Show the modal right away — nothing above waited on the network.
+  checkinModal.classList.add("show");
+
+  // Refresh the room dropdown in the background (picks up any status
+  // changes since it was last loaded) and re-sync the selection once it's
+  // done. If this is the very first open (dropdown was empty above), this
+  // is also what fills in the price/category fields for the first time.
   populateRoomDropdown().then(() => {
-    // Set the selected room number
     const dropdown = document.getElementById("checkin-room-dropdown");
     if (dropdown) {
-      // Find the option with the matching room number
       const option = Array.from(dropdown.options).find(
         (opt) => opt.value === roomNumber,
       );
@@ -4287,60 +4383,7 @@ function showEnhancedCheckinModal(roomNumber) {
       }
     }
 
-    // Reset form fields
-    const checkinForm = document.getElementById("checkin-form");
-    if (checkinForm) {
-      checkinForm.reset();
-    }
-
-    // Reset photo elements
-    const photoPreviewContainer = document.getElementById(
-      "photo-preview-container",
-    );
-    if (photoPreviewContainer) {
-      photoPreviewContainer.style.display = "none";
-    }
-
-    const cameraContainer = document.getElementById("camera-container");
-    if (cameraContainer) {
-      cameraContainer.style.display = "none";
-    }
-
-    // Reset captured photo data
-    capturedPhotoData = null;
-    uploadedPhotoUrl = null;
-
-    // Make sure cash is the default active payment method
-    document.querySelectorAll(".payment-btn").forEach((btn) => {
-      btn.classList.remove("active");
-    });
-
-    const cashBtn = document.querySelector('.payment-btn[data-payment="cash"]');
-    if (cashBtn) {
-      cashBtn.classList.add("active");
-    }
-
-    const paymentMethodInput = document.getElementById("payment-method");
-    if (paymentMethodInput) {
-      paymentMethodInput.value = "cash";
-    }
-
-    // Reset user-edited flags so auto-fill works fresh on each modal open
-    const amountPaidInputReset = document.getElementById("amount-paid");
-    if (amountPaidInputReset) {
-      amountPaidInputReset.dataset.userEdited = "false";
-    }
-    const roomPriceInputReset = document.getElementById("room-price");
-    if (roomPriceInputReset) {
-      roomPriceInputReset.dataset.userEdited = "false";
-    }
-
-    // Update room info based on selected room
-    const event = new Event("checkinModalOpened");
-    document.dispatchEvent(event);
-
-    // Show the modal
-    checkinModal.classList.add("show");
+    document.dispatchEvent(new Event("checkinModalOpened"));
   });
 }
 
@@ -5073,40 +5116,42 @@ function showReportsTab() {
 
 // Add discount field to checkout modal for existing stays
 function addDiscountToCheckoutModal() {
-  // Anchored on the Balance Due row itself (not its position in the list) —
-  // robust to the guest-details section being reordered/restructured, e.g.
-  // when the Name/Mobile rows moved out into their own profile card.
-  const checkoutBalanceEl = document.getElementById("checkout-balance");
-  const balanceRow = checkoutBalanceEl
-    ? checkoutBalanceEl.closest(".detail-row")
-    : null;
-  if (!balanceRow) return;
+  // Anchored on the stat grid itself (not a specific sibling tile) — robust
+  // to the guest-details section being reordered/restructured, e.g. when
+  // the Name/Mobile rows moved out into their own profile card.
+  const statGrid = document.getElementById("checkout-stat-grid");
+  if (!statGrid) return;
+  if (document.getElementById("checkout-discount")) return; // already added
 
   // RBAC: only render the "Add Discount" + button for users with the
   // discount.apply permission (admin only). For everyone else, render
-  // a plain Discount row with no add control so the layout stays
+  // a plain Discount tile with no add control so the layout stays
   // consistent. The data-perm attribute is also a defensive hide for
   // any future code path that bypasses this check.
   const _canDiscount = window.CibaraAuth
     && window.CibaraAuth.userCan
     && window.CibaraAuth.userCan("discount.apply");
 
-  const discountRow = document.createElement("div");
-  discountRow.className = "detail-row";
-  discountRow.innerHTML = _canDiscount ? `
-    <div class="detail-label">
-      <span class="detail-icon"><i class="fas fa-percent"></i></span>Discount
+  const discountTile = document.createElement("div");
+  discountTile.className = "stat-tile";
+  discountTile.innerHTML = _canDiscount ? `
+    <div class="stat-tile-head">
+      <span class="stat-icon stat-icon-amber"><i class="fas fa-percent"></i></span>
+      <span class="stat-label">Discount</span>
       <button id="add-discount-btn" data-perm="discount.apply" class="discount-add-btn">
         <i class="fas fa-plus-circle"></i>
       </button>
     </div>
-    <div class="detail-value" id="checkout-discount">₹0</div>
+    <div class="stat-value" id="checkout-discount">₹0</div>
   ` : `
-    <div class="detail-label"><span class="detail-icon"><i class="fas fa-percent"></i></span>Discount</div>
-    <div class="detail-value" id="checkout-discount">₹0</div>
+    <div class="stat-tile-head">
+      <span class="stat-icon stat-icon-amber"><i class="fas fa-percent"></i></span>
+      <span class="stat-label">Discount</span>
+    </div>
+    <div class="stat-value" id="checkout-discount">₹0</div>
   `;
 
-  balanceRow.parentNode.insertBefore(discountRow, balanceRow);
+  statGrid.appendChild(discountTile);
 }
 
 // Discount dialog for existing stays

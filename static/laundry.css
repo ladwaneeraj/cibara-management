@@ -440,6 +440,77 @@
   text-align: center;
 }
 
+/* Effective-date row above Save Prices */
+.laundry-price-effective-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  border-radius: 6px;
+  padding: 0.4rem 0.6rem;
+  margin-bottom: 0.5rem;
+}
+.laundry-price-effective-row label {
+  font-size: 0.74rem;
+  font-weight: 700;
+  color: #1d4ed8;
+}
+.laundry-price-effective-row .laundry-price-input {
+  width: auto;
+  min-width: 130px;
+  background: #fff;
+}
+
+/* Price History log -- every version ever saved */
+.laundry-price-history { margin-top: 0.75rem; border-top: 1px solid var(--border, #e2e8f0); padding-top: 0.6rem; }
+.laundry-price-history-title {
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--text-muted, #718096);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 0.4rem;
+}
+.laundry-price-history-list { display: flex; flex-direction: column; gap: 0.35rem; max-height: 220px; overflow-y: auto; }
+.laundry-price-history-empty { font-size: 0.78rem; color: var(--text-muted, #718096); padding: 0.3rem 0; }
+.laundry-price-history-item {
+  border: 1px solid var(--border, #e2e8f0);
+  border-radius: 8px;
+  padding: 0.45rem 0.6rem;
+}
+.laundry-price-history-item.current { border-color: #86efac; background: #f0fdf4; }
+.laundry-price-history-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.25rem;
+}
+.laundry-price-history-date { font-size: 0.8rem; font-weight: 700; color: var(--text, #2d3748); }
+.laundry-price-history-item.current .laundry-price-history-date { color: #166534; }
+.laundry-price-history-badge {
+  font-size: 0.62rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #166534;
+  background: #dcfce7;
+  border-radius: 10px;
+  padding: 0.1rem 0.5rem;
+}
+.laundry-price-history-meta { font-size: 0.68rem; color: var(--text-muted, #718096); margin-bottom: 0.3rem; }
+.laundry-price-history-prices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem 0.6rem;
+  font-size: 0.72rem;
+  color: var(--text, #2d3748);
+}
+.laundry-price-history-prices span { white-space: nowrap; }
+.laundry-price-history-prices b { font-weight: 700; }
+
 /* Bill fields row */
 .laundry-bill-field-row {
   display: grid;

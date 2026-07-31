@@ -1237,8 +1237,11 @@ class TransactionLogManager {
         methodBadgeHtml = "";
       }
 
-      const line2 = `${forTagHtml}${methodBadgeHtml}`;
-      const line3 = `${whenStr ? `<span class="pay-when">${whenStr}</span>` : ""}${byHtml}`;
+      // Everything below the title/amount row — badges, "for" tag, date/time,
+      // "added by" — is merged into ONE flex-wrap line instead of two stacked
+      // divs, so a payment row is always exactly 2 lines tall (title+amount,
+      // then this line), never 3, regardless of how many badges it carries.
+      const line2 = `${forTagHtml}${methodBadgeHtml}${whenStr ? `<span class="pay-when">${whenStr}</span>` : ""}${byHtml}`;
 
       logsHtml += `
         <div class="pay-row">
@@ -1249,7 +1252,6 @@ class TransactionLogManager {
               ${showAmount ? `<span class="pay-amt pay-amt--${amtKind}">${amountText}</span>` : ""}
             </div>
             ${line2 ? `<div class="pay-line2">${line2}</div>` : ""}
-            ${line3 ? `<div class="pay-line3">${line3}</div>` : ""}
           </div>
         </div>
       `;
@@ -1607,6 +1609,22 @@ const transactionTrackingStyles = `
     .pay-when {
         font: 500 0.74rem 'Inter', system-ui, sans-serif;
         color: #667085;
+    }
+
+    /* Shrink the whole payment-history card on phones — always 2 lines
+       (title+amount, then badges/date), just with less padding and
+       smaller type so each entry takes less vertical space. */
+    @media (max-width: 480px) {
+        #checkout-payment-logs { gap: 6px; }
+        .pay-row { gap: 9px; padding: 8px 10px; }
+        .pay-icon { width: 30px; height: 30px; font-size: 0.8rem; border-radius: 8px; }
+        .pay-title { font-size: 0.82rem; }
+        .pay-amt { font-size: 0.85rem; }
+        .pay-line2 { gap: 5px; margin-top: 3px; }
+        .pay-for, .pay-badge { font-size: 0.62rem; padding: 1px 7px; }
+        .pay-lead .pay-badge { font-size: 0.72rem; padding: 2px 9px; }
+        .pay-when { font-size: 0.68rem; }
+        .txn-added-by { font-size: 0.62rem; padding: 1px 6px; }
     }
 `;
 

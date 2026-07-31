@@ -375,6 +375,227 @@ body {
   color: rgba(255,255,255,0.9);
 }
 
+/* ---------- Room-status filter bar (Rooms tab) — color-coded per
+   status, compact, single-row (scrolls instead of wrapping), and
+   abbreviated to one letter on narrow screens. Scoped to #rooms-tab
+   so the Bills tab's Pending/Paid/Cancelled filters — which reuse the
+   same .filter-container/.filter-btn classes — are untouched. ---------- */
+#rooms-tab .filter-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-top: 0.6rem;
+  margin-bottom: 0.6rem;
+}
+
+#rooms-tab .filter-row .filter-container {
+  margin-top: 0;
+  margin-bottom: 0;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+#rooms-tab .filter-container {
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+  gap: 0.3rem;
+  padding-bottom: 2px;
+}
+
+#rooms-tab .filter-container::-webkit-scrollbar {
+  display: none;
+}
+
+/* "More" dropdown — anchored top-right of the filter bar, opens down.
+   Houses Laundry / Deep Check / Staff (moved out of the floating Quick
+   Actions button so they're one tap away from the room list). */
+#rooms-tab .filter-more {
+  position: relative;
+  flex-shrink: 0;
+}
+
+#rooms-tab .filter-more-btn {
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  border: 1.5px solid #e2e8f0;
+  background: #fff;
+  color: #475569;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  font-size: 0.82rem;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+
+#rooms-tab .filter-more-btn:hover,
+#rooms-tab .filter-more-btn.active {
+  background: #475569;
+  border-color: #475569;
+  color: #fff;
+}
+
+#rooms-tab .filter-more-dropdown {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.14);
+  min-width: 172px;
+  padding: 6px;
+  display: none;
+  flex-direction: column;
+  gap: 2px;
+  z-index: 40;
+}
+
+#rooms-tab .filter-more-dropdown.show {
+  display: flex;
+}
+
+#rooms-tab .filter-more-dropdown .quick-action-item {
+  padding: 0.5rem 0.6rem;
+  border-radius: 8px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #334155;
+}
+
+#rooms-tab .filter-more-dropdown .quick-action-item:hover {
+  background: #f1f5f9;
+}
+
+#rooms-tab .filter-more-dropdown .quick-action-item i {
+  color: #64748b;
+}
+
+/* Bigger, easier-to-spot "more" button on laptop/desktop screens — the
+   32px mobile size reads as too small once there's room to spare.
+   Mobile (≤768px) keeps the compact base size above untouched. */
+@media (min-width: 769px) {
+  #rooms-tab .filter-more-btn {
+    width: 42px;
+    height: 42px;
+    font-size: 1.05rem;
+    border-width: 2px;
+    box-shadow: 0 1px 4px rgba(15, 23, 42, 0.08);
+  }
+  #rooms-tab .filter-more-btn:hover,
+  #rooms-tab .filter-more-btn.active {
+    box-shadow: 0 4px 10px rgba(71, 85, 105, 0.3);
+  }
+  #rooms-tab .filter-more-dropdown {
+    min-width: 200px;
+    padding: 8px;
+  }
+  #rooms-tab .filter-more-dropdown .quick-action-item {
+    padding: 0.65rem 0.75rem;
+    font-size: 0.88rem;
+  }
+}
+
+#rooms-tab .filter-btn {
+  flex-shrink: 0;
+  padding: 0.3rem 0.65rem;
+  font-size: 0.76rem;
+  border-radius: 16px;
+  background: #fff;
+  border: 1.5px solid #e2e8f0;
+  color: #475569;
+}
+
+#rooms-tab .filter-btn.active {
+  background: #475569;
+  border-color: #475569;
+  color: #fff;
+}
+
+/* Vacant — green, matches the room-status color used on room cards */
+#rooms-tab .filter-btn-vacant {
+  background: rgba(46, 196, 182, 0.12);
+  border-color: rgba(46, 196, 182, 0.5);
+  color: #0d9488;
+}
+#rooms-tab .filter-btn-vacant.active {
+  background: var(--vacant);
+  border-color: var(--vacant);
+  color: #fff;
+}
+
+/* Occupied — red, matches the room-status color used on room cards */
+#rooms-tab .filter-btn-occupied {
+  background: rgba(230, 57, 70, 0.1);
+  border-color: rgba(230, 57, 70, 0.45);
+  color: #c1121f;
+}
+#rooms-tab .filter-btn-occupied.active {
+  background: var(--occupied);
+  border-color: var(--occupied);
+  color: #fff;
+}
+
+/* Cleaning — amber, matches the room-status color used on room cards */
+#rooms-tab .filter-btn-cleaning {
+  background: rgba(255, 159, 28, 0.14);
+  border-color: rgba(255, 159, 28, 0.5);
+  color: #b45309;
+}
+#rooms-tab .filter-btn-cleaning.active {
+  background: var(--cleaning);
+  border-color: var(--cleaning);
+  color: #fff;
+}
+
+/* Balances — violet, a distinct "financial" hue so it never reads as
+   another room-status color */
+#rooms-tab .filter-btn-balances {
+  background: rgba(124, 58, 237, 0.1);
+  border-color: rgba(124, 58, 237, 0.45);
+  color: #6d28d9;
+}
+#rooms-tab .filter-btn-balances.active {
+  background: #7c3aed;
+  border-color: #7c3aed;
+  color: #fff;
+}
+#rooms-tab .filter-btn-balances.active .filter-balance-amount {
+  color: rgba(255, 255, 255, 0.9);
+}
+
+#rooms-tab .filter-balance-amount {
+  font-size: 0.64rem;
+}
+
+/* Full word label by default; single-letter label hidden until the
+   narrow-screen breakpoint below swaps them. */
+#rooms-tab .filter-label-short {
+  display: none;
+}
+
+@media (max-width: 480px) {
+  #rooms-tab .filter-btn {
+    padding: 0.28rem 0.55rem;
+    font-size: 0.74rem;
+  }
+  #rooms-tab .filter-label-full {
+    display: none;
+  }
+  #rooms-tab .filter-label-short {
+    display: inline;
+  }
+  /* Drop the ₹ amount under "Balances" on mobile — the letter + count
+     is enough, and this is what let the bar wrap to a second line. */
+  #rooms-tab .filter-balance-amount {
+    display: none;
+  }
+}
+
 .rooms-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
@@ -4222,7 +4443,9 @@ input:checked + .toggle-slider:before {
 .ms-stat-val { font-weight: 700; color: #1d4ed8; font-size: .86rem; }
 .ms-stat-empty { color: #cbd5e1; font-size: .86rem; font-weight: 600; }
 .ms-stat-lbl {
-  color: #94a3b8; font-size
+  color: #94a3b8; font-size: 0.68rem;
+}
+
 /* ── Customer detail: Stay History ── */
 .cm-history-section { margin: .9rem 0; }
 .cm-history-toggle {
@@ -4296,4 +4519,546 @@ body.incognito-mode #bl-bill-editprice {
 body.incognito-mode #profile-menu-settings {
   opacity: 0 !important;
   cursor: default !important;
+}
+
+/* ================================================================
+   Checkout flow — modern, compact, mobile-first redesign
+   Everything below is scoped to #checkout-modal / #checkout-confirm-modal
+   only (both are ID selectors, so they win over the shared .modal-*
+   rules above without touching the other 24 modals in this app).
+   ================================================================ */
+
+/* ---------- Shell: floating card on desktop, full-height sheet on
+   phones. Header and footer are sticky within modal-content's own
+   scroll (it already has overflow-y: auto from the base rule). ---------- */
+#checkout-modal .modal-content,
+#checkout-confirm-modal .modal-content {
+  padding: 0;
+  width: 92%;
+  border-radius: 18px;
+  box-shadow: 0 24px 60px -12px rgba(15, 23, 42, 0.35), 0 4px 16px rgba(15, 23, 42, 0.08);
+}
+
+#checkout-modal .modal-content {
+  max-width: 440px;
+  max-height: 68vh;
+}
+
+#checkout-confirm-modal .modal-content {
+  max-width: 380px;
+  max-height: 62vh;
+}
+
+#checkout-modal .modal-header,
+#checkout-confirm-modal .modal-header {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  background: #fff;
+  margin-bottom: 0;
+  padding: 0.6rem 1rem 0.5rem;
+  border-bottom: 1px solid #eef0f4;
+  border-radius: 18px 18px 0 0;
+}
+
+#checkout-modal .modal-header h2,
+#checkout-confirm-modal .modal-header h2 {
+  font-size: 1rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+#checkout-modal .close-btn,
+#checkout-confirm-modal .close-btn {
+  width: 30px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  font-size: 1.15rem;
+  transition: background 0.15s;
+}
+
+#checkout-modal .close-btn:hover,
+#checkout-confirm-modal .close-btn:hover {
+  background: #f1f3f9;
+  color: var(--dark);
+}
+
+#checkout-modal .doc-cam-btn {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+}
+
+/* ---------- Body sections need their own horizontal padding now
+   that modal-content padding is 0 ---------- */
+#checkout-modal .add-on-section,
+#checkout-modal .payment-logs-container,
+#checkout-modal #payment-or-refund-section {
+  padding-left: 1.1rem;
+  padding-right: 1.1rem;
+}
+
+#checkout-modal .add-on-section {
+  padding-top: 0.6rem;
+  padding-bottom: 0.6rem;
+  border-top: 1px solid #eef0f4;
+}
+
+#checkout-modal .add-on-section h3 {
+  margin-bottom: 0.4rem !important;
+}
+
+#checkout-modal .add-on-section h3 {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--gray);
+  font-weight: 700;
+}
+
+#checkout-modal .payment-logs-container {
+  padding-top: 0.6rem;
+  padding-bottom: 0.6rem;
+  border-top: 1px solid #eef0f4;
+}
+
+#checkout-modal .payment-logs-container h3 {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--gray);
+  font-weight: 700;
+}
+
+#checkout-modal .svc-chips {
+  gap: 6px;
+}
+
+#checkout-modal .svc-chip {
+  padding: 5px 12px;
+  font-size: 0.8rem;
+}
+
+#checkout-modal .payment-options {
+  gap: 0.4rem;
+}
+
+#checkout-modal .payment-btn,
+#checkout-confirm-modal .payment-btn {
+  padding: 0.65rem;
+  font-size: 0.85rem;
+  border-radius: 10px;
+}
+
+/* ---------- Guest profile card: avatar (photo or coloured initials) +
+   name + phone. The avatar/chevron are only made clickable by JS for
+   users with customer.manage (admin-only) — everyone else sees the same
+   card, just without the tap affordance. Opens the same Customer
+   Records profile & past-stay-history panel used elsewhere in the app. ---------- */
+#checkout-modal .checkout-profile {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  margin: 0.6rem 1.1rem 0.5rem;
+  padding: 0.6rem 0.75rem;
+  background: #f8f9fc;
+  border: 1px solid #eef0f4;
+  border-radius: 12px;
+}
+
+#checkout-modal .checkout-avatar {
+  position: relative;
+  flex-shrink: 0;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #2563eb, #3b82f6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  color: #fff;
+  font-weight: 700;
+  font-size: 0.92rem;
+  letter-spacing: 0.02em;
+}
+
+#checkout-modal .checkout-avatar.checkout-avatar-clickable {
+  cursor: pointer;
+  transition: transform 0.12s ease;
+}
+#checkout-modal .checkout-avatar.checkout-avatar-clickable:hover {
+  transform: scale(1.06);
+}
+#checkout-modal .checkout-avatar.checkout-avatar-clickable:active {
+  transform: scale(0.97);
+}
+
+/* The real guest photo (when on file) absolutely covers the initials —
+   toggled by the exact same JS that already shows/hides this element
+   elsewhere, unchanged; only its visual role here is new. */
+#checkout-modal #checkout-photo-container {
+  position: absolute;
+  inset: 0;
+}
+
+#checkout-modal #checkout-guest-photo {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+#checkout-modal .checkout-profile-info {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+#checkout-modal .checkout-profile-name {
+  font-size: 0.94rem;
+  font-weight: 700;
+  color: var(--dark);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+#checkout-modal .checkout-profile-mobile {
+  margin-top: 0.15rem;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+#checkout-modal .checkout-profile-mobile .call-link {
+  font-size: 0.78rem;
+  gap: 4px;
+}
+
+#checkout-modal .checkout-profile-chevron {
+  flex-shrink: 0;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: none;
+  background: #eef0f4;
+  color: var(--primary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  font-size: 0.75rem;
+  transition: background 0.15s;
+}
+#checkout-modal .checkout-profile-chevron:hover {
+  background: #e0e7ff;
+}
+
+/* ---------- Compact guest-info card: a simple, safe single-column
+   list of label/value rows in a rounded card. Any row inserted
+   dynamically (e.g. the admin-only Discount row) picks up the same
+   row styling automatically since it shares the .detail-row class. ---------- */
+#checkout-modal .guest-details {
+  margin: 0.5rem 1.1rem 0.45rem;
+  padding: 0 0.65rem;
+  background: #f8f9fc;
+  border: 1px solid #eef0f4;
+  border-radius: 10px;
+}
+
+#checkout-modal .guest-details .detail-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.18rem 0;
+  border-bottom: 1px solid #f0f1f6;
+  min-width: 0;
+  min-height: 0;
+  line-height: 1.2;
+}
+
+#checkout-modal .guest-details .detail-row:last-child {
+  border-bottom: none;
+}
+
+#checkout-modal .guest-details .detail-label {
+  font-size: 0.64rem;
+  color: var(--gray);
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+/* Small round icon badge in front of every label — same muted treatment
+   for all rows, so the row's own text/value colour is what carries the
+   meaning (e.g. Balance Due), not a rainbow of label colours. */
+#checkout-modal .guest-details .detail-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: #e9edf5;
+  color: #94a3b8;
+  font-size: 0.6rem;
+}
+
+#checkout-modal .guest-details .detail-value {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--dark);
+  text-align: right;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#checkout-modal .guest-details .detail-value#checkout-stay-status {
+  white-space: normal;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.3rem;
+  flex-wrap: wrap;
+}
+
+#checkout-modal #checkout-balance {
+  font-size: 0.92rem;
+  font-weight: 800;
+}
+
+/* Balance Due — the one number that matters most at checkout, so it gets
+   its own tinted "hero" treatment instead of blending into the list.
+   Colour reflects state: red = owed, green = credit, grey = settled.
+   Class is toggled by updateCheckoutModal() alongside the existing
+   text-colour logic — see script.js. */
+#checkout-modal .guest-details .detail-row.balance-row {
+  margin: 0.3rem -0.65rem -0.05rem;
+  padding: 0.5rem 0.65rem;
+  border-radius: 0 0 9px 9px;
+  border-bottom: none;
+  background: #eef0f4;
+}
+
+#checkout-modal .guest-details .detail-row.balance-row .detail-label {
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: var(--dark);
+}
+
+#checkout-modal .guest-details .detail-row.balance-state-due {
+  background: rgba(230, 57, 70, 0.09);
+}
+#checkout-modal .guest-details .detail-row.balance-state-due .detail-icon {
+  background: rgba(230, 57, 70, 0.16);
+  color: var(--danger);
+}
+
+#checkout-modal .guest-details .detail-row.balance-state-credit {
+  background: rgba(16, 185, 129, 0.1);
+}
+#checkout-modal .guest-details .detail-row.balance-state-credit .detail-icon {
+  background: rgba(16, 185, 129, 0.18);
+  color: var(--success);
+}
+
+#checkout-modal .guest-details .detail-row.balance-state-zero .detail-icon {
+  background: #e2e8f0;
+  color: #94a3b8;
+}
+
+/* Discount "+" button — was a bare icon sitting inline in the label text;
+   now a small round tap target consistent with other icon buttons in the
+   modal (e.g. the edit-check-in-time button). */
+#checkout-modal .discount-add-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  background: none;
+  border: none;
+  color: var(--primary);
+  cursor: pointer;
+  font-size: 0.72rem;
+  padding: 0;
+}
+
+/* Same tile treatment for the standalone "Available Refund" row that
+   updatePaymentOrRefundUI() renders inside #payment-or-refund-section —
+   keeps it visually consistent with the guest-info card above without
+   converting it into a 2-column grid (it's a single stat, not a set). */
+#checkout-modal #payment-or-refund-section .detail-row {
+  display: flex;
+  flex-direction: row;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.45rem 0;
+}
+
+/* ---------- Sticky footer action bar. Scoped with an explicit class
+   so the *other* .action-row in this modal (Cancel / Add Service inside
+   the service-form) is left alone and still stacks on narrow screens
+   per the shared rule. ---------- */
+#checkout-modal .action-row.checkout-footer-actions,
+#checkout-confirm-modal .action-row {
+  position: sticky;
+  bottom: 0;
+  z-index: 3;
+  background: #fff;
+  margin: 0 !important;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  gap: 0.5rem;
+  padding: 0.55rem 1.1rem calc(0.55rem + env(safe-area-inset-bottom, 0px));
+  border-top: 1px solid #eef0f4;
+  border-radius: 0 0 18px 18px;
+}
+
+#checkout-modal .action-row.checkout-footer-actions .action-btn,
+#checkout-confirm-modal .action-row .action-btn {
+  margin-top: 0;
+  border-radius: 8px;
+  padding: 0.5rem;
+  font-size: 0.82rem;
+  white-space: nowrap;
+}
+
+/* ---------- Checkout Confirm modal — compact card styling ---------- */
+#checkout-confirm-modal .confirm-body {
+  padding: 0.75rem 1.1rem 0;
+  text-align: center;
+  overflow-y: auto;
+}
+
+#checkout-confirm-modal .confirm-icon {
+  width: 38px;
+  height: 38px;
+  margin: 0 auto 0.4rem;
+  border-radius: 50%;
+  background: rgba(255, 159, 28, 0.12);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--warning);
+  font-size: 1.1rem;
+}
+
+#checkout-confirm-modal .confirm-question {
+  font-size: 0.86rem;
+  color: var(--dark);
+  margin-bottom: 0.6rem;
+}
+
+#checkout-confirm-modal .confirm-summary {
+  background: #f8f9fc;
+  border: 1px solid #eef0f4;
+  border-radius: 12px;
+  padding: 0.2rem 0.9rem;
+  text-align: left;
+}
+
+#checkout-confirm-modal .confirm-summary-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.32rem 0;
+  font-size: 0.82rem;
+}
+
+#checkout-confirm-modal .confirm-summary-row + .confirm-summary-row {
+  border-top: 1px solid #eceef4;
+}
+
+#checkout-confirm-modal .confirm-summary-label {
+  color: var(--gray);
+}
+
+#checkout-confirm-modal .confirm-summary-value {
+  font-weight: 700;
+}
+
+#checkout-confirm-modal .confirm-balance-container {
+  margin-top: 0.5rem;
+  text-align: left;
+}
+
+#checkout-confirm-modal .confirm-balance-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: #fff5f5;
+  border: 1px solid #fde2e2;
+  color: var(--danger);
+  border-radius: 10px;
+  padding: 0.4rem 0.75rem;
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+#checkout-confirm-modal .settle-later-group {
+  margin-top: 0.5rem;
+  text-align: left;
+}
+
+#checkout-confirm-modal .settle-later-label,
+#checkout-confirm-modal .confirm-flag-label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+
+#checkout-confirm-modal .settle-later-label input,
+#checkout-confirm-modal .confirm-flag-label input {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+#checkout-confirm-modal .confirm-flag-section {
+  margin-top: 0.5rem;
+  padding: 0.5rem 1.1rem 0;
+  border-top: 1px solid #f0f0f0;
+  text-align: left;
+}
+
+#checkout-confirm-modal .confirm-flag-text {
+  font-weight: 600;
+  color: #c0392b;
+  font-size: 0.85rem;
+}
+
+/* ---------- Phones: still a proper floating modal — never a full-bleed
+   page. Slightly tighter side margins, and a bit more of the viewport on
+   short screens so it doesn't feel cramped, but the backdrop stays
+   visible around the card and the corners stay rounded, so it still
+   reads as "a modal" rather than a full page. ---------- */
+@media (max-width: 560px) {
+  #checkout-modal .modal-content {
+    width: 94%;
+    max-height: 72vh;
+  }
+  #checkout-confirm-modal .modal-content {
+    width: 94%;
+    max-height: 65vh;
+  }
+}
+
+@media (max-height: 640px) {
+  #checkout-modal .modal-content {
+    max-height: 80vh;
+  }
+  #checkout-confirm-modal .modal-content {
+    max-height: 78vh;
+  }
 }

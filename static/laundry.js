@@ -109,21 +109,79 @@
   }
 
   // ── Prices ─────────────────────────────────────────────────────────────────
-  async function _loadPrices() {
+  // Prices are effective-dated on the server (laundry_price_history) — a
+  // price change only applies from whatever date it was saved with.
+  // `_prices` here holds whatever version is relevant to the currently
+  // loaded bill panel (fetched "as of" that bill's period_start, so a
+  // bill for a period before a price change still auto-calculates with
+  // the OLD price). The Edit Prices panel is deliberately independent of
+  // this — it always shows/edits TODAY's price, fetched fresh each time
+  // it opens, so it's never accidentally pre-filled with a historical
+  // snapshot left over from viewing an old bill.
+  async function _loadPrices(asOf) {
     try {
-      const res = await _fetch("/laundry/settings");
+      const url = asOf ? `/laundry/settings?as_of=${asOf}` : "/laundry/settings";
+      const res = await _fetch(url);
       if (res.success) {
         _prices = res.prices || {};
-        _renderPriceEditor();
         _recalcAutoAmount();
       }
     } catch (e) { console.error("loadPrices", e); }
   }
-  function _renderPriceEditor() {
-    ITEMS.forEach(item => {
-      const inp = document.getElementById(`lprice-${item.key}`);
-      if (inp) inp.value = _prices[item.key] ?? 100;
-    });
+  async function _loadPriceEditor() {
+    try {
+      const res = await _fetch("/laundry/settings"); // no as_of → today's price
+      if (res.success) {
+        const prices = res.prices || {};
+        ITEMS.forEach(item => {
+          const inp = document.getElementById(`lprice-${item.key}`);
+          if (inp) inp.value = prices[item.key] ?? 100;
+        });
+      }
+    } catch (e) { console.error("loadPriceEditor", e); }
+    const dateInp = document.getElementById("laundry-price-effective-date");
+    // Always reset to today on open — otherwise a future/past date left
+    // over from a previous edit could silently carry into the next save.
+    if (dateInp) dateInp.value = _todayDate();
+    _loadPriceHistory();
+  }
+  async function _loadPriceHistory() {
+    const list = document.getElementById("laundry-price-history-list");
+    if (!list) return;
+    list.innerHTML = `<div class="laundry-price-history-empty">Loading…</div>`;
+    try {
+      const res = await _fetch("/laundry/settings/history");
+      const history = (res.success && Array.isArray(res.history)) ? res.history : [];
+      if (!history.length) {
+        list.innerHTML = `<div class="laundry-price-history-empty">`
+          + `No price changes recorded yet — the first save above starts the history.</div>`;
+        return;
+      }
+      const today = _todayDate();
+      let markedCurrent = false;
+      list.innerHTML = history.map(v => {
+        const isCurrent = !markedCurrent && v.effective_from <= today;
+        if (isCurrent) markedCurrent = true;
+        const priceBits = ITEMS.map(item =>
+          `<span>${item.short}: <b>₹${(v.prices && v.prices[item.key]) ?? "-"}</b></span>`
+        ).join("");
+        const setAt = v.set_at ? _fmtDate(String(v.set_at).slice(0, 10)) : "";
+        const future = v.effective_from > today;
+        return `
+          <div class="laundry-price-history-item${isCurrent ? " current" : ""}">
+            <div class="laundry-price-history-head">
+              <span class="laundry-price-history-date">From ${_fmtDate(v.effective_from)}</span>
+              ${isCurrent ? '<span class="laundry-price-history-badge">Current</span>' : ""}
+              ${future ? '<span class="laundry-price-history-badge" style="color:#92400e;background:#fef3c7;">Upcoming</span>' : ""}
+            </div>
+            <div class="laundry-price-history-meta">Set by ${_esc(v.set_by || "—")}${setAt ? " on " + setAt : ""}</div>
+            <div class="laundry-price-history-prices">${priceBits}</div>
+          </div>
+        `;
+      }).join("");
+    } catch (e) {
+      list.innerHTML = `<div class="laundry-price-history-empty">Error loading history</div>`;
+    }
   }
   async function _savePrices() {
     const payload = {};
@@ -131,6 +189,8 @@
       const inp = document.getElementById(`lprice-${item.key}`);
       payload[item.key] = parseInt(inp?.value) || 100;
     });
+    const dateInp = document.getElementById("laundry-price-effective-date");
+    payload.effective_from = dateInp?.value || _todayDate();
     try {
       const res = await _fetch("/laundry/settings", {
         method: "POST",
@@ -138,9 +198,14 @@
         body: JSON.stringify(payload),
       });
       if (res.success) {
-        _prices = payload;
-        _notify("Prices saved ✓");
-        _recalcAutoAmount();
+        const future = payload.effective_from > _todayDate();
+        _notify(future
+          ? `Prices saved — will apply from ${_fmtDate(payload.effective_from)} ✓`
+          : "Prices saved ✓");
+        _loadPriceHistory();
+        // Refresh whatever's currently driving the bill panel's auto-calc,
+        // in case this save changed the version effective for that period.
+        _loadPrices(_billPanelData?.period_start || undefined);
       } else {
         _notify(res.message || "Failed to save prices", "error");
       }
@@ -1275,6 +1340,11 @@
 
       _renderBillPanelSummary(res.totals || {});
       _updateBillPeriodLabel(res);
+      // Auto-calc with whatever price was actually effective at the START
+      // of this billing period — not necessarily today's price — so a
+      // bill for a period before a price change doesn't overcharge (or a
+      // period after a scheduled future change doesn't undercharge).
+      await _loadPrices(from);
       const auto = _recalcAutoAmount();
 
       // Prefill: an existing bill for this exact period is being EDITED;
@@ -1635,9 +1705,11 @@
       if (typeof openMgrAccessModal === "function") {
         openMgrAccessModal("Edit Prices", "Enter manager password to edit laundry prices", "fa-tags", () => {
           ed.classList.add("open");
+          _loadPriceEditor();
         });
       } else {
         ed.classList.add("open"); // dev fallback
+        _loadPriceEditor();
       }
     });
     document.getElementById("laundry-save-prices-btn")?.addEventListener("click", _savePrices);

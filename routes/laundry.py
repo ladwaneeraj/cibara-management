@@ -50,6 +50,10 @@ _laundry_settings_ref = lambda: db.collection("settings").document("laundry_pric
 _laundry_locks_ref    = lambda: db.collection("laundry_locks")
 _laundry_adjust_ref   = lambda: db.collection("laundry_adjustments")
 _laundry_ledger_ref   = lambda: db.collection("settings").document("laundry_ledger")
+# One doc per distinct price change, doc id == effective_from ("YYYY-MM-DD")
+# so re-saving the same date updates that version instead of duplicating it.
+# See "SETTINGS -- prices per piece" below for the full history model.
+_laundry_price_hist_ref = lambda: db.collection("laundry_price_history")
 
 
 # -- Data locking ------------------------------------------------------------
@@ -257,26 +261,130 @@ def _build_ledger():
 # SETTINGS -- prices per piece
 # ---------------------------------------------------------------------------
 
+def _ensure_legacy_price_migrated():
+    """
+    One-time, idempotent migration: existing installs already had a price
+    in settings/laundry_prices from before effective-dated history existed
+    -- with no history entries, that old price is invisible in the Price
+    History log even though it really was in force. The first time either
+    settings endpoint runs, if laundry_price_history is still completely
+    empty, copy the legacy doc's price in as one dated entry (dated to
+    when it was last saved, or a safe fallback if that's missing) so it
+    shows up in the log going forward. Runs at most once -- after that,
+    history is non-empty and this is a no-op.
+    """
+    try:
+        if next(_laundry_price_hist_ref().limit(1).stream(), None) is not None:
+            return  # history already has at least one entry -- nothing to do
+        legacy = _laundry_settings_ref().get()
+        if not legacy.exists:
+            return
+        legacy_data = legacy.to_dict() or {}
+        prices = legacy_data.get("prices")
+        if not prices:
+            return
+        updated_at = str(legacy_data.get("updated_at") or "")
+        effective_from = updated_at[:10] if len(updated_at) >= 10 else "2020-01-01"
+        _laundry_price_hist_ref().document(effective_from).set({
+            "effective_from": effective_from,
+            "prices":         prices,
+            "set_by":         "Migrated from earlier price settings",
+            "set_at":         updated_at or datetime.now(IST).isoformat(),
+        })
+    except Exception as e:
+        logger.warning(f"_ensure_legacy_price_migrated failed: {e}")
+
+
 @laundry_bp.route("/laundry/settings", methods=["GET"])
 def get_laundry_settings():
+    """
+    Prices in effect on a given date (default: today). Prices are
+    effective-dated (see laundry_price_history below) -- pass
+    ?as_of=YYYY-MM-DD to get the price that applied on some other day,
+    e.g. the start of a billing period, so a bill for a period before a
+    price change still uses the old price. Falls back to the legacy
+    single-price doc (pre-dates history tracking) and then
+    DEFAULT_PRICES if no history version exists at or before that date.
+    """
     try:
-        doc = _laundry_settings_ref().get()
-        if doc.exists:
-            data = doc.to_dict()
-            prices = data.get("prices", DEFAULT_PRICES)
+        _ensure_legacy_price_migrated()
+        as_of = (request.args.get("as_of") or "").strip()
+        if as_of:
+            try:
+                datetime.strptime(as_of, "%Y-%m-%d")
+            except ValueError:
+                return jsonify(success=False, message="as_of must be YYYY-MM-DD"), 400
         else:
-            prices = DEFAULT_PRICES
-        return jsonify(success=True, prices=prices)
+            as_of = datetime.now(IST).strftime("%Y-%m-%d")
+
+        versions = list(
+            _laundry_price_hist_ref()
+            .where(filter=FieldFilter("effective_from", "<=", as_of))
+            .order_by("effective_from", direction="DESCENDING")
+            .limit(1)
+            .stream()
+        )
+
+        if versions:
+            v = versions[0].to_dict() or {}
+            prices = v.get("prices", DEFAULT_PRICES)
+            effective_from = v.get("effective_from")
+        else:
+            # No tracked history at/before this date -- fall back to the
+            # legacy single-price doc from before effective-dating existed.
+            doc = _laundry_settings_ref().get()
+            prices = ((doc.to_dict() or {}).get("prices", DEFAULT_PRICES)
+                      if doc.exists else DEFAULT_PRICES)
+            effective_from = None
+
+        return jsonify(success=True, prices=prices, as_of=as_of,
+                       effective_from=effective_from)
     except Exception as e:
         logger.error(f"get_laundry_settings error: {e}")
+        return jsonify(success=False, message=str(e)), 500
+
+
+@laundry_bp.route("/laundry/settings/history", methods=["GET"])
+def get_laundry_price_history():
+    """Every saved price version, newest effective_from first -- powers
+    the Price History log in the Edit Prices panel."""
+    try:
+        _ensure_legacy_price_migrated()
+        docs = (
+            _laundry_price_hist_ref()
+            .order_by("effective_from", direction="DESCENDING")
+            .stream()
+        )
+        history = [d.to_dict() for d in docs]
+        return jsonify(success=True, history=history)
+    except Exception as e:
+        logger.error(f"get_laundry_price_history error: {e}")
         return jsonify(success=False, message=str(e)), 500
 
 
 @laundry_bp.route("/laundry/settings", methods=["POST"])
 @requires_permission("laundry.price.edit")
 def save_laundry_settings():
+    """
+    Save a new price version, effective from a chosen date (default:
+    today -- pass effective_from to schedule a future change or backfill
+    a past one). Previous versions are never overwritten or deleted --
+    each effective_from gets its own doc in laundry_price_history, so
+    every price that was ever in force stays on record. Saving the same
+    effective_from again updates that version in place, so fixing a typo
+    doesn't clutter the history with near-duplicate entries.
+    """
     try:
         data = request.json or {}
+
+        effective_from = (data.get("effective_from") or "").strip() \
+            or datetime.now(IST).strftime("%Y-%m-%d")
+        try:
+            datetime.strptime(effective_from, "%Y-%m-%d")
+        except ValueError:
+            return jsonify(success=False,
+                           message="effective_from must be YYYY-MM-DD"), 400
+
         prices = {}
         for k in ITEM_KEYS:
             try:
@@ -284,11 +392,24 @@ def save_laundry_settings():
             except (ValueError, TypeError):
                 prices[k] = DEFAULT_PRICES[k]
 
-        _laundry_settings_ref().set({
-            "prices": prices,
-            "updated_at": datetime.now(IST).isoformat()
-        })
-        return jsonify(success=True, message="Prices saved")
+        from services.audit_log import write_log, _safe_user
+        _user = (_safe_user() or {}).get("userId") or "admin"
+
+        version = {
+            "effective_from": effective_from,
+            "prices":         prices,
+            "set_by":         _user,
+            "set_at":         datetime.now(IST).isoformat(),
+        }
+        # Doc id == effective_from: re-saving the same date corrects that
+        # version instead of stacking duplicate entries for one date.
+        _laundry_price_hist_ref().document(effective_from).set(version)
+
+        write_log("laundry.price.set", target_collection="laundry_price_history",
+                  target_id=effective_from, metadata=version)
+
+        return jsonify(success=True, message="Prices saved",
+                       effective_from=effective_from)
     except Exception as e:
         logger.error(f"save_laundry_settings error: {e}")
         return jsonify(success=False, message=str(e)), 500

@@ -890,30 +890,67 @@
           </div>
 
           <!-- Filters -->
-          <div class="filter-container">
-            <button class="filter-btn active" data-filter="all" data-hide-roles="housekeeping">All</button>
-            <button class="filter-btn" data-filter="vacant" data-hide-roles="housekeeping">
-              Vacant&nbsp;<span id="count-filter-vacant">0</span>
-            </button>
-            <button class="filter-btn" data-filter="occupied" data-hide-roles="housekeeping">
-              Occupied&nbsp;<span id="count-filter-occupied">0</span>
-            </button>
-            <button class="filter-btn" data-filter="cleaning">
-              Cleaning&nbsp;<span id="count-filter-cleaning">0</span>
-            </button>
-            <button
-              class="filter-btn filter-btn-balances"
-              data-filter="balances"
-              data-hide-roles="housekeeping"
-            >
-              <span
-                >Balances&nbsp;<span id="count-filter-balances">0</span></span
+          <div class="filter-row">
+            <div class="filter-container">
+              <button class="filter-btn active" data-filter="all" data-hide-roles="housekeeping">
+                <span class="filter-label-full">All</span><span class="filter-label-short">A</span>
+              </button>
+              <button class="filter-btn filter-btn-vacant" data-filter="vacant" data-hide-roles="housekeeping">
+                <span class="filter-label-full">Vacant&nbsp;</span><span class="filter-label-short">V&nbsp;</span><span id="count-filter-vacant">0</span>
+              </button>
+              <button class="filter-btn filter-btn-occupied" data-filter="occupied" data-hide-roles="housekeeping">
+                <span class="filter-label-full">Occupied&nbsp;</span><span class="filter-label-short">O&nbsp;</span><span id="count-filter-occupied">0</span>
+              </button>
+              <button class="filter-btn filter-btn-cleaning" data-filter="cleaning">
+                <span class="filter-label-full">Cleaning&nbsp;</span><span class="filter-label-short">C&nbsp;</span><span id="count-filter-cleaning">0</span>
+              </button>
+              <button
+                class="filter-btn filter-btn-balances"
+                data-filter="balances"
+                data-hide-roles="housekeeping"
               >
-              <span
-                class="filter-balance-amount"
-                id="amount-filter-balances"
-              ></span>
-            </button>
+                <span
+                  ><span class="filter-label-full">Balances&nbsp;</span><span class="filter-label-short">B&nbsp;</span><span id="count-filter-balances">0</span></span
+                >
+                <span
+                  class="filter-balance-amount"
+                  id="amount-filter-balances"
+                ></span>
+              </button>
+            </div>
+
+            <!-- "More" dropdown — Laundry / Deep Check / Staff, moved here out
+                 of the floating Quick Actions button so they're reachable
+                 straight from the filter bar. Same element IDs as before, so
+                 laundry.js / maintenance.js / staff.js wire up unchanged. -->
+            <div class="filter-more" id="rooms-filter-more">
+              <button
+                class="filter-more-btn"
+                id="rooms-filter-more-btn"
+                type="button"
+                aria-haspopup="true"
+                aria-expanded="false"
+                aria-label="More actions"
+              >
+                <i class="fas fa-ellipsis-v"></i>
+              </button>
+              <div class="filter-more-dropdown" id="rooms-filter-more-dropdown">
+                <div class="quick-action-item" id="quick-laundry-btn">
+                  <i class="fas fa-tshirt"></i>
+                  <span>Laundry</span>
+                </div>
+                <div class="quick-action-item" id="quick-maintenance-btn"
+                     data-perm="maintenance.view" data-hide-roles="housekeeping">
+                  <i class="fas fa-tools"></i>
+                  <span>Deep Check</span>
+                </div>
+                <div class="quick-action-item" id="quick-staff-btn"
+                     data-perm="staff.view" data-hide-roles="housekeeping">
+                  <i class="fas fa-users"></i>
+                  <span>Staff</span>
+                </div>
+              </div>
+            </div>
           </div>
 
           <!-- Rooms Grid -->
@@ -3099,14 +3136,19 @@
           <div id="checkout-pending-thumbs" style="display: flex; gap: 0.55rem; padding: 0.2rem 1rem 0.65rem; overflow-x: auto; scrollbar-width: none; align-items: flex-end;"></div>
         </div>
 
-        <div class="guest-details">
-          <div class="detail-row">
-            <div class="detail-label">Guest Name</div>
-            <div class="detail-value" id="checkout-guest-name"></div>
+        <!-- Guest Profile — tap the avatar (admin only) to open the same
+             Customer Records profile & past-stay history used elsewhere in
+             the app. Everyone else sees the same card, just not clickable. -->
+        <div class="checkout-profile" id="checkout-profile-card">
+          <div class="checkout-avatar" id="checkout-avatar">
+            <span id="checkout-avatar-initials"></span>
+            <div id="checkout-photo-container" style="display: none">
+              <img id="checkout-guest-photo" alt="Guest photo" />
+            </div>
           </div>
-          <div class="detail-row">
-            <div class="detail-label">Mobile</div>
-            <div class="detail-value" id="checkout-mobile-cell" style="display: flex; align-items: center">
+          <div class="checkout-profile-info">
+            <div class="checkout-profile-name" id="checkout-guest-name"></div>
+            <div class="checkout-profile-mobile" id="checkout-mobile-cell">
               <a href="tel:" id="checkout-guest-mobile" class="call-link">
                 <i class="fas fa-phone"></i>
                 <span id="checkout-mobile-number"></span>
@@ -3119,8 +3161,15 @@
               </button>
             </div>
           </div>
+          <button class="checkout-profile-chevron" id="checkout-view-profile-btn" type="button"
+                  style="display: none" aria-label="View guest profile">
+            <i class="fas fa-chevron-right"></i>
+          </button>
+        </div>
+
+        <div class="guest-details">
           <div class="detail-row">
-            <div class="detail-label">Check-in Time</div>
+            <div class="detail-label"><span class="detail-icon"><i class="fas fa-clock"></i></span>Check-in Time</div>
             <div class="detail-value" style="display: flex; align-items: center">
               <span id="checkout-checkin-time"></span>
               <button id="edit-checkin-time"
@@ -3132,29 +3181,24 @@
             </div>
           </div>
           <div class="detail-row">
-            <div class="detail-label">Room Price</div>
+            <div class="detail-label"><span class="detail-icon"><i class="fas fa-tag"></i></span>Room Price</div>
             <div class="detail-value" id="checkout-room-price"></div>
           </div>
           <div class="detail-row">
-            <div class="detail-label">Balance Due</div>
-            <div class="detail-value" id="checkout-balance">₹0</div>
-          </div>
-          <div class="detail-row">
-            <div class="detail-label">Stay Status</div>
+            <div class="detail-label"><span class="detail-icon"><i class="fas fa-calendar-day"></i></span>Stay Status</div>
             <div class="detail-value" id="checkout-stay-status">
               <span id="checkout-day-count">Day 1</span>
               <span id="checkout-renewal-status" class="status-tag waiting">Waiting</span>
             </div>
           </div>
-          <!-- Guest Photo -->
-          <div id="checkout-photo-container" style="margin-top: 1rem; text-align: center; display: none">
-            <h4 style="margin-bottom: 0.5rem; font-size: 0.9rem; color: var(--gray);">Guest Photo</h4>
-            <img id="checkout-guest-photo" style="max-width: 100%; max-height: 200px; border-radius: 8px; border: 1px solid #eee;" alt="Guest photo" />
+          <div class="detail-row balance-row">
+            <div class="detail-label"><span class="detail-icon"><i class="fas fa-wallet"></i></span>Balance Due</div>
+            <div class="detail-value" id="checkout-balance">₹0</div>
           </div>
         </div>
 
         <!-- Add-on Services -->
-        <div class="add-on-section" style="margin-top: 1.5rem">
+        <div class="add-on-section">
           <h3 style="margin-bottom: 0.75rem">Add Services</h3>
           <div class="svc-chips">
             <button class="svc-chip" data-service="Water 2L" data-price="30"><i class="fas fa-tint"></i> Water 2L<span class="svc-chip-price">₹30</span></button>
@@ -3218,7 +3262,7 @@
         <!-- Clear Balance or Process Refund Section -->
         <div id="payment-or-refund-section"></div>
 
-        <div class="action-row" style="margin-top: 1.5rem">
+        <div class="action-row checkout-footer-actions">
           <button class="action-btn btn-danger" id="cancel-checkout-btn">Cancel</button>
           <button class="action-btn btn-success" id="confirm-checkout-btn">Complete Checkout</button>
         </div>
@@ -3365,12 +3409,6 @@
           <span>Transfer Room</span>
         </div>
 
-        <!-- Laundry button -->
-        <div class="quick-action-item" id="quick-laundry-btn">
-          <i class="fas fa-tshirt"></i>
-          <span>Laundry</span>
-        </div>
-
         <!-- Banking shortcut — hidden from housekeeping and gated by the
              banking.view permission so managers/admin see it, anyone
              else doesn't. -->
@@ -3380,76 +3418,54 @@
           <span>Banking</span>
         </div>
 
-        <!-- Deep-check maintenance — room-by-room inspection rounds,
-             defect tracking and analytics. Managers + admin
-             (maintenance.view); hidden from housekeeping. -->
-        <div class="quick-action-item" id="quick-maintenance-btn"
-             data-perm="maintenance.view" data-hide-roles="housekeeping">
-          <i class="fas fa-tools"></i>
-          <span>Deep Check</span>
-        </div>
-
-        <!-- Staff attendance & payroll — daily full/half-day marking
-             (managers + admin, staff.view); wages, advances and salary
-             payouts are admin-only inside the modal. -->
-        <div class="quick-action-item" id="quick-staff-btn"
-             data-perm="staff.view" data-hide-roles="housekeeping">
-          <i class="fas fa-users"></i>
-          <span>Staff</span>
-        </div>
+        <!-- Laundry, Deep Check (maintenance) and Staff have moved to the
+             "more" dropdown in the Rooms-tab filter bar — see filter-row
+             above. Same element IDs, so their JS wiring in laundry.js /
+             maintenance.js / staff.js is untouched. -->
 
       </div>
     </div>
     <!-- Checkout Confirmation Modal -->
     <div class="modal-backdrop" id="checkout-confirm-modal">
-      <div class="modal-content" style="max-width: 400px">
+      <div class="modal-content">
         <div class="modal-header">
           <h2>Confirm Checkout</h2>
           <button class="close-btn" aria-label="Close">&times;</button>
         </div>
-        <div style="text-align: center; padding: 1rem">
-          <i
-            class="fas fa-exclamation-circle"
-            style="font-size: 3rem; color: var(--warning); margin-bottom: 1rem"
-          ></i>
-          <p style="margin-bottom: 1.5rem">
-            Are you sure you want to checkout this guest?
-          </p>
-          <p>
-            <strong>Room: <span id="confirm-checkout-room"></span></strong>
-          </p>
-          <p>
-            <strong>Guest: <span id="confirm-checkout-guest"></span></strong>
-          </p>
+
+        <div class="confirm-body">
+          <div class="confirm-icon"><i class="fas fa-exclamation-circle"></i></div>
+          <p class="confirm-question">Are you sure you want to checkout this guest?</p>
+
+          <div class="confirm-summary">
+            <div class="confirm-summary-row">
+              <span class="confirm-summary-label">Room</span>
+              <span class="confirm-summary-value" id="confirm-checkout-room"></span>
+            </div>
+            <div class="confirm-summary-row">
+              <span class="confirm-summary-label">Guest</span>
+              <span class="confirm-summary-value" id="confirm-checkout-guest"></span>
+            </div>
+          </div>
 
           <!-- Add balance display and settle later option -->
           <div
             id="checkout-balance-container"
-            style="margin-top: 1rem; display: none"
+            class="confirm-balance-container"
+            style="display: none"
           >
-            <p>
-              Outstanding balance:
+            <div class="confirm-balance-row">
+              <span>Outstanding balance</span>
               <strong>₹<span id="confirm-checkout-balance">0</span></strong>
-            </p>
+            </div>
 
             <!-- Settle Later: admin only. Manager / housekeeping never see
                  this control — they cannot finalise a checkout with a
                  pending balance. The password input below is gone too;
                  admin doesn't need to re-prove identity. -->
-            <div class="form-group" style="margin-top: 1rem" data-roles="admin">
-              <label
-                style="
-                  display: inline-flex;
-                  align-items: center;
-                  cursor: pointer;
-                  margin-bottom: 0.5rem;
-                "
-              >
-                <input
-                  type="checkbox"
-                  id="settle-later-checkbox"
-                  style="margin-right: 0.5rem"
-                />
+            <div class="form-group settle-later-group" data-roles="admin">
+              <label class="settle-later-label">
+                <input type="checkbox" id="settle-later-checkbox" />
                 <span>Allow checkout with "Settle Later" option</span>
               </label>
 
@@ -3477,32 +3493,10 @@
         </div>
 
         <!-- ── Customer Flag Section ── -->
-        <div
-          id="checkout-flag-section"
-          style="
-            margin-top: 1rem;
-            border-top: 1px solid #f0f0f0;
-            padding-top: 1rem;
-            text-align: left;
-          "
-        >
-          <label
-            style="
-              display: inline-flex;
-              align-items: center;
-              cursor: pointer;
-              gap: 0.5rem;
-              user-select: none;
-            "
-          >
-            <input
-              type="checkbox"
-              id="checkout-flag-customer"
-              style="width: 16px; height: 16px; cursor: pointer"
-            />
-            <span style="font-weight: 600; color: #c0392b">
-              🚩 Flag this customer
-            </span>
+        <div id="checkout-flag-section" class="confirm-flag-section">
+          <label class="confirm-flag-label">
+            <input type="checkbox" id="checkout-flag-customer" />
+            <span class="confirm-flag-text">🚩 Flag this customer</span>
           </label>
           <div
             id="checkout-flag-notes-container"
@@ -3518,7 +3512,7 @@
           </div>
         </div>
 
-        <div class="action-row" style="margin-top: 1rem">
+        <div class="action-row">
           <button
             class="action-btn btn-secondary"
             id="cancel-confirm-checkout-btn"
@@ -5820,10 +5814,31 @@
                     <div class="laundry-price-row"><label>Mat</label>       <input type="number" class="laundry-price-input" id="lprice-mat"        value="100" min="0" /></div>
                     <div class="laundry-price-row"><label>Curtain</label>   <input type="number" class="laundry-price-input" id="lprice-curtain"    value="100" min="0" /></div>
                   </div>
+
+                  <!-- Effective date -- these prices apply from this date
+                       onward; older bills/history keep whatever price was
+                       in force on their own date. Defaults to today, but
+                       can be set to a future date (schedule ahead) or a
+                       past date (backfill a rate you forgot to update). -->
+                  <div class="laundry-price-effective-row">
+                    <label for="laundry-price-effective-date">Effective from</label>
+                    <input type="date" id="laundry-price-effective-date" class="laundry-price-input" style="width:auto" />
+                  </div>
+
                   <button class="action-btn btn-secondary" id="laundry-save-prices-btn"
                     style="width:100%;font-size:0.8rem;padding:0.35rem;margin-top:0.5rem">
                     <i class="fas fa-save"></i> Save Prices
                   </button>
+
+                  <!-- Price History -- every version ever saved, newest
+                       first, so it's always clear from when a price
+                       actually applied. -->
+                  <div class="laundry-price-history">
+                    <div class="laundry-price-history-title">Price History</div>
+                    <div id="laundry-price-history-list" class="laundry-price-history-list">
+                      <div class="laundry-price-history-empty">Loading…</div>
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>

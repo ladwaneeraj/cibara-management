@@ -1755,6 +1755,47 @@ function showCheckinModal(roomNumber) {
   checkinModal.classList.add("show");
 }
 
+// ── Checkout-modal profile avatar helpers ───────────────────────────────────
+// Same rules as customer-manager.js's _initials()/_avatarStyle() (kept as a
+// small local copy since that file wraps its helpers in a closure and
+// doesn't expose them on window) — so a guest gets the same initials and
+// the same colour whether you're looking at the checkout modal or the
+// Customer Records list.
+function _checkoutInitials(name) {
+  if (!name) return "?";
+  return name.trim().split(/\s+/).slice(0, 2).map((w) => w[0].toUpperCase()).join("");
+}
+const _CHECKOUT_AVATAR_GRADIENTS = [
+  "linear-gradient(135deg,#2563eb,#3b82f6)",
+  "linear-gradient(135deg,#7c3aed,#a78bfa)",
+  "linear-gradient(135deg,#0d9488,#2dd4bf)",
+  "linear-gradient(135deg,#d97706,#fbbf24)",
+  "linear-gradient(135deg,#db2777,#f472b6)",
+  "linear-gradient(135deg,#4f46e5,#818cf8)",
+  "linear-gradient(135deg,#059669,#34d399)",
+  "linear-gradient(135deg,#b91c1c,#f87171)",
+];
+function _checkoutAvatarGradient(seed) {
+  let h = 0;
+  const s = String(seed || "");
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+  return _CHECKOUT_AVATAR_GRADIENTS[h % _CHECKOUT_AVATAR_GRADIENTS.length];
+}
+
+// checkin_time is always stored/sent as "YYYY-MM-DD HH:MM" (see
+// formatDateTime() and the edit-checkin-time form) — this only reformats
+// it for display as "DD-MM-YYYY HH:MM"; the stored value/data model is
+// untouched, so parsing elsewhere (new Date(roomInfo.checkin_time), etc.)
+// keeps working.
+function _formatCheckinDisplay(raw) {
+  if (!raw) return "N/A";
+  const [datePart, ...rest] = String(raw).split(" ");
+  const dateBits = datePart.split("-");
+  if (dateBits.length !== 3) return raw; // unexpected shape — show as-is
+  const [y, m, d] = dateBits;
+  return `${d}-${m}-${y}${rest.length ? " " + rest.join(" ") : ""}`;
+}
+
 // Update checkout modal to refresh all information
 function updateCheckoutModal(roomNumber) {
   if (!checkoutModal) {
@@ -1816,9 +1857,51 @@ function updateCheckoutModal(roomNumber) {
       : null;
   }
 
+  // ── Profile avatar (photo or coloured initials) ─────────────────────────
+  // Same initials + deterministic gradient logic as the Customer Records
+  // list, so a given guest gets the same avatar colour everywhere.
+  const checkoutAvatarInitialsEl = document.getElementById("checkout-avatar-initials");
+  if (checkoutAvatarInitialsEl) {
+    checkoutAvatarInitialsEl.textContent = _checkoutInitials(roomInfo.guest.name);
+  }
+  const checkoutAvatarEl = document.getElementById("checkout-avatar");
+  if (checkoutAvatarEl) {
+    checkoutAvatarEl.style.background = _checkoutAvatarGradient(
+      roomInfo.guest.name || roomInfo.guest.mobile || roomNumber,
+    );
+  }
+
+  // ── "View guest profile" (admin-only) ───────────────────────────────────
+  // Opens the same Customer Records detail panel used elsewhere in the app
+  // (photo, stats, and the collapsible past-stay history) — reusing
+  // openCustomerDetail() from customer-manager.js rather than building a
+  // second view. Gated on customer.manage, which is admin-only (managers and
+  // housekeeping never get it — see permissions.js).
+  const checkoutAvatarClickEl = document.getElementById("checkout-avatar");
+  const checkoutViewProfileBtn = document.getElementById("checkout-view-profile-btn");
+  if (checkoutAvatarClickEl && checkoutViewProfileBtn) {
+    const _guestMobile = roomInfo.guest.mobile;
+    const _canViewProfile = !!(
+      _guestMobile &&
+      window.CibaraAuth &&
+      window.CibaraAuth.userCan &&
+      window.CibaraAuth.userCan("customer.manage")
+    );
+    const _openGuestProfile = () => {
+      if (typeof window.openCustomerDetail === "function") {
+        window.openCustomerDetail(_guestMobile);
+      }
+    };
+    checkoutViewProfileBtn.style.display = _canViewProfile ? "" : "none";
+    checkoutAvatarClickEl.classList.toggle("checkout-avatar-clickable", _canViewProfile);
+    checkoutAvatarClickEl.title = _canViewProfile ? "View guest profile & stay history" : "";
+    checkoutAvatarClickEl.onclick = _canViewProfile ? _openGuestProfile : null;
+    checkoutViewProfileBtn.onclick = _canViewProfile ? _openGuestProfile : null;
+  }
+
   const checkoutCheckinTime = document.getElementById("checkout-checkin-time");
   if (checkoutCheckinTime) {
-    checkoutCheckinTime.textContent = roomInfo.checkin_time || "N/A";
+    checkoutCheckinTime.textContent = _formatCheckinDisplay(roomInfo.checkin_time);
   }
 
   // ── Edit-checkin-time visibility (RBAC) ─────────────────────────────────
@@ -1865,10 +1948,20 @@ function updateCheckoutModal(roomNumber) {
   }
 
   // ── Balance row ──────────────────────────────────────────────────────────
+  // Balance Due is the one number that matters most at checkout, so besides
+  // the text colour it also gets a tinted "hero" background on its row
+  // (red = owed, green = credit, neutral = settled) via these state classes.
   const balanceEl  = document.getElementById("checkout-balance");
   const isOtaRoom  = roomInfo.guest && roomInfo.guest.payment === "ota";
   const balanceRow = balanceEl ? balanceEl.closest(".detail-row") : null;
   if (balanceEl) {
+    if (balanceRow) {
+      balanceRow.classList.remove(
+        "balance-state-due",
+        "balance-state-credit",
+        "balance-state-zero",
+      );
+    }
     if (isOtaRoom) {
       // MMT prepaid — hide balance row (not applicable)
       if (balanceRow) balanceRow.style.display = "none";
@@ -1877,12 +1970,15 @@ function updateCheckoutModal(roomNumber) {
       if (roomInfo.balance < 0) {
         balanceEl.textContent = "−₹" + Math.abs(roomInfo.balance);
         balanceEl.style.color = "var(--success)";
+        if (balanceRow) balanceRow.classList.add("balance-state-credit");
       } else if (roomInfo.balance > 0) {
         balanceEl.textContent = "₹" + roomInfo.balance;
         balanceEl.style.color = "var(--danger)";
+        if (balanceRow) balanceRow.classList.add("balance-state-due");
       } else {
         balanceEl.textContent = "₹0";
         balanceEl.style.color = "";
+        if (balanceRow) balanceRow.classList.add("balance-state-zero");
       }
     }
   }
@@ -2008,7 +2104,7 @@ function updateRenewalHistory(roomNumber) {
   renewalHistoryContent.innerHTML += `
     <div class="renewal-history-item">
       <div>Initial Check-in</div>
-      <div>${roomInfo.checkin_time}</div>
+      <div>${_formatCheckinDisplay(roomInfo.checkin_time)}</div>
     </div>
   `;
 
@@ -2714,7 +2810,7 @@ function showEditTimeModal(roomNumber, currentCheckInTime, options) {
           "checkout-checkin-time",
         );
         if (checkoutCheckinTime) {
-          checkoutCheckinTime.textContent = newCheckInTime;
+          checkoutCheckinTime.textContent = _formatCheckinDisplay(newCheckInTime);
         }
 
         showNotification("Check-in time updated successfully!", "success");
@@ -4977,9 +5073,13 @@ function showReportsTab() {
 
 // Add discount field to checkout modal for existing stays
 function addDiscountToCheckoutModal() {
-  const balanceRow = document.querySelector(
-    "#checkout-modal .detail-row:nth-child(5)",
-  );
+  // Anchored on the Balance Due row itself (not its position in the list) —
+  // robust to the guest-details section being reordered/restructured, e.g.
+  // when the Name/Mobile rows moved out into their own profile card.
+  const checkoutBalanceEl = document.getElementById("checkout-balance");
+  const balanceRow = checkoutBalanceEl
+    ? checkoutBalanceEl.closest(".detail-row")
+    : null;
   if (!balanceRow) return;
 
   // RBAC: only render the "Add Discount" + button for users with the
@@ -4995,14 +5095,14 @@ function addDiscountToCheckoutModal() {
   discountRow.className = "detail-row";
   discountRow.innerHTML = _canDiscount ? `
     <div class="detail-label">
-      Discount
-      <button id="add-discount-btn" data-perm="discount.apply" style="background: none; border: none; color: var(--primary); cursor: pointer; margin-left: 5px;">
+      <span class="detail-icon"><i class="fas fa-percent"></i></span>Discount
+      <button id="add-discount-btn" data-perm="discount.apply" class="discount-add-btn">
         <i class="fas fa-plus-circle"></i>
       </button>
     </div>
     <div class="detail-value" id="checkout-discount">₹0</div>
   ` : `
-    <div class="detail-label">Discount</div>
+    <div class="detail-label"><span class="detail-icon"><i class="fas fa-percent"></i></span>Discount</div>
     <div class="detail-value" id="checkout-discount">₹0</div>
   `;
 
@@ -6363,6 +6463,37 @@ document.addEventListener("DOMContentLoaded", function () {
     document.addEventListener("click", function (event) {
       if (!event.target.closest(".quick-actions-container")) {
         quickActionMenu.classList.remove("show");
+      }
+    });
+  }
+
+  // Rooms-tab filter bar "more" dropdown — Laundry / Deep Check / Staff
+  // live here now instead of the floating Quick Actions menu. Each item's
+  // own click handler (laundry.js / maintenance.js / staff.js) still opens
+  // its modal exactly as before; this just handles opening/closing the
+  // dropdown itself.
+  const roomsMoreBtn = document.getElementById("rooms-filter-more-btn");
+  const roomsMoreDropdown = document.getElementById("rooms-filter-more-dropdown");
+  if (roomsMoreBtn && roomsMoreDropdown) {
+    const _closeRoomsMore = () => {
+      roomsMoreDropdown.classList.remove("show");
+      roomsMoreBtn.classList.remove("active");
+      roomsMoreBtn.setAttribute("aria-expanded", "false");
+    };
+    roomsMoreBtn.addEventListener("click", function (event) {
+      event.stopPropagation();
+      const isOpen = roomsMoreDropdown.classList.toggle("show");
+      roomsMoreBtn.classList.toggle("active", isOpen);
+      roomsMoreBtn.setAttribute("aria-expanded", isOpen ? "true" : "false");
+    });
+    roomsMoreDropdown.addEventListener("click", function (event) {
+      if (event.target.closest(".quick-action-item")) {
+        _closeRoomsMore();
+      }
+    });
+    document.addEventListener("click", function (event) {
+      if (!event.target.closest("#rooms-filter-more")) {
+        _closeRoomsMore();
       }
     });
   }

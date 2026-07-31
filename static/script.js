@@ -6512,11 +6512,12 @@ document.addEventListener("DOMContentLoaded", function () {
     });
   }
 
-  // Rooms-tab filter bar "more" dropdown — Laundry / Deep Check / Staff
-  // live here now instead of the floating Quick Actions menu. Each item's
-  // own click handler (laundry.js / maintenance.js / staff.js) still opens
-  // its modal exactly as before; this just handles opening/closing the
-  // dropdown itself.
+  // Rooms-tab filter bar "more" dropdown — Deep Check / Pending Payments /
+  // Banking live here. Laundry and Staff live in the floating Quick
+  // Actions menu instead — see quick-action-toggle above. Each item's
+  // own click handler (maintenance.js / settlements + banking handlers /
+  // laundry.js / staff.js) still opens its modal exactly as before; this
+  // just handles opening/closing the dropdown itself.
   const roomsMoreBtn = document.getElementById("rooms-filter-more-btn");
   const roomsMoreDropdown = document.getElementById("rooms-filter-more-dropdown");
   if (roomsMoreBtn && roomsMoreDropdown) {

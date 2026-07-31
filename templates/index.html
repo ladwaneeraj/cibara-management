@@ -919,10 +919,13 @@
               </button>
             </div>
 
-            <!-- "More" dropdown — Laundry / Deep Check / Staff, moved here out
-                 of the floating Quick Actions button so they're reachable
-                 straight from the filter bar. Same element IDs as before, so
-                 laundry.js / maintenance.js / staff.js wire up unchanged. -->
+            <!-- "More" dropdown — Deep Check / Pending Payments / Banking,
+                 moved here out of the floating Quick Actions button so
+                 they're reachable straight from the filter bar. Same
+                 element IDs as before, so maintenance.js / the settlements
+                 + banking handlers wire up unchanged regardless of DOM
+                 parent. Laundry and Staff live in the floating Quick
+                 Actions menu instead — see quick-actions-container below. -->
             <div class="filter-more" id="rooms-filter-more">
               <button
                 class="filter-more-btn"
@@ -935,19 +938,19 @@
                 <i class="fas fa-ellipsis-v"></i>
               </button>
               <div class="filter-more-dropdown" id="rooms-filter-more-dropdown">
-                <div class="quick-action-item" id="quick-laundry-btn">
-                  <i class="fas fa-tshirt"></i>
-                  <span>Laundry</span>
-                </div>
                 <div class="quick-action-item" id="quick-maintenance-btn"
                      data-perm="maintenance.view" data-hide-roles="housekeeping">
                   <i class="fas fa-tools"></i>
                   <span>Deep Check</span>
                 </div>
-                <div class="quick-action-item" id="quick-staff-btn"
-                     data-perm="staff.view" data-hide-roles="housekeeping">
-                  <i class="fas fa-users"></i>
-                  <span>Staff</span>
+                <div class="quick-action-item" id="quick-settlements-btn">
+                  <i class="fas fa-money-bill-wave"></i>
+                  <span>Pending Payments</span>
+                </div>
+                <div class="quick-action-item" id="quick-banking-btn"
+                     data-perm="banking.view" data-hide-roles="housekeeping">
+                  <i class="fas fa-university"></i>
+                  <span>Banking</span>
                 </div>
               </div>
             </div>
@@ -3415,30 +3418,28 @@
           <span>Renewals Due</span>
         </div>
 
-        <div class="quick-action-item" id="quick-settlements-btn">
-          <i class="fas fa-money-bill-wave"></i>
-          <span>Pending Payments</span>
-        </div>
-
         <!-- New Transfer Room button -->
         <div class="quick-action-item" id="quick-transfer-btn">
           <i class="fas fa-exchange-alt"></i>
           <span>Transfer Room</span>
         </div>
 
-        <!-- Banking shortcut — hidden from housekeeping and gated by the
-             banking.view permission so managers/admin see it, anyone
-             else doesn't. -->
-        <div class="quick-action-item" id="quick-banking-btn"
-             data-perm="banking.view" data-hide-roles="housekeeping">
-          <i class="fas fa-university"></i>
-          <span>Banking</span>
+        <div class="quick-action-item" id="quick-laundry-btn">
+          <i class="fas fa-tshirt"></i>
+          <span>Laundry</span>
         </div>
 
-        <!-- Laundry, Deep Check (maintenance) and Staff have moved to the
-             "more" dropdown in the Rooms-tab filter bar — see filter-row
-             above. Same element IDs, so their JS wiring in laundry.js /
-             maintenance.js / staff.js is untouched. -->
+        <div class="quick-action-item" id="quick-staff-btn"
+             data-perm="staff.view" data-hide-roles="housekeeping">
+          <i class="fas fa-users"></i>
+          <span>Staff</span>
+        </div>
+
+        <!-- Deep Check (maintenance), Pending Payments and Banking stay in
+             the "more" dropdown in the Rooms-tab filter bar — see
+             filter-row above. Same element IDs, so their JS wiring
+             (maintenance.js / the settlements + banking handlers) is
+             untouched. -->
 
       </div>
     </div>

@@ -475,6 +475,7 @@
 }
 .laundry-price-history-list { display: flex; flex-direction: column; gap: 0.35rem; max-height: 220px; overflow-y: auto; }
 .laundry-price-history-empty { font-size: 0.78rem; color: var(--text-muted, #718096); padding: 0.3rem 0; }
+.laundry-price-history-retry { cursor: pointer; text-decoration: underline; color: var(--text-link, #4c51bf); }
 .laundry-price-history-item {
   border: 1px solid var(--border, #e2e8f0);
   border-radius: 8px;

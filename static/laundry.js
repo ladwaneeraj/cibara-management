@@ -149,8 +149,13 @@
     const list = document.getElementById("laundry-price-history-list");
     if (!list) return;
     list.innerHTML = `<div class="laundry-price-history-empty">Loading…</div>`;
+    // Guard against a stalled/slow request leaving the panel stuck on
+    // "Loading…" forever with no way out (no timeout previously existed
+    // here, unlike populateRoomDropdown's fetch elsewhere).
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10000);
     try {
-      const res = await _fetch("/laundry/settings/history");
+      const res = await _fetch("/laundry/settings/history", { signal: controller.signal });
       const history = (res.success && Array.isArray(res.history)) ? res.history : [];
       if (!history.length) {
         list.innerHTML = `<div class="laundry-price-history-empty">`
@@ -180,7 +185,20 @@
         `;
       }).join("");
     } catch (e) {
-      list.innerHTML = `<div class="laundry-price-history-empty">Error loading history</div>`;
+      const timedOut = e && e.name === "AbortError";
+      list.innerHTML = `<div class="laundry-price-history-empty laundry-price-history-retry" role="button" tabindex="0">`
+        + (timedOut ? "Timed out loading history — tap to retry" : "Error loading history — tap to retry")
+        + `</div>`;
+      const retryEl = list.querySelector(".laundry-price-history-retry");
+      if (retryEl) {
+        const retry = () => _loadPriceHistory();
+        retryEl.addEventListener("click", retry);
+        retryEl.addEventListener("keydown", (ev) => {
+          if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); retry(); }
+        });
+      }
+    } finally {
+      clearTimeout(timeoutId);
     }
   }
   async function _savePrices() {

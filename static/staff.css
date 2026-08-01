@@ -70,8 +70,15 @@
   box-shadow: none;
   /* No longer clipping to rounded corners, so no need to hide overflow at
      the shell level — .stf-grid-wrap keeps its own independent
-     overflow-x/max-height for the wide attendance table. */
+     overflow-x for the wide attendance table. */
   overflow: visible;
+  /* The base .modal-content rule still sets max-height: 90vh (sized for a
+     centered popup). Left in place, that quietly turned .modal-body below
+     into a bounded flex child, so ITS overflow-y: auto kicked in and
+     scrolled internally — a nested scrollbar independent of both the
+     page's own scroll and the attendance grid's. This is a full tab now,
+     not a popup, so it should just grow with its content. */
+  max-height: none;
   /* .modal-content's base rule in style.css defaults to opacity:0 /
      translateY(12px) and only clears via ".modal-backdrop.show
      .modal-content" — a selector that can never match anymore since
@@ -82,7 +89,12 @@
   transform: none;
 }
 #staff-modal .modal-body {
-  overflow-y: auto;
+  /* Was overflow-y: auto, which (paired with the shell's now-removed
+     max-height: 90vh) made this scroll internally — a third nested
+     scrollbar on top of the page's own and the attendance grid's. Full
+     tab, natural page flow, single scroll: same reasoning as everywhere
+     else in this file. */
+  overflow-y: visible;
   /* Matches .bills-container's flat "padding: 1rem" so the inset lines up
      with every other tab instead of reading as a smaller card-within-a-tab. */
   padding: 1rem;
@@ -298,11 +310,27 @@
 .stf-allpresent-btn:disabled { opacity: 0.6; cursor: wait; }
 
 /* ── Attendance grid ── */
+/* Desktop: no inner vertical scrollbar. max-height: 60vh here used to cap
+   the grid and give it its own overflow-y, which meant a full-screen tab
+   with plenty of room still nested a second scrollbar inside the page's
+   own scroll — two scroll gestures to see one table. overflow-x stays
+   (31 day-columns are wider than the viewport on most screens); overflow-y
+   is hidden rather than visible because browsers force overflow-x/-y to
+   resolve together when either is non-visible — with no max-height the box
+   always sizes to its content anyway, so nothing is ever actually clipped,
+   this just keeps that resolution predictable across browsers. Note the
+   header/footer's `position: sticky` (below) only stays pinned during a
+   scroll INSIDE this box; with no inner scroll it no longer follows the
+   page as you scroll past a long staff list — an accepted trade-off for
+   losing the double scrollbar. Phones get their own max-height back in the
+   max-width: 600px block below, where the header/toolbar genuinely eat too
+   much of the viewport for that to work, so the sticky header still holds
+   there. */
 .stf-grid-wrap {
-  overflow: auto;
+  overflow-x: auto;
+  overflow-y: hidden;
   border: 1px solid var(--stf-line);
   border-radius: var(--stf-radius);
-  max-height: 60vh;
   -webkit-overflow-scrolling: touch;
   box-shadow: var(--stf-shadow);
   background: #fff;

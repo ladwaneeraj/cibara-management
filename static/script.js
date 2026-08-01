@@ -4293,6 +4293,20 @@ function showEnhancedCheckinModal(roomNumber) {
     checkinForm.reset();
   }
 
+  // form.reset() only restores real <input>/<select> controls to their
+  // HTML default value — #checkin-time-input (hidden) IS one of those, so
+  // it's correctly cleared back to "" above. But #checkin-time-display is a
+  // plain <span> the "Edit check-in time" click handler overwrites with
+  // "HH:MM" (and an orange color) once a custom time is picked; reset()
+  // never touches it. Without this, that stale time+color from the last
+  // room checked in kept showing on every subsequent room's check-in modal
+  // even though the actual value being submitted was already back to "now".
+  const checkinTimeDisplayReset = document.getElementById("checkin-time-display");
+  if (checkinTimeDisplayReset) {
+    checkinTimeDisplayReset.textContent = "Now";
+    checkinTimeDisplayReset.style.color = "#4a5568";
+  }
+
   // Reset photo elements
   const photoPreviewContainer = document.getElementById(
     "photo-preview-container",
@@ -5761,11 +5775,21 @@ document.addEventListener("DOMContentLoaded", function () {
       const tabName = item.dataset.tab;
       debugLog(`Tab clicked: ${tabName}`);
 
-      // Special handling for reports tab
+      // Special handling for reports tab — reached via a manager password
+      // gate, doesn't participate in normal tab switching.
       if (tabName === "reports") {
         handleReportsTabAccess();
         return;
       }
+
+      // Laundry and Staff are full tabs (this is what they were converted
+      // from a modal to), switched exactly like Rooms/Bills/... below.
+      // Staff's content div follows the usual `${tabName}-tab` id pattern
+      // (#staff-tab — see index.html / staff.js's ensureModal()). Laundry
+      // kept its pre-existing id (#laundry-modal) instead of being renamed
+      // to #laundry-tab, so laundry.js's many getElementById() calls didn't
+      // need touching when it moved out of the old modal markup.
+      const contentId = tabName === "laundry" ? "laundry-modal" : `${tabName}-tab`;
 
       // Update nav items
       document.querySelectorAll(".nav-item").forEach((navItem) => {
@@ -5778,11 +5802,21 @@ document.addEventListener("DOMContentLoaded", function () {
         content.classList.add("hidden");
       });
 
-      const tabContent = document.getElementById(`${tabName}-tab`);
+      const tabContent = document.getElementById(contentId);
       if (tabContent) {
         tabContent.classList.remove("hidden");
       } else {
         debugLog(`Tab content for ${tabName} not found`);
+      }
+
+      // Laundry / Staff refresh their data every time you switch to them
+      // (mirrors the old "reopening the modal always loads fresh" behaviour)
+      // instead of loading once and going stale while you're on another tab.
+      if (tabName === "laundry" && typeof openLaundryModal === "function") {
+        openLaundryModal();
+      }
+      if (tabName === "staff" && typeof openStaffModal === "function") {
+        openStaffModal();
       }
     });
   });

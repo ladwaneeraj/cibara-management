@@ -78,17 +78,22 @@
   }
 
   // ── Open / close ───────────────────────────────────────────────────────────
+  // Laundry is a full tab now (bottom nav), not a modal — the generic
+  // nav-item handler in script.js already hides every other .tab-content and
+  // un-hides #laundry-modal before calling this, so "opening" here just
+  // means refreshing the tab's data, same as switching to any other tab.
   function openLaundryModal() {
     const modal = document.getElementById("laundry-modal");
     if (!modal) return;
-    modal.classList.add("show");
     _switchTab("send");
     _loadPrices();
     _gridMonth = _todayMonth();
     _loadGrid(_gridMonth);
   }
+  // The header's × button now just backs out to Rooms — there's no
+  // "closed" state for a tab, only "some other tab is showing instead".
   function closeLaundryModal() {
-    document.getElementById("laundry-modal")?.classList.remove("show");
+    document.querySelector('.nav-item[data-tab="rooms"]')?.click();
   }
 
   // ── Tab switching ──────────────────────────────────────────────────────────
@@ -1607,19 +1612,16 @@
   }
 
   // ── Init ───────────────────────────────────────────────────────────────────
+  // Laundry now opens via the bottom nav (nav-item[data-tab="laundry"] in
+  // script.js), not a Quick Actions button — the old quick-laundry-btn no
+  // longer exists in the DOM.
   function init() {
-    // Quick action button
-    document.getElementById("quick-laundry-btn")?.addEventListener("click", () => {
-      document.querySelector(".quick-action-menu")?.classList.remove("open");
-      openLaundryModal();
-    });
-
     const modal = document.getElementById("laundry-modal");
     if (!modal) return;
 
-    // Close
+    // × button backs out to Rooms. No click-outside-to-close anymore —
+    // #laundry-modal fills the tab area now, there's no backdrop to click.
     modal.querySelector(".close-btn")?.addEventListener("click", closeLaundryModal);
-    modal.addEventListener("click", e => { if (e.target === modal) closeLaundryModal(); });
 
     // Tabs
     modal.querySelectorAll(".laundry-tab-btn").forEach(btn =>

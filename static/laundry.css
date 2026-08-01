@@ -1,21 +1,44 @@
 /* ══════════════════════════════════════════════════════════════════════════════
-   LAUNDRY MANAGEMENT — Full-screen modal + Excel grid
+   LAUNDRY MANAGEMENT — full tab (bottom nav) + Excel grid
 ══════════════════════════════════════════════════════════════════════════════ */
 
-/* Full-screen modal override */
-#laundry-modal.modal-backdrop {
-  align-items: flex-start;
-  padding: 2vh 2vw;
+/* #laundry-modal is a .tab-content now (index.html + the
+   nav-item[data-tab="laundry"] handling in script.js) — no dark backdrop,
+   no centering, no viewport-unit sizing. It flows in the page exactly like
+   Rooms/Bills/Register: natural height, whole page scrolls, and the
+   existing .dashboard{margin-bottom:60px} (style.css) is what keeps the
+   fixed bottom nav clear of content, same mechanism every other tab
+   already relies on. (An earlier version tried to bound this tab to a
+   fixed flex height with its own internal scroll — that depended on
+   .app-container having a definite, not just min-, height, which it
+   doesn't, so the box never actually got bounded and the bottom nav ended
+   up overlapping content. Natural page flow sidesteps that entirely.) */
+#laundry-modal.tab-content {
+  width: 100%;
 }
 #laundry-modal .modal-content {
-  width: 96vw !important;
-  max-width: 96vw !important;
-  height: 94vh !important;
-  max-height: 94vh !important;
-  overflow: hidden !important;
+  width: 100% !important;
+  max-width: none !important;
   display: flex !important;
   flex-direction: column !important;
-  border-radius: 12px;
+  /* Flat, edge-to-edge like Bills/Register (.bills-container is just
+     "padding: 1rem" on the bare .dashboard background) instead of a
+     floating white card — no rounded corners, no shadow, no separate
+     background. .dashboard already gives 1rem on all sides; this 1rem
+     matches .bills-container's own padding so the total inset lines up
+     with every other tab instead of reading as a smaller card-within-a-tab. */
+  background: transparent !important;
+  box-shadow: none !important;
+  border-radius: 0 !important;
+  padding: 1rem !important;
+  /* .modal-content's base rule in style.css defaults to opacity:0 /
+     translateY(12px) and only clears via ".modal-backdrop.show
+     .modal-content" — a selector that can never match anymore since
+     #laundry-modal isn't a .modal-backdrop. Without this override the
+     card stayed permanently invisible (0 opacity) even though it had
+     real layout dimensions. */
+  opacity: 1 !important;
+  transform: none !important;
 }
 
 /* Tab bar */
@@ -41,7 +64,10 @@
   color: var(--primary, #e53e3e);
   border-bottom-color: var(--primary, #e53e3e);
 }
-.laundry-tab-pane { display: none; flex: 1; overflow: hidden; flex-direction: column; }
+/* overflow:visible (was hidden) — the pane no longer sits in a bounded-
+   height ancestor, so nothing needs clipping; hidden here would have
+   risked silently cropping content with no bounded box to justify it. */
+.laundry-tab-pane { display: none; flex: 1; overflow: visible; flex-direction: column; min-width: 0; }
 .laundry-tab-pane.active { display: flex; }
 
 /* ── TAB 1: Daily Excel Grid ─────────────────────────────────────────────── */

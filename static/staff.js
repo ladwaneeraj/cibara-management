@@ -159,7 +159,10 @@
   window.refreshStaffModule = function () {
     state.staffLoaded = false;
     var modal = document.getElementById("staff-modal");
-    if (modal && modal.classList.contains("show")) {
+    // Staff is a tab now (#staff-tab, toggled via .hidden) rather than a
+    // modal toggled via .show — check the tab wrapper's visibility instead.
+    var tabWrap = document.getElementById("staff-tab");
+    if (modal && tabWrap && !tabWrap.classList.contains("hidden")) {
       var activeTab = modal.querySelector(".stf-tab-btn.active");
       switchTab(activeTab ? activeTab.dataset.stab : "attendance");
     }
@@ -206,8 +209,20 @@
 
   // ── modal shell ─────────────────────────────────────────────────────────
 
+  // Staff is a full tab now (bottom nav), not a modal — #staff-tab is the
+  // empty <div class="tab-content hidden" id="staff-tab"></div> placeholder
+  // in index.html (same pattern as bills-tab/banking-tab, populated by
+  // their own JS). We inject the module's markup into it instead of
+  // appending to document.body, and drop .modal-backdrop from the wrapper
+  // (no backdrop / centering / click-outside-to-close for a tab) while
+  // keeping .modal-content for its base card styling, same as #laundry-modal.
   function ensureModal() {
     if (document.getElementById("staff-modal")) return;
+    var container = document.getElementById("staff-tab");
+    if (!container) {
+      console.error("staff.js: #staff-tab placeholder not found in DOM");
+      return;
+    }
     var tabs =
       '<button class="stf-tab-btn active" data-stab="attendance"><i class="fas fa-calendar-check"></i> Attendance</button>' +
       // Insights is analytics — admin-only, same as the rest of the app's
@@ -219,8 +234,7 @@
         ? '<button class="stf-tab-btn" data-stab="payroll"><i class="fas fa-users"></i> Staff &amp; Salary</button>'
         : "");
     var html =
-      '<div class="modal-backdrop" id="staff-modal">' +
-      '  <div class="modal-content stf-shell">' +
+      '<div class="modal-content stf-shell" id="staff-modal">' +
       '    <div class="stf-head">' +
       '      <div class="stf-head-ic"><i class="fas fa-users"></i></div>' +
       '      <div class="stf-head-tx">' +
@@ -235,15 +249,12 @@
       '      <div class="stf-tab-pane" id="stf-pane-insights"></div>' +
       '      <div class="stf-tab-pane" id="stf-pane-payroll"></div>' +
       "    </div>" +
-      "  </div>" +
       "</div>";
-    document.body.insertAdjacentHTML("beforeend", html);
+    container.insertAdjacentHTML("beforeend", html);
 
     var modal = document.getElementById("staff-modal");
+    // × now backs out to Rooms — there's no "closed" state for a tab.
     modal.querySelector(".stf-close").addEventListener("click", closeModal);
-    modal.addEventListener("click", function (e) {
-      if (e.target === modal) closeModal();
-    });
     modal.querySelectorAll(".stf-tab-btn").forEach(function (btn) {
       btn.addEventListener("click", function () { switchTab(btn.dataset.stab); });
     });
@@ -269,6 +280,10 @@
     }
   }
 
+  // Staff is a full tab now — the generic nav-item handler in script.js
+  // already hides every other .tab-content and un-hides #staff-tab before
+  // calling this, so openModal() only needs to build the content (first
+  // time) and refresh it, not toggle any visibility class itself.
   function openModal() {
     ensureModal();
     var sub = document.getElementById("stf-head-sub");
@@ -277,13 +292,13 @@
         weekday: "long", day: "numeric", month: "long", year: "numeric",
       });
     }
-    document.getElementById("staff-modal").classList.add("show");
     switchTab("attendance");
   }
+  // The header's × button now just backs out to Rooms — there's no
+  // "closed" state for a tab, only "some other tab is showing instead".
   function closeModal() {
     _closeCellPop();
-    var m = document.getElementById("staff-modal");
-    if (m) m.classList.remove("show");
+    document.querySelector('.nav-item[data-tab="rooms"]')?.click();
   }
 
   // ═════════════════════════════════════════════════════════════════════════
@@ -2251,17 +2266,10 @@
   }
 
   // ── bootstrap ───────────────────────────────────────────────────────────
-
-  function bind() {
-    var btn = document.getElementById("quick-staff-btn");
-    if (btn) {
-      btn.addEventListener("click", function () {
-        var menu = document.querySelector(".quick-action-menu");
-        if (menu) menu.classList.remove("show");
-        openModal();
-      });
-    }
-  }
+  // Staff now opens via the bottom nav (nav-item[data-tab="staff"] in
+  // script.js), not a Quick Actions button — the old quick-staff-btn no
+  // longer exists in the DOM, so there's nothing left to bind here.
+  function bind() {}
 
   function start() {
     if (!window.CibaraAuth) { setTimeout(start, 100); return; }

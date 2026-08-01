@@ -1692,6 +1692,28 @@ body {
     font-size: 0.75rem;
     padding: 0.3rem 0.6rem;
   }
+
+  /* Bottom nav now has 7 items (Rooms/Transactions/Register/Bills/Bookings/
+     Laundry/Staff) — too many to fit un-squeezed on a phone width. Make it
+     horizontally scrollable instead of letting flexbox keep shrinking every
+     item; each item is sized to exactly 1/4 of the bar's width so 4 are
+     visible at once, with the rest one swipe away. scroll-snap keeps a
+     swipe from stopping mid-item. Desktop/tablet (>768px) keeps the
+     original space-around layout untouched. */
+  .bottom-nav {
+    justify-content: flex-start;
+    overflow-x: auto;
+    scroll-snap-type: x proximity;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none; /* Firefox */
+  }
+  .bottom-nav::-webkit-scrollbar {
+    display: none; /* Chrome/Safari */
+  }
+  .bottom-nav .nav-item {
+    flex: 0 0 25%;
+    scroll-snap-align: start;
+  }
 }
 
 @media (max-width: 576px) {

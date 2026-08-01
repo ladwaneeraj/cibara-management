@@ -1,11 +1,29 @@
 /* ──────────────────────────────────────────────────────────────────────────
  * Staff attendance & payroll UI (static/staff.js).
  *
- * Self-contained visual system for the Staff modal, prefixed stf-.
- * Only .modal-backdrop / .modal-content / .form-control come from
- * style.css; every other primitive (buttons, cards, tables) is defined
- * here so nothing inherits the app's full-width block buttons.
+ * Self-contained visual system for the Staff module, prefixed stf-.
+ * #staff-modal is a full tab now (see nav-item[data-tab="staff"] in
+ * script.js) — injected by staff.js into the empty #staff-tab placeholder
+ * in index.html (same pattern as bills-tab/banking-tab), not appended to
+ * document.body as a .modal-backdrop overlay. #staff-modal IS the card
+ * itself (staff.js used to wrap it in a separate .modal-backdrop div; that
+ * wrapper is gone, so #staff-modal carries .modal-content.stf-shell
+ * directly). Only .modal-content / .form-control come from style.css;
+ * every other primitive (buttons, cards, tables) is defined here so
+ * nothing inherits the app's full-width block buttons.
  * ────────────────────────────────────────────────────────────────────── */
+
+/* #staff-tab flows in the page exactly like Rooms/Bills/Register: natural
+   height, whole page scrolls, and the existing .dashboard{margin-bottom:60px}
+   (style.css) keeps the fixed bottom nav clear of content — same mechanism
+   every other tab already relies on. (An earlier version tried to bound
+   this tab to a fixed flex height with internal scroll — that depended on
+   .app-container having a definite, not just min-, height, which it
+   doesn't, so the box never actually got bounded and the bottom nav ended
+   up overlapping content. Natural page flow sidesteps that entirely.) */
+#staff-tab.tab-content {
+  width: 100%;
+}
 
 #staff-modal {
   /* module tokens */
@@ -35,22 +53,45 @@
    would be overridden by this higher-specificity rule. */
 #staff-modal *:not(i) { font-family: inherit; }
 
-#staff-modal .modal-content.stf-shell {
-  max-width: 920px;
-  width: 95%;
-  max-height: 92vh;
+#staff-modal.stf-shell {
+  /* Flat, edge-to-edge like Bills/Register — not a floating card. The base
+     .modal-content rule in style.css (background-color: white; border-radius:
+     var(--border-radius-lg); box-shadow: var(--shadow-lg); padding: 1.5rem)
+     is designed for a centered popup and still applies unless overridden
+     here, which is exactly why this kept "feeling like a modal" even after
+     it became a full tab: right sizing, wrong skin. */
+  width: 100%;
+  max-width: none;
   display: flex;
   flex-direction: column;
   padding: 0;                       /* the shell manages its own spacing */
-  border-radius: var(--stf-radius-lg);
-  overflow: hidden;
-  box-shadow: 0 24px 60px -12px rgba(15, 23, 42, 0.28);
+  background: transparent;
+  border-radius: 0;
+  box-shadow: none;
+  /* No longer clipping to rounded corners, so no need to hide overflow at
+     the shell level — .stf-grid-wrap keeps its own independent
+     overflow-x/max-height for the wide attendance table. */
+  overflow: visible;
+  /* .modal-content's base rule in style.css defaults to opacity:0 /
+     translateY(12px) and only clears via ".modal-backdrop.show
+     .modal-content" — a selector that can never match anymore since
+     #staff-modal isn't inside a .modal-backdrop. Without this override the
+     card stayed permanently invisible even though it had real layout
+     dimensions. */
+  opacity: 1;
+  transform: none;
 }
 #staff-modal .modal-body {
   overflow-y: auto;
-  padding: 1.1rem 1.4rem 1.4rem;
+  /* Matches .bills-container's flat "padding: 1rem" so the inset lines up
+     with every other tab instead of reading as a smaller card-within-a-tab. */
+  padding: 1rem;
   flex: 1;
-  background: #fff;
+  /* Sits directly on the gray .dashboard background, same as Bills/Register —
+     individual components (.stf-card, .stf-kpi, .stf-grid-wrap, .stf-table-wrap,
+     etc.) still carry their own white card styling, exactly like Bills' own
+     stat cards do. */
+  background: transparent;
 }
 
 /* ── Header ── */
@@ -964,7 +1005,16 @@ td.stf-grid-name.stf-grid-foot {
 }
 .stf-stat.advance-due b { color: #b91c1c; }
 .stf-card-actions { display: flex; gap: 0.45rem; flex-wrap: wrap; }
-.stf-card-actions .stf-btn { flex: 1; min-width: 0; }
+/* Root cause of the "Pay Salary overlapping" bug: .stf-btn is
+   white-space: nowrap (never wraps its own label) with no overflow:hidden,
+   so `min-width: 0` let flex shrink the button box narrower than "Pay
+   Salary" + its icon actually need — the label kept its full width and
+   spilled out past the button's edge, visually overlapping the next
+   button. min-width: max-content refuses to shrink a button below its own
+   label width, so once the row is too narrow for all of them, the
+   pre-existing flex-wrap: wrap above pushes the overflow button onto its
+   own line instead of letting it bleed into its neighbor. */
+.stf-card-actions .stf-btn { flex: 1 1 auto; min-width: max-content; }
 .stf-card-actions .stf-btn.iconbtn { flex: 0 0 auto; }
 
 /* ── In-pane forms (advance / pay / edit / ledger) ── */
@@ -1264,17 +1314,10 @@ td.stf-grid-name.stf-grid-foot {
 
 /* ── Phones: full-screen sheet + stacked layouts ── */
 @media (max-width: 600px) {
-  /* The modal becomes a full-screen sheet — no floating card, no wasted
-     margins. 100dvh tracks the browser chrome collapsing on scroll. */
-  #staff-modal { align-items: stretch; }
-  #staff-modal .modal-content.stf-shell {
-    width: 100%;
-    max-width: none;
-    height: 100dvh;
-    max-height: 100dvh;
-    border-radius: 0;
-    box-shadow: none;
-  }
+  /* #staff-modal already fills #staff-tab edge-to-edge at every screen
+     size (see the base #staff-modal.stf-shell rule above) — no separate
+     width/height override needed here anymore. Everything below this
+     point is genuinely phone-specific layout, not sizing. */
   #staff-modal .modal-body {
     padding: 0.8rem 0.65rem calc(1.1rem + env(safe-area-inset-bottom));
   }

@@ -226,6 +226,16 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
   .bl-filter-bar label { display: none; }
   .bills-table { font-size: 0.73rem; }
   .bills-table th, .bills-table td { padding: 0.35rem 0.25rem; }
+
+  /* Exactly 3 stat cards per row on phones — the auto-fit minmax(130px,1fr)
+     default only fits 2 across on most phone widths. */
+  .bills-tally {
+    grid-template-columns: repeat(3, 1fr);
+    gap: 0.4rem;
+  }
+  .bl-card { padding: 0.45rem 0.5rem; }
+  .bl-card .bl-label { font-size: 0.58rem; }
+  .bl-card .bl-value { font-size: 0.82rem; }
 }
 
 /* ── Pay modal ── */

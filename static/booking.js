@@ -593,6 +593,575 @@ async function createBooking(event) {
   }
 }
 
+// ============================================================
+// Multi-Room Booking — one submission, several linked room-bookings
+// (shared dates/check-in-time, each room its own guest + price). See
+// /create_multi_booking in routes/bookings.py for the backend side.
+// ============================================================
+var _mbPicker = null;
+
+function initMultiBookingModal() {
+  var modal = document.getElementById("multi-booking-modal");
+  if (!modal) return;
+
+  if (window.flatpickr && !_mbPicker) {
+    _mbPicker = flatpickr("#mb-date-range", {
+      mode: "range",
+      dateFormat: "D, d M",
+      minDate: "today",
+      disableMobile: true,
+      onChange: function (selectedDates) {
+        function toYMD(d) {
+          return (
+            d.getFullYear() + "-" +
+            String(d.getMonth() + 1).padStart(2, "0") + "-" +
+            String(d.getDate()).padStart(2, "0")
+          );
+        }
+        var ci = document.getElementById("mb-check-in");
+        var co = document.getElementById("mb-check-out");
+        if (selectedDates.length >= 1 && ci) ci.value = toYMD(selectedDates[0]);
+        if (selectedDates.length === 2 && co) {
+          co.value = toYMD(selectedDates[1]);
+          refreshMultiBookingRoomOptions();
+          updateAllMultiBookingRowRates();
+        }
+      },
+    });
+  }
+
+  var addBtn = document.getElementById("mb-add-room-btn");
+  if (addBtn) {
+    addBtn.addEventListener("click", function () {
+      addMultiBookingRoomRow();
+    });
+  }
+
+  var sameGuestToggle = document.getElementById("mb-same-guest-toggle");
+  if (sameGuestToggle) {
+    sameGuestToggle.addEventListener("change", function () {
+      setMultiBookingSameGuestMode(sameGuestToggle.checked);
+    });
+  }
+
+  if (typeof attachMultiBookingMobileLookup === "function") {
+    attachMultiBookingMobileLookup(
+      document.getElementById("mb-shared-guest-mobile"),
+      document.getElementById("mb-shared-guest-name"),
+      document.getElementById("mb-shared-mobile-suggestions")
+    );
+  }
+
+  document.querySelectorAll("#multi-booking-form .payment-btn").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      document.querySelectorAll("#multi-booking-form .payment-btn").forEach(function (b) {
+        b.classList.remove("active");
+      });
+      this.classList.add("active");
+      document.getElementById("mb-payment-method").value = this.dataset.payment;
+    });
+  });
+
+  var closeBtn = modal.querySelector(".close-btn");
+  if (closeBtn) {
+    closeBtn.addEventListener("click", function () {
+      modal.classList.remove("show");
+    });
+  }
+
+  var form = document.getElementById("multi-booking-form");
+  if (form) form.addEventListener("submit", submitMultiBooking);
+
+  var container = document.getElementById("mb-rooms-container");
+  if (container) {
+    container.addEventListener("input", function (e) {
+      if (e.target.classList.contains("mb-rate")) {
+        updateMultiBookingRowTotal(e.target.closest(".mb-room-row"));
+      }
+      if (e.target.classList.contains("mb-guest-count")) {
+        updateMultiBookingRowRate(e.target.closest(".mb-room-row"));
+      }
+      updateMultiBookingSummary();
+    });
+    container.addEventListener("change", function (e) {
+      if (e.target.classList.contains("mb-room-select")) {
+        refreshMultiBookingRoomOptions();
+        updateMultiBookingRowRate(e.target.closest(".mb-room-row"));
+      }
+      if (e.target.classList.contains("mb-room-ac-toggle")) {
+        updateMultiBookingRowRate(e.target.closest(".mb-room-row"));
+      }
+    });
+    container.addEventListener("click", function (e) {
+      var removeBtn = e.target.closest(".mb-remove-room-btn");
+      if (removeBtn) removeMultiBookingRoomRow(removeBtn.closest(".mb-room-row"));
+    });
+  }
+
+  // Booking type switch. Both booking modals carry an identical
+  // .bk-mode-switch control; clicking the inactive side swaps modals. This
+  // replaced the old "Switch to multi-room booking" text link.
+  document.querySelectorAll(".bk-mode-btn").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      setBookingMode(this.dataset.bookingMode);
+    });
+  });
+}
+
+// Reflect the current mode on every .bk-mode-switch on the page. Called by
+// the two modal openers so the control is correct however the modal was
+// opened (toolbar button, calendar day, or the switch itself).
+function syncBookingModeButtons(mode) {
+  document.querySelectorAll(".bk-mode-btn").forEach(function (btn) {
+    var on = btn.dataset.bookingMode === mode;
+    btn.classList.toggle("active", on);
+    btn.setAttribute("aria-selected", on ? "true" : "false");
+  });
+}
+
+// Show the booking modal for `mode` ("single" | "multi") and hide the other.
+// Each opener resets its own form, so switching always starts clean. That is
+// deliberate: the two forms collect different fields (the multi form has no
+// OTA commission block, the single form has no per-room rows), and silently
+// carrying half the values across would be worse than re-entering them.
+function setBookingMode(mode) {
+  var single = document.getElementById("new-booking-modal");
+  var multi = document.getElementById("multi-booking-modal");
+  if (mode === "multi") {
+    if (single) single.classList.remove("show");
+    openMultiBookingModal();
+  } else {
+    if (multi) multi.classList.remove("show");
+    showNewBookingModal();
+  }
+}
+
+function multiBookingRoomRowHtml() {
+  return (
+    '<div class="mb-room-row">' +
+      '<div class="mb-room-row-head">' +
+        '<span class="mb-room-badge"><span class="mb-room-num">1</span> Room</span>' +
+        '<button type="button" class="mb-remove-room-btn" title="Remove this room">' +
+          '<i class="fas fa-times"></i>' +
+        '</button>' +
+      '</div>' +
+      '<div class="bk-row">' +
+        '<div class="form-group">' +
+          '<label class="form-label">Room</label>' +
+          '<select class="form-control mb-room-select" required><option value="">Select dates first</option></select>' +
+        '</div>' +
+        '<div class="form-group">' +
+          '<label class="form-label"># Guests</label>' +
+          '<input type="number" class="form-control mb-guest-count" value="1" min="1" />' +
+        '</div>' +
+      '</div>' +
+      '<div class="bk-row mb-room-guest-fields">' +
+        '<div class="form-group">' +
+          '<label class="form-label">Guest Name</label>' +
+          '<input type="text" class="form-control mb-guest-name" placeholder="Full name" required autocomplete="off" />' +
+        '</div>' +
+        '<div class="form-group" style="position:relative;">' +
+          '<label class="form-label">Mobile</label>' +
+          '<input type="tel" class="form-control mb-guest-mobile" placeholder="10-digit mobile" required pattern="[0-9]{10}" autocomplete="off" />' +
+          '<div class="mb-mobile-suggestions" style="display:none;"></div>' +
+        '</div>' +
+      '</div>' +
+      '<div class="mb-room-ac-row" style="display:none;align-items:center;justify-content:space-between;background:#f0f9ff;border:1px solid #bae6fd;border-radius:8px;padding:0.4rem 0.6rem;margin-bottom:0.5rem;font-size:0.78rem;">' +
+        '<span style="color:#0284c7;font-weight:600;"><i class="fas fa-snowflake"></i> AC Room</span>' +
+        '<label style="display:flex;align-items:center;gap:0.35rem;cursor:pointer;margin:0;">' +
+          '<input type="checkbox" class="mb-room-ac-toggle" style="width:15px;height:15px;accent-color:#0ea5e9;" />' +
+          '<span style="font-size:0.76rem;color:#64748b;">+₹600/night</span>' +
+        '</label>' +
+      '</div>' +
+      '<div class="bk-row">' +
+        '<div class="form-group">' +
+          '<label class="form-label">Rate/Night (₹)</label>' +
+          '<input type="number" class="form-control mb-rate" placeholder="Rate" min="0" />' +
+        '</div>' +
+        '<div class="form-group">' +
+          '<label class="form-label">Total Amount (₹)</label>' +
+          '<input type="number" class="form-control mb-total" placeholder="Total" min="0" required />' +
+        '</div>' +
+      '</div>' +
+      '<div class="form-group" style="margin-bottom:0;">' +
+        '<label class="form-label">Advance (₹)</label>' +
+        '<input type="number" class="form-control mb-advance" placeholder="Optional" min="0" value="0" />' +
+      '</div>' +
+    '</div>'
+  );
+}
+
+// Keep each row's "Room N" badge in sync with its position — rows can be
+// added/removed in any order, so this just renumbers left to right.
+function renumberMultiBookingRooms() {
+  document.querySelectorAll("#mb-rooms-container .mb-room-row").forEach(function (row, i) {
+    var num = row.querySelector(".mb-room-num");
+    if (num) num.textContent = i + 1;
+  });
+}
+
+function addMultiBookingRoomRow() {
+  var container = document.getElementById("mb-rooms-container");
+  if (!container) return;
+  var wrap = document.createElement("div");
+  wrap.innerHTML = multiBookingRoomRowHtml();
+  var row = wrap.firstElementChild;
+  var sameGuestToggle = document.getElementById("mb-same-guest-toggle");
+  if (sameGuestToggle && sameGuestToggle.checked) {
+    row.classList.add("mb-same-guest");
+    row.querySelector(".mb-guest-name").required = false;
+    row.querySelector(".mb-guest-mobile").required = false;
+  }
+  container.appendChild(row);
+  renumberMultiBookingRooms();
+  refreshMultiBookingRoomOptions();
+
+  if (typeof attachMultiBookingMobileLookup === "function") {
+    attachMultiBookingMobileLookup(
+      row.querySelector(".mb-guest-mobile"),
+      row.querySelector(".mb-guest-name"),
+      row.querySelector(".mb-mobile-suggestions")
+    );
+  }
+}
+
+function removeMultiBookingRoomRow(rowEl) {
+  var container = document.getElementById("mb-rooms-container");
+  if (!container || !rowEl) return;
+  if (container.children.length <= 1) {
+    showNotification("A multi-room booking needs at least one room left — close this modal instead if you want none.", "warning");
+    return;
+  }
+  rowEl.remove();
+  renumberMultiBookingRooms();
+  refreshMultiBookingRoomOptions();
+  updateMultiBookingSummary();
+}
+
+// "Use the same guest for every room" toggle: hides each row's own
+// Guest Name / Mobile fields in favour of one shared pair up top, and
+// keeps HTML5 `required` pointed at whichever fields are actually
+// visible so the browser doesn't block submission on a hidden field.
+function setMultiBookingSameGuestMode(isSame) {
+  var sharedFields = document.getElementById("mb-shared-guest-fields");
+  var sharedName = document.getElementById("mb-shared-guest-name");
+  var sharedMobile = document.getElementById("mb-shared-guest-mobile");
+  if (sharedFields) sharedFields.classList.toggle("show", isSame);
+  if (sharedName) sharedName.required = isSame;
+  if (sharedMobile) sharedMobile.required = isSame;
+
+  document.querySelectorAll("#mb-rooms-container .mb-room-row").forEach(function (row) {
+    row.classList.toggle("mb-same-guest", isSame);
+    var nameEl = row.querySelector(".mb-guest-name");
+    var mobileEl = row.querySelector(".mb-guest-mobile");
+    if (nameEl) nameEl.required = !isSame;
+    if (mobileEl) mobileEl.required = !isSame;
+  });
+}
+
+// Rate × nights auto-fill, same idea as the single-room form's calc —
+// only while the operator is actively typing in the rate field, so it
+// never clobbers a manually-entered total.
+function updateMultiBookingRowTotal(rowEl) {
+  if (!rowEl) return;
+  var rateEl = rowEl.querySelector(".mb-rate");
+  var totalEl = rowEl.querySelector(".mb-total");
+  var ci = document.getElementById("mb-check-in").value;
+  var co = document.getElementById("mb-check-out").value;
+  if (!rateEl || !totalEl || !ci || !co) return;
+  if (document.activeElement !== rateEl) return;
+  var rate = parseInt(rateEl.value || 0);
+  if (!rate) return;
+  var nights = Math.round((new Date(co) - new Date(ci)) / 86400000);
+  if (nights > 0) totalEl.value = rate * nights;
+}
+
+// Auto-fills Rate/Night + Total for a room row from its room number and
+// guest count, reusing the same per-room pricing table the regular
+// booking form uses (getBookingRatePerNight, defined above). Fires when
+// the room, guest count, AC toggle, or the shared dates change — NOT on
+// every keystroke in the rate field itself, so a manually-typed rate
+// (handled by updateMultiBookingRowTotal above) is never overwritten
+// mid-edit.
+function updateMultiBookingRowRate(rowEl) {
+  if (!rowEl) return;
+  var roomSelect = rowEl.querySelector(".mb-room-select");
+  var guestCountEl = rowEl.querySelector(".mb-guest-count");
+  var rateEl = rowEl.querySelector(".mb-rate");
+  var totalEl = rowEl.querySelector(".mb-total");
+  var acRow = rowEl.querySelector(".mb-room-ac-row");
+  var acToggle = rowEl.querySelector(".mb-room-ac-toggle");
+  if (!roomSelect || !rateEl || !totalEl) return;
+
+  var room = roomSelect.value;
+  if (!room) {
+    if (acRow) acRow.style.display = "none";
+    return;
+  }
+
+  var isAcRoom = ["200", "201", "202", "203", "204", "205", "206"].indexOf(String(room)) !== -1;
+  if (acRow) acRow.style.display = isAcRoom ? "flex" : "none";
+  if (!isAcRoom && acToggle) acToggle.checked = false;
+
+  var ci = document.getElementById("mb-check-in").value;
+  var co = document.getElementById("mb-check-out").value;
+  if (!ci || !co) return;
+  var nights = Math.round((new Date(co) - new Date(ci)) / 86400000);
+  if (nights <= 0) return;
+
+  var guests = parseInt((guestCountEl && guestCountEl.value) || 1) || 1;
+  var rate = typeof getBookingRatePerNight === "function" ? getBookingRatePerNight(room, guests) : 0;
+  if (isAcRoom && acToggle && acToggle.checked) rate += 600;
+
+  rateEl.value = rate;
+  totalEl.value = rate * nights;
+  updateMultiBookingSummary();
+}
+
+function updateAllMultiBookingRowRates() {
+  document.querySelectorAll("#mb-rooms-container .mb-room-row").forEach(updateMultiBookingRowRate);
+}
+
+function updateMultiBookingSummary() {
+  var rows = document.querySelectorAll("#mb-rooms-container .mb-room-row");
+  var grandTotal = 0, grandAdvance = 0;
+  rows.forEach(function (row) {
+    grandTotal += parseInt(row.querySelector(".mb-total").value || 0);
+    grandAdvance += parseInt(row.querySelector(".mb-advance").value || 0);
+  });
+  var totalEl = document.getElementById("mb-grand-total");
+  var advEl = document.getElementById("mb-grand-advance");
+  var countEl = document.getElementById("mb-grand-room-count");
+  if (totalEl) totalEl.textContent = "₹" + grandTotal;
+  if (advEl) advEl.textContent = "₹" + grandAdvance;
+  if (countEl) countEl.textContent = rows.length;
+}
+
+// Re-fetch availability for the shared dates and repopulate every room
+// row's dropdown, excluding rooms already picked in OTHER rows so the
+// same room can't be selected twice in one submission.
+async function refreshMultiBookingRoomOptions() {
+  var ci = document.getElementById("mb-check-in").value;
+  var co = document.getElementById("mb-check-out").value;
+  var rows = document.querySelectorAll("#mb-rooms-container .mb-room-row");
+  if (!ci || !co || !rows.length) return;
+
+  try {
+    const response = await apiFetch("/check_availability", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ check_in_date: ci, check_out_date: co }),
+    });
+    const result = await response.json();
+    if (!result.success) {
+      showNotification(result.message || "Error checking availability", "error");
+      return;
+    }
+    var available = result.available_rooms || [];
+    var chosen = Array.prototype.map.call(rows, function (r) {
+      return r.querySelector(".mb-room-select").value;
+    }).filter(Boolean);
+
+    rows.forEach(function (row) {
+      var select = row.querySelector(".mb-room-select");
+      var current = select.value;
+      var options = available.filter(function (room) {
+        return room === current || chosen.indexOf(room) === -1;
+      });
+      select.innerHTML =
+        '<option value="">Select a room</option>' +
+        options
+          .map(function (room) {
+            return (
+              '<option value="' + room + '"' +
+              (room === current ? " selected" : "") +
+              ">Room " + room + "</option>"
+            );
+          })
+          .join("");
+    });
+  } catch (error) {
+    console.error("Error checking availability for multi-room booking:", error);
+  }
+}
+
+function openMultiBookingModal() {
+  var modal = document.getElementById("multi-booking-modal");
+  if (!modal) return;
+
+  var form = document.getElementById("multi-booking-form");
+  if (form) form.reset();
+  setMultiBookingSameGuestMode(false);
+
+  document.querySelectorAll("#multi-booking-form .payment-btn").forEach(function (btn) {
+    btn.classList.remove("active");
+  });
+  var mbCashBtn = document.querySelector("#multi-booking-form .payment-btn.cash");
+  if (mbCashBtn) mbCashBtn.classList.add("active");
+  var mbPaymentMethodInput = document.getElementById("mb-payment-method");
+  if (mbPaymentMethodInput) mbPaymentMethodInput.value = "cash";
+
+  var container = document.getElementById("mb-rooms-container");
+  if (container) container.innerHTML = "";
+  addMultiBookingRoomRow();
+  addMultiBookingRoomRow();
+
+  if (_mbPicker) _mbPicker.clear();
+  var ci = document.getElementById("mb-check-in");
+  var co = document.getElementById("mb-check-out");
+  if (ci) ci.value = "";
+  if (co) co.value = "";
+
+  var timeInput = document.getElementById("mb-check-in-time");
+  if (timeInput) timeInput.value = "14:00";
+
+  updateMultiBookingSummary();
+  syncBookingModeButtons("multi");
+  modal.classList.add("show");
+}
+
+async function submitMultiBooking(event) {
+  event.preventDefault();
+
+  var checkInDate = document.getElementById("mb-check-in").value;
+  var checkOutDate = document.getElementById("mb-check-out").value;
+  var checkInTime = document.getElementById("mb-check-in-time").value;
+  var bookingSource = document.getElementById("mb-source").value;
+  var paymentMethod = document.getElementById("mb-payment-method").value;
+  var notes = document.getElementById("mb-notes").value;
+
+  if (!checkInDate || !checkOutDate || !checkInTime) {
+    showNotification("Please select check-in/check-out dates and a check-in time", "error");
+    return;
+  }
+
+  var today = new Date();
+  today.setHours(0, 0, 0, 0);
+  var checkIn = new Date(checkInDate);
+  checkIn.setHours(0, 0, 0, 0);
+  if (checkIn < today) {
+    showNotification("Check-in date cannot be in the past", "error");
+    return;
+  }
+  var checkOut = new Date(checkOutDate);
+  checkOut.setHours(0, 0, 0, 0);
+  if (checkOut <= checkIn) {
+    showNotification("Check-out date must be after check-in date", "error");
+    return;
+  }
+
+  var rows = document.querySelectorAll("#mb-rooms-container .mb-room-row");
+  if (rows.length < 2) {
+    showNotification("Add at least 2 rooms — for a single room, use the regular New Booking form", "error");
+    return;
+  }
+
+  var sameGuestToggle = document.getElementById("mb-same-guest-toggle");
+  var useSameGuest = !!(sameGuestToggle && sameGuestToggle.checked);
+  var sharedGuestName = document.getElementById("mb-shared-guest-name").value.trim();
+  var sharedGuestMobile = document.getElementById("mb-shared-guest-mobile").value.trim();
+
+  if (useSameGuest) {
+    if (!sharedGuestName || !sharedGuestMobile) {
+      showNotification("Enter the shared guest's name and mobile", "error");
+      return;
+    }
+    if (!/^[0-9]{10}$/.test(sharedGuestMobile)) {
+      showNotification("Shared guest mobile must be 10 digits", "error");
+      return;
+    }
+  }
+
+  var roomsPayload = [];
+  var seenRooms = {};
+  for (var i = 0; i < rows.length; i++) {
+    var row = rows[i];
+    var room = row.querySelector(".mb-room-select").value;
+    var guestName = useSameGuest ? sharedGuestName : row.querySelector(".mb-guest-name").value.trim();
+    var guestMobile = useSameGuest ? sharedGuestMobile : row.querySelector(".mb-guest-mobile").value.trim();
+    var totalAmount = parseInt(row.querySelector(".mb-total").value || 0);
+    var advance = parseInt(row.querySelector(".mb-advance").value || 0);
+    var rate = parseInt(row.querySelector(".mb-rate").value || 0) || null;
+    var guestCount = parseInt(row.querySelector(".mb-guest-count").value || 1);
+
+    if (!room || !guestName || !guestMobile || !totalAmount) {
+      showNotification("Room #" + (i + 1) + ": fill in room, guest name, mobile and total amount", "error");
+      return;
+    }
+    if (!/^[0-9]{10}$/.test(guestMobile)) {
+      showNotification("Room #" + (i + 1) + ": mobile must be 10 digits", "error");
+      return;
+    }
+    if (advance > totalAmount) {
+      showNotification("Room " + room + ": advance can't exceed the total amount", "error");
+      return;
+    }
+    if (seenRooms[room]) {
+      showNotification("Room " + room + " is selected more than once", "error");
+      return;
+    }
+    seenRooms[room] = true;
+
+    roomsPayload.push({
+      room: room,
+      guest_name: guestName,
+      guest_mobile: guestMobile,
+      guest_count: guestCount,
+      rate_per_night: rate,
+      total_amount: totalAmount,
+      advance: advance,
+    });
+  }
+
+  var submitBtn = event.target.querySelector("button[type=submit]");
+  var originalContent = submitBtn ? submitBtn.innerHTML : "";
+  if (submitBtn) {
+    submitBtn.disabled = true;
+    submitBtn.innerHTML = '<span class="loader" style="width: 20px; height: 20px;"></span> Processing...';
+  }
+
+  try {
+    const response = await apiFetch("/create_multi_booking", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        check_in_date: checkInDate,
+        check_in_time: checkInTime,
+        check_out_date: checkOutDate,
+        booking_source: bookingSource,
+        payment_method: paymentMethod,
+        notes: notes,
+        rooms: roomsPayload,
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`Server responded with status: ${response.status}`);
+    }
+
+    const result = await response.json();
+
+    if (result.success) {
+      document.getElementById("multi-booking-modal").classList.remove("show");
+      showNotification(result.message || "Bookings created successfully!", "success");
+      fetchBookings();
+      if (currentCalendarView === "calendar") renderCalendar();
+    } else {
+      showNotification(result.message || "Error creating bookings", "error");
+    }
+  } catch (error) {
+    console.error("Error creating multi-room booking:", error);
+    showNotification("Error creating bookings: " + error.message, "error");
+  } finally {
+    if (submitBtn) {
+      submitBtn.disabled = false;
+      submitBtn.innerHTML = originalContent;
+    }
+  }
+}
+
+document.addEventListener("DOMContentLoaded", initMultiBookingModal);
+
 // Trigger one ingestion pass for a single OTA endpoint. Returns a normalised
 // {ok, created, settled, skipped, review, message} result; never throws.
 async function _ingestOta(label, endpoint) {
@@ -799,6 +1368,7 @@ function renderBookings() {
 
   // Render bookings
   let html = "";
+  const groupIndex = buildBookingGroupIndex();
 
   filteredBookings.forEach((booking) => {
     // Format dates for display
@@ -863,44 +1433,56 @@ function renderBookings() {
       ? '<span class="booking-source-badge" style="background:linear-gradient(135deg,#e0f2fe,#bae6fd);color:#0369a1;border:1px solid #7dd3fc;">❄️ AC</span>'
       : "";
 
+    // Multi-room group chip — tells the manager at a glance that this room
+    // travels with others (same dates, one group_booking_id).
+    const groupSize = booking.group_booking_id
+      ? (groupIndex.get(booking.group_booking_id) || []).length
+      : 0;
+    const groupChip =
+      groupSize > 1
+        ? `<span class="bk-group-chip"><i class="fas fa-layer-group"></i> Group · ${groupSize}</span>`
+        : "";
+
+    // Card accent: cancelled / checked-in / arriving today.
+    let stateClass = "";
+    if (booking.status === "cancelled") stateClass = "bk-cancelled";
+    else if (booking.status === "checked_in") stateClass = "bk-checked-in";
+    else if (isToday) stateClass = "bk-arriving-today";
+
+    const balance = booking.balance != null
+      ? booking.balance
+      : (booking.total_amount || 0) - (booking.paid_amount || 0);
+    const balanceNote =
+      !isOtaPrepaid(src) && balance > 0
+        ? `<span class="bk-balance-note">₹${balance} due</span>`
+        : "";
+
     html += `
-      <div class="booking-item" data-id="${booking.booking_id}">
+      <div class="booking-item ${stateClass}" data-id="${booking.booking_id}"
+           role="button" tabindex="0">
         <div class="booking-header">
           <div class="booking-room">Room ${booking.room}${booking.is_ac ? ' <span style="font-size:0.7rem;color:#0ea5e9;">❄️</span>' : ''}</div>
           <div class="booking-badges">
             ${statusBadge}
             ${todayBadge}
+            ${groupChip}
             ${acBadge}
             ${sourceBadge}
           </div>
         </div>
         <div class="booking-guest">${booking.guest_name}</div>
-        <div class="booking-dates">
-          <div class="booking-date-row">
-            <div class="date-info">
-              <i class="fas fa-calendar-check"></i> ${formattedCheckIn}
-            </div>
-            <div class="time-info">
-              <i class="fas fa-clock"></i> ${formattedTime}
-            </div>
-          </div>
-          <div><i class="fas fa-calendar-times"></i> ${formattedCheckOut}</div>
-          <div><i class="fas fa-moon"></i> ${nights} night${
-            nights !== 1 ? "s" : ""
-          }</div>
+        <div class="bk-stay-line">
+          <i class="fas fa-calendar-check"></i> ${formattedCheckIn}
+          <span class="bk-stay-sep">&rarr;</span> ${formattedCheckOut}
+          <span class="bk-stay-sep">&middot;</span> ${nights} night${nights !== 1 ? "s" : ""}
+          <span class="bk-stay-time"><i class="fas fa-clock"></i> ${formattedTime}</span>
         </div>
         <div class="booking-footer">
           <div class="booking-payment">
             ${paymentStatus}
-            <div class="booking-amount">${isOtaPrepaid(src) ? "OTA" : "₹" + booking.total_amount}</div>
+            ${balanceNote}
           </div>
-          <div class="booking-actions">
-            <button class="action-btn btn-sm btn-primary view-booking-btn" data-id="${
-              booking.booking_id
-            }">
-              <i class="fas fa-eye"></i>
-            </button>
-          </div>
+          <div class="booking-amount">${isOtaPrepaid(src) ? "OTA" : "₹" + booking.total_amount}</div>
         </div>
       </div>
     `;
@@ -908,13 +1490,46 @@ function renderBookings() {
 
   bookingsList.innerHTML = html;
 
-  // Add event listeners to booking items
-  document.querySelectorAll(".view-booking-btn").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      const bookingId = btn.dataset.id;
-      showBookingDetails(bookingId);
+  // The whole card is the tap target (the old eye-icon button was a 32px
+  // target on a 300px card). Keyboard access via role=button + Enter/Space.
+  bookingsList.querySelectorAll(".booking-item").forEach((card) => {
+    const open = () => showBookingDetails(card.dataset.id);
+    card.addEventListener("click", open);
+    card.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        open();
+      }
     });
   });
+}
+
+// ── Multi-room booking groups ───────────────────────────────────────────────
+// Bookings created through the multi-room flow each get their own document
+// but share a group_booking_id (see /create_multi_booking in
+// routes/bookings.py). Cancelled rooms are excluded — a cancelled room must
+// not appear on a confirmation or arrivals sheet.
+function buildBookingGroupIndex(source) {
+  const index = new Map();
+  (source || bookings).forEach((b) => {
+    if (!b.group_booking_id || b.status === "cancelled") return;
+    if (!index.has(b.group_booking_id)) index.set(b.group_booking_id, []);
+    index.get(b.group_booking_id).push(b);
+  });
+  index.forEach((list) =>
+    list.sort((a, b) => String(a.room).localeCompare(String(b.room), undefined, { numeric: true })),
+  );
+  return index;
+}
+
+// Every non-cancelled room that shares this booking's group. Returns [booking]
+// for a plain single-room booking, so callers never need to special-case it.
+function getBookingGroupMembers(booking) {
+  if (!booking || !booking.group_booking_id || booking.status === "cancelled") {
+    return booking ? [booking] : [];
+  }
+  const members = buildBookingGroupIndex().get(booking.group_booking_id) || [];
+  return members.length ? members : [booking];
 }
 
 // Helper function to format time
@@ -1051,6 +1666,44 @@ function showBookingDetails(bookingId) {
       photoContainer.style.display = "none";
     }
   }
+
+  // ── Multi-room group banner + WhatsApp button label ─────────────────────
+  // A room booked through the multi-room flow shares a group_booking_id with
+  // its siblings. Surfacing that here is what makes the single combined
+  // WhatsApp confirmation predictable: the manager can see it will cover all
+  // the listed rooms before pressing WA.
+  const groupMembers = getBookingGroupMembers(booking);
+  const isGroup = groupMembers.length > 1;
+  const groupBanner = document.getElementById("details-group-banner");
+  if (groupBanner) {
+    if (isGroup) {
+      const escRoom = (s) =>
+        String(s).replace(/[&<>"']/g, (c) => ({
+          "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+        })[c]);
+      const groupTotal = groupMembers.reduce((s, m) => s + (m.total_amount || 0), 0);
+      groupBanner.innerHTML =
+        `<div><i class="fas fa-layer-group"></i> Part of a <strong>${groupMembers.length}-room booking</strong>` +
+        ` · ₹${groupTotal} total</div>` +
+        `<div class="bk-group-rooms">` +
+        groupMembers
+          .map(
+            (m) =>
+              `<span class="bk-group-room${m.booking_id === bookingId ? " bk-group-room-current" : ""}">` +
+              `Room ${escRoom(m.room)}</span>`,
+          )
+          .join("") +
+        `</div>` +
+        `<div style="margin-top:0.35rem;font-size:0.74rem;opacity:0.85;">` +
+        `WhatsApp sends one combined confirmation for all ${groupMembers.length} rooms.</div>`;
+      groupBanner.style.display = "";
+    } else {
+      groupBanner.style.display = "none";
+      groupBanner.innerHTML = "";
+    }
+  }
+  const waBtnLabel = document.querySelector("#send-whatsapp-btn span");
+  if (waBtnLabel) waBtnLabel.textContent = isGroup ? `WA ×${groupMembers.length}` : "WA";
 
   // For OTA prepaid (MMT / Agoda): hide the payment section (no money
   // collected from the guest at the hotel).
@@ -1342,6 +1995,7 @@ function showNewBookingModal() {
   checkAvailability();
 
   // Show modal
+  syncBookingModeButtons("single");
   modal.classList.add("show");
 }
 
@@ -2950,10 +3604,24 @@ function showNewBookingModalForDate(dateStr) {
   }
 
   // Set check-out date to the next day by default
+  const nextDay = new Date(dateStr);
+  nextDay.setDate(nextDay.getDate() + 1);
   if (checkOutDate) {
-    const nextDay = new Date(dateStr);
-    nextDay.setDate(nextDay.getDate() + 1);
     checkOutDate.value = formatDateForAPI(nextDay);
+  }
+
+  // Reflect the same range in the visible flatpickr field — the two
+  // hidden inputs above are what the form actually submits, but without
+  // this the date-range box still shows its "Select dates" placeholder,
+  // which reads as "nothing was preset" even though it was.
+  if (window.bookingDatePicker) {
+    // Third arg tells flatpickr to parse these as Y-m-d — without it, it
+    // tries to parse them using the picker's DISPLAY format ("D, d M"),
+    // fails silently, and the visible field is left showing "Select
+    // dates" even though the hidden inputs above are correct.
+    window.bookingDatePicker.setDate(
+      [dateStr, formatDateForAPI(nextDay)], true, "Y-m-d"
+    );
   }
 
   // Set default check-in time to 2:00 PM
@@ -3290,138 +3958,298 @@ window.addEventListener("resize", function () {
   }
 });
 
-// WhatsApp Booking Confirmation - whatsapp-booking.js
-// Save this file as: /static/whatsapp-booking.js
+// ── WhatsApp booking confirmation ───────────────────────────────────────────
+// One message per *stay*, not per room. A multi-room booking (rooms sharing a
+// group_booking_id — see /create_multi_booking in routes/bookings.py) produces
+// a single combined confirmation listing every room; an ordinary booking
+// produces the usual single-room message. Messages are handed to wa.me rather
+// than sent server-side, so the manager sends them from their own WhatsApp.
 
-function sendWhatsAppBookingConfirmation() {
-  try {
-    // Use the stored booking object for rich data (falls back to DOM text if missing)
-    const bk = _activeBookingForWhatsApp || {};
+const WA_MAPS_LINK = "https://maps.app.goo.gl/Mz5rTrvC3ctyMmUt5";
 
-    const bookingId   = bk.booking_id  || document.getElementById("details-booking-id")?.textContent  || "";
-    const guestName   = bk.guest_name  || document.getElementById("details-guest-name")?.textContent  || "";
-    const guestMobile = bk.guest_mobile || document.getElementById("details-guest-mobile")?.textContent || "";
-    const room        = bk.room        || document.getElementById("details-room-number")?.textContent  || "";
-    const guestCount  = bk.guest_count || 1;
-    const src         = bk.booking_source || "normal";
+// 10-digit Indian mobile -> wa.me form. Tolerates +91/0/spaces/dashes.
+function _waNormalisePhone(mobile) {
+  let phone = String(mobile || "").trim().replace(/[^\d+]/g, "");
+  phone = phone.replace(/^\+/, "");
+  if (phone.startsWith("0")) phone = phone.substring(1);
+  if (!phone.startsWith("91")) phone = `91${phone}`;
+  return phone;
+}
 
-    // Validate phone number
-    if (!guestMobile || guestMobile.trim() === "") {
-      showNotification("Phone number not available", "error");
-      return;
-    }
+function _waFmtDate(d) {
+  return d
+    ? new Date(d + "T00:00:00").toLocaleDateString("en-IN", {
+        weekday: "short",
+        day: "numeric",
+        month: "short",
+        year: "numeric",
+      })
+    : "—";
+}
 
-    // Format phone number
-    let phone = guestMobile.trim().replace(/[^\d+]/g, "");
-    if (phone.startsWith("0")) phone = phone.substring(1);
-    if (!phone.startsWith("91")) phone = `91${phone}`;
+function _waFmtTime(t) {
+  if (!t) return "2:00 PM";
+  const [h, m] = String(t).split(":");
+  const hr = parseInt(h, 10);
+  if (isNaN(hr)) return "2:00 PM";
+  const ampm = hr >= 12 ? "PM" : "AM";
+  return `${hr % 12 || 12}:${m} ${ampm}`;
+}
 
-    // ── Dates & duration ─────────────────────────────────────────────────
-    const checkInDateStr  = bk.check_in_date  || "";
-    const checkOutDateStr = bk.check_out_date || "";
-    const checkInTimeRaw  = bk.check_in_time  || "14:00";
+function _waNights(checkIn, checkOut) {
+  if (!checkIn || !checkOut) return 0;
+  return Math.round(
+    (new Date(checkOut) - new Date(checkIn)) / (1000 * 60 * 60 * 24),
+  );
+}
 
-    // Human-readable dates
-    const fmtDate = (d) => d ? new Date(d + "T00:00:00").toLocaleDateString("en-IN", { weekday:"short", day:"numeric", month:"short", year:"numeric" }) : "—";
-    const formattedCheckIn  = fmtDate(checkInDateStr);
-    const formattedCheckOut = fmtDate(checkOutDateStr);
+function _waReminders(showAdvanceNote) {
+  return [
+    "🔔 *Important Reminders:*",
+    "• Please carry a valid govt. photo ID (Aadhaar / Passport / DL)",
+    "• Room number is subject to availability and may change on arrival",
+    showAdvanceNote ? "• Advance amount paid is non-refundable" : null,
+    "• We offer *24-hour checkout* — check-out time matches your check-in time",
+    "• Contact us if you need any assistance",
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
 
-    // Nights
-    let nights = 0;
-    if (checkInDateStr && checkOutDateStr) {
-      nights = Math.round((new Date(checkOutDateStr) - new Date(checkInDateStr)) / (1000 * 60 * 60 * 24));
-    }
-    const nightsText = nights > 0 ? `${nights} night${nights !== 1 ? "s" : ""}` : "—";
+function _waOpen(phone, message) {
+  window.open(
+    `https://wa.me/${phone}?text=${encodeURIComponent(message)}`,
+    "_blank",
+  );
+  showNotification("✅ Opening WhatsApp...", "success");
+}
 
-    // Check-in time (approx)
-    const fmtTime = (t) => {
-      if (!t) return "2:00 PM";
-      const [h, m] = t.split(":");
-      const hr = parseInt(h);
-      const ampm = hr >= 12 ? "PM" : "AM";
-      return `${hr % 12 || 12}:${m} ${ampm}`;
-    };
-    const checkInTimeDisplay = fmtTime(checkInTimeRaw);
+// ── Message builders ────────────────────────────────────────────────────────
 
-    // ── AC info ───────────────────────────────────────────────────────────
-    const isAc = bk.is_ac === true;
-    const acLine = isAc ? "\n• Room Type: ❄️ AC Room" : "";
+function _waSingleBookingMessage(bk) {
+  const bookingId =
+    bk.booking_id ||
+    document.getElementById("details-booking-id")?.textContent ||
+    "";
+  const guestName =
+    bk.guest_name ||
+    document.getElementById("details-guest-name")?.textContent ||
+    "";
+  const room =
+    bk.room || document.getElementById("details-room-number")?.textContent || "";
+  const guestCount = bk.guest_count || 1;
+  const src = bk.booking_source || "normal";
 
-    // ── Payment ───────────────────────────────────────────────────────────
-    const ratePerNight = bk.rate_per_night || 0;
-    const totalAmount  = bk.total_amount   || 0;
-    const paidAmount   = bk.paid_amount    || 0;
-    const balance      = bk.balance        != null ? bk.balance : (totalAmount - paidAmount);
+  const nights = _waNights(bk.check_in_date, bk.check_out_date);
+  const nightsText = nights > 0 ? `${nights} night${nights !== 1 ? "s" : ""}` : "—";
+  const acLine = bk.is_ac === true ? "\n• Room Type: ❄️ AC Room" : "";
 
-    // For OTA prepaid (MMT / Agoda): no payment section from guest side
-    const isMmt = isOtaPrepaid(src);
-    let paymentSection = "";
-    if (!isMmt) {
-      const rateLineStr = (ratePerNight > 0 && nights > 0)
+  const ratePerNight = bk.rate_per_night || 0;
+  const totalAmount = bk.total_amount || 0;
+  const paidAmount = bk.paid_amount || 0;
+  const balance = bk.balance != null ? bk.balance : totalAmount - paidAmount;
+
+  const isOta = isOtaPrepaid(src);
+  let paymentSection;
+  if (isOta) {
+    paymentSection = `
+
+🏷️ *Booking Source:* ${otaSourceLabel(src)} (Prepaid)
+• Payment already settled via ${otaSourceLabel(src)}`;
+  } else {
+    const rateLineStr =
+      ratePerNight > 0 && nights > 0
         ? `\n• Rate: ₹${ratePerNight}/night × ${nights} night${nights !== 1 ? "s" : ""} = ₹${totalAmount}`
         : `\n• Total Amount: ₹${totalAmount}`;
-
-      paymentSection = `
+    paymentSection = `
 
 💰 *Payment Details:*${rateLineStr}
 • Advance Paid: ₹${paidAmount}
 • Balance Due at Check-in: ₹${balance > 0 ? balance : 0}`;
-    } else {
-      paymentSection = `
+  }
 
-🏷️ *Booking Source:* MakeMyTrip (Prepaid)
-• Payment already settled via MMT`;
-    }
-
-    // Advance is non-refundable — only relevant when the guest actually paid an
-    // advance at the desk (MMT/OTA stays are settled via the OTA, not here).
-    const advanceReminder =
-      (!isMmt && paidAmount > 0)
-        ? "\n• Advance amount paid is non-refundable"
-        : "";
-
-    // ── Google Maps ───────────────────────────────────────────────────────
-    const mapsLink = "https://maps.app.goo.gl/Mz5rTrvC3ctyMmUt5";
-
-    // ── Build message ─────────────────────────────────────────────────────
-    const message =
-`🏨 *CIBARA COMFORTS — BOOKING CONFIRMED* ✅
+  return `🏨 *CIBARA COMFORTS — BOOKING CONFIRMED* ✅
 
 Namaste ${guestName}! 🙏
 
 We're delighted to confirm your reservation. Here are your booking details:
 
 🛏️ *Stay Details:*
-• Booking ID: #${bookingId.substring(0, 8).toUpperCase()}
+• Booking ID: #${String(bookingId).substring(0, 8).toUpperCase()}
 • Room: ${room}${acLine}
 • Guests: ${guestCount} guest${guestCount !== 1 ? "s" : ""}
-• Check-in: 📅 ${formattedCheckIn}
-• ⏰ Approx. Arrival Time: ${checkInTimeDisplay}
-• Check-out: 📅 ${formattedCheckOut}
+• Check-in: 📅 ${_waFmtDate(bk.check_in_date)}
+• ⏰ Approx. Arrival Time: ${_waFmtTime(bk.check_in_time || "14:00")}
+• Check-out: 📅 ${_waFmtDate(bk.check_out_date)}
 • Duration: 🌙 ${nightsText}${paymentSection}
 
 📍 *Find Us Here:*
-${mapsLink}
+${WA_MAPS_LINK}
 
-🔔 *Important Reminders:*
-• Please carry a valid govt. photo ID (Aadhaar / Passport / DL)
-• Room number is subject to availability and may change on arrival${advanceReminder}
-• We offer *24-hour checkout* — check-out time matches your check-in time
-• Contact us if you need any assistance
+${_waReminders(!isOta && paidAmount > 0)}
 
 We look forward to hosting you! 😊
 For any queries, reply to this message.
 
 — *Team Cibara Comforts*`;
+}
 
-    // Open WhatsApp
-    window.open(`https://wa.me/${phone}?text=${encodeURIComponent(message)}`, "_blank");
-    showNotification("✅ Opening WhatsApp...", "success");
+// One message covering every room in a multi-room booking. `lead` is the
+// member whose guest is being addressed (the picked recipient).
+function _waGroupBookingMessage(members, lead) {
+  const first = members[0];
+  const nights = _waNights(first.check_in_date, first.check_out_date);
+  const nightsText = nights > 0 ? `${nights} night${nights !== 1 ? "s" : ""}` : "—";
 
+  const grandTotal = members.reduce((s, m) => s + (m.total_amount || 0), 0);
+  const grandPaid = members.reduce((s, m) => s + (m.paid_amount || 0), 0);
+  const grandBalance = members.reduce(
+    (s, m) =>
+      s +
+      (m.balance != null ? m.balance : (m.total_amount || 0) - (m.paid_amount || 0)),
+    0,
+  );
+  const totalGuests = members.reduce((s, m) => s + (m.guest_count || 1), 0);
+
+  // Only repeat the per-room guest name when the rooms are under different
+  // names — for a single-organiser group it is noise.
+  const distinctNames = new Set(
+    members.map((m) => String(m.guest_name || "").trim().toLowerCase()),
+  );
+  const showPerRoomNames = distinctNames.size > 1;
+
+  const roomLines = members
+    .map((m, i) => {
+      const ac = m.is_ac ? " ❄️" : "";
+      const who = showPerRoomNames ? ` — ${m.guest_name}` : "";
+      const guests = ` — ${m.guest_count || 1} guest${(m.guest_count || 1) !== 1 ? "s" : ""}`;
+      const amount = ` — ₹${m.total_amount || 0}`;
+      return `${i + 1}. Room ${m.room}${ac}${who}${guests}${amount}`;
+    })
+    .join("\n");
+
+  const groupRef = String(first.group_booking_id || "").substring(0, 8).toUpperCase();
+
+  return `🏨 *CIBARA COMFORTS — BOOKING CONFIRMED* ✅
+
+Namaste ${lead.guest_name}! 🙏
+
+We're delighted to confirm your reservation for *${members.length} rooms*.
+
+🛏️ *Your Rooms:*
+${roomLines}
+
+📅 *Stay Details:*
+• Booking Ref: #${groupRef}
+• Check-in: 📅 ${_waFmtDate(first.check_in_date)}
+• ⏰ Approx. Arrival Time: ${_waFmtTime(first.check_in_time || "14:00")}
+• Check-out: 📅 ${_waFmtDate(first.check_out_date)}
+• Duration: 🌙 ${nightsText}
+• Total Guests: ${totalGuests}
+
+💰 *Payment Details (all rooms):*
+• Grand Total: ₹${grandTotal}
+• Advance Paid: ₹${grandPaid}
+• Balance Due at Check-in: ₹${grandBalance > 0 ? grandBalance : 0}
+
+📍 *Find Us Here:*
+${WA_MAPS_LINK}
+
+${_waReminders(grandPaid > 0)}
+
+We look forward to hosting you! 😊
+For any queries, reply to this message.
+
+— *Team Cibara Comforts*`;
+}
+
+// ── Entry point (wired to the WA button in the booking details modal) ───────
+
+function sendWhatsAppBookingConfirmation() {
+  try {
+    const bk = _activeBookingForWhatsApp || {};
+    const members = getBookingGroupMembers(bk);
+
+    // Single room — unchanged behaviour.
+    if (members.length <= 1) {
+      const mobile =
+        bk.guest_mobile ||
+        document.getElementById("details-guest-mobile")?.textContent ||
+        "";
+      if (!String(mobile).trim()) {
+        showNotification("Phone number not available", "error");
+        return;
+      }
+      _waOpen(_waNormalisePhone(mobile), _waSingleBookingMessage(bk));
+      return;
+    }
+
+    // Multi-room group — one combined message. Group the members by contact
+    // number; if the whole group shares one number there is nothing to ask.
+    const byMobile = new Map();
+    members.forEach((m) => {
+      const key = _waNormalisePhone(m.guest_mobile);
+      if (!key || key === "91") return;
+      if (!byMobile.has(key)) byMobile.set(key, []);
+      byMobile.get(key).push(m);
+    });
+
+    if (byMobile.size === 0) {
+      showNotification("No phone number on any room in this group", "error");
+      return;
+    }
+
+    if (byMobile.size === 1) {
+      const [phone, rooms] = byMobile.entries().next().value;
+      _waOpen(phone, _waGroupBookingMessage(members, rooms[0]));
+      return;
+    }
+
+    _waShowGroupRecipientPicker(members, byMobile, _waNormalisePhone(bk.guest_mobile));
   } catch (error) {
     console.error("Error sending WhatsApp confirmation:", error);
     showNotification("Error preparing message: " + error.message, "error");
   }
+}
+
+// Rooms in a group can be under different names/numbers. Rather than guessing
+// or falling back to one message per room, ask which single contact should
+// receive the combined confirmation.
+function _waShowGroupRecipientPicker(members, byMobile, defaultPhone) {
+  const modal = document.getElementById("wa-group-recipient-modal");
+  const list = document.getElementById("wa-group-recipient-list");
+  if (!modal || !list) {
+    // Fall back to the currently open booking's contact rather than blocking.
+    const fallback = defaultPhone || byMobile.keys().next().value;
+    const lead = (byMobile.get(fallback) || members)[0];
+    _waOpen(fallback, _waGroupBookingMessage(members, lead));
+    return;
+  }
+
+  const esc = (s) =>
+    String(s).replace(/[&<>"']/g, (c) => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+    })[c]);
+
+  list.innerHTML = "";
+  byMobile.forEach((rooms, phone) => {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className =
+      "bk-recipient-btn" + (phone === defaultPhone ? " bk-recipient-default" : "");
+    btn.innerHTML =
+      `<span><span class="bk-recipient-name">${esc(rooms[0].guest_name)}</span>` +
+      `<span class="bk-recipient-meta">${esc(rooms[0].guest_mobile)} · ` +
+      `Room${rooms.length !== 1 ? "s" : ""} ${rooms.map((r) => esc(r.room)).join(", ")}</span></span>` +
+      `<i class="fab fa-whatsapp" style="color:#25d366;font-size:1.15rem;"></i>`;
+    btn.addEventListener("click", () => {
+      modal.classList.remove("show");
+      _waOpen(phone, _waGroupBookingMessage(members, rooms[0]));
+    });
+    list.appendChild(btn);
+  });
+
+  modal.classList.add("show");
 }
 
 // ─── MMT Settlements View ───────────────────────────────────────────────────
@@ -3672,3 +4500,415 @@ async function _mmtRenderReceived() {
 
   listEl.innerHTML = html;
 }
+
+// ============================================================
+// Arrivals Sheet — printable daily assignment + inspection checklist
+// ------------------------------------------------------------
+// Prints one page for a chosen date: every arrival with room, guest, contact
+// and balance due, plus tick-boxes the manager fills in by hand (room ready,
+// inspected, ID collected, keys handed). Optionally a departures section so
+// the manager can see which rooms free up that day.
+//
+// The sheet is rendered into #booking-print-root (an otherwise-empty node at
+// the end of templates/index.html) and revealed only by the @media print
+// rules at the bottom of booking.css. Printing in-document rather than via
+// window.open() avoids pop-up blockers and works on mobile browsers.
+// ============================================================
+
+function _bkEsc(s) {
+  return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+    return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+  });
+}
+
+// Local-date YYYY-MM-DD (toISOString would shift by the UTC offset).
+function _bkYmd(date) {
+  return (
+    date.getFullYear() +
+    "-" +
+    String(date.getMonth() + 1).padStart(2, "0") +
+    "-" +
+    String(date.getDate()).padStart(2, "0")
+  );
+}
+
+function _bkLongDate(dateStr) {
+  if (!dateStr) return "";
+  return new Date(dateStr + "T00:00:00").toLocaleDateString("en-IN", {
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+  });
+}
+
+function _bkShortDate(dateStr) {
+  if (!dateStr) return "—";
+  return new Date(dateStr + "T00:00:00").toLocaleDateString("en-IN", {
+    day: "2-digit", month: "short",
+  });
+}
+
+function _bkRoomSort(a, b) {
+  return String(a.room).localeCompare(String(b.room), undefined, { numeric: true });
+}
+
+// Arrivals = confirmed or already-checked-in bookings whose check-in is this
+// date. Cancelled rooms are excluded — they must never reach the sheet.
+function _bkArrivalsFor(dateStr) {
+  return bookings
+    .filter(
+      (b) =>
+        b.check_in_date === dateStr &&
+        b.status !== "cancelled",
+    )
+    .sort(_bkRoomSort);
+}
+
+// Departures are the *expected* check-outs recorded on the booking. Actual
+// checkout happens in the rooms module, so treat this as a planning hint.
+function _bkDeparturesFor(dateStr) {
+  return bookings
+    .filter(
+      (b) =>
+        b.check_out_date === dateStr &&
+        b.check_in_date !== dateStr &&
+        (b.status === "confirmed" || b.status === "checked_in"),
+    )
+    .sort(_bkRoomSort);
+}
+
+function _bkArrivalsSelectedDate() {
+  const input = document.getElementById("arrivals-sheet-date");
+  return (input && input.value) || _bkYmd(new Date());
+}
+
+function renderArrivalsSheetPreview() {
+  const box = document.getElementById("arrivals-sheet-preview");
+  if (!box) return;
+  const dateStr = _bkArrivalsSelectedDate();
+  const arrivals = _bkArrivalsFor(dateStr);
+
+  // Keep the quick chips in sync with whatever date is actually selected.
+  const today = _bkYmd(new Date());
+  const tomorrowDate = new Date();
+  tomorrowDate.setDate(tomorrowDate.getDate() + 1);
+  const tomorrow = _bkYmd(tomorrowDate);
+  document.querySelectorAll("[data-arrivals-preset]").forEach((chip) => {
+    const want = chip.dataset.arrivalsPreset === "today" ? today : tomorrow;
+    chip.classList.toggle("active", want === dateStr);
+  });
+
+  if (!arrivals.length) {
+    box.innerHTML =
+      '<div class="bk-preview-empty">No arrivals on ' +
+      _bkEsc(_bkLongDate(dateStr)) +
+      ". The sheet will still print with the departures section.</div>";
+    return;
+  }
+
+  const guests = arrivals.reduce((s, b) => s + (b.guest_count || 1), 0);
+  const balance = arrivals.reduce(
+    (s, b) =>
+      s +
+      (isOtaPrepaid(b.booking_source)
+        ? 0
+        : b.balance != null
+          ? b.balance
+          : (b.total_amount || 0) - (b.paid_amount || 0)),
+    0,
+  );
+  const groups = new Set(
+    arrivals.filter((b) => b.group_booking_id).map((b) => b.group_booking_id),
+  );
+
+  box.innerHTML =
+    '<div class="bk-preview-stat"><span>Arrivals</span><span>' +
+    arrivals.length +
+    " room" + (arrivals.length !== 1 ? "s" : "") +
+    "</span></div>" +
+    '<div class="bk-preview-stat"><span>Guests expected</span><span>' + guests + "</span></div>" +
+    (groups.size
+      ? '<div class="bk-preview-stat"><span>Multi-room groups</span><span>' + groups.size + "</span></div>"
+      : "") +
+    '<div class="bk-preview-stat"><span>Balance to collect</span><span>₹' + balance + "</span></div>";
+}
+
+function _bkSourceLabel(b) {
+  if (isOtaPrepaid(b.booking_source)) return otaSourceLabel(b.booking_source);
+  if (b.booking_source === "booking.com") return "Booking.com";
+  return "Direct";
+}
+
+function _bkArrivalRowsHtml(arrivals, groupLabels) {
+  return arrivals
+    .map((b, i) => {
+      const nights = _waNights(b.check_in_date, b.check_out_date);
+      const isOta = isOtaPrepaid(b.booking_source);
+      const bal = b.balance != null ? b.balance : (b.total_amount || 0) - (b.paid_amount || 0);
+      const groupTag =
+        b.group_booking_id && groupLabels.has(b.group_booking_id)
+          ? '<span class="bk-group-tag">' + _bkEsc(groupLabels.get(b.group_booking_id)) + "</span>"
+          : "";
+      const checkOut = b.check_out_date
+        ? new Date(b.check_out_date + "T00:00:00").toLocaleDateString("en-IN", {
+            day: "2-digit", month: "short",
+          })
+        : "—";
+      return (
+        "<tr>" +
+        '<td class="bk-c-idx">' + (i + 1) + "</td>" +
+        '<td><div class="bk-c-room">' + _bkEsc(b.room) +
+          (b.is_ac ? ' <span class="bk-ac">AC</span>' : "") + "</div>" +
+          (groupTag ? '<div style="margin-top:0.8mm">' + groupTag + "</div>" : "") + "</td>" +
+        '<td><div class="bk-c-name">' + _bkEsc(b.guest_name) + "</div>" +
+          '<div class="bk-c-sub">' + _bkEsc(b.guest_mobile || "no contact on file") +
+          ' &nbsp;<span class="bk-src">' + _bkEsc(_bkSourceLabel(b)) + "</span></div></td>" +
+        '<td class="bk-c-mid">' + (b.guest_count || 1) + "</td>" +
+        '<td class="bk-c-mid">' + _bkEsc(formatTime(b.check_in_time || "14:00")) + "</td>" +
+        '<td class="bk-c-mid">' + _bkEsc(checkOut) +
+          '<div class="bk-c-sub">' + nights + " night" + (nights !== 1 ? "s" : "") + "</div></td>" +
+        '<td class="bk-c-num">' + (isOta ? "Prepaid" : "₹" + (b.total_amount || 0)) +
+          '<div class="bk-c-sub bk-c-due">' +
+          (isOta ? "settled via OTA" : "due ₹" + (bal > 0 ? bal : 0)) + "</div></td>" +
+        "<td></td>" +
+        '<td class="bk-c-tick"><span class="bk-tick-box"></span></td>' +
+        '<td class="bk-c-tick"><span class="bk-tick-box"></span></td>' +
+        '<td class="bk-c-tick"><span class="bk-tick-box"></span></td>' +
+        '<td class="bk-c-tick"><span class="bk-tick-box"></span></td>' +
+        "<td></td>" +
+        "</tr>"
+      );
+    })
+    .join("");
+}
+
+function buildArrivalsSheetHtml(dateStr, includeDepartures) {
+  const arrivals = _bkArrivalsFor(dateStr);
+  const departures = includeDepartures ? _bkDeparturesFor(dateStr) : [];
+
+  // Label each multi-room group A, B, C… so rooms that travel together are
+  // obvious on paper without printing raw UUIDs.
+  const groupLabels = new Map();
+  arrivals.forEach((b) => {
+    if (!b.group_booking_id || groupLabels.has(b.group_booking_id)) return;
+    if (arrivals.filter((x) => x.group_booking_id === b.group_booking_id).length > 1) {
+      groupLabels.set(b.group_booking_id, "GRP " + String.fromCharCode(65 + groupLabels.size));
+    }
+  });
+
+  const guests = arrivals.reduce((s, b) => s + (b.guest_count || 1), 0);
+  const balance = arrivals.reduce(
+    (s, b) =>
+      s +
+      (isOtaPrepaid(b.booking_source)
+        ? 0
+        : b.balance != null
+          ? b.balance
+          : (b.total_amount || 0) - (b.paid_amount || 0)),
+    0,
+  );
+
+  const printedAt = new Date().toLocaleString("en-IN", {
+    day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit",
+  });
+
+  // Percentage widths so the sheet fills whatever page size and margins the
+  // printer is set to, instead of being tuned to one paper size in mm.
+  const arrivalsTable = arrivals.length
+    ? "<table><colgroup>" +
+      ["3%","8%","19%","4%","7%","9%","11%","10%","5%","5%","4%","5%","10%"]
+        .map((w) => '<col style="width:' + w + '"/>').join("") +
+      "</colgroup><thead><tr>" +
+      "<th>#</th>" +
+      "<th>Room</th>" +
+      "<th>Guest &amp; contact</th>" +
+      "<th>Pax</th>" +
+      "<th>ETA</th>" +
+      "<th>Check-out</th>" +
+      "<th style=\"text-align:right\">Amount</th>" +
+      "<th>Room allotted</th>" +
+      "<th class=\"bk-c-tick\">Ready</th>" +
+      "<th class=\"bk-c-tick\">Insp.</th>" +
+      "<th class=\"bk-c-tick\">ID</th>" +
+      "<th class=\"bk-c-tick\">Keys</th>" +
+      "<th>Remarks</th>" +
+      "</tr></thead><tbody>" +
+      _bkArrivalRowsHtml(arrivals, groupLabels) +
+      "</tbody></table>"
+    : '<div class="bk-sheet-empty">No arrivals booked for this date.</div>';
+
+  const departuresTable = !includeDepartures
+    ? ""
+    : '<div class="bk-sheet-block">' +
+      '<div class="bk-sheet-section"><span>Departures</span>' +
+      '<span class="bk-section-note">Rooms expected to free up</span></div>' +
+      (departures.length
+        ? "<table><colgroup>" +
+          ["7%","24%","11%","11%","7%","7%","7%","26%"]
+            .map((w) => '<col style="width:' + w + '"/>').join("") +
+          "</colgroup><thead><tr>" +
+          "<th>Room</th><th>Guest</th><th>Checked in</th>" +
+          "<th style=\"text-align:right\">Balance</th>" +
+          "<th class=\"bk-c-tick\">Vacated</th>" +
+          "<th class=\"bk-c-tick\">Cleaned</th>" +
+          "<th class=\"bk-c-tick\">Insp.</th>" +
+          "<th>Remarks</th>" +
+          "</tr></thead><tbody>" +
+          departures
+            .map((b) => {
+              const bal = b.balance != null ? b.balance : (b.total_amount || 0) - (b.paid_amount || 0);
+              return (
+                "<tr>" +
+                '<td><div class="bk-c-room">' + _bkEsc(b.room) +
+                  (b.is_ac ? ' <span class="bk-ac">AC</span>' : "") + "</div></td>" +
+                '<td><div class="bk-c-name">' + _bkEsc(b.guest_name) + "</div>" +
+                  '<div class="bk-c-sub">' + _bkEsc(b.guest_mobile || "—") + "</div></td>" +
+                '<td class="bk-c-mid">' + _bkEsc(_bkShortDate(b.check_in_date)) + "</td>" +
+                '<td class="bk-c-num">' +
+                  (isOtaPrepaid(b.booking_source) ? "—" : "₹" + (bal > 0 ? bal : 0)) + "</td>" +
+                '<td class="bk-c-tick"><span class="bk-tick-box"></span></td>' +
+                '<td class="bk-c-tick"><span class="bk-tick-box"></span></td>' +
+                '<td class="bk-c-tick"><span class="bk-tick-box"></span></td>' +
+                "<td></td>" +
+                "</tr>"
+              );
+            })
+            .join("") +
+          "</tbody></table>"
+        : '<div class="bk-sheet-empty">No departures expected for this date.</div>') +
+      "</div>";
+
+  const groupNote = groupLabels.size
+    ? groupLabels.size + " multi-room group" + (groupLabels.size !== 1 ? "s" : "") +
+      " — rooms sharing a tag arrive together"
+    : "One room per line";
+
+  return (
+    '<div class="bk-sheet">' +
+      '<div class="bk-sheet-head">' +
+        '<div><div class="bk-brand-name">CIBARA COMFORTS</div>' +
+          '<div class="bk-brand-rule"></div></div>' +
+        '<div class="bk-doc">' +
+          '<div class="bk-doc-title">Arrivals &amp; Room Inspection</div>' +
+          '<div class="bk-doc-date">' + _bkEsc(_bkLongDate(dateStr)) + "</div>" +
+        "</div>" +
+        '<div class="bk-doc-meta">' +
+          '<div><span class="bk-k">Printed</span>' + _bkEsc(printedAt) + "</div>" +
+          '<div><span class="bk-k">Duty manager</span>________________</div>' +
+        "</div>" +
+      "</div>" +
+
+      '<div class="bk-stats">' +
+        "<div class=\"bk-stat\"><span>Rooms arriving</span><b>" + arrivals.length + "</b></div>" +
+        "<div class=\"bk-stat\"><span>Guests expected</span><b>" + guests + "</b></div>" +
+        "<div class=\"bk-stat\"><span>Balance to collect</span><b>₹" + balance + "</b></div>" +
+        (includeDepartures
+          ? "<div class=\"bk-stat\"><span>Departures</span><b>" + departures.length + "</b></div>"
+          : "") +
+        "<div class=\"bk-stat\"><span>Multi-room groups</span><b>" + groupLabels.size + "</b></div>" +
+      "</div>" +
+
+      '<div class="bk-sheet-block">' +
+        '<div class="bk-sheet-section"><span>Arrivals</span>' +
+        '<span class="bk-section-note">' + _bkEsc(groupNote) + "</span></div>" +
+        arrivalsTable +
+      "</div>" +
+
+      departuresTable +
+
+      '<div class="bk-sign">' +
+        '<div class="bk-sign-line">Prepared by</div>' +
+        '<div class="bk-sign-line">Rooms inspected by</div>' +
+        '<div class="bk-sign-line">Verified by / time</div>' +
+      "</div>" +
+      '<div class="bk-sheet-note">Insp. = room inspected and passed. ' +
+        "Allotted room numbers are provisional until inspection is signed off.</div>" +
+    "</div>"
+  );
+}
+
+function printArrivalsSheet() {
+  const root = document.getElementById("booking-print-root");
+  if (!root) {
+    showNotification("Print area missing — reload the page and try again", "error");
+    return;
+  }
+  const dateStr = _bkArrivalsSelectedDate();
+  const includeDepartures = !!document.getElementById("arrivals-include-departures")?.checked;
+
+  // The print stylesheet hides every direct child of <body> except this node.
+  // Re-parent it defensively so the rule holds even if the template moves it
+  // inside a wrapper later — a nested print root would be hidden along with
+  // its ancestor and the page would come out blank.
+  if (root.parentElement !== document.body) document.body.appendChild(root);
+
+  root.innerHTML = buildArrivalsSheetHtml(dateStr, includeDepartures);
+  document.body.classList.add("bk-printing");
+
+  // Only the body class is removed on the way out. The sheet markup is left
+  // in place (the node is display:none on screen) and overwritten on the next
+  // print: some browsers fire `afterprint` as soon as the preview opens
+  // rather than when it closes, and clearing the node there empties the
+  // preview the user is looking at.
+  const cleanup = () => {
+    document.body.classList.remove("bk-printing");
+    window.removeEventListener("afterprint", cleanup);
+  };
+  window.addEventListener("afterprint", cleanup);
+  setTimeout(cleanup, 120000);
+
+  // Two frames: one for the style/class change to apply, one for layout of
+  // the freshly inserted table, before the dialog snapshots the page.
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      try {
+        window.print();
+      } catch (e) {
+        console.error("Arrivals sheet print failed:", e);
+        showNotification("Could not open the print dialog", "error");
+        cleanup();
+      }
+    });
+  });
+}
+
+async function openArrivalsSheetModal() {
+  const modal = document.getElementById("arrivals-sheet-modal");
+  if (!modal) return;
+
+  const dateInput = document.getElementById("arrivals-sheet-date");
+  if (dateInput && !dateInput.value) dateInput.value = _bkYmd(new Date());
+
+  modal.classList.add("show");
+  // Always work from fresh data — the sheet is acted on physically, so a
+  // stale cancellation on it would send someone to an occupied room.
+  try {
+    await fetchBookings();
+  } catch (e) {
+    console.error("Arrivals sheet: could not refresh bookings", e);
+  }
+  renderArrivalsSheetPreview();
+}
+
+function initArrivalsSheet() {
+  const openBtn = document.getElementById("print-arrivals-btn");
+  if (openBtn) openBtn.addEventListener("click", openArrivalsSheetModal);
+
+  const dateInput = document.getElementById("arrivals-sheet-date");
+  if (dateInput) dateInput.addEventListener("change", renderArrivalsSheetPreview);
+
+  document.querySelectorAll("[data-arrivals-preset]").forEach((chip) => {
+    chip.addEventListener("click", function () {
+      const d = new Date();
+      if (this.dataset.arrivalsPreset === "tomorrow") d.setDate(d.getDate() + 1);
+      if (dateInput) dateInput.value = _bkYmd(d);
+      renderArrivalsSheetPreview();
+    });
+  });
+
+  const printBtn = document.getElementById("arrivals-sheet-print-btn");
+  if (printBtn) printBtn.addEventListener("click", printArrivalsSheet);
+}
+
+document.addEventListener("DOMContentLoaded", initArrivalsSheet);

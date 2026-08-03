@@ -1827,3 +1827,97 @@ function _bkClearGuestInfo() {
   const thumbEl = document.getElementById('booking-doc-thumbs');
   if (thumbEl) { thumbEl.style.display = 'none'; thumbEl.innerHTML = ''; }
 }
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Multi-Room Booking modal — same "previous stayed guest" lookup as the
+// regular booking form above, but generalised so it can attach to any
+// mobile input: the one shared-guest field, or any of the per-room fields
+// (which are created dynamically as rows are added). Deliberately lighter
+// than _bkLookupAndFill — just the suggestions dropdown + name auto-fill,
+// no returning-guest info bar / ID thumbnails, to keep the room-row cards
+// compact.
+// ─────────────────────────────────────────────────────────────────────────────
+function attachMultiBookingMobileLookup(mobileInput, nameInput, suggestionsEl) {
+  if (!mobileInput || !suggestionsEl || mobileInput._mbLookupAttached) return;
+  mobileInput._mbLookupAttached = true;
+
+  let debounceTimer = null;
+
+  function hideSuggestions() {
+    suggestionsEl.style.display = 'none';
+  }
+
+  async function fetchSuggestions(prefix) {
+    try {
+      const res = await apiFetch('/search_customers_mobile', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prefix }),
+      });
+      const data = await res.json();
+      renderSuggestions(data.success ? (data.customers || []) : []);
+    } catch (e) { console.error('[mb-mobile] suggest error:', e); }
+  }
+
+  function renderSuggestions(customers) {
+    if (!customers.length) { hideSuggestions(); return; }
+    suggestionsEl.innerHTML = '';
+    customers.slice(0, 6).forEach(c => {
+      const item = document.createElement('div');
+      item.style.cssText = 'padding:0.45rem 0.75rem;cursor:pointer;border-bottom:1px solid #f0f0f0;font-size:0.85rem;display:flex;align-items:center;gap:0.5rem;';
+
+      const stays = c.total_stays || 0;
+      const stayBadge = stays > 0
+        ? `<span style="background:#e3f2fd;color:#1565c0;border-radius:10px;padding:0.1rem 0.45rem;font-size:0.7rem;font-weight:700;white-space:nowrap;flex-shrink:0;">${stays}× stays</span>`
+        : '';
+      const sub = [c.mobile];
+      if (c.last_stay_date) sub.push(_fmtDate(c.last_stay_date));
+
+      item.innerHTML = `
+        <div style="flex:1;min-width:0;">
+          <div style="font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${_fmtName(c.name) || '(No name)'}</div>
+          <div style="color:#888;font-size:0.76rem;">${sub.join(' · ')}</div>
+        </div>${stayBadge}`;
+
+      item.addEventListener('mouseover', () => { item.style.background = '#f5f5f5'; });
+      item.addEventListener('mouseout',  () => { item.style.background = ''; });
+      item.addEventListener('click', () => {
+        mobileInput.value = c.mobile;
+        hideSuggestions();
+        lookupAndFillName(c.mobile);
+      });
+      suggestionsEl.appendChild(item);
+    });
+    suggestionsEl.style.display = 'block';
+  }
+
+  async function lookupAndFillName(mobile) {
+    try {
+      const res  = await apiFetch(`/get_customer/${mobile}`);
+      const data = await res.json();
+      if (data.success && data.customer && nameInput && !nameInput.value.trim()) {
+        nameInput.value = _fmtName(data.customer.name) || '';
+      }
+    } catch (e) { console.error('[mb-mobile] lookup error:', e); }
+  }
+
+  mobileInput.addEventListener('input', function () {
+    clearTimeout(debounceTimer);
+    const digits = this.value.replace(/\D/g, '');
+    if (digits.length < 4) { hideSuggestions(); return; }
+    debounceTimer = setTimeout(async () => {
+      if (digits.length >= 10) {
+        hideSuggestions();
+        await lookupAndFillName(digits.slice(0, 10));
+      } else {
+        fetchSuggestions(digits);
+      }
+    }, 180);
+  });
+
+  document.addEventListener('click', (e) => {
+    if (!mobileInput.contains(e.target) && !suggestionsEl.contains(e.target)) {
+      hideSuggestions();
+    }
+  });
+}

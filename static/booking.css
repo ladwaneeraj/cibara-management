@@ -686,3 +686,765 @@
     padding: 0.2rem 0.4rem;
   }
 }
+
+/* ==========================================================================
+   BOOKINGS MODULE — 2026 UI PASS
+   --------------------------------------------------------------------------
+   Everything below is scoped to the bookings module: either to #bookings-tab,
+   to a [data-bk-modal] booking modal, or to a new `bk-`/`mb-` class. No
+   shared component (.modal-content, .filter-btn, .status-badge, ...) is
+   restyled globally, so other tabs are unaffected.
+
+   Companion rules that must win over this file live in the inline <style>
+   block at the top of templates/index.html (that block is parsed after this
+   stylesheet, so it wins ties): the .bk-mode-switch control and the
+   phone-sheet treatment for [data-bk-modal].
+   ========================================================================== */
+
+/* ── Section header + toolbar ─────────────────────────────────────────── */
+#bookings-tab .bk-section-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+#bookings-tab .bk-toolbar {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+/* .action-btn in style.css is `display:block; width:100%; margin-top:1rem`
+   (it was written for full-width form submit buttons). Inside a wrapping
+   flex row that makes every toolbar button claim a full line and stack.
+   Reset the box model here rather than touching the shared class. */
+#bookings-tab .bk-tool-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  width: auto;
+  flex: 0 0 auto;
+  min-height: 36px;
+  margin-top: 0;
+  padding: 0.45rem 0.85rem;
+  font-size: 0.83rem;
+  border-radius: 9px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* Same shared-class problem: the calendar's Today button is an .action-btn
+   inside a wrapping flex row, so it was also rendering full width. */
+#bookings-tab .calendar-controls #today-btn {
+  width: auto;
+  flex: 0 0 auto;
+  margin-top: 0;
+}
+
+#bookings-tab .bk-tool-slate {
+  background: #eef1f6;
+  color: #475569;
+  border: 1px solid #dde3ec;
+}
+#bookings-tab .bk-tool-orange {
+  background: rgba(230, 81, 0, 0.12);
+  color: #e65100;
+  border: 1px solid rgba(230, 81, 0, 0.3);
+}
+#bookings-tab .bk-tool-blue {
+  background: rgba(12, 111, 205, 0.12);
+  color: #0c6fcd;
+  border: 1px solid rgba(12, 111, 205, 0.3);
+}
+
+/* ── Filter pills: one scrollable row instead of a wrapping block ─────── */
+#bookings-tab .bk-filter-row {
+  display: flex;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  gap: 0.4rem;
+  padding-bottom: 0.35rem;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+#bookings-tab .bk-filter-row::-webkit-scrollbar {
+  display: none;
+}
+#bookings-tab .booking-filter-btn {
+  flex: 0 0 auto;
+  min-height: 34px;
+  border-radius: 999px;
+  padding: 0.35rem 0.85rem;
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+/* ── List / Calendar switcher ─────────────────────────────────────────── */
+#bookings-tab .bk-view-selector {
+  background: #f1f3f9;
+  border: 1px solid #e6e9f2;
+  border-radius: 11px;
+  padding: 0.25rem;
+  gap: 0.25rem;
+  margin: 0.35rem 0 0.9rem;
+  /* A two-option switch stretched across a 1900px desktop reads as two huge
+     unrelated buttons. Cap it; it still goes full width on phones. */
+  max-width: 340px;
+}
+#bookings-tab .bk-view-selector .view-btn {
+  border-radius: 9px;
+  padding: 0.5rem 0.6rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #64748b;
+  min-height: 40px;
+}
+#bookings-tab .bk-view-selector .view-btn.active {
+  background: #fff;
+  color: var(--primary);
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.14);
+}
+
+/* ── Booking cards ────────────────────────────────────────────────────── */
+#bookings-tab .bookings-container {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 0.65rem;
+}
+
+#bookings-tab .booking-item {
+  padding: 0.85rem 0.95rem;
+  border-radius: 12px;
+  border-left-width: 4px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+#bookings-tab .booking-item:hover {
+  transform: none;
+  box-shadow: var(--shadow-md);
+}
+#bookings-tab .booking-item.bk-cancelled {
+  border-left-color: var(--danger);
+  opacity: 0.72;
+}
+#bookings-tab .booking-item.bk-checked-in {
+  border-left-color: var(--success);
+}
+#bookings-tab .booking-item.bk-arriving-today {
+  border-left-color: #d97706;
+  background: linear-gradient(180deg, #fffbf3, #fff 55%);
+}
+
+#bookings-tab .booking-header {
+  align-items: flex-start;
+  margin-bottom: 0;
+  gap: 0.5rem;
+}
+#bookings-tab .booking-room {
+  font-size: 1.02rem;
+  line-height: 1.2;
+}
+#bookings-tab .booking-badges {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.3rem;
+}
+#bookings-tab .booking-guest {
+  font-weight: 600;
+  font-size: 0.95rem;
+  color: var(--dark);
+  line-height: 1.25;
+}
+
+/* Compact stay line: 12 Aug → 14 Aug · 2N · 2:00 PM */
+.bk-stay-line {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.3rem 0.45rem;
+  font-size: 0.82rem;
+  color: #475569;
+}
+.bk-stay-line i {
+  color: var(--primary);
+  font-size: 0.75rem;
+}
+.bk-stay-sep {
+  color: #cbd5e1;
+}
+.bk-stay-time {
+  background: rgba(67, 97, 238, 0.1);
+  color: var(--primary);
+  font-weight: 600;
+  border-radius: 5px;
+  padding: 0.1rem 0.4rem;
+  white-space: nowrap;
+}
+
+#bookings-tab .booking-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  border-top: 1px solid #f1f4f9;
+  padding-top: 0.55rem;
+}
+#bookings-tab .booking-payment {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+}
+#bookings-tab .booking-amount {
+  font-weight: 700;
+  font-size: 0.95rem;
+  color: var(--dark);
+}
+.bk-balance-note {
+  font-size: 0.75rem;
+  color: var(--danger);
+  font-weight: 600;
+}
+
+/* Group chip — marks a room that belongs to a multi-room booking. */
+.bk-group-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  background: #ede9fe;
+  color: #6d28d9;
+  border: 1px solid #ddd6fe;
+  border-radius: 999px;
+  padding: 0.1rem 0.5rem;
+  font-size: 0.7rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+/* Group banner inside the booking details modal. */
+.bk-group-banner {
+  background: #f5f3ff;
+  border: 1px solid #ddd6fe;
+  border-radius: 10px;
+  padding: 0.6rem 0.75rem;
+  margin-bottom: 0.75rem;
+  font-size: 0.8rem;
+  color: #4c1d95;
+}
+.bk-group-banner strong {
+  font-weight: 700;
+}
+.bk-group-banner .bk-group-rooms {
+  margin-top: 0.35rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
+.bk-group-banner .bk-group-room {
+  background: #fff;
+  border: 1px solid #e9d5ff;
+  border-radius: 6px;
+  padding: 0.1rem 0.45rem;
+  font-size: 0.74rem;
+  font-weight: 600;
+  color: #6d28d9;
+}
+.bk-group-banner .bk-group-room.bk-group-room-current {
+  background: #6d28d9;
+  border-color: #6d28d9;
+  color: #fff;
+}
+
+/* ── Small shared bits used by the new modals ─────────────────────────── */
+.bk-modal-hint {
+  font-size: 0.8rem;
+  color: #64748b;
+  line-height: 1.45;
+  margin: 0 0 0.75rem;
+}
+
+.bk-chip-row {
+  display: flex;
+  gap: 0.4rem;
+  margin-bottom: 0.65rem;
+  flex-wrap: wrap;
+}
+.bk-chip {
+  border: 1px solid #dde3ec;
+  background: #f8fafc;
+  color: #475569;
+  border-radius: 999px;
+  padding: 0.35rem 0.8rem;
+  font-family: inherit;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  min-height: 34px;
+}
+.bk-chip:hover {
+  background: #eef2f7;
+}
+.bk-chip.active {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #fff;
+}
+
+.bk-check {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.82rem;
+  color: #334155;
+  cursor: pointer;
+  margin-bottom: 0.75rem;
+}
+.bk-check input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--primary);
+  flex-shrink: 0;
+}
+
+.bk-arrivals-preview {
+  background: #f8fafc;
+  border: 1px solid #e8edf4;
+  border-radius: 10px;
+  padding: 0.7rem 0.85rem;
+  font-size: 0.82rem;
+  color: #334155;
+  min-height: 44px;
+}
+.bk-arrivals-preview .bk-preview-empty {
+  color: #94a3b8;
+}
+.bk-arrivals-preview .bk-preview-stat {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.15rem 0;
+}
+.bk-arrivals-preview .bk-preview-stat span:last-child {
+  font-weight: 700;
+  color: var(--dark);
+}
+
+/* WhatsApp recipient picker */
+.bk-recipient-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+.bk-recipient-btn {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  width: 100%;
+  text-align: left;
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 0.6rem 0.75rem;
+  font-family: inherit;
+  font-size: 0.86rem;
+  cursor: pointer;
+  min-height: 52px;
+  transition: border-color 0.15s, background 0.15s;
+}
+.bk-recipient-btn:hover {
+  border-color: #25d366;
+  background: #f0fdf4;
+}
+.bk-recipient-btn .bk-recipient-name {
+  font-weight: 600;
+  color: var(--dark);
+}
+.bk-recipient-btn .bk-recipient-meta {
+  display: block;
+  font-size: 0.76rem;
+  color: #64748b;
+  font-weight: 400;
+  margin-top: 2px;
+}
+.bk-recipient-btn.bk-recipient-default {
+  border-color: #25d366;
+  background: #f0fdf4;
+}
+
+/* ── Phone layout ─────────────────────────────────────────────────────── */
+@media (max-width: 576px) {
+  #bookings-tab .bk-section-title {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+  #bookings-tab .bk-toolbar {
+    width: 100%;
+    justify-content: flex-start;
+  }
+  /* Secondary tools shrink to icon buttons; New Booking keeps its label
+     and takes the remaining width so the primary action stays obvious. */
+  #bookings-tab .bk-tool-btn.bk-tool-slate span,
+  #bookings-tab .bk-tool-btn.bk-tool-orange span,
+  #bookings-tab .bk-tool-btn.bk-tool-blue span {
+    display: none;
+  }
+  #bookings-tab .bk-tool-btn.bk-tool-slate,
+  #bookings-tab .bk-tool-btn.bk-tool-orange,
+  #bookings-tab .bk-tool-btn.bk-tool-blue {
+    flex: 0 0 40px;
+    width: 40px;
+    min-height: 40px;
+    padding: 0;
+  }
+  #bookings-tab .bk-tool-primary {
+    flex: 1 1 auto;
+    width: auto;
+    min-height: 40px;
+  }
+  #bookings-tab .bk-view-selector {
+    max-width: none;
+  }
+  #bookings-tab .bookings-container {
+    grid-template-columns: 1fr;
+  }
+  #bookings-tab .booking-item {
+    padding: 0.8rem 0.85rem;
+  }
+}
+
+/* ==========================================================================
+   ARRIVALS SHEET — PRINT
+   --------------------------------------------------------------------------
+   printArrivalsSheet() in booking.js writes the sheet into
+   #booking-print-root and sets body.bk-printing, then calls window.print()
+   and clears both afterwards. The node is never visible on screen; only the
+   print stylesheet reveals it. Printing in-document (rather than opening a
+   popup window) avoids pop-up blockers and works on mobile browsers.
+   ========================================================================== */
+#booking-print-root {
+  display: none;
+}
+
+@media print {
+  /* Primary rule: hide every sibling of the print root. */
+  body.bk-printing > *:not(#booking-print-root) {
+    display: none !important;
+  }
+  /* Belt and braces: if the root ever ends up nested inside a wrapper (so the
+     rule above cannot reach it), visibility still blanks the app chrome.
+     Deliberately NOT position:absolute — that escapes the @page margin box
+     and prints edge to edge. printArrivalsSheet() re-parents the node to
+     <body> instead, which is the correct fix for nesting. */
+  body.bk-printing * {
+    visibility: hidden !important;
+  }
+  body.bk-printing #booking-print-root,
+  body.bk-printing #booking-print-root * {
+    visibility: visible !important;
+  }
+  html, body.bk-printing {
+    background: #fff !important;
+    height: auto !important;
+    width: auto !important;
+    min-width: 0 !important;
+    max-width: none !important;
+    overflow: visible !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+  body.bk-printing #booking-print-root {
+    display: block !important;
+  }
+
+  /* Deliberately a SMALL page margin. Chrome's print dialog lets the user
+     override @page margins (the "Margins: None" option), and when they do,
+     anything relying on this alone prints to the paper edge and the printer
+     clips it. The real safety gutter is the margin on .bk-sheet below, which
+     no dialog setting can remove. Total gutter is 4mm + 8mm = 12mm normally,
+     and still 8mm if the user prints with margins set to None — above the
+     unprintable area of every common inkjet and laser. */
+  @page {
+    size: A4 landscape;
+    margin: 4mm;
+  }
+
+  /* ── Sheet typography ─────────────────────────────────────────────── */
+  /* Everything inside the sheet is border-box and allowed to shrink. Flex
+     items default to min-width:auto, which refuses to go below their content
+     width — that is what pushed the masthead and the stats strip wider than
+     the page and clipped the sheet on both edges. */
+  .bk-sheet,
+  .bk-sheet *,
+  .bk-sheet *::before,
+  .bk-sheet *::after {
+    box-sizing: border-box;
+  }
+  .bk-sheet {
+    font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    color: #000;
+    font-size: 9pt;
+    line-height: 1.35;
+    /* margin = the gutter the print dialog cannot take away.
+       border  = the frame around the form.
+       padding = breathing room inside the frame.
+       width:auto so the block fills the page minus its own margins; a
+       width:100% here would add the margins on top and overflow. */
+    width: auto;
+    max-width: none;
+    margin: 8mm;
+    border: 1pt solid #000;
+    padding: 5mm;
+    overflow: hidden;
+  }
+  .bk-sheet > * {
+    max-width: 100%;
+  }
+
+  /* ── Masthead ─────────────────────────────────────────────────────── */
+  .bk-sheet-head {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 6mm;
+    padding-bottom: 3mm;
+    border-bottom: 1.6pt solid #000;
+  }
+  .bk-sheet-head > * {
+    min-width: 0;
+  }
+  .bk-brand-name {
+    font-size: 14pt;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    line-height: 1.05;
+  }
+  .bk-brand-rule {
+    width: 22mm;
+    height: 1.4pt;
+    background: #000 !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+    margin-top: 1.6mm;
+  }
+  .bk-doc {
+    text-align: center;
+    flex: 1;
+  }
+  .bk-doc-title {
+    font-size: 10.5pt;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.16em;
+  }
+  .bk-doc-date {
+    font-size: 11pt;
+    margin-top: 1mm;
+  }
+  .bk-doc-meta {
+    text-align: right;
+    font-size: 7.2pt;
+    line-height: 1.7;
+  }
+  .bk-doc-meta .bk-k {
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: #555;
+    margin-right: 1.5mm;
+  }
+
+  /* ── Summary strip ────────────────────────────────────────────────── */
+  .bk-stats {
+    display: flex;
+    gap: 0;
+    margin: 4mm 0 5mm;
+    border: 0.6pt solid #999;
+  }
+  .bk-stat {
+    flex: 1 1 0;
+    min-width: 0;
+    padding: 2.2mm 2.4mm;
+    border-right: 0.6pt solid #999;
+  }
+  .bk-stat:last-child {
+    border-right: none;
+  }
+  .bk-stat span {
+    display: block;
+    font-size: 6.8pt;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: #555;
+  }
+  .bk-stat b {
+    font-size: 12pt;
+    font-weight: 700;
+  }
+
+  /* ── Section headings ─────────────────────────────────────────────── */
+  .bk-sheet-section {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    font-size: 8.5pt;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.14em;
+    margin: 0 0 2mm;
+    padding-bottom: 1.2mm;
+    border-bottom: 0.9pt solid #000;
+  }
+  .bk-sheet-section .bk-section-note {
+    font-weight: 400;
+    letter-spacing: 0.02em;
+    text-transform: none;
+    font-size: 7.5pt;
+    color: #555;
+  }
+  .bk-sheet-block {
+    margin-bottom: 6mm;
+  }
+
+  /* ── Tables ───────────────────────────────────────────────────────── */
+  .bk-sheet table {
+    width: 100%;
+    max-width: 100%;
+    border-collapse: collapse;
+    table-layout: fixed;
+  }
+  .bk-sheet thead {
+    display: table-header-group; /* repeat the header on page 2+ */
+  }
+  .bk-sheet th {
+    background: #ececec !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+    border: 0.5pt solid #666;
+    border-bottom: 0.9pt solid #000;
+    padding: 2mm 1.8mm;
+    text-align: left;
+    font-size: 6.8pt;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    vertical-align: middle;
+  }
+  .bk-sheet td {
+    border: 0.5pt solid #999;
+    padding: 2.4mm 1.8mm;
+    text-align: left;
+    vertical-align: top;
+    word-wrap: break-word;
+  }
+  .bk-sheet tbody tr {
+    page-break-inside: avoid;
+    height: 12mm; /* room to write in by hand */
+  }
+  .bk-sheet tbody tr:nth-child(even) td {
+    background: #f6f6f6 !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  .bk-sheet .bk-c-idx {
+    text-align: center;
+    color: #555;
+  }
+  .bk-sheet .bk-c-room {
+    font-size: 12pt;
+    font-weight: 700;
+    line-height: 1.1;
+  }
+  .bk-sheet .bk-c-room .bk-ac {
+    font-size: 6.8pt;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+  }
+  .bk-sheet .bk-c-name {
+    font-size: 9.5pt;
+    font-weight: 700;
+  }
+  .bk-sheet .bk-c-sub {
+    font-size: 7.4pt;
+    color: #444;
+    margin-top: 0.6mm;
+  }
+  .bk-sheet .bk-c-num {
+    text-align: right;
+    white-space: nowrap;
+  }
+  .bk-sheet .bk-c-due {
+    font-weight: 700;
+  }
+  .bk-sheet .bk-c-mid {
+    text-align: center;
+  }
+  .bk-sheet .bk-c-tick {
+    text-align: center;
+  }
+  .bk-sheet .bk-tick-box {
+    display: inline-block;
+    width: 5mm;
+    height: 5mm;
+    border: 0.9pt solid #000;
+    margin-top: 0.6mm;
+  }
+  .bk-sheet .bk-group-tag {
+    display: inline-block;
+    border: 0.7pt solid #000;
+    border-radius: 1mm;
+    padding: 0 1.2mm;
+    font-size: 6.4pt;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    vertical-align: middle;
+    white-space: nowrap; /* was breaking into "GRP" / "A" on two lines */
+  }
+  .bk-sheet .bk-src {
+    display: inline-block;
+    border: 0.5pt solid #777;
+    border-radius: 1mm;
+    padding: 0 1mm;
+    font-size: 6.4pt;
+    letter-spacing: 0.04em;
+  }
+  .bk-sheet-empty {
+    border: 0.5pt dashed #999;
+    padding: 4mm;
+    text-align: center;
+    font-size: 8.5pt;
+    color: #555;
+  }
+
+  /* ── Sign-off ─────────────────────────────────────────────────────── */
+  .bk-sign {
+    display: flex;
+    gap: 8mm;
+    margin-top: 8mm;
+    page-break-inside: avoid;
+  }
+  .bk-sign > * {
+    min-width: 0;
+  }
+  .bk-sign-line {
+    flex: 1;
+    border-top: 0.7pt solid #000;
+    padding-top: 1.4mm;
+    font-size: 7pt;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: #333;
+  }
+  .bk-sheet-note {
+    margin-top: 4mm;
+    font-size: 7pt;
+    color: #555;
+  }
+}

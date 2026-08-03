@@ -562,7 +562,7 @@
         '<td class="stf-grid-name' + (nameAttrs ? " clickable" : "") + '"' +
         nameAttrs + ">" +
         '<span class="nm">' +
-        (gr.pairSecond ? shiftTag : esc(s.name) + shiftTag) + "</span>" +
+        (gr.pairSecond ? shiftTag : '<span class="stf-name-text">' + esc(s.name) + '</span>' + shiftTag) + "</span>" +
         (showActions && (s.designation || advDue)
           ? '<span class="ds">' + esc(s.designation || "") +
             (s.designation && advDue ? " · " : "") + advDue + "</span>"
@@ -1228,6 +1228,18 @@
         defaultDate: [_ymdDate(qp.start), _ymdDate(qp.end)],
         disableMobile: true,
         locale: { rangeSeparator: " – " },
+        // Color-code each day the same way the attendance grid does for
+        // already-paid ("locked") days — a light green fill + small lock
+        // mark — so it's obvious at a glance which days in this range
+        // have already been paid out, before you even confirm.
+        onDayCreate: function (dObj, dStr, fp, dayElem) {
+          if (!dayElem.dateObj) return;
+          var ymd = _toYMD(dayElem.dateObj);
+          if (_isPaid(qp.staffId, ymd)) {
+            dayElem.classList.add("stf-fp-paid");
+            dayElem.title = "Salary already paid for this day";
+          }
+        },
         onChange: function (sel) {
           var qp2 = state.quickPay;
           if (!qp2 || sel.length < 2) return;

@@ -43,7 +43,7 @@
       rel="stylesheet"
     />
     <link rel="stylesheet" href="{{ asset_url('style.css') }}" />
-    <link rel="stylesheet" href="/static/booking.css" />
+    <link rel="stylesheet" href="{{ asset_url('booking.css') }}" />
     <link rel="stylesheet" href="/static/laundry.css" />
     <link rel="stylesheet" href="/static/banking.css" />
     <link rel="stylesheet" href="/static/maintenance.css" />
@@ -136,8 +136,217 @@
       #new-booking-modal textarea.form-control {
         padding: 0.35rem 0.5rem;
       }
+
+      /* ── Multi-Room Booking modal ─────────────────────────────────── */
+      #multi-booking-modal .form-group {
+        margin-bottom: 0.7rem;
+      }
+      #multi-booking-modal .form-label {
+        font-size: 0.78rem;
+        margin-bottom: 0.25rem;
+      }
+      #multi-booking-modal .form-control {
+        font-size: 0.85rem;
+        padding: 0.35rem 0.5rem;
+      }
+      #multi-booking-modal textarea.form-control {
+        padding: 0.35rem 0.5rem;
+      }
+      .mb-same-guest-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.6rem;
+        background: #f8f9fc;
+        border: 1px solid #eef0f4;
+        border-radius: 10px;
+        padding: 0.55rem 0.75rem;
+        margin: 0.5rem 0 0.75rem;
+      }
+      .mb-same-guest-row label {
+        font-size: 0.8rem;
+        font-weight: 600;
+        color: var(--dark);
+        display: flex;
+        align-items: center;
+        gap: 0.45rem;
+        cursor: pointer;
+        margin: 0;
+      }
+      .mb-toggle-switch {
+        position: relative;
+        width: 36px;
+        height: 20px;
+        flex-shrink: 0;
+      }
+      .mb-toggle-switch input {
+        opacity: 0;
+        width: 0;
+        height: 0;
+      }
+      .mb-toggle-slider {
+        position: absolute;
+        inset: 0;
+        background: #cbd5e1;
+        border-radius: 999px;
+        cursor: pointer;
+        transition: background 0.15s;
+      }
+      .mb-toggle-slider::before {
+        content: "";
+        position: absolute;
+        width: 16px;
+        height: 16px;
+        left: 2px;
+        top: 2px;
+        background: #fff;
+        border-radius: 50%;
+        transition: transform 0.15s;
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+      }
+      .mb-toggle-switch input:checked + .mb-toggle-slider {
+        background: var(--primary);
+      }
+      .mb-toggle-switch input:checked + .mb-toggle-slider::before {
+        transform: translateX(16px);
+      }
+      .mb-shared-guest-fields {
+        display: none;
+      }
+      .mb-shared-guest-fields.show {
+        display: grid;
+      }
+      .mb-mobile-suggestions {
+        position: absolute;
+        top: 100%;
+        left: 0;
+        right: 0;
+        background: #fff;
+        border: 1px solid #ddd;
+        border-radius: 6px;
+        z-index: 9999;
+        max-height: 200px;
+        overflow-y: auto;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+      }
+      /* Room row cards — numbered with a coloured left accent so a long
+         list of rooms stays easy to scan at a glance. */
+      .mb-room-row {
+        position: relative;
+        background: #fff;
+        border: 1px solid #eef0f4;
+        border-left: 3px solid var(--primary);
+        border-radius: 10px;
+        padding: 0.7rem 0.85rem 0.55rem;
+        margin-bottom: 0.65rem;
+        box-shadow: var(--shadow-sm);
+      }
+      .mb-room-row.mb-same-guest .mb-room-guest-fields {
+        display: none;
+      }
+      .mb-room-row-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 0.5rem;
+      }
+      .mb-room-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.4rem;
+        font-size: 0.72rem;
+        font-weight: 700;
+        color: var(--primary);
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+      }
+      .mb-room-badge .mb-room-num {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 18px;
+        height: 18px;
+        border-radius: 50%;
+        background: rgba(67, 97, 238, 0.12);
+        font-size: 0.68rem;
+      }
+      .mb-remove-room-btn {
+        background: none;
+        border: none;
+        color: #94a3b8;
+        cursor: pointer;
+        font-size: 0.85rem;
+        padding: 0.15rem 0.35rem;
+        border-radius: 6px;
+        transition: color 0.15s, background 0.15s;
+      }
+      .mb-remove-room-btn:hover {
+        color: #dc2626;
+        background: rgba(220, 38, 38, 0.08);
+      }
+      .mb-add-room-btn {
+        width: 100%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 0.4rem;
+        padding: 0.55rem;
+        margin: 0.1rem 0 0.75rem;
+        background: #f5f6fd;
+        color: var(--primary);
+        border: 1.5px dashed #c7d2fe;
+        border-radius: 10px;
+        font-size: 0.82rem;
+        font-weight: 600;
+        cursor: pointer;
+        transition: background 0.15s, border-color 0.15s;
+      }
+      .mb-add-room-btn:hover {
+        background: #eef1fe;
+        border-color: var(--primary);
+      }
+      .mb-summary {
+        display: flex;
+        align-items: center;
+        background: linear-gradient(135deg, #eef1fe, #f5f6fd);
+        border: 1px solid #dde3fb;
+        border-radius: 10px;
+        padding: 0.65rem 0.9rem;
+        margin-bottom: 0.7rem;
+      }
+      .mb-summary-item {
+        flex: 1;
+        font-size: 0.68rem;
+        color: #64748b;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+      }
+      .mb-summary-value {
+        display: block;
+        font-size: 1.08rem;
+        font-weight: 800;
+        color: var(--dark);
+        margin-top: 0.15rem;
+      }
+      .mb-summary-divider {
+        width: 1px;
+        align-self: stretch;
+        background: #dde3fb;
+        margin: 0 0.9rem;
+      }
       .booking-date-range-wrap {
         position: relative;
+      }
+      /* #new-booking-modal / #multi-booking-modal .form-control (above)
+         set padding as a shorthand, which — because those rules are
+         ID-scoped and therefore higher specificity than this class-level
+         one — was winning and wiping out the 2rem left padding below,
+         pulling the calendar icon on top of the date text. Re-assert it
+         with matching ID-scoped specificity so it always wins here. */
+      #new-booking-modal .booking-date-range-wrap input[type="text"],
+      #multi-booking-modal .booking-date-range-wrap input[type="text"] {
+        padding-left: 2rem;
       }
       .booking-date-range-wrap input[type="text"] {
         padding-left: 2rem;
@@ -145,6 +354,67 @@
         background: #fff
           url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%23888' stroke-width='2'%3E%3Crect x='3' y='4' width='18' height='18' rx='2' ry='2'%3E%3C/rect%3E%3Cline x1='16' y1='2' x2='16' y2='6'%3E%3C/line%3E%3Cline x1='8' y1='2' x2='8' y2='6'%3E%3C/line%3E%3Cline x1='3' y1='10' x2='21' y2='10'%3E%3C/line%3E%3C/svg%3E")
           no-repeat 0.5rem center;
+      }
+
+      /* ── Booking type switch (Single room / Multiple rooms) ──────────
+         Replaces the old "Switch to multi-room booking" text link. The two
+         booking modals each carry an identical control; setBookingMode()
+         in booking.js swaps which modal is on screen. ------------------- */
+      .bk-mode-switch {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 0.25rem;
+        background: #f1f3f9;
+        border: 1px solid #e6e9f2;
+        border-radius: 11px;
+        padding: 0.25rem;
+        margin: 0 0 0.9rem;
+      }
+      .bk-mode-btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 0.4rem;
+        min-height: 40px;
+        padding: 0.45rem 0.4rem;
+        border: none;
+        border-radius: 9px;
+        background: transparent;
+        color: #64748b;
+        font-family: inherit;
+        font-size: 0.83rem;
+        font-weight: 600;
+        cursor: pointer;
+        transition: background 0.15s, color 0.15s, box-shadow 0.15s;
+      }
+      .bk-mode-btn i {
+        font-size: 0.85rem;
+        opacity: 0.9;
+      }
+      .bk-mode-btn.active {
+        background: #fff;
+        color: var(--primary, #4361ee);
+        box-shadow: 0 1px 3px rgba(15, 23, 42, 0.14);
+      }
+      .bk-mode-btn:focus-visible {
+        outline: 2px solid var(--primary, #4361ee);
+        outline-offset: 1px;
+      }
+
+      /* Bookings modals deliberately keep their default centred-card layout
+         at every width. An earlier pass turned them into full-height phone
+         sheets with sticky headers and stacked form rows; that was reverted
+         on request — the card reads better and the forms are short enough
+         that the sheet bought nothing. The only phone-specific rule kept is
+         the close-button hit area, which was a bare glyph well under the
+         44px minimum. */
+      @media (max-width: 576px) {
+        [data-bk-modal] .close-btn {
+          width: 40px;
+          height: 40px;
+          line-height: 1;
+          margin: -0.5rem -0.5rem -0.5rem 0;
+        }
       }
     </style>
     <link rel="stylesheet" href="/static/settle-later.css" />
@@ -1335,45 +1605,42 @@
           </div>
         </div>
         <div class="tab-content hidden" id="bookings-tab">
-          <div class="section-title">
+          <div class="section-title bk-section-title">
             <h2>Room Bookings</h2>
-            <div style="display: flex; gap: 0.5rem">
+            <div class="bk-toolbar">
+              <button
+                id="print-arrivals-btn"
+                class="action-btn btn-sm bk-tool-btn bk-tool-slate"
+                title="Print the arrivals + room inspection sheet for a date"
+              >
+                <i class="fas fa-print"></i> <span>Arrivals Sheet</span>
+              </button>
               <button
                 id="fetch-mmt-btn"
-                class="action-btn btn-sm"
+                class="action-btn btn-sm bk-tool-btn bk-tool-orange"
                 title="Fetch new MMT and Agoda bookings from email"
-                style="
-                  background: rgba(230, 81, 0, 0.12);
-                  color: #e65100;
-                  border: 1px solid rgba(230, 81, 0, 0.3);
-                "
               >
-                <i class="fas fa-sync-alt"></i> Fetch Bookings
+                <i class="fas fa-sync-alt"></i> <span>Fetch Bookings</span>
               </button>
               <button
                 id="mmt-settlements-btn"
-                class="action-btn btn-sm"
+                class="action-btn btn-sm bk-tool-btn bk-tool-blue"
                 data-perm="settlement.manage"
                 title="MMT and Agoda bank settlements"
-                style="
-                  background: rgba(12, 111, 205, 0.12);
-                  color: #0c6fcd;
-                  border: 1px solid rgba(12, 111, 205, 0.3);
-                "
               >
-                <i class="fas fa-university"></i> OTA Settlements
+                <i class="fas fa-university"></i> <span>OTA Settlements</span>
               </button>
               <button
                 id="new-booking-btn"
-                class="action-btn btn-sm btn-primary"
+                class="action-btn btn-sm btn-primary bk-tool-btn bk-tool-primary"
               >
-                <i class="fas fa-plus"></i> New Booking
+                <i class="fas fa-plus"></i> <span>New Booking</span>
               </button>
             </div>
           </div>
 
           <!-- Booking Filters -->
-          <div class="filter-container">
+          <div class="filter-container bk-filter-row">
             <button class="booking-filter-btn active" data-filter="upcoming">
               Upcoming
             </button>
@@ -1389,12 +1656,12 @@
             </button>
           </div>
 
-          <div class="view-selector">
+          <div class="view-selector bk-view-selector">
             <button class="view-btn active" data-view="list">
-              <i class="fas fa-list"></i> List View
+              <i class="fas fa-list"></i> <span>List</span>
             </button>
             <button class="view-btn" data-view="calendar">
-              <i class="fas fa-calendar-alt"></i> Calendar View
+              <i class="fas fa-calendar-alt"></i> <span>Calendar</span>
             </button>
           </div>
 
@@ -1453,7 +1720,7 @@
           </div>
 
           <!-- Day Details Modal -->
-          <div class="modal-backdrop" id="day-details-modal">
+          <div class="modal-backdrop" id="day-details-modal" data-bk-modal>
             <div class="modal-content">
               <div class="modal-header">
                 <h2>Bookings for <span id="selected-date">Date</span></h2>
@@ -1479,7 +1746,7 @@
         <!-- MMT Settlements Modal -->
         <div
           class="modal-backdrop"
-          id="mmt-settlements-modal"
+          id="mmt-settlements-modal" data-bk-modal
           style="z-index: 1100"
         >
           <div
@@ -4511,7 +4778,7 @@
     </div>
 
     <!-- New Booking Modal -->
-    <div class="modal-backdrop" id="new-booking-modal">
+    <div class="modal-backdrop" id="new-booking-modal" data-bk-modal>
       <div class="modal-content booking-modal-compact">
         <div class="modal-header">
           <h2>
@@ -4522,6 +4789,19 @@
             >New Booking
           </h2>
           <button class="close-btn" aria-label="Close">&times;</button>
+        </div>
+        <!-- Booking type switch. Both booking modals carry an identical
+             control; setBookingMode() in booking.js swaps which modal is
+             visible. See also the copy inside #multi-booking-modal. -->
+        <div class="bk-mode-switch" role="tablist" aria-label="Booking type">
+          <button type="button" class="bk-mode-btn active" data-booking-mode="single"
+                  role="tab" aria-selected="true">
+            <i class="fas fa-door-open"></i> Single room
+          </button>
+          <button type="button" class="bk-mode-btn" data-booking-mode="multi"
+                  role="tab" aria-selected="false">
+            <i class="fas fa-layer-group"></i> Multiple rooms
+          </button>
         </div>
         <form id="booking-form">
           <!-- Row 1: Date range + check-in time -->
@@ -4801,8 +5081,140 @@
       </div>
     </div>
 
+    <!-- Multi-Room Booking Modal — one submission creates several linked
+         room-bookings (same dates/check-in-time), each with its own guest
+         and price. See addMultiBookingRoomRow() / submitMultiBooking() in
+         booking.js and /create_multi_booking in routes/bookings.py. -->
+    <div class="modal-backdrop" id="multi-booking-modal" data-bk-modal>
+      <div class="modal-content booking-modal-compact" style="max-width: 640px;">
+        <div class="modal-header">
+          <h2>
+            <i class="fas fa-layer-group" style="font-size: 0.9rem; margin-right: 0.4rem"></i>Multi-Room Booking
+          </h2>
+          <button class="close-btn" aria-label="Close">&times;</button>
+        </div>
+        <div class="bk-mode-switch" role="tablist" aria-label="Booking type">
+          <button type="button" class="bk-mode-btn" data-booking-mode="single"
+                  role="tab" aria-selected="false">
+            <i class="fas fa-door-open"></i> Single room
+          </button>
+          <button type="button" class="bk-mode-btn active" data-booking-mode="multi"
+                  role="tab" aria-selected="true">
+            <i class="fas fa-layer-group"></i> Multiple rooms
+          </button>
+        </div>
+        <form id="multi-booking-form">
+          <div class="bk-row">
+            <div class="form-group">
+              <label class="form-label">Check-in &rarr; Check-out</label>
+              <div class="booking-date-range-wrap">
+                <input
+                  type="text"
+                  class="form-control"
+                  id="mb-date-range"
+                  placeholder="Select dates"
+                  readonly
+                />
+              </div>
+              <input type="hidden" id="mb-check-in" />
+              <input type="hidden" id="mb-check-out" />
+            </div>
+            <div class="form-group">
+              <label class="form-label">Expected Check-in Time</label>
+              <input type="time" class="form-control" id="mb-check-in-time" required />
+            </div>
+          </div>
+
+          <div class="bk-row">
+            <div class="form-group">
+              <label class="form-label">Booking Source</label>
+              <select class="form-control" id="mb-source">
+                <option value="normal">Normal</option>
+                <option value="booking.com">Booking.com (Pay at Hotel)</option>
+              </select>
+            </div>
+            <div class="form-group" style="margin-bottom:0;">
+              <label class="form-label">Payment Method</label>
+              <div class="payment-options" style="margin-top:0.2rem;">
+                <button type="button" class="payment-btn cash active" data-payment="cash">
+                  <i class="fas fa-money-bill"></i> Cash
+                </button>
+                <button type="button" class="payment-btn online" data-payment="online">
+                  <i class="fas fa-mobile-alt"></i> Online
+                </button>
+              </div>
+              <input type="hidden" id="mb-payment-method" value="cash" />
+            </div>
+          </div>
+
+          <div class="mb-same-guest-row">
+            <label for="mb-same-guest-toggle">
+              <i class="fas fa-user-friends"></i> Use the same guest for every room
+            </label>
+            <label class="mb-toggle-switch">
+              <input type="checkbox" id="mb-same-guest-toggle" />
+              <span class="mb-toggle-slider"></span>
+            </label>
+          </div>
+
+          <div class="bk-row mb-shared-guest-fields" id="mb-shared-guest-fields">
+            <div class="form-group">
+              <label class="form-label">Guest Name</label>
+              <input type="text" class="form-control" id="mb-shared-guest-name" placeholder="Full name" autocomplete="off" />
+            </div>
+            <div class="form-group" style="position:relative;">
+              <label class="form-label">Mobile</label>
+              <input type="tel" class="form-control" id="mb-shared-guest-mobile" placeholder="10-digit mobile" pattern="[0-9]{10}" autocomplete="off" />
+              <div id="mb-shared-mobile-suggestions" class="mb-mobile-suggestions" style="display:none;"></div>
+            </div>
+          </div>
+
+          <div id="mb-rooms-container"></div>
+
+          <button type="button" id="mb-add-room-btn" class="mb-add-room-btn">
+            <i class="fas fa-plus"></i> Add Another Room
+          </button>
+
+          <div class="mb-summary" id="mb-summary">
+            <div class="mb-summary-item">
+              Grand Total
+              <span class="mb-summary-value" id="mb-grand-total">₹0</span>
+            </div>
+            <div class="mb-summary-divider"></div>
+            <div class="mb-summary-item">
+              Total Advance
+              <span class="mb-summary-value" id="mb-grand-advance">₹0</span>
+            </div>
+            <div class="mb-summary-divider"></div>
+            <div class="mb-summary-item">
+              Rooms
+              <span class="mb-summary-value" id="mb-grand-room-count">0</span>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">Notes (Optional)</label>
+            <textarea
+              class="form-control"
+              id="mb-notes"
+              placeholder="Special requests or notes"
+              rows="2"
+            ></textarea>
+          </div>
+
+          <button
+            type="submit"
+            class="action-btn btn-primary"
+            style="width: 100%; margin-top: 0.25rem"
+          >
+            <i class="fas fa-check"></i> Create All Bookings
+          </button>
+        </form>
+      </div>
+    </div>
+
     <!-- Booking Details Modal -->
-    <div class="modal-backdrop" id="booking-details-modal">
+    <div class="modal-backdrop" id="booking-details-modal" data-bk-modal>
       <div class="modal-content booking-modal-compact">
         <div class="modal-header">
           <h2>
@@ -4816,6 +5228,11 @@
         </div>
 
         <div class="booking-details">
+          <!-- Group banner — shown only when this booking belongs to a
+               multi-room group (see group_booking_id in routes/bookings.py).
+               Populated by showBookingDetails() in booking.js. -->
+          <div id="details-group-banner" class="bk-group-banner" style="display: none"></div>
+
           <!-- Guest + Room header card -->
           <div class="summary-card" style="margin-bottom: 0.75rem">
             <div
@@ -5075,8 +5492,69 @@
       </div>
     </div>
 
+    <!-- Arrivals Sheet Modal — picks a date, then prints the arrivals +
+         room-inspection checklist. Rendering lives in printArrivalsSheet()
+         in booking.js; the printed markup is written into
+         #booking-print-root at the bottom of this file. -->
+    <div class="modal-backdrop" id="arrivals-sheet-modal" data-bk-modal>
+      <div class="modal-content booking-modal-compact">
+        <div class="modal-header">
+          <h2>
+            <i class="fas fa-clipboard-check" style="font-size: 0.9rem; margin-right: 0.4rem"></i
+            >Arrivals Sheet
+          </h2>
+          <button class="close-btn" aria-label="Close">&times;</button>
+        </div>
+        <p class="bk-modal-hint">
+          One page for the chosen date: every arrival with its room, guest and
+          balance due, plus tick-boxes for room inspection, ID and key handover.
+        </p>
+        <div class="bk-chip-row">
+          <button type="button" class="bk-chip" data-arrivals-preset="today">Today</button>
+          <button type="button" class="bk-chip" data-arrivals-preset="tomorrow">Tomorrow</button>
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="arrivals-sheet-date">Date</label>
+          <input type="date" class="form-control" id="arrivals-sheet-date" />
+        </div>
+        <label class="bk-check">
+          <input type="checkbox" id="arrivals-include-departures" checked />
+          <span>Include departures (rooms freeing up that day)</span>
+        </label>
+        <div id="arrivals-sheet-preview" class="bk-arrivals-preview"></div>
+        <button
+          type="button"
+          id="arrivals-sheet-print-btn"
+          class="action-btn btn-primary"
+          style="width: 100%; margin-top: 0.5rem"
+        >
+          <i class="fas fa-print"></i> Print Sheet
+        </button>
+      </div>
+    </div>
+
+    <!-- WhatsApp group-confirmation recipient picker — only shown when a
+         multi-room group has more than one distinct contact number. The
+         message itself is always a single combined one covering every room. -->
+    <div class="modal-backdrop" id="wa-group-recipient-modal" data-bk-modal style="z-index: 1100">
+      <div class="modal-content modal-sm">
+        <div class="modal-header">
+          <h2>
+            <i class="fab fa-whatsapp" style="color: #25d366; margin-right: 0.4rem"></i
+            >Send group confirmation
+          </h2>
+          <button class="close-btn" aria-label="Close">&times;</button>
+        </div>
+        <p class="bk-modal-hint">
+          This group has more than one contact number. One combined message
+          covering all rooms will be sent to the contact you pick.
+        </p>
+        <div id="wa-group-recipient-list" class="bk-recipient-list"></div>
+      </div>
+    </div>
+
     <!-- OTA Settlement Modal (MMT) -->
-    <div class="modal-backdrop" id="ota-settlement-modal">
+    <div class="modal-backdrop" id="ota-settlement-modal" data-bk-modal>
       <div class="modal-content">
         <div class="modal-header">
           <h2>Mark MMT Settlement Received</h2>
@@ -5137,7 +5615,7 @@
     </div>
 
     <!-- Convert Booking to Check-in Modal -->
-    <div class="modal-backdrop" id="convert-booking-modal">
+    <div class="modal-backdrop" id="convert-booking-modal" data-bk-modal>
       <div class="modal-content">
         <div class="modal-header">
           <h2>Check In Guest</h2>
@@ -5220,7 +5698,7 @@
     </div>
 
     <!-- Cancel Booking Modal -->
-    <div class="modal-backdrop" id="cancel-booking-modal">
+    <div class="modal-backdrop" id="cancel-booking-modal" data-bk-modal>
       <div class="modal-content">
         <div class="modal-header">
           <h2>Cancel Booking</h2>
@@ -5327,7 +5805,7 @@
     </div>
 
     <!-- Add Payment Modal -->
-    <div class="modal-backdrop" id="add-payment-modal">
+    <div class="modal-backdrop" id="add-payment-modal" data-bk-modal>
       <div class="modal-content">
         <div class="modal-header">
           <h2>Add Payment</h2>
@@ -5404,7 +5882,7 @@
     </div>
 
     <!-- Update Booking Modal -->
-    <div class="modal-backdrop" id="update-booking-modal">
+    <div class="modal-backdrop" id="update-booking-modal" data-bk-modal>
       <div class="modal-content">
         <div class="modal-header">
           <h2>Update Booking</h2>
@@ -5600,7 +6078,7 @@
     <script defer src="/static/analytics.js"></script>
     <script defer src="{{ asset_url('expense.js') }}"></script>
     <script defer src="/static/expense-presets-admin.js"></script>
-    <script defer src="/static/booking.js"></script>
+    <script defer src="{{ asset_url('booking.js') }}"></script>
     <script defer src="/static/settle-later.js"></script>
     <script defer src="/static/settle-later-fix.js"></script>
     <!-- revenue-protection.js removed — revenue visibility is now governed by
@@ -5635,7 +6113,7 @@
     <script>
       document.addEventListener("DOMContentLoaded", function () {
         if (!window.flatpickr) return;
-        var _bookingPicker = flatpickr("#booking-date-range", {
+        var _bookingPicker = window.bookingDatePicker = flatpickr("#booking-date-range", {
           mode: "range",
           dateFormat: "D, d M",
           minDate: "today",
@@ -6062,6 +6540,12 @@
     </div>
 
     <!-- ── Laundry Management Modal (Full-Screen) ──────────────────────────── -->
+
+    <!-- Print target for the bookings arrivals sheet. Stays empty (and
+         display:none) until printArrivalsSheet() fills it and sets
+         body.bk-printing; the @media print rules in booking.css then hide
+         the app and show only this node. Nothing else may write here. -->
+    <div id="booking-print-root" aria-hidden="true"></div>
 
   </body>
 </html>

@@ -335,6 +335,255 @@ def create_booking():
         logger.error(f"Error creating booking: {str(e)}")
         return jsonify(success=False, message=f"Error creating booking: {str(e)}")
 
+@bookings_bp.route("/create_multi_booking", methods=["POST"])
+def create_multi_booking():
+    """Create several room-bookings that share one stay (same dates, same
+    check-in time) in a single submission — e.g. one group taking 4 Deluxe
+    + 3 Single rooms with different guests and prices. Each room still
+    becomes its own booking document (so checkout/billing/ledger logic
+    downstream doesn't need to know about groups at all); they're tied
+    together only by a shared group_booking_id for reference. MMT/Agoda
+    (prepaid OTA) sources aren't supported here — those need per-booking
+    commission fields that this flow doesn't collect; use the regular
+    New Booking form for those."""
+    try:
+        data = request.json or {}
+        rooms_in = data.get("rooms")
+        if not isinstance(rooms_in, list) or len(rooms_in) < 2:
+            return jsonify(success=False, message="Provide at least 2 rooms for a multi-room booking")
+        if len(rooms_in) > 20:
+            return jsonify(success=False, message="Too many rooms in one submission (max 20)")
+
+        check_in_date  = data.get("check_in_date")
+        check_in_time  = data.get("check_in_time")
+        check_out_date = data.get("check_out_date")
+        booking_source = data.get("booking_source", "normal")
+        payment_method = data.get("payment_method", "cash")
+        notes          = data.get("notes", "")
+
+        for field_name, value in (("check_in_date", check_in_date),
+                                   ("check_in_time", check_in_time),
+                                   ("check_out_date", check_out_date)):
+            if not value:
+                return jsonify(success=False, message=f"Missing required field: {field_name}")
+
+        if booking_source in ("mmt", "agoda"):
+            return jsonify(success=False, message="MMT/Agoda bookings aren't supported in multi-room booking — use the regular New Booking form for those")
+
+        if payment_method not in VALID_PAYMENT_METHODS:
+            return jsonify(success=False, message=f"Invalid payment method: {payment_method}")
+
+        try:
+            check_in  = datetime.strptime(check_in_date, "%Y-%m-%d")
+            check_out = datetime.strptime(check_out_date, "%Y-%m-%d")
+        except ValueError:
+            return jsonify(success=False, message="Invalid date format. Use YYYY-MM-DD")
+        if check_out <= check_in:
+            return jsonify(success=False, message="Check-out date must be after check-in date")
+
+        seen_rooms = set()
+        parsed_rooms = []
+        for idx, r in enumerate(rooms_in, start=1):
+            room = r.get("room")
+            guest_name = str(r.get("guest_name", "")).strip()
+            guest_mobile = str(r.get("guest_mobile", "")).strip()
+
+            if not room:
+                return jsonify(success=False, message=f"Room #{idx}: room is required")
+            if room in seen_rooms:
+                return jsonify(success=False, message=f"Room {room} is selected more than once")
+            seen_rooms.add(room)
+            if not guest_name:
+                return jsonify(success=False, message=f"Room {room}: guest name is required")
+            if not guest_mobile:
+                return jsonify(success=False, message=f"Room {room}: guest mobile is required")
+
+            try:
+                total_amount = int(r.get("total_amount"))
+            except (TypeError, ValueError):
+                return jsonify(success=False, message=f"Room {room}: total amount is required")
+            if total_amount < 0:
+                return jsonify(success=False, message=f"Room {room}: total amount cannot be negative")
+
+            try:
+                advance = int(r.get("advance") or 0)
+            except (TypeError, ValueError):
+                return jsonify(success=False, message=f"Room {room}: advance must be a number")
+            if advance < 0:
+                return jsonify(success=False, message=f"Room {room}: advance cannot be negative")
+            if advance > total_amount:
+                return jsonify(success=False, message=f"Room {room}: advance (₹{advance}) cannot exceed its total (₹{total_amount})")
+
+            parsed_rooms.append({
+                "room": room,
+                "guest_name": guest_name,
+                "guest_mobile": guest_mobile,
+                "guest_count": int(r.get("guest_count") or 1),
+                "rate_per_night": int(r.get("rate_per_night") or 0) or None,
+                "total_amount": total_amount,
+                "advance": advance,
+                "is_ac": bool(r.get("is_ac", False)),
+            })
+
+        # Same overlap check as /check_availability, scoped to just the
+        # rooms being requested — reject the whole submission if any of
+        # them are already booked/occupied for this date range.
+        bookings_stream = (
+            bookings_ref
+            .where("check_out_date", ">=", check_in.strftime("%Y-%m-%d"))
+            .where("check_in_date",  "<=", check_out.strftime("%Y-%m-%d"))
+            .stream()
+        )
+        conflicting = set()
+        for booking_doc in bookings_stream:
+            b = booking_doc.to_dict()
+            if b.get("status") in ("cancelled", "checked_in"):
+                continue
+            if b.get("room") not in seen_rooms:
+                continue
+            b_ci = datetime.strptime(b["check_in_date"], "%Y-%m-%d")
+            b_co = datetime.strptime(b["check_out_date"], "%Y-%m-%d")
+            if check_in < b_co and check_out > b_ci:
+                conflicting.add(b["room"])
+
+        today = datetime.now(IST).replace(hour=0, minute=0, second=0, microsecond=0)
+        if check_in.date() == today.date():
+            for room_doc in rooms_ref.stream():
+                if room_doc.id in seen_rooms and room_doc.to_dict().get("status") == "occupied":
+                    conflicting.add(room_doc.id)
+
+        if conflicting:
+            return jsonify(success=False, message="Room(s) already booked for these dates: " + ", ".join(sorted(conflicting)))
+
+        group_booking_id = str(uuid.uuid4())
+        _book_user = (_safe_user() or {}).get("userId") or "system"
+        booking_date_str = datetime.now(IST).strftime("%Y-%m-%d")
+        now_time_str = datetime.now(IST).strftime("%H:%M")
+
+        batch = db.batch()
+        created_ids = []
+        total_advance = 0
+
+        for pr in parsed_rooms:
+            booking_id = str(uuid.uuid4())
+            created_ids.append(booking_id)
+            booking = {
+                "room": pr["room"],
+                "guest_name": pr["guest_name"],
+                "guest_mobile": pr["guest_mobile"],
+                "booking_date": booking_date_str,
+                "check_in_date": check_in_date,
+                "check_in_time": check_in_time,
+                "check_out_date": check_out_date,
+                "status": "confirmed",
+                "booking_source": booking_source,
+                "payment_source": "hotel",
+                "total_amount": pr["total_amount"],
+                "paid_amount": pr["advance"],
+                "balance": pr["total_amount"] - pr["advance"],
+                "is_ac": pr["is_ac"],
+                "rate_per_night": pr["rate_per_night"],
+                "payment_method": payment_method,
+                "notes": notes,
+                "photo_path": None,
+                "guest_count": pr["guest_count"],
+                "group_booking_id": group_booking_id,
+            }
+            booking.update(attribution_create())
+            booking["bookedBy"] = _book_user
+
+            batch.set(bookings_ref.document(booking_id), booking)
+            total_advance += pr["advance"]
+
+        if total_advance > 0:
+            batch.update(totals_ref.document('current_totals'), {
+                payment_method: firestore.Increment(total_advance),
+                "advance_bookings": firestore.Increment(total_advance),
+            })
+
+        batch.commit()
+        invalidate_rooms_and_totals()
+
+        # Payment ledger rows — one per room with an advance, same shape as
+        # the single-room flow so the checkout-time stay-payment lookup
+        # (query_payments_for_stay) finds them.
+        for pr, booking_id in zip(parsed_rooms, created_ids):
+            if pr["advance"] > 0:
+                payment_service.write_payment({
+                    "room": pr["room"], "name": pr["guest_name"],
+                    "amount": pr["advance"], "method": payment_method,
+                    "type": "booking_advance",
+                    "date": booking_date_str,
+                    "time": now_time_str,
+                    "booking_id": booking_id, "transaction_type": "booking_advance",
+                    "mobile": pr["guest_mobile"],
+                    "stay_checkin_date": check_in_date,
+                })
+
+        logger.info(f"Multi-room booking created: group {group_booking_id}, {len(created_ids)} rooms")
+        write_log("booking.create_multi", target_collection="bookings", target_id=group_booking_id)
+
+        # Best-effort WhatsApp confirmation — one consolidated message for
+        # the whole group, sent to whoever's on the first room (the "lead"
+        # contact for the group). A WhatsApp failure here must never fail
+        # the booking itself — the rooms are already committed — so this is
+        # deliberately isolated in its own try/except.
+        try:
+            NL = chr(10)
+            lead = parsed_rooms[0]
+            phone_number = str(lead["guest_mobile"]).strip()
+            if phone_number.startswith("0"):
+                phone_number = phone_number[1:]
+            if not phone_number.startswith("91"):
+                phone_number = f"91{phone_number}"
+
+            nights = (check_out - check_in).days
+            grand_total = sum(pr["total_amount"] for pr in parsed_rooms)
+            grand_advance = sum(pr["advance"] for pr in parsed_rooms)
+            room_lines = NL.join(
+                f"• Room {pr['room']} — {pr['guest_name']} — ₹{pr['total_amount']} (adv ₹{pr['advance']})"
+                for pr in parsed_rooms
+            )
+
+            message_lines = [
+                "🏨 *GROUP BOOKING CONFIRMATION*",
+                "",
+                f"Hello {lead['guest_name']},",
+                "",
+                f"Your group booking of {len(parsed_rooms)} rooms has been confirmed!",
+                "",
+                "📋 *Rooms:*",
+                room_lines,
+                "",
+                f"🗓️ Check-in: {check_in.strftime('%d %b %Y')} ({check_in_time})",
+                f"🗓️ Check-out: {check_out.strftime('%d %b %Y')}",
+                f"🌙 Duration: {nights} night{'s' if nights != 1 else ''}",
+                "",
+                "💰 *Payment:*",
+                f"• Grand Total: ₹{grand_total}",
+                f"• Total Advance Paid: ₹{grand_advance}",
+                f"• Balance Due: ₹{grand_total - grand_advance}",
+                "",
+                "If you have any questions, please feel free to contact us.",
+                "",
+                "Thank you for choosing us! 🙏",
+            ]
+            group_message = NL.join(message_lines)
+
+            wa_sent = send_whatsapp_message(phone_number, group_message)
+            if not wa_sent:
+                logger.warning(f"create_multi_booking: WhatsApp group confirmation send returned falsy for group {group_booking_id}")
+        except Exception as _wa_e:
+            logger.warning(f"create_multi_booking: WhatsApp group confirmation failed for group {group_booking_id}: {_wa_e}")
+
+        return jsonify(success=True, group_booking_id=group_booking_id, booking_ids=created_ids,
+                        message=f"{len(created_ids)} bookings created successfully")
+
+
+    except Exception as e:
+        logger.error(f"Error creating multi-room booking: {str(e)}")
+        return jsonify(success=False, message=f"Error creating multi-room booking: {str(e)}")
+
 @bookings_bp.route("/update_booking", methods=["POST"])
 def update_booking():
     try:

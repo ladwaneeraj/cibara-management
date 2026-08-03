@@ -688,6 +688,16 @@ function renderRooms() {
     `;
     roomsGrid.appendChild(emptyState);
   }
+
+  // Keep the Vacant/Occupied/Cleaning/Balances filter counts in lock-step
+  // with the grid. updateStats() only recomputes from the in-memory
+  // `rooms` object already sitting in this tab — no network call — so this
+  // is free. Previously it only ran inside fetchData(), i.e. after the
+  // full /get_data round trip; every optimistic local update (checkout,
+  // check-in, add-on, ...) calls renderRooms() immediately but that full
+  // refetch is debounced by seconds, so the room grid flipped instantly
+  // while the counts sat stale until the background fetch caught up.
+  if (typeof updateStats === "function") updateStats();
 }
 
 // Handle cleaned button click (housekeeping → ready_to_inspect)

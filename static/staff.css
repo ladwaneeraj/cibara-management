@@ -408,13 +408,25 @@
   text-underline-offset: 2px;
 }
 .stf-grid-name .nm {
-  display: block;
+  display: flex;
+  align-items: center;
   font-weight: 600;
   font-size: 0.79rem;
   color: var(--stf-ink);
-  white-space: nowrap;
+}
+/* Name text truncates on its own (min-width:0 lets it shrink below its
+   content size inside the flex row); the shift badge keeps flex:none so
+   it never gets squeezed, and margin-left:auto below pushes it to the
+   right edge of the cell instead of sitting flush after the name. */
+.stf-grid-name .nm .stf-name-text {
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.stf-name-text + .stf-shift-tag {
+  margin-left: auto;
 }
 .stf-grid-name .ds {
   display: block;
@@ -429,28 +441,61 @@
   font-weight: 700;
 }
 /* Dual-shift staff: a small D/N badge beside the name identifies which
-   of their two grid rows (Day / Night) this is. */
+   of their two grid rows (Day / Night) this is. A round pill with a
+   defined border reads clearly as a tag rather than a stray letter. */
 .stf-shift-tag {
   display: inline-flex;
+  flex: none;
   align-items: center;
   justify-content: center;
-  min-width: 15px;
-  height: 15px;
-  margin-left: 0.35rem;
-  padding: 0 0.2rem;
-  border-radius: 4px;
+  min-width: 18px;
+  height: 18px;
+  margin-left: 0.4rem;
+  padding: 0 0.3rem;
+  border-radius: 999px;
+  border: 1px solid transparent;
   font-size: 0.6rem;
-  font-weight: 700;
+  font-weight: 800;
+  line-height: 1;
   vertical-align: middle;
 }
-.stf-shift-tag.day   { color: var(--stf-primary); background: var(--stf-primary-soft); }
-.stf-shift-tag.night { color: #6b46c1; background: #f1e9fc; }
+.stf-shift-tag.day {
+  color: var(--stf-primary);
+  background: var(--stf-primary-soft);
+  border-color: var(--stf-primary-line);
+}
+.stf-shift-tag.night {
+  color: #6b46c1;
+  background: #f1e9fc;
+  border-color: #ddc8f7;
+}
 
 /* The Day/Night pair of rows for one dual-shift staff member: the name
    is printed only once, on the Day row; the Night row just carries its
-   N badge (no repeated name) so the pair reads as one person, two rows. */
+   N badge (no repeated name) so the pair reads as one person, two rows.
+   The Night row used to right-align its lone badge, leaving it stranded
+   in the far corner with nothing to connect it to the row above. Left-
+   aligning it under the name, with a small connector tick, reads instead
+   as "this person's second row" at a glance. */
 .stf-pair-first td { border-bottom: none !important; }
-.stf-pair-second .stf-grid-name { text-align: right !important; }
+.stf-pair-second .stf-grid-name {
+  padding-top: 0.15rem !important;
+  padding-bottom: 0.3rem !important;
+}
+.stf-pair-second .stf-grid-name .nm {
+  display: flex;
+  align-items: center;
+}
+.stf-pair-second .stf-grid-name .nm::before {
+  content: "";
+  width: 9px;
+  height: 8px;
+  margin-right: 0.15rem;
+  border-left: 1.5px solid var(--stf-line);
+  border-bottom: 1.5px solid var(--stf-line);
+  border-bottom-left-radius: 4px;
+  flex: none;
+}
 .stf-grid-pay-empty { cursor: default; }
 
 .stf-grid-cell {
@@ -491,6 +536,44 @@
   transition: opacity 0.12s;
 }
 .stf-grid-cell.is-locked:hover::after { opacity: 0.85; }
+
+/* Quick-pay range picker (flatpickr, id=stf-qp-range): flag days already
+   paid for this staff member, same green + lock-mark language as the
+   attendance grid's .is-locked cells above, so it's obvious at a glance
+   which days in the visible month are already settled — no need to cross-
+   check against the grid. Hardcoded colors (not the module's --stf-*
+   variables): flatpickr appends its calendar to <body>, outside
+   #staff-modal, so those custom properties wouldn't resolve here. Values
+   match --stf-full-bg / --stf-full-ink exactly. */
+.flatpickr-day.stf-fp-paid {
+  background: #d3f2df;
+  border-color: #d3f2df;
+  color: #15803d;
+  position: relative;
+}
+.flatpickr-day.stf-fp-paid:hover {
+  background: #bfe9cf;
+  border-color: #bfe9cf;
+  color: #15803d;
+}
+.flatpickr-day.stf-fp-paid::after {
+  content: "\1F512";
+  position: absolute;
+  bottom: 0;
+  right: 2px;
+  font-size: 0.5rem;
+  opacity: 0.45;
+}
+.flatpickr-day.stf-fp-paid.selected,
+.flatpickr-day.stf-fp-paid.startRange,
+.flatpickr-day.stf-fp-paid.endRange,
+.flatpickr-day.stf-fp-paid.inRange {
+  /* Picking over a paid day is still allowed (rare corrections happen) —
+     keep flatpickr's normal selection color on top so the selection
+     itself stays legible; the paid state is still visible via the lock
+     mark carried over from the base rule above. */
+  color: #fff;
+}
 
 .stf-grid-total-h,
 .stf-grid-total {

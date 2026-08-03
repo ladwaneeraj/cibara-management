@@ -447,6 +447,45 @@ def checkout():
 
         # Handle final checkout
         elif is_final_checkout:
+            # ── Stale/duplicate-submit guard ─────────────────────────────────
+            # A second /checkout for this room can arrive after the FIRST one
+            # already committed (double-click on "Yes, Checkout", a retried
+            # request, the optimistic-UI button re-enabling before the 5-8s
+            # server round trip finishes). By the time this second request is
+            # handled, the client-supplied room_data has no guest (either the
+            # frontend's own optimistic mutation already nulled it locally, or
+            # — since a falsy client guest forces a live Firestore re-read
+            # above — the re-read now reflects the first request's completed
+            # reset). Falling through would hit create_bill_record() with no
+            # guest and raise BillCreationError, surfacing a scary "Checkout
+            # blocked — alert sent to admin" message for a checkout that, in
+            # fact, already succeeded.
+            #
+            # Detect this by room status rather than by active_bill_id/guest
+            # (both already cleared): a room that is no longer "occupied" has
+            # already been actioned by a prior request. A room stuck in
+            # "occupied" with a missing guest is a genuinely different,
+            # real data problem — that case still falls through and is
+            # correctly blocked below.
+            if room_data.get("status") != "occupied":
+                _dup_last_bill = room_data.get("last_bill_id")
+                logger.warning(
+                    f"[CHECKOUT] ignoring duplicate/stale final-checkout "
+                    f"request for room {room}: status="
+                    f"{room_data.get('status')!r} (already actioned by a "
+                    f"prior request; last_bill_id={_dup_last_bill})"
+                )
+                if _dup_last_bill:
+                    return jsonify(
+                        success=True, idempotent=True,
+                        bill_id=_dup_last_bill,
+                        message="Checkout already completed for this stay.",
+                    )
+                return jsonify(
+                    success=False,
+                    message=f"Room {room} is not currently occupied — nothing to check out.",
+                )
+
             balance = room_data["balance"]
             guest_info = room_data["guest"]
             guest_name = guest_info["name"] if guest_info else "Unknown"

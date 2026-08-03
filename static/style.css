@@ -516,54 +516,11 @@ body {
   color: #fff;
 }
 
-/* Vacant — green, matches the room-status color used on room cards */
-#rooms-tab .filter-btn-vacant {
-  background: rgba(46, 196, 182, 0.12);
-  border-color: rgba(46, 196, 182, 0.5);
-  color: #0d9488;
-}
-#rooms-tab .filter-btn-vacant.active {
-  background: var(--vacant);
-  border-color: var(--vacant);
-  color: #fff;
-}
-
-/* Occupied — red, matches the room-status color used on room cards */
-#rooms-tab .filter-btn-occupied {
-  background: rgba(230, 57, 70, 0.1);
-  border-color: rgba(230, 57, 70, 0.45);
-  color: #c1121f;
-}
-#rooms-tab .filter-btn-occupied.active {
-  background: var(--occupied);
-  border-color: var(--occupied);
-  color: #fff;
-}
-
-/* Cleaning — amber, matches the room-status color used on room cards */
-#rooms-tab .filter-btn-cleaning {
-  background: rgba(255, 159, 28, 0.14);
-  border-color: rgba(255, 159, 28, 0.5);
-  color: #b45309;
-}
-#rooms-tab .filter-btn-cleaning.active {
-  background: var(--cleaning);
-  border-color: var(--cleaning);
-  color: #fff;
-}
-
-/* Balances — violet, a distinct "financial" hue so it never reads as
-   another room-status color */
-#rooms-tab .filter-btn-balances {
-  background: rgba(124, 58, 237, 0.1);
-  border-color: rgba(124, 58, 237, 0.45);
-  color: #6d28d9;
-}
-#rooms-tab .filter-btn-balances.active {
-  background: #7c3aed;
-  border-color: #7c3aed;
-  color: #fff;
-}
+/* Per-status colors (green/red/amber/violet borders matching room-card
+   status) were removed here — every filter button now uses the same
+   plain style as "All" above, distinguished only by the .active state.
+   Simpler and less visually noisy than a differently-tinted pill per
+   button. */
 #rooms-tab .filter-btn-balances.active .filter-balance-amount {
   color: rgba(255, 255, 255, 0.9);
 }
@@ -579,20 +536,18 @@ body {
 }
 
 @media (max-width: 480px) {
+  /* Full word + the balance amount stay visible on mobile too (single
+     letters and a bare count read as cryptic on a phone). The bar still
+     never wraps to a second line: .filter-container above is already
+     `flex-wrap: nowrap; overflow-x: auto` at every width, so once the
+     five buttons are wider than the screen they scroll sideways within
+     one row instead of breaking onto a second one. */
   #rooms-tab .filter-btn {
-    padding: 0.28rem 0.55rem;
-    font-size: 0.74rem;
+    padding: 0.28rem 0.5rem;
+    font-size: 0.7rem;
   }
-  #rooms-tab .filter-label-full {
-    display: none;
-  }
-  #rooms-tab .filter-label-short {
-    display: inline;
-  }
-  /* Drop the ₹ amount under "Balances" on mobile — the letter + count
-     is enough, and this is what let the bar wrap to a second line. */
   #rooms-tab .filter-balance-amount {
-    display: none;
+    font-size: 0.6rem;
   }
 }
 
@@ -4799,11 +4754,24 @@ body.incognito-mode #profile-menu-settings {
   margin: 0.6rem 1.1rem 0.5rem;
 }
 
+/* ── Redesigned layout ──────────────────────────────────────────────
+   Squeezing Check-in's value (date + time + an edit button — by far the
+   longest of the four) into a half-width tile, indented to match its
+   label, wrapped it onto three ugly lines ("27-07-" / "2026" / "15:42").
+   No amount of indent tuning fixes that; the value is simply too long
+   for that box. Fix: Check-in and Discount (the two tiles with either
+   long content or an action button) each get their own FULL-WIDTH row,
+   laid out horizontally — icon+label on the left, value on the right,
+   all on one line with room to spare. Room Price and Stay Status (both
+   short, single-word-ish values) keep the compact stacked tile —
+   label+icon on top, value indented to line up underneath — as a tidy
+   pair in between. */
 #checkout-modal .stat-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 0.55rem;
   margin-bottom: 0.55rem;
+  align-items: start;
 }
 
 #checkout-modal .stat-tile {
@@ -4850,22 +4818,33 @@ body.incognito-mode #profile-menu-settings {
   white-space: nowrap;
 }
 
+/* Room Price / Stay Status: line the value up under the LABEL TEXT, not
+   under the icon (head row is icon 26px + gap 0.4rem + label; the value
+   below used to start flush at the tile's left edge, under the icon,
+   while the label started ~30px further right — a visible left/right
+   stagger between a tile's own label and value). */
 #checkout-modal .stat-value {
   font-size: 0.95rem;
   font-weight: 700;
   color: var(--dark);
   line-height: 1.25;
+  text-align: center;
 }
 
 #checkout-modal .stat-value-row {
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: 0.3rem;
 }
+
+
+
 
 #checkout-modal .stat-value#checkout-stay-status {
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: 0.35rem;
   flex-wrap: wrap;
   font-size: 0.88rem;

@@ -1511,87 +1511,111 @@
             <!-- Will be filled dynamically -->
           </div>
 
-          <!-- Reports View -->
+          <!-- Reports View — revamped: unified transaction-style report -->
           <div id="reports-view" class="view-content hidden">
 
-            <!-- Report Filter Controls -->
-            <div class="report-controls" id="report-controls">
-              <div class="report-filter-controls">
-                <input
-                  type="text"
-                  id="report-search"
-                  placeholder="Search room, guest or description…"
-                  class="filter-input"
-                />
-                <select id="report-type-filter" class="filter-select">
-                  <option value="all">All Transactions</option>
-                  <option value="cash">Cash Only</option>
-                  <option value="online">Online / UPI Only</option>
-                  <option value="expenses">Expenses Only</option>
-                  <option value="refunds">Refunds Only</option>
+            <!-- Summary strip (tap a card to filter the list) -->
+            <div class="rpt-summary" id="rpt-summary">
+              <button type="button" class="rpt-stat rpt-stat-cash" data-type="cash" title="Show cash payments only">
+                <span class="rpt-stat-lbl"><i class="fas fa-money-bill-wave"></i> Cash</span>
+                <span class="rpt-stat-val" id="report-cash-total">₹0</span>
+                <span class="rpt-stat-sub" id="rpt-sub-cash">—</span>
+              </button>
+              <button type="button" class="rpt-stat rpt-stat-online" data-type="online" title="Show online / UPI payments only">
+                <span class="rpt-stat-lbl"><i class="fas fa-mobile-alt"></i> Online / UPI</span>
+                <span class="rpt-stat-val" id="report-online-total">₹0</span>
+                <span class="rpt-stat-sub" id="rpt-sub-online">—</span>
+              </button>
+              <button type="button" class="rpt-stat rpt-stat-exp" data-type="expenses" title="Show expenses only">
+                <span class="rpt-stat-lbl"><i class="fas fa-receipt"></i> Expenses</span>
+                <span class="rpt-stat-val" id="report-expense-total">₹0</span>
+                <span class="rpt-stat-sub" id="rpt-sub-exp">—</span>
+              </button>
+              <button type="button" class="rpt-stat rpt-stat-ref" data-type="refunds" title="Show refunds only">
+                <span class="rpt-stat-lbl"><i class="fas fa-undo"></i> Refunds</span>
+                <span class="rpt-stat-val" id="report-refund-total">₹0</span>
+                <span class="rpt-stat-sub" id="rpt-sub-ref">—</span>
+              </button>
+              <div class="rpt-stat rpt-stat-net" title="Cash + Online − Refunds − Expenses">
+                <span class="rpt-stat-lbl"><i class="fas fa-balance-scale"></i> Net</span>
+                <span class="rpt-stat-val" id="report-net-revenue">₹0</span>
+                <span class="rpt-stat-sub">Cash + Online − Refunds − Expenses</span>
+              </div>
+            </div>
+            <div class="rpt-meta" id="rpt-meta"></div>
+
+            <!-- Toolbar: search / sort / filters / export -->
+            <div class="rpt-toolbar" id="rpt-toolbar">
+              <div class="rpt-toolbar-row">
+                <div class="rpt-search-wrap">
+                  <i class="fas fa-search"></i>
+                  <input
+                    type="text"
+                    id="report-search"
+                    placeholder="Search room, guest, description, vendor…"
+                    autocomplete="off"
+                  />
+                  <button type="button" id="rpt-search-clear" title="Clear search" hidden>
+                    <i class="fas fa-times"></i>
+                  </button>
+                </div>
+                <select id="report-sort" class="filter-select rpt-sort" title="Sort order">
+                  <option value="newest">Newest first</option>
+                  <option value="oldest">Oldest first</option>
+                  <option value="highest">Highest amount</option>
+                  <option value="lowest">Lowest amount</option>
                 </select>
-                <!-- Expense category filter — shown only when Expenses is selected -->
-                <select id="expense-category-filter" class="filter-select" style="display:none">
-                  <option value="all">All Categories</option>
+                <button type="button" id="rpt-more-filters-btn" class="rpt-tool-btn" title="More filters">
+                  <i class="fas fa-sliders-h"></i> <span>Filters</span><span class="rpt-filter-dot" id="rpt-filter-dot" hidden></span>
+                </button>
+                <div class="rpt-export-wrap">
+                  <button type="button" id="rpt-export-btn" class="rpt-tool-btn rpt-export" data-perm="data.export" title="Export report">
+                    <i class="fas fa-file-export"></i> <span>Export</span>
+                  </button>
+                  <div class="rpt-export-menu" id="rpt-export-menu" hidden>
+                    <button type="button" id="rpt-export-xlsx"><i class="fas fa-file-excel"></i> Excel — full report</button>
+                    <button type="button" id="rpt-export-csv"><i class="fas fa-file-csv"></i> CSV — current view</button>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Type chips with live counts -->
+              <div class="rpt-type-chips" id="rpt-type-chips">
+                <button type="button" class="rpt-chip active" data-type="all">All <span class="rpt-chip-n" id="rpt-n-all"></span></button>
+                <button type="button" class="rpt-chip" data-type="cash">Cash <span class="rpt-chip-n" id="rpt-n-cash"></span></button>
+                <button type="button" class="rpt-chip" data-type="online">Online <span class="rpt-chip-n" id="rpt-n-online"></span></button>
+                <button type="button" class="rpt-chip" data-type="expenses">Expenses <span class="rpt-chip-n" id="rpt-n-expenses"></span></button>
+                <button type="button" class="rpt-chip" data-type="refunds">Refunds <span class="rpt-chip-n" id="rpt-n-refunds"></span></button>
+              </div>
+
+              <!-- Advanced filters (toggled by the Filters button) -->
+              <div class="rpt-adv" id="rpt-adv" hidden>
+                <select id="expense-category-filter" class="filter-select" title="Expense category (applies to expense rows)">
+                  <option value="all">All categories</option>
                 </select>
-                <!-- Daily / Report expense filter — shown only when Expenses is selected.
-                     Daily = transaction-type (drawer expenses).
-                     Report = from-account (off-deposit). -->
-                <select id="expense-type-filter" class="filter-select" style="display:none">
+                <select id="expense-type-filter" class="filter-select" title="Daily (drawer) or Report (from-account) expenses">
                   <option value="all">Daily &amp; Report</option>
                   <option value="transaction">Daily only</option>
                   <option value="report">Report only</option>
                 </select>
-                <select id="report-sort" class="filter-select">
-                  <option value="oldest">Oldest First</option>
-                  <option value="newest">Newest First</option>
-                  <option value="highest">Highest Amount</option>
-                  <option value="lowest">Lowest Amount</option>
-                </select>
-                <button onclick="exportToExcel()" class="action-btn btn-success btn-sm" data-perm="data.export">
-                  <i class="fas fa-file-excel"></i> Export
+                <label class="rpt-gst-toggle" title="Only expenses that carry GST">
+                  <input type="checkbox" id="rpt-gst-only" /> GST only
+                </label>
+                <div class="rpt-amt-range" title="Amount range — applies to every row type">
+                  <input type="number" id="rpt-min-amt" placeholder="Min ₹" min="0" inputmode="numeric" />
+                  <span>–</span>
+                  <input type="number" id="rpt-max-amt" placeholder="Max ₹" min="0" inputmode="numeric" />
+                </div>
+                <button type="button" id="rpt-clear-filters" class="rpt-tool-btn rpt-clear" title="Reset all filters">
+                  <i class="fas fa-undo-alt"></i> Reset
                 </button>
               </div>
             </div>
 
-            <!-- Revenue Summary Card -->
-            <div class="summary-card">
-              <div class="summary-title">
-                Revenue Report <span id="report-date-range"></span>
-              </div>
-              <div class="summary-row">
-                <div class="summary-label">Cash Payments</div>
-                <div class="summary-value" id="report-cash-total">₹0</div>
-              </div>
-              <div class="summary-row">
-                <div class="summary-label">Online Payments</div>
-                <div class="summary-value" id="report-online-total">₹0</div>
-              </div>
-              <div class="summary-row">
-                <div class="summary-label">Add-ons & Services</div>
-                <div class="summary-value" id="report-addon-total">₹0</div>
-              </div>
-              <div class="summary-row">
-                <div class="summary-label">Refunds</div>
-                <div class="summary-value" id="report-refund-total">₹0</div>
-              </div>
-              <div class="summary-row">
-                <div class="summary-label">Expenses</div>
-                <div
-                  class="summary-value"
-                  id="report-expense-total"
-                  style="color: var(--danger)"
-                >
-                  ₹0
-                </div>
-              </div>
-              <div class="summary-row total-row">
-                <div class="summary-label">Net Revenue</div>
-                <div class="summary-value" id="report-net-revenue">₹0</div>
-              </div>
-            </div>
+            <!-- Result meta bar -->
+            <div class="rpt-result-bar hidden" id="rpt-result-bar"></div>
 
-            <!-- Transaction logs -->
+            <!-- Unified transaction list -->
             <div id="report-content">
               <div class="loading-indicator hidden">
                 <span class="loader"></span>
@@ -1599,7 +1623,7 @@
               </div>
               <div class="empty-state">
                 <i class="fas fa-chart-line fa-3x"></i>
-                <p>Select a date range and click Apply to generate a report</p>
+                <p>Select a date range and click Generate to build the report</p>
               </div>
             </div>
           </div>

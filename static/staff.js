@@ -1838,13 +1838,21 @@
   //   account → payment_method "online", expense_type "report"
   //             (paid from bank / UPI — a "report" expense)
 
-  function sourceHtml(id) {
+  function sourceHtml(id, opts) {
     // Managers pay from counter cash only (custody rule — enforced
     // server-side too); the Account/UPI option renders only for roles
     // with staff.pay.account (admin).
     var accountBtn = can("staff.pay.account")
       ? '  <button type="button" data-src="account">' +
         '    <span><i class="fas fa-university"></i> Account / UPI</span><small>bank or online</small>' +
+        "  </button>"
+      : "";
+    // Opening balance from the paper books — Advance form only
+    // (opts.books), admin-only. Writes NO expense row and never touches
+    // the counter; used to seed an old advance into the software.
+    var booksBtn = (opts && opts.books && can("staff.pay.account"))
+      ? '  <button type="button" data-src="books">' +
+        '    <span><i class="fas fa-book"></i> Books (opening)</span><small>old advance — no expense entry</small>' +
         "  </button>"
       : "";
     return (
@@ -1854,6 +1862,7 @@
       '    <span><i class="fas fa-store"></i> Cash counter</span><small>today\'s drawer cash</small>' +
       "  </button>" +
       accountBtn +
+      booksBtn +
       "</div></div>"
     );
   }
@@ -1872,6 +1881,8 @@
   function readSource(id) {
     var sel = document.querySelector("#" + id + " button.sel");
     var src = sel ? sel.dataset.src : "counter";
+    if (src === "books")
+      return { payment_method: "books", expense_type: "opening", opening: true };
     return src === "account"
       ? { payment_method: "online", expense_type: "report" }
       : { payment_method: "cash", expense_type: "transaction" };
@@ -1895,10 +1906,10 @@
       '    <div class="form-group"><label class="form-label">Date</label>' +
       '      <input class="form-control" type="date" id="stf-adv-date" value="' + _todayStr() + '" max="' + _todayStr() + '"></div>' +
       "  </div>" +
-      sourceHtml("stf-adv-source") +
+      sourceHtml("stf-adv-source", { books: true }) +
       '  <div class="form-group"><label class="form-label">Note</label>' +
       '    <input class="form-control" id="stf-adv-note" maxlength="120" placeholder="Optional — e.g. festival, medical"></div>' +
-      '  <div style="font-size:0.72rem;color:#718096;margin-bottom:0.7rem;">' +
+      '  <div id="stf-adv-hint" style="font-size:0.72rem;color:#718096;margin-bottom:0.7rem;">' +
       "    The advance is recorded in expenses too, and gets deducted from " +
       "    the next salary. Anything not recovered carries forward automatically." +
       "  </div>" +
@@ -1910,6 +1921,22 @@
       backToCards(false);
     });
     bindSource("stf-adv-source");
+    // Books (opening) source: swap the hint so it's clear no expense row /
+    // counter movement happens for an opening-balance entry.
+    var _advHintDefault =
+      "The advance is recorded in expenses too, and gets deducted from " +
+      "the next salary. Anything not recovered carries forward automatically.";
+    var _advHintBooks =
+      "Opening balance from the paper books — recorded against " + staff.name +
+      " only. No expense entry, no counter or account impact. It still gets " +
+      "deducted from upcoming salaries.";
+    document.querySelectorAll("#stf-adv-source button").forEach(function (b) {
+      b.addEventListener("click", function () {
+        var hint = document.getElementById("stf-adv-hint");
+        if (hint) hint.textContent =
+          b.dataset.src === "books" ? _advHintBooks : _advHintDefault;
+      });
+    });
     document.getElementById("stf-adv-save").addEventListener("click", function () {
       var amount = parseInt(document.getElementById("stf-adv-amount").value, 10);
       if (!(amount > 0)) return notify("Enter the advance amount", "error");
@@ -1923,6 +1950,7 @@
         note: document.getElementById("stf-adv-note").value.trim(),
         payment_method: src.payment_method,
         expense_type: src.expense_type,
+        opening: !!src.opening,
       })
         .then(function (json) {
           notify(json.message || "Advance recorded", "success");
@@ -2165,9 +2193,11 @@
             if (it.kind === "advance") {
               var a = it.advance;
               var aBy = _byLine(a.created_by);
-              title = "Advance given" + (a.note ? " — " + esc(a.note) : "");
+              title = (a.opening ? "Opening advance (from books)" : "Advance given") +
+                (a.note ? " — " + esc(a.note) : "");
               detail = '<span class="muted">' + esc(fmtD(a.date)) +
-                (a.expense_type === "report" ? " · account" : " · counter cash") +
+                (a.opening ? " · books only"
+                  : a.expense_type === "report" ? " · account" : " · counter cash") +
                 (aBy ? " · " + esc(aBy) : "") +
                 "</span>";
               amtHtml = '<div class="amt adv-amt">' + rup(a.amount) + "</div>" +

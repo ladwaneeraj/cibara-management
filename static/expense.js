@@ -1561,10 +1561,12 @@ async function submitExpense(e) {
         debouncedFetchData();
       }
 
-      if (type === "report" &&
-          document.getElementById("reports-tab") &&
-          !document.getElementById("reports-tab").classList.contains("hidden")) {
-        generateReport();
+      // Refresh the Reports view when a report has been generated, so the
+      // add/edit shows up there immediately. Any expense type — the Reports
+      // list shows both Daily and Report expenses. (Replaces a call to the
+      // undefined generateReport(), which used to throw here.)
+      if (typeof window.refreshReportsView === "function") {
+        window.refreshReportsView();
       }
 
       showNotification(

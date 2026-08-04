@@ -74,3 +74,6 @@ htmlcov/
 *.backup
 # Sensitive config — served dynamically from env vars
 static/firebase-config.js
+
+# Session scratch — removed code parked here (safe to delete the folder)
+_to_delete/

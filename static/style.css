@@ -5133,3 +5133,435 @@ body.incognito-mode #profile-menu-settings {
     max-height: 78vh;
   }
 }
+
+/* ============================================================
+   REPORTS VIEW — REVAMP (unified transaction-style list)
+   Namespaced `rpt-` so nothing else on the page is affected.
+   ============================================================ */
+
+/* ---------- Summary strip ---------- */
+.rpt-summary {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 0.55rem;
+  margin-bottom: 0.35rem;
+}
+.rpt-stat {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.15rem;
+  padding: 0.6rem 0.75rem;
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.04);
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.15s, box-shadow 0.15s, transform 0.1s;
+  font-family: inherit;
+}
+button.rpt-stat:hover { border-color: #94a3b8; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+button.rpt-stat:active { transform: scale(0.985); }
+.rpt-stat.active { border-color: var(--primary); box-shadow: 0 0 0 2px rgba(67, 97, 238, 0.18); }
+.rpt-stat-lbl {
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: #64748b;
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+.rpt-stat-val { font-size: 1.12rem; font-weight: 700; color: #0f172a; }
+.rpt-stat-sub { font-size: 0.68rem; color: #94a3b8; }
+.rpt-stat-cash  .rpt-stat-lbl i { color: #16a34a; }
+.rpt-stat-online .rpt-stat-lbl i { color: #2563eb; }
+.rpt-stat-exp   .rpt-stat-lbl i { color: #dc2626; }
+.rpt-stat-exp   .rpt-stat-val,
+.rpt-stat-ref   .rpt-stat-val { color: #dc2626; }
+.rpt-stat-ref   .rpt-stat-lbl i { color: #ea580c; }
+.rpt-stat-net { background: linear-gradient(135deg, #1e3a8a, #2563eb); border: none; cursor: default; }
+.rpt-stat-net .rpt-stat-lbl { color: #bfdbfe; }
+.rpt-stat-net .rpt-stat-lbl i { color: #bfdbfe; }
+.rpt-stat-net .rpt-stat-val { color: #fff; }
+.rpt-stat-net .rpt-stat-sub { color: #93c5fd; }
+
+.rpt-meta {
+  font-size: 0.74rem;
+  color: #64748b;
+  margin: 0 0.15rem 0.7rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 0.9rem;
+}
+.rpt-meta i { color: #94a3b8; margin-right: 0.2rem; }
+
+/* ---------- Toolbar ---------- */
+.rpt-toolbar {
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 14px;
+  padding: 0.6rem 0.7rem;
+  margin-bottom: 0.7rem;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+.rpt-toolbar-row {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+}
+.rpt-search-wrap {
+  position: relative;
+  flex: 1 1 220px;
+  min-width: 170px;
+}
+.rpt-search-wrap > i.fa-search {
+  position: absolute;
+  left: 0.65rem;
+  top: 50%;
+  transform: translateY(-50%);
+  color: #94a3b8;
+  font-size: 0.8rem;
+  pointer-events: none;
+}
+.rpt-search-wrap input {
+  width: 100%;
+  padding: 0.45rem 2rem 0.45rem 2rem;
+  border: 1px solid #e2e8f0;
+  border-radius: 9px;
+  font-size: 0.85rem;
+  background: #f8fafc;
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.rpt-search-wrap input:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 2px rgba(67, 97, 238, 0.12);
+  background: #fff;
+}
+#rpt-search-clear {
+  position: absolute;
+  right: 0.35rem;
+  top: 50%;
+  transform: translateY(-50%);
+  border: none;
+  background: #e2e8f0;
+  color: #475569;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  font-size: 0.65rem;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+#rpt-search-clear:hover { background: #cbd5e1; }
+.rpt-sort { flex: 0 0 auto; }
+
+.rpt-tool-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.42rem 0.75rem;
+  border: 1px solid #e2e8f0;
+  border-radius: 9px;
+  background: #f8fafc;
+  color: #334155;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+  position: relative;
+  font-family: inherit;
+  white-space: nowrap;
+}
+.rpt-tool-btn:hover { background: #f1f5f9; border-color: #cbd5e1; }
+.rpt-tool-btn.rpt-export { background: #059669; border-color: #059669; color: #fff; }
+.rpt-tool-btn.rpt-export:hover { background: #047857; }
+.rpt-filter-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--primary);
+  position: absolute;
+  top: 5px;
+  right: 5px;
+}
+
+.rpt-export-wrap { position: relative; }
+.rpt-export-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 5px);
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.13);
+  z-index: 60;
+  min-width: 205px;
+  overflow: hidden;
+}
+.rpt-export-menu button {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.55rem 0.8rem;
+  background: none;
+  border: none;
+  font-size: 0.8rem;
+  color: #334155;
+  cursor: pointer;
+  text-align: left;
+  font-family: inherit;
+}
+.rpt-export-menu button:hover { background: #f1f5f9; }
+.rpt-export-menu i.fa-file-excel { color: #1d6f42; }
+.rpt-export-menu i.fa-file-csv { color: #2563eb; }
+
+/* ---------- Type chips ---------- */
+.rpt-type-chips {
+  display: flex;
+  gap: 0.35rem;
+  overflow-x: auto;
+  padding-bottom: 2px;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+.rpt-type-chips::-webkit-scrollbar { display: none; }
+.rpt-chip {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.32rem;
+  padding: 0.34rem 0.75rem;
+  border-radius: 999px;
+  border: 1px solid #e2e8f0;
+  background: #f8fafc;
+  color: #475569;
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s;
+  font-family: inherit;
+  white-space: nowrap;
+}
+.rpt-chip:hover { border-color: #cbd5e1; background: #f1f5f9; }
+.rpt-chip.active { background: var(--primary); border-color: var(--primary); color: #fff; }
+.rpt-chip-n {
+  font-size: 0.68rem;
+  font-weight: 700;
+  background: #e2e8f0;
+  color: #475569;
+  border-radius: 999px;
+  padding: 0.05rem 0.42rem;
+  min-width: 1.15rem;
+  text-align: center;
+}
+.rpt-chip.active .rpt-chip-n { background: rgba(255, 255, 255, 0.25); color: #fff; }
+.rpt-chip-n:empty { display: none; }
+
+/* ---------- Advanced filters ---------- */
+.rpt-adv {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+  border-top: 1px dashed #e2e8f0;
+  padding-top: 0.55rem;
+}
+.rpt-adv[hidden] { display: none; }
+.rpt-gst-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.32rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: #475569;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 9px;
+  padding: 0.38rem 0.65rem;
+  cursor: pointer;
+  user-select: none;
+}
+.rpt-gst-toggle input { accent-color: var(--primary); margin: 0; }
+.rpt-amt-range {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  color: #94a3b8;
+  font-size: 0.8rem;
+}
+.rpt-amt-range input {
+  width: 84px;
+  padding: 0.38rem 0.5rem;
+  border: 1px solid #e2e8f0;
+  border-radius: 9px;
+  font-size: 0.8rem;
+  background: #f8fafc;
+  outline: none;
+}
+.rpt-amt-range input:focus { border-color: var(--primary); background: #fff; }
+.rpt-tool-btn.rpt-clear { color: #b91c1c; background: #fef2f2; border-color: #fecaca; }
+.rpt-tool-btn.rpt-clear:hover { background: #fee2e2; }
+select.filter-select:disabled, .rpt-gst-toggle.rpt-disabled { opacity: 0.45; pointer-events: none; }
+
+/* ---------- Result bar ---------- */
+.rpt-result-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem 0.9rem;
+  flex-wrap: wrap;
+  font-size: 0.78rem;
+  color: #475569;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 0.45rem 0.8rem;
+  margin-bottom: 0.7rem;
+}
+.rpt-result-bar.hidden { display: none; }
+.rpt-result-bar strong { color: #0f172a; }
+.rpt-in { color: #16a34a; font-weight: 700; }
+.rpt-out { color: #dc2626; font-weight: 700; }
+.rpt-clear-link {
+  margin-left: auto;
+  border: none;
+  background: none;
+  color: var(--primary);
+  font-size: 0.76rem;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 0.1rem 0.2rem;
+  font-family: inherit;
+}
+.rpt-clear-link:hover { text-decoration: underline; }
+
+/* ---------- Unified list ---------- */
+.rpt-list {
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 14px;
+  overflow: hidden;
+  box-shadow: 0 1px 5px rgba(0, 0, 0, 0.05);
+  margin-bottom: 1.2rem;
+}
+.rpt-day-hdr {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.45rem 1rem;
+  background: #f1f5f9;
+  border-top: 1px solid #e2e8f0;
+  border-bottom: 1px solid #e2e8f0;
+  font-size: 0.76rem;
+  font-weight: 700;
+  color: #334155;
+}
+.rpt-list > .rpt-day-hdr:first-child { border-top: none; }
+.rpt-day-hdr .rpt-day-totals {
+  margin-left: auto;
+  display: flex;
+  gap: 0.7rem;
+  font-weight: 600;
+  font-size: 0.72rem;
+}
+.rpt-row {
+  padding: 0.6rem 1rem;
+  border-bottom: 1px solid #f1f5f9;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+.rpt-row:last-child { border-bottom: none; }
+.rpt-row .log-details { flex: 1; min-width: 0; }
+.rpt-row .log-title { font-size: 0.86rem; }
+.rpt-row .log-subtitle { font-size: 0.74rem; }
+.rpt-row .log-amount { white-space: nowrap; font-size: 0.9rem; }
+.rpt-row-cash    { background: #f2faf4; }
+.rpt-row-online  { background: #f0f7fd; }
+.rpt-row-expense { background: #fdf3f2; }
+.rpt-row-refund  { background: #fff8f1; }
+.rpt-amt-in  { color: #15803d !important; }
+.rpt-amt-out { color: #dc2626 !important; }
+
+/* Expense row action buttons — ≥40px touch targets on mobile */
+.rpt-row-actions { display: inline-flex; gap: 0.25rem; margin-left: 0.35rem; }
+.rpt-exp-edit-btn, .rpt-exp-del-btn {
+  border-radius: 7px;
+  padding: 0.22rem 0.55rem;
+  font-size: 0.72rem;
+  cursor: pointer;
+  background: #fff;
+  line-height: 1.5;
+}
+.rpt-exp-edit-btn { border: 1px solid #cbd5e1; color: #2563eb; }
+.rpt-exp-edit-btn:hover { background: #eff6ff; }
+.rpt-exp-del-btn { border: 1px solid #fecaca; color: #c53030; }
+.rpt-exp-del-btn:hover { background: #fef2f2; }
+.rpt-exp-del-btn:disabled { opacity: 0.5; cursor: wait; }
+
+.rpt-badge {
+  display: inline-block;
+  font-size: 0.66rem;
+  font-weight: 600;
+  border-radius: 5px;
+  padding: 1px 6px;
+  vertical-align: middle;
+}
+.rpt-badge-daily  { background: #fef3c7; color: #92400e; }
+.rpt-badge-report { background: #ede9fe; color: #6d28d9; }
+.rpt-badge-gst    { background: #e8f5e9; color: #2e7d32; }
+.rpt-badge-split  { background: #e0f2fe; color: #0369a1; }
+.rpt-badge-addon  { background: #fef9c3; color: #92400e; }
+
+.rpt-empty {
+  padding: 2.4rem 1rem;
+  text-align: center;
+  color: #94a3b8;
+}
+.rpt-empty i { font-size: 2rem; margin-bottom: 0.6rem; opacity: 0.6; display: block; }
+.rpt-empty p { margin: 0 0 0.2rem; font-size: 0.88rem; }
+.rpt-empty small { font-size: 0.75rem; }
+
+/* ---------- Mobile ---------- */
+@media (max-width: 860px) {
+  .rpt-summary { grid-template-columns: repeat(3, 1fr); }
+  .rpt-stat-net { grid-column: span 3; flex-direction: row; align-items: center; gap: 0.6rem; }
+  .rpt-stat-net .rpt-stat-sub { margin-left: auto; }
+}
+@media (max-width: 600px) {
+  .rpt-summary { grid-template-columns: 1fr 1fr; gap: 0.45rem; }
+  .rpt-stat { padding: 0.55rem 0.65rem; }
+  .rpt-stat-val { font-size: 1rem; }
+  .rpt-stat-net { grid-column: span 2; }
+  .rpt-stat-net .rpt-stat-sub { display: none; }
+  .rpt-toolbar { padding: 0.55rem; border-radius: 12px; }
+  .rpt-toolbar-row { gap: 0.4rem; }
+  .rpt-search-wrap { flex: 1 1 100%; }
+  .rpt-sort { flex: 1 1 auto; }
+  .rpt-tool-btn { padding: 0.5rem 0.7rem; }   /* bigger touch target */
+  .rpt-adv { gap: 0.4rem; }
+  .rpt-adv .filter-select { flex: 1 1 46%; width: auto; }
+  .rpt-amt-range { flex: 1 1 100%; }
+  .rpt-amt-range input { flex: 1; width: auto; }
+  .rpt-row { padding: 0.6rem 0.7rem; }
+  .rpt-day-hdr { padding: 0.4rem 0.7rem; }
+  .rpt-exp-edit-btn, .rpt-exp-del-btn { padding: 0.4rem 0.65rem; font-size: 0.78rem; }
+  .rpt-result-bar { font-size: 0.74rem; }
+}
+@media (max-width: 380px) {
+  .rpt-stat-lbl { font-size: 0.64rem; }
+  .rpt-chip { padding: 0.3rem 0.6rem; font-size: 0.74rem; }
+}

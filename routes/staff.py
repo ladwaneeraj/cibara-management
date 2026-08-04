@@ -247,31 +247,42 @@ def staff_detail(staff_id):
 def give_advance():
     """
     Body: { staff_id, amount, date?, payment_method: cash|online,
-            expense_type: transaction|report, note? }
+            expense_type: transaction|report, note?, opening? }
 
     Writes the advance + its expense row atomically. The response echoes
     the expense row (with _doc_id) so the transaction log can
     smooth-insert it, mirroring /add_expense.
+
+    opening=true records an opening balance from the paper books —
+    advance doc only, no expense row, no counter touch. Admin-only.
     """
     try:
         data = request.json or {}
-        if _reject_account_source(data):
+        opening = bool(data.get("opening"))
+        # Opening-balance entries rewrite payroll history, so they share the
+        # admin-only custody gate used for account payments.
+        if opening and not _can_pay_from_account():
+            return _fail("Opening-balance entries are admin-only.", 403)
+        if not opening and _reject_account_source(data):
             return _fail(_ACCOUNT_403, 403)
         out = svc.create_advance(
             data.get("staff_id", ""), data.get("amount"),
             data.get("date", ""), data.get("payment_method", "cash"),
             data.get("expense_type", "transaction"),
-            data.get("note", ""), g.current_user)
+            data.get("note", ""), g.current_user, opening=opening)
         invalidate_rooms_and_totals()
         adv = out["advance"]
         write_log("staff.advance.give",
                   target_collection="staff_advances", target_id=adv["id"],
                   metadata={"staff": adv["staff_name"],
                             "amount": adv["amount"],
-                            "expense_doc_id": adv["expense_doc_id"]})
-        return jsonify(success=True,
-                       message="Advance of ₹{} given to {}".format(
-                           adv["amount"], adv["staff_name"]),
+                            "opening": opening,
+                            "expense_doc_id": adv.get("expense_doc_id", "")})
+        msg = ("Opening advance of ₹{} recorded for {} (from books)"
+               if opening else
+               "Advance of ₹{} given to {}").format(
+                   adv["amount"], adv["staff_name"])
+        return jsonify(success=True, message=msg,
                        advance=adv, expense=out["expense"])
     except ValueError as ve:
         return _fail(ve)

@@ -466,14 +466,22 @@ def _counter_increment(batch, amount: int):
 # ═══════════════════════════════════════════════════════════════════════════
 
 def create_advance(staff_id: str, amount, date: str, payment_method: str,
-                   expense_type: str, note: str, user: Optional[dict]) -> dict:
+                   expense_type: str, note: str, user: Optional[dict],
+                   opening: bool = False) -> dict:
     """
     Record an advance: ONE atomic batch writes the advance doc, the linked
     expense doc, and (for counter-cash) the totals increment — an advance
     can never exist without its expense row or vice versa.
 
+    opening=True records an OPENING BALANCE from the paper books — an
+    advance handed out before the software existed. Only the advance doc
+    is written: no linked expense row, no counter touch, so today's
+    counter, expense reports and banking stay clean while the outstanding
+    balance (and future salary deductions) include it. Admin-only,
+    enforced in routes/staff.py.
+
     Returns {advance, expense} (expense includes _doc_id for the
-    transaction log's smooth-insert).
+    transaction log's smooth-insert; expense is None for opening entries).
     """
     staff = get_staff(staff_id)
     if not staff:
@@ -493,9 +501,35 @@ def create_advance(staff_id: str, amount, date: str, payment_method: str,
         raise ValueError("Date must be YYYY-MM-DD.")
     if date > _ist_today():
         raise ValueError("An advance cannot be dated in the future.")
-    _validate_money_source(payment_method, expense_type)
+    if not opening:
+        _validate_money_source(payment_method, expense_type)
     note = str(note or "").strip()[:120]
     name = staff.get("name", "")
+
+    # ── Opening balance (from the physical books) ────────────────────────
+    # The ledger derives the outstanding advance from raw advance docs
+    # (amounts only), so a books-only advance participates in salary
+    # deductions exactly like a normal one. delete_advance already
+    # tolerates a missing expense_doc_id.
+    if opening:
+        adv_doc = {
+            "staff_id": staff_id,
+            "staff_name": name,
+            "date": date,
+            "amount": amt,
+            "note": note,
+            "payment_method": "books",
+            "expense_type": "opening",
+            "opening": True,
+            "created_at": _now_utc(),
+            "created_by": _user_stamp(user),
+        }
+        adv_ref = _adv_ref().document()
+        adv_ref.set(adv_doc)
+        adv_doc["id"] = adv_ref.id
+        logger.info("staff: OPENING advance ₹%s recorded for %s (%s) from books",
+                    amt, name, staff_id)
+        return {"advance": adv_doc, "expense": None}
 
     desc = "Staff Advance — {}".format(name)
     if note:

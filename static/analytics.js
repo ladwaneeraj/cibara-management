@@ -1673,51 +1673,76 @@ async function generateEnhancedReport() {
   }
 }
 
-// Update report date range display
+// Track the generated range for the meta line + CSV filename
+let _rptRange = { start: null, end: null };
+
+// Store the generated range (meta line is rendered by updateReportSummary)
 function updateReportDateRange(startDate, endDate) {
-  const dateRangeElement = document.getElementById("report-date-range");
-  if (!dateRangeElement) return;
-
-  const formatDate = (dateStr) => {
-    const date = new Date(dateStr);
-    return date.toLocaleDateString("en-IN", {
-      day: "numeric",
-      month: "short",
-      year: "numeric",
-    });
-  };
-
-  const formattedStart = formatDate(startDate);
-  const formattedEnd = formatDate(endDate);
-
-  dateRangeElement.textContent =
-    formattedStart === formattedEnd
-      ? `(${formattedStart})`
-      : `(${formattedStart} to ${formattedEnd})`;
+  _rptRange.start = startDate;
+  _rptRange.end = endDate;
 }
 
-// Update report summary values
+// Update the summary stat cards + meta line for the revamped Reports view
 function updateReportSummary(data) {
-  // Update summary values
-  document.getElementById("report-cash-total").textContent = `₹${
-    data.cash_total || 0
-  }`;
-  document.getElementById("report-online-total").textContent = `₹${
-    data.online_total || 0
-  }`;
-  document.getElementById("report-refund-total").textContent = `₹${
-    data.refund_total || 0
-  }`;
-  document.getElementById("report-expense-total").textContent = `₹${
-    data.expense_total || 0
-  }`;
+  const fmtR = (n) => "\u20b9" + Math.round(Math.abs(n || 0)).toLocaleString("en-IN");
+  const setTxt = (id, v) => {
+    const el = document.getElementById(id);
+    if (el) el.textContent = v;
+  };
 
-  // FIXED: Calculate net revenue properly (Income - Expenses)
-  const totalIncome = (data.cash_total || 0) + (data.online_total || 0);
-  const totalExpense = data.expense_total || 0;
-  const netRevenue = totalIncome - totalExpense;
+  const cash = data.cash_total || 0;
+  const online = data.online_total || 0;
+  const refunds = data.refund_total || 0;
+  const expenses = data.expense_total || 0;
+  // Net = money in − money out. Refunds are cash handed back, so they
+  // subtract too (the old view ignored them in Net; that was misleading).
+  const net = cash + online - refunds - expenses;
 
-  document.getElementById("report-net-revenue").textContent = `₹${netRevenue}`;
+  setTxt("report-cash-total", fmtR(cash));
+  setTxt("report-online-total", fmtR(online));
+  setTxt("report-refund-total", fmtR(refunds));
+  setTxt("report-expense-total", fmtR(expenses));
+  setTxt("report-net-revenue", (net < 0 ? "\u2212" : "") + fmtR(net));
+
+  setTxt("rpt-sub-cash", (data.cash_logs || []).length + " entries");
+  setTxt("rpt-sub-online", (data.online_logs || []).length + " entries");
+  setTxt("rpt-sub-ref", (data.refund_logs || []).length + " entries");
+  setTxt(
+    "rpt-sub-exp",
+    "Daily " + fmtR(data.transaction_expense_total || 0) +
+      " \u00b7 Report " + fmtR(data.report_expense_total || 0)
+  );
+
+  // Meta line: date range · check-ins · renewals · add-ons note
+  const meta = document.getElementById("rpt-meta");
+  if (meta) {
+    const fmtD = (ds) => {
+      try {
+        return new Date(ds + "T00:00:00").toLocaleDateString("en-IN", {
+          day: "numeric", month: "short", year: "numeric",
+        });
+      } catch (e) { return ds; }
+    };
+    const bits = [];
+    if (_rptRange.start && _rptRange.end) {
+      bits.push(
+        '<span><i class="far fa-calendar-alt"></i>' +
+        (_rptRange.start === _rptRange.end
+          ? fmtD(_rptRange.start)
+          : fmtD(_rptRange.start) + " \u2192 " + fmtD(_rptRange.end)) +
+        "</span>"
+      );
+    }
+    bits.push('<span><i class="fas fa-door-open"></i>' + (data.checkins || 0) + " check-ins</span>");
+    bits.push('<span><i class="fas fa-sync-alt"></i>' + (data.renewals || 0) + " renewals</span>");
+    if (data.addon_total) {
+      bits.push(
+        '<span><i class="fas fa-concierge-bell"></i>Add-ons ' + fmtR(data.addon_total) +
+        " (included in Cash/Online)</span>"
+      );
+    }
+    meta.innerHTML = bits.join("");
+  }
 }
 
 // Excel Export Function - FIXED: Removed duplicate formatDateTime function
@@ -1894,238 +1919,658 @@ function exportToExcel() {
 // Store raw report data globally for client-side filtering
 window.rawReportData = null;
 
-// Render report data – wires filters, populates category dropdown, renders
+// ═══════════════════════════════════════════════════════════════════════════
+// REPORTS VIEW — unified transaction-style report
+//
+// Renders cash / online / expense / refund rows in ONE chronological list
+// styled like the Transactions tab (same row tints, pills and badges —
+// .transaction-tag styles are injected globally by transaction-tracking.js).
+// All filtering / sorting / grouping is client-side over window.rawReportData;
+// expense rows carry admin-only inline Edit / Delete wired to
+// PATCH|DELETE /expense/<doc_id> — the same endpoints the Transactions tab
+// uses. The Analytics view is untouched.
+// ═══════════════════════════════════════════════════════════════════════════
+
+// Filter/sort state. Preserved across re-renders and background refreshes
+// (e.g. after a delete) so the operator doesn't lose their place; the
+// Reset button clears everything back to defaults.
+const _rptState = {
+  type: "all",      // all | cash | online | expenses | refunds
+  search: "",
+  sort: "newest",   // newest | oldest | highest | lowest
+  cat: "all",       // expense category
+  scope: "all",     // all | transaction (Daily) | report (From-account)
+  gstOnly: false,
+  min: null,        // amount range — applies to every row type
+  max: null,
+};
+
+const _RPT_KIND2TYPE = { cash: "cash", online: "online", expense: "expenses", refund: "refunds" };
+
+const _RPT_CAT_CLASS = {
+  salary: "cat-badge-salary", utilities: "cat-badge-utilities",
+  maintenance: "cat-badge-maintenance", supplies: "cat-badge-supplies",
+  booking_commission: "cat-badge-commission",
+};
+
+function _rptEsc(v) {
+  return String(v == null ? "" : v)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
+function _rptFmt(n) { return Math.round(Math.abs(n || 0)).toLocaleString("en-IN"); }
+function _rptCap(s) {
+  s = String(s || "other");
+  return s.charAt(0).toUpperCase() + s.slice(1).replace(/_/g, " ");
+}
+
+// Same GST rule as the Transactions tab / GST export (_carries_gst server-side)
+function _rptCarriesGst(log) {
+  if (!log) return false;
+  if (log.has_gst === true) return true;
+  const g = parseFloat(log.gst_amount || 0) || 0;
+  const c = parseFloat(log.commission_gst || 0) || 0;
+  return g > 0 || c > 0;
+}
+
+// Sortable timestamp from the row's date + time strings. ISO "T" form so
+// Safari parses it too; falls back to date-only, then 0.
+function _rptTs(log) {
+  const d = log.date || "2000-01-01";
+  let t = String(log.time || "00:00").slice(0, 8);
+  if (t.length === 5) t += ":00";
+  let ts = new Date(d + "T" + t).getTime();
+  if (isNaN(ts)) ts = new Date(d + "T00:00:00").getTime();
+  return isNaN(ts) ? 0 : ts;
+}
+
+// Flatten the /reports payload into one unified row list.
+// addon_logs are NOT added separately — add-on payments already appear
+// inside cash_logs / online_logs (they'd double-count otherwise).
+function _rptBuildRows(data) {
+  const rows = [];
+  const push = (log, kind) =>
+    rows.push({ log: log, kind: kind, ts: _rptTs(log), amount: Number(log.amount) || 0 });
+  (data.cash_logs || []).forEach((l) => push(l, "cash"));
+  (data.online_logs || []).forEach((l) => push(l, "online"));
+  (data.expense_logs || []).forEach((l) => push(l, "expense"));
+  (data.refund_logs || []).forEach((l) => push(l, "refund"));
+  return rows;
+}
+
+// Does a row pass the current filters? skipType=true ignores the type chip
+// (used to compute per-chip counts).
+function _rptMatches(row, skipType) {
+  const s = _rptState;
+  if (!skipType && s.type !== "all" && _RPT_KIND2TYPE[row.kind] !== s.type) return false;
+  if (s.min != null && row.amount < s.min) return false;
+  if (s.max != null && row.amount > s.max) return false;
+
+  const log = row.log;
+  if (row.kind === "expense") {
+    if (s.cat !== "all" && (log.category || "other") !== s.cat) return false;
+    const et = (log.expense_type || "transaction").toLowerCase();
+    if (s.scope !== "all" && et !== s.scope) return false;
+    if (s.gstOnly && !_rptCarriesGst(log)) return false;
+  }
+  if (s.search) {
+    const fields = row.kind === "expense"
+      ? [log.description, log.name, log.category, log.paid_to, log.vendor_name, log.invoice_number]
+      : [log.room, log.name, log.item, log.note];
+    if (!fields.some((f) => String(f || "").toLowerCase().includes(s.search))) return false;
+  }
+  return true;
+}
+
+function _rptSortRows(rows) {
+  const s = _rptState.sort;
+  rows.sort(function (a, b) {
+    if (s === "highest") return b.amount - a.amount || b.ts - a.ts;
+    if (s === "lowest") return a.amount - b.amount || a.ts - b.ts;
+    return s === "oldest" ? a.ts - b.ts : b.ts - a.ts;
+  });
+  return rows;
+}
+
+// "Added by / Collected by" chip — same resolution as the Transactions tab.
+function _rptByChip(log) {
+  let name = "";
+  if (log.createdBy && window.CibaraUsers && typeof window.CibaraUsers.nameOf === "function") {
+    name = window.CibaraUsers.nameOf(log.createdBy) || "";
+  } else if (log.created_by && log.created_by.name && log.created_by.name !== "system") {
+    name = log.created_by.name;
+  }
+  if (!name) return "";
+  return ' <span class="txn-added-by"><i class="fas fa-user"></i> ' + _rptEsc(name) + "</span>";
+}
+
+function _rptCanManageExpense() {
+  return !!(window.CibaraAuth &&
+    typeof window.CibaraAuth.userCan === "function" &&
+    window.CibaraAuth.userCan("expense.manage"));
+}
+
+// DD-MM-YYYY for subtitles (flat sort modes where there's no day header)
+function _rptDMY(dateStr) {
+  if (!dateStr) return "—";
+  const p = String(dateStr).split("-");
+  return p.length === 3 ? p[2] + "-" + p[1] + "-" + p[0] : dateStr;
+}
+
+function _rptDayLabel(dateStr) {
+  try {
+    const d = new Date(dateStr + "T00:00:00");
+    return d.toLocaleDateString("en-IN", { weekday: "short", day: "numeric", month: "short", year: "numeric" });
+  } catch (e) { return dateStr; }
+}
+
+// One unified row. showDate=true adds the date to the subtitle (flat modes).
+function _rptRowHtml(row, showDate) {
+  const log = row.log;
+  const amt = _rptFmt(row.amount);
+  const when = (showDate ? _rptDMY(log.date) + " · " : "") + (log.time || "—");
+  const by = _rptByChip(log);
+
+  if (row.kind === "cash" || row.kind === "online") {
+    const pill = row.kind === "cash"
+      ? '<span class="transaction-tag cash-tag">Cash</span>'
+      : '<span class="transaction-tag online-tag">Online</span>';
+    const addon = log.item
+      ? ' <span class="rpt-badge rpt-badge-addon">Add-on: ' + _rptEsc(log.item) + "</span>"
+      : "";
+    const renewal = log.type === "renewal"
+      ? ' <span class="transaction-tag continue-tag">Renewal</span>' : "";
+    return (
+      '<div class="rpt-row rpt-row-' + row.kind + '">' +
+        '<div class="log-details">' +
+          '<div class="log-title">Room ' + _rptEsc(log.room || "—") + " — " + _rptEsc(log.name || "N/A") + addon + "</div>" +
+          '<div class="log-subtitle">' + pill + renewal + " " + _rptEsc(when) + by + "</div>" +
+        "</div>" +
+        '<div class="log-amount rpt-amt-in">+₹' + amt + "</div>" +
+      "</div>"
+    );
+  }
+
+  if (row.kind === "refund") {
+    return (
+      '<div class="rpt-row rpt-row-refund">' +
+        '<div class="log-details">' +
+          '<div class="log-title">Room ' + _rptEsc(log.room || "—") + " — " + _rptEsc(log.name || "N/A") + "</div>" +
+          '<div class="log-subtitle"><span class="transaction-tag refund-tag">Refund</span> ' +
+            _rptEsc((log.payment_mode || "cash").toUpperCase()) + " · " + _rptEsc(when) +
+            (log.note ? " · " + _rptEsc(log.note) : "") + by +
+          "</div>" +
+        "</div>" +
+        '<div class="log-amount rpt-amt-out">−₹' + amt + "</div>" +
+      "</div>"
+    );
+  }
+
+  // ── Expense row ──────────────────────────────────────────────────────────
+  const cat = log.category || "other";
+  const catCls = _RPT_CAT_CLASS[cat] || "cat-badge-other";
+  const scope = (log.expense_type || "transaction") === "report"
+    ? '<span class="rpt-badge rpt-badge-report">Report</span>'
+    : '<span class="rpt-badge rpt-badge-daily">Daily</span>';
+  const gst = _rptCarriesGst(log)
+    ? '<span class="rpt-badge rpt-badge-gst">GST' +
+      (log.gst_amount ? " ₹" + _rptFmt(log.gst_amount) : "") + "</span>"
+    : "";
+  const split = log.split_group_id
+    ? '<span class="rpt-badge rpt-badge-split" title="Split-payment expense — legs share one invoice">Split</span>'
+    : "";
+  const invoice = log.invoice_photo_url
+    ? ' <a href="' + _rptEsc(log.invoice_photo_url) + '" target="_blank" rel="noopener" title="View invoice"' +
+      ' style="color:#3182ce;font-size:0.78rem;text-decoration:none;"><i class="fas fa-file-image"></i></a>'
+    : "";
+  const pill = (log.payment_method || "cash").toLowerCase() === "online"
+    ? '<span class="transaction-tag online-tag">Online</span>'
+    : '<span class="transaction-tag cash-tag">Cash</span>';
+  const who = log.vendor_name || log.paid_to || "";
+
+  let actions = "";
+  if (_rptCanManageExpense() && log._doc_id) {
+    actions =
+      '<div class="rpt-row-actions">' +
+        '<button type="button" class="rpt-exp-edit-btn" data-doc-id="' + _rptEsc(log._doc_id) + '" title="Edit expense">' +
+          '<i class="fas fa-pen"></i></button>' +
+        '<button type="button" class="rpt-exp-del-btn" data-doc-id="' + _rptEsc(log._doc_id) + '"' +
+          ' data-amount="' + _rptEsc(log.amount || 0) + '"' +
+          ' data-description="' + _rptEsc(log.description || log.name || "") + '"' +
+          ' title="Delete expense"><i class="fas fa-trash"></i></button>' +
+      "</div>";
+  }
+
+  return (
+    '<div class="rpt-row rpt-row-expense">' +
+      '<div class="log-details">' +
+        '<div class="log-title"><strong>' + _rptEsc(log.description || log.name || "N/A") + "</strong> " +
+          '<span class="expense-category-badge ' + catCls + '">' + _rptEsc(_rptCap(cat)) + "</span> " +
+          scope + " " + gst + " " + split + invoice +
+        "</div>" +
+        '<div class="log-subtitle">' + pill + " " + _rptEsc(when) +
+          (who ? " · " + _rptEsc(who) : "") + by +
+        "</div>" +
+      "</div>" +
+      '<div class="log-amount rpt-amt-out">−₹' + amt + "</div>" +
+      actions +
+    "</div>"
+  );
+}
+
+// Human-readable description of the active filters (for the result bar)
+function _rptFilterDesc() {
+  const s = _rptState;
+  const parts = [];
+  if (s.search) parts.push('"' + s.search + '"');
+  if (s.type !== "all") parts.push(s.type);
+  if (s.cat !== "all") parts.push(_rptCap(s.cat));
+  if (s.scope !== "all") parts.push(s.scope === "transaction" ? "Daily" : "Report");
+  if (s.gstOnly) parts.push("GST only");
+  if (s.min != null || s.max != null) {
+    parts.push("₹" + (s.min != null ? _rptFmt(s.min) : "0") + "–" + (s.max != null ? _rptFmt(s.max) : "∞"));
+  }
+  return parts.join(", ");
+}
+
+function _rptIsFiltered() {
+  const s = _rptState;
+  return !!(s.search || s.type !== "all" || s.cat !== "all" || s.scope !== "all" ||
+    s.gstOnly || s.min != null || s.max != null);
+}
+
+// ── Main render — filters, counts, grouping, list ───────────────────────────
+function applyReportFilters() {
+  const data = window.rawReportData;
+  const content = document.getElementById("report-content");
+  if (!data || !content) return;
+
+  const s = _rptState;
+  const eligible = _rptBuildRows(data).filter(function (r) { return _rptMatches(r, true); });
+
+  // Per-chip counts (all filters applied EXCEPT the type chip itself)
+  const counts = { all: eligible.length, cash: 0, online: 0, expenses: 0, refunds: 0 };
+  eligible.forEach(function (r) { counts[_RPT_KIND2TYPE[r.kind]]++; });
+  ["all", "cash", "online", "expenses", "refunds"].forEach(function (t) {
+    const el = document.getElementById("rpt-n-" + t);
+    if (el) el.textContent = counts[t];
+  });
+
+  // Chip + summary-card active states
+  document.querySelectorAll("#rpt-type-chips .rpt-chip").forEach(function (c) {
+    c.classList.toggle("active", c.dataset.type === s.type);
+  });
+  document.querySelectorAll("#rpt-summary .rpt-stat[data-type]").forEach(function (c) {
+    c.classList.toggle("active", c.dataset.type === s.type);
+  });
+
+  // Advanced-filter affordances: expense-only controls make no sense while
+  // a non-expense chip is active (they'd filter nothing visible).
+  const expControlsOff = s.type !== "all" && s.type !== "expenses";
+  ["expense-category-filter", "expense-type-filter"].forEach(function (id) {
+    const el = document.getElementById(id);
+    if (el) el.disabled = expControlsOff;
+  });
+  const gstWrap = document.querySelector(".rpt-gst-toggle");
+  if (gstWrap) gstWrap.classList.toggle("rpt-disabled", expControlsOff);
+  const dot = document.getElementById("rpt-filter-dot");
+  if (dot) dot.hidden = !(s.cat !== "all" || s.scope !== "all" || s.gstOnly || s.min != null || s.max != null);
+
+  // Rows for the list = eligible + type chip
+  const rows = s.type === "all"
+    ? eligible.slice()
+    : eligible.filter(function (r) { return _RPT_KIND2TYPE[r.kind] === s.type; });
+  _rptSortRows(rows);
+
+  // In / out totals for the current view
+  let inSum = 0, outSum = 0;
+  rows.forEach(function (r) {
+    if (r.kind === "cash" || r.kind === "online") inSum += r.amount;
+    else outSum += r.amount;
+  });
+
+  // Result bar
+  const bar = document.getElementById("rpt-result-bar");
+  if (bar) {
+    const desc = _rptFilterDesc();
+    bar.classList.remove("hidden");
+    bar.innerHTML =
+      "<span><strong>" + rows.length + "</strong> transaction" + (rows.length !== 1 ? "s" : "") +
+      (desc ? " for <em>" + _rptEsc(desc) + "</em>" : "") + "</span>" +
+      '<span class="rpt-in">In +₹' + _rptFmt(inSum) + "</span>" +
+      '<span class="rpt-out">Out −₹' + _rptFmt(outSum) + "</span>" +
+      '<span>Net ' + (inSum - outSum < 0 ? "−" : "") + "₹" + _rptFmt(inSum - outSum) + "</span>" +
+      (_rptIsFiltered()
+        ? '<button type="button" class="rpt-clear-link" id="rpt-result-clear">Clear filters</button>'
+        : "");
+  }
+
+  // Empty state
+  if (!rows.length) {
+    content.innerHTML =
+      '<div class="rpt-list"><div class="rpt-empty"><i class="fas fa-inbox"></i>' +
+      "<p>" + (_rptIsFiltered() ? "No transactions match your filters" : "No transactions in this period") + "</p>" +
+      (_rptIsFiltered() ? "<small>Try widening the search or resetting filters.</small>" : "") +
+      "</div></div>";
+    return;
+  }
+
+  // Build list — grouped by day for date sorts, flat for amount sorts
+  const grouped = s.sort === "newest" || s.sort === "oldest";
+  let html = '<div class="rpt-list">';
+  if (grouped) {
+    // Per-day in/out subtotals
+    const dayTotals = {};
+    rows.forEach(function (r) {
+      const d = r.log.date || "—";
+      if (!dayTotals[d]) dayTotals[d] = { in: 0, out: 0 };
+      if (r.kind === "cash" || r.kind === "online") dayTotals[d].in += r.amount;
+      else dayTotals[d].out += r.amount;
+    });
+    let curDay = null;
+    rows.forEach(function (r) {
+      const d = r.log.date || "—";
+      if (d !== curDay) {
+        curDay = d;
+        const t = dayTotals[d];
+        html +=
+          '<div class="rpt-day-hdr"><i class="far fa-calendar"></i> ' + _rptEsc(_rptDayLabel(d)) +
+          '<span class="rpt-day-totals">' +
+            (t.in ? '<span class="rpt-in">+₹' + _rptFmt(t.in) + "</span>" : "") +
+            (t.out ? '<span class="rpt-out">−₹' + _rptFmt(t.out) + "</span>" : "") +
+          "</span></div>";
+      }
+      html += _rptRowHtml(r, false);
+    });
+  } else {
+    rows.forEach(function (r) { html += _rptRowHtml(r, true); });
+  }
+  html += "</div>";
+  content.innerHTML = html;
+}
+
+// ── Entry point after /reports returns ──────────────────────────────────────
 function renderCompactReportData(data) {
-  const reportContent = document.getElementById("report-content");
-  if (!reportContent) return;
+  const content = document.getElementById("report-content");
+  if (!content) return;
 
   window.rawReportData = data;
 
-  // Hide loading / empty state
-  const loadingEl = reportContent.querySelector(".loading-indicator");
+  const loadingEl = content.querySelector(".loading-indicator");
   if (loadingEl) loadingEl.classList.add("hidden");
-  const emptyEl = reportContent.querySelector(".empty-state");
+  const emptyEl = content.querySelector(".empty-state");
   if (emptyEl) emptyEl.remove();
 
-  // Populate expense category dropdown from actual data
+  // Populate the expense-category dropdown from actual data, preserving the
+  // current selection when that category still exists in the new range.
   const catSelect = document.getElementById("expense-category-filter");
   if (catSelect) {
-    const cats = [...new Set((data.expense_logs || []).map(l => l.category || "other"))].sort();
-    const capFirst = s => s.charAt(0).toUpperCase() + s.slice(1);
-    catSelect.innerHTML = `<option value="all">All Categories</option>` +
-      cats.map(c => `<option value="${c}">${capFirst(c.replace(/_/g," "))}</option>`).join("");
+    const cats = Array.from(new Set((data.expense_logs || []).map(function (l) { return l.category || "other"; }))).sort();
+    catSelect.innerHTML = '<option value="all">All categories</option>' +
+      cats.map(function (c) { return '<option value="' + _rptEsc(c) + '">' + _rptEsc(_rptCap(c)) + "</option>"; }).join("");
+    if (cats.indexOf(_rptState.cat) !== -1) catSelect.value = _rptState.cat;
+    else { _rptState.cat = "all"; catSelect.value = "all"; }
   }
 
-  // Wire up filter controls (once). expense-type-filter is the
-  // Daily/Report selector that appears alongside the category filter
-  // when "Expenses Only" is the active transaction type.
-  ["report-search","report-type-filter","expense-category-filter",
-   "expense-type-filter","report-sort"].forEach(id => {
-    const el = document.getElementById(id);
-    if (el && !el._filterWired) {
-      el.addEventListener(id === "report-search" ? "input" : "change", applyReportFilters);
-      el._filterWired = true;
-    }
-  });
-
-  // Show/hide category + expense-type filters based on transaction-type
-  const typeEl = document.getElementById("report-type-filter");
-  if (typeEl && !typeEl._visWired) {
-    typeEl.addEventListener("change", () => {
-      const catEl = document.getElementById("expense-category-filter");
-      const etEl  = document.getElementById("expense-type-filter");
-      const isExp = typeEl.value === "expenses";
-      if (catEl) catEl.style.display = isExp ? "" : "none";
-      if (etEl)  etEl.style.display  = isExp ? "" : "none";
-    });
-    typeEl._visWired = true;
-  }
-
-  // Reset to defaults
-  const searchEl = document.getElementById("report-search");
-  if (searchEl) searchEl.value = "";
-  if (typeEl) { typeEl.value = "all"; }
-  if (catSelect) { catSelect.value = "all"; catSelect.style.display = "none"; }
-  const etEl = document.getElementById("expense-type-filter");
-  if (etEl) { etEl.value = "all"; etEl.style.display = "none"; }
-  const sortEl = document.getElementById("report-sort");
-  if (sortEl) sortEl.value = "oldest";
-
+  _rptWireControls();
   applyReportFilters();
 }
 
-// Apply filters + expense category filter and re-render
-function applyReportFilters() {
-  const data = window.rawReportData;
-  if (!data) return;
+// ── Reset all filters to defaults ───────────────────────────────────────────
+function _rptResetFilters() {
+  _rptState.type = "all"; _rptState.search = ""; _rptState.sort = "newest";
+  _rptState.cat = "all"; _rptState.scope = "all"; _rptState.gstOnly = false;
+  _rptState.min = null; _rptState.max = null;
+  const set = function (id, val) { const el = document.getElementById(id); if (el) el.value = val; };
+  set("report-search", ""); set("report-sort", "newest");
+  set("expense-category-filter", "all"); set("expense-type-filter", "all");
+  set("rpt-min-amt", ""); set("rpt-max-amt", "");
+  const gst = document.getElementById("rpt-gst-only"); if (gst) gst.checked = false;
+  const clr = document.getElementById("rpt-search-clear"); if (clr) clr.hidden = true;
+  applyReportFilters();
+}
 
-  const reportContent = document.getElementById("report-content");
-  if (!reportContent) return;
+// ── One-time control wiring (idempotent) ────────────────────────────────────
+let _rptWired = false;
+function _rptWireControls() {
+  if (_rptWired) return;
+  _rptWired = true;
 
-  const fmt = n => Math.round(n||0).toLocaleString("en-IN");
-  const capFirst = s => (s||"other").charAt(0).toUpperCase()+(s||"other").slice(1).replace(/_/g," ");
+  // Type chips + summary stat cards (stat cards toggle back to All)
+  document.addEventListener("click", function (e) {
+    const chip = e.target.closest("#rpt-type-chips .rpt-chip");
+    if (chip) { _rptState.type = chip.dataset.type; applyReportFilters(); return; }
+    const stat = e.target.closest("#rpt-summary .rpt-stat[data-type]");
+    if (stat && window.rawReportData) {
+      _rptState.type = _rptState.type === stat.dataset.type ? "all" : stat.dataset.type;
+      applyReportFilters();
+    }
+  });
 
-  const search     = (document.getElementById("report-search")?.value||"").toLowerCase().trim();
-  const typeFilter = document.getElementById("report-type-filter")?.value||"all";
-  const catFilter  = document.getElementById("expense-category-filter")?.value||"all";
-  // Daily / Report sub-filter inside Expenses. "all" = both, default.
-  // Missing expense_type on a legacy row is treated as "transaction".
-  const expTypeFilter = document.getElementById("expense-type-filter")?.value||"all";
-  const sortOrder  = document.getElementById("report-sort")?.value||"oldest";
-
-  // Category filter badge color map
-  const catClass = { salary:"cat-badge-salary", utilities:"cat-badge-utilities",
-    maintenance:"cat-badge-maintenance", supplies:"cat-badge-supplies",
-    booking_commission:"cat-badge-commission" };
-
-  function sortLogs(logs) {
-    return [...logs].sort((a, b) => {
-      if (sortOrder==="highest") return (b.amount||0)-(a.amount||0);
-      if (sortOrder==="lowest")  return (a.amount||0)-(b.amount||0);
-      const da = new Date(`${a.date||"2000-01-01"} ${a.time||"00:00"}`);
-      const db = new Date(`${b.date||"2000-01-01"} ${b.time||"00:00"}`);
-      return sortOrder==="newest" ? db-da : da-db;
+  // Search (debounced) + clear button
+  const search = document.getElementById("report-search");
+  const searchClear = document.getElementById("rpt-search-clear");
+  if (search) {
+    let timer = null;
+    search.addEventListener("input", function () {
+      if (searchClear) searchClear.hidden = !search.value;
+      clearTimeout(timer);
+      timer = setTimeout(function () {
+        _rptState.search = search.value.toLowerCase().trim();
+        applyReportFilters();
+      }, 180);
     });
   }
-  function hasSearch(log, fields) {
-    return !search || fields.some(f => String(log[f]||"").toLowerCase().includes(search));
+  if (searchClear) {
+    searchClear.addEventListener("click", function () {
+      if (search) search.value = "";
+      searchClear.hidden = true;
+      _rptState.search = "";
+      applyReportFilters();
+    });
   }
 
-  const showCash    = typeFilter==="all" || typeFilter==="cash";
-  const showOnline  = typeFilter==="all" || typeFilter==="online";
-  const showExp     = typeFilter==="all" || typeFilter==="expenses";
-  const showRef     = typeFilter==="all" || typeFilter==="refunds";
-
-  const cashLogs   = showCash   ? sortLogs((data.cash_logs||[]).filter(l=>hasSearch(l,["room","name","item"]))) : [];
-  const onlineLogs = showOnline ? sortLogs((data.online_logs||[]).filter(l=>hasSearch(l,["room","name","item"]))) : [];
-  const refLogs    = showRef    ? sortLogs((data.refund_logs||[]).filter(l=>hasSearch(l,["room","name"]))) : [];
-  const expLogs    = showExp
-    ? sortLogs((data.expense_logs||[]).filter(l => {
-        const catOk = catFilter==="all" || (l.category||"other")===catFilter;
-        // Daily / Report sub-filter. Missing field counts as "transaction"
-        // so legacy expenses still show under "Daily only".
-        const et = (l.expense_type || "transaction").toLowerCase();
-        const etOk = expTypeFilter==="all" || et === expTypeFilter;
-        return catOk && etOk && hasSearch(l,["name","description","category","paid_to"]);
-      }))
-    : [];
-
-  // Count active filters for result bar
-  const total = cashLogs.length + onlineLogs.length + expLogs.length + refLogs.length;
-  const isFiltered = search || typeFilter!=="all" || catFilter!=="all"
-                     || expTypeFilter!=="all";
-
-  let html = "";
-  if (isFiltered) {
-    const filterDesc = [
-      search ? `"${search}"` : "",
-      typeFilter!=="all" ? typeFilter : "",
-      catFilter!=="all" && showExp ? capFirst(catFilter) : "",
-      expTypeFilter!=="all" && showExp
-        ? (expTypeFilter === "transaction" ? "Daily" : "Report") : "",
-    ].filter(Boolean).join(", ");
-    html += `<div class="filter-result-bar"><i class="fas fa-filter"></i>&nbsp; <strong>${total}</strong> result${total!==1?"s":""} ${filterDesc ? `for <em>${filterDesc}</em>` : ""}</div>`;
+  // Sort
+  const sort = document.getElementById("report-sort");
+  if (sort) {
+    sort.value = _rptState.sort;
+    sort.addEventListener("change", function () { _rptState.sort = sort.value; applyReportFilters(); });
   }
 
-  // ---- helper to build a collapsible section ----
-  function section(id, iconClass, iconColor, badgeBg, badgeColor, title, count, rows, totalAmt, amtColor) {
-    const emptyMsg = search || isFiltered ? "No results match your filters" : `No ${title.toLowerCase()} in this period`;
-    return `
-    <div class="transaction-section">
-      <h3 onclick="toggleSection('${id}')">
-        <span><i class="${iconClass}" style="color:${iconColor};margin-right:0.4rem"></i>${title}</span>
-        <span style="display:flex;align-items:center;gap:0.5rem">
-          <span class="section-badge" style="background:${badgeBg};color:${badgeColor}">${count}</span>
-          <i class="fas fa-chevron-right" id="${id}-icon"></i>
-        </span>
-      </h3>
-      <div class="transaction-logs" id="${id}" style="display:none">
-        ${rows.length ? rows.join("") + `<div class="log-item section-total"><div class="log-details"><div class="log-title">Subtotal</div></div><div class="log-amount" style="color:${amtColor}">₹${fmt(totalAmt)}</div></div>` : `<div class="log-item log-empty">${emptyMsg}</div>`}
-      </div>
-    </div>`;
+  // Advanced filters toggle
+  const moreBtn = document.getElementById("rpt-more-filters-btn");
+  const adv = document.getElementById("rpt-adv");
+  if (moreBtn && adv) {
+    moreBtn.addEventListener("click", function () { adv.hidden = !adv.hidden; });
   }
 
-  function payRow(log) {
-    return `<div class="log-item">
-      <div class="log-details">
-        <div class="log-title">Room ${log.room} — ${log.name}${log.item?` <span class="transaction-item">(${log.item})</span>`:""}
-          ${log.type==="addon"?'<span class="expense-category-badge" style="background:#fef9c3;color:#92400e">Add-on</span>':""}
-        </div>
-        <div class="log-subtitle">${log.date} ${log.time||""}</div>
-      </div>
-      <div class="log-amount">₹${fmt(log.amount)}</div>
-    </div>`;
+  // Advanced filter inputs
+  const cat = document.getElementById("expense-category-filter");
+  if (cat) cat.addEventListener("change", function () { _rptState.cat = cat.value; applyReportFilters(); });
+  const scope = document.getElementById("expense-type-filter");
+  if (scope) scope.addEventListener("change", function () { _rptState.scope = scope.value; applyReportFilters(); });
+  const gst = document.getElementById("rpt-gst-only");
+  if (gst) gst.addEventListener("change", function () { _rptState.gstOnly = gst.checked; applyReportFilters(); });
+  const minA = document.getElementById("rpt-min-amt");
+  const maxA = document.getElementById("rpt-max-amt");
+  const amtChanged = function () {
+    const mn = parseFloat(minA && minA.value);
+    const mx = parseFloat(maxA && maxA.value);
+    _rptState.min = isNaN(mn) ? null : mn;
+    _rptState.max = isNaN(mx) ? null : mx;
+    applyReportFilters();
+  };
+  if (minA) minA.addEventListener("input", amtChanged);
+  if (maxA) maxA.addEventListener("input", amtChanged);
+
+  // Reset buttons (toolbar + result-bar link, the latter is re-rendered so delegate)
+  const clearBtn = document.getElementById("rpt-clear-filters");
+  if (clearBtn) clearBtn.addEventListener("click", _rptResetFilters);
+  document.addEventListener("click", function (e) {
+    if (e.target.closest("#rpt-result-clear")) _rptResetFilters();
+  });
+
+  // Export menu
+  const expBtn = document.getElementById("rpt-export-btn");
+  const expMenu = document.getElementById("rpt-export-menu");
+  if (expBtn && expMenu) {
+    expBtn.addEventListener("click", function (e) {
+      e.stopPropagation();
+      expMenu.hidden = !expMenu.hidden;
+    });
+    document.addEventListener("click", function (e) {
+      if (!expMenu.hidden && !e.target.closest(".rpt-export-wrap")) expMenu.hidden = true;
+    });
+    const xlsx = document.getElementById("rpt-export-xlsx");
+    if (xlsx) xlsx.addEventListener("click", function () { expMenu.hidden = true; exportToExcel(); });
+    const csv = document.getElementById("rpt-export-csv");
+    if (csv) csv.addEventListener("click", function () { expMenu.hidden = true; _rptExportCsv(); });
   }
 
-  function expRow(log) {
-    const cat = log.category||"other";
-    const cls = catClass[cat]||"cat-badge-other";
-    const moreInfo = log.vendor_name ? `· ${log.vendor_name}` : (log.paid_to ? `· ${log.paid_to}` : "");
-    return `<div class="log-item">
-      <div class="log-details">
-        <div class="log-title">
-          ${log.name||log.description||"N/A"}
-          <span class="expense-category-badge ${cls}">${capFirst(cat)}</span>
-          ${log.has_gst?'<span class="expense-category-badge" style="background:#e0f2fe;color:#0369a1">GST</span>':""}
-        </div>
-        <div class="log-subtitle">${formatDateTime(log.date,log.time)} ${moreInfo} · ${(log.payment_method||"cash").toUpperCase()}</div>
-      </div>
-      <div class="log-amount" style="color:#dc2626">₹${fmt(log.amount)}</div>
-    </div>`;
+  // Expense Edit / Delete — event delegation, admin-gated
+  document.addEventListener("click", function (e) {
+    const editBtn = e.target.closest(".rpt-exp-edit-btn");
+    if (editBtn) {
+      e.preventDefault();
+      const log = _rptFindExpense(editBtn.getAttribute("data-doc-id"));
+      if (!log) {
+        if (typeof showNotification === "function") showNotification("Could not find expense — regenerate the report.", "error");
+        return;
+      }
+      if (typeof window.openExpenseEditModal === "function") window.openExpenseEditModal(log);
+      return;
+    }
+
+    const delBtn = e.target.closest(".rpt-exp-del-btn");
+    if (delBtn) {
+      e.preventDefault();
+      _rptDeleteExpense(delBtn);
+    }
+  });
+}
+
+function _rptFindExpense(docId) {
+  if (!docId || !window.rawReportData) return null;
+  return (window.rawReportData.expense_logs || []).find(function (l) { return l._doc_id === docId; }) || null;
+}
+
+// ── Delete an expense from the report list ──────────────────────────────────
+function _rptDeleteExpense(btn) {
+  const docId = btn.getAttribute("data-doc-id");
+  const log = _rptFindExpense(docId);
+  if (!docId || !log) return;
+
+  if (!_rptCanManageExpense()) {
+    if (typeof showNotification === "function") showNotification("Only admins can delete expenses", "error");
+    return;
   }
 
-  function refRow(log) {
-    return `<div class="log-item">
-      <div class="log-details">
-        <div class="log-title">Room ${log.room} — ${log.name}</div>
-        <div class="log-subtitle">${log.date} ${log.time||""}</div>
-      </div>
-      <div class="log-amount" style="color:#dc2626">₹${fmt(log.amount)}</div>
-    </div>`;
+  const desc = log.description || log.name || "this expense";
+  const splitNote = log.split_group_id
+    ? "\n\nThis is a SPLIT expense — all its payment legs will be deleted together."
+    : "";
+  if (!confirm('Delete "' + desc + '" (₹' + _rptFmt(log.amount) + ")?" + splitNote + "\n\nThis cannot be undone.")) return;
+
+  btn.disabled = true;
+  apiFetch("/expense/" + encodeURIComponent(docId), { method: "DELETE" })
+    .then(function (r) { return r.json(); })
+    .then(function (data) {
+      if (data && data.success) {
+        // Remove locally (all legs for a split — the server deletes the group)
+        const raw = window.rawReportData;
+        if (raw && Array.isArray(raw.expense_logs)) {
+          raw.expense_logs = raw.expense_logs.filter(function (l) {
+            if (log.split_group_id) return l.split_group_id !== log.split_group_id;
+            return l._doc_id !== docId;
+          });
+          _rptRecomputeExpenseTotals(raw);
+          updateReportSummary(raw);
+          applyReportFilters();
+        }
+        if (typeof showNotification === "function") showNotification(data.message || "Expense deleted", "success");
+        // Keep the Transactions tab's caches honest too
+        if (typeof window.refreshTransactionsView === "function") window.refreshTransactionsView();
+      } else {
+        if (typeof showNotification === "function") showNotification((data && data.message) || "Delete failed", "error");
+        btn.disabled = false;
+      }
+    })
+    .catch(function (err) {
+      console.error("report delete expense error:", err);
+      if (typeof showNotification === "function") showNotification("Error: " + err.message, "error");
+      btn.disabled = false;
+    });
+}
+
+// Recompute the expense-side totals after a local mutation so the summary
+// cards stay consistent without a refetch. Mirrors the server's arithmetic.
+function _rptRecomputeExpenseTotals(data) {
+  let txn = 0, rep = 0;
+  (data.expense_logs || []).forEach(function (l) {
+    const amt = Number(l.amount) || 0;
+    if ((l.expense_type || "transaction") === "report") rep += amt;
+    else txn += amt;
+  });
+  data.transaction_expense_total = txn;
+  data.report_expense_total = rep;
+  data.expense_total = txn + rep;
+  data.total_revenue = (data.cash_total || 0) + (data.online_total || 0) -
+    (data.refund_total || 0) - txn;
+}
+
+// Called by expense.js after an expense is added/edited while a report is on
+// screen — re-pulls the report so both Reports and Analytics reflect it.
+window.refreshReportsView = function () {
+  if (!window.rawReportData) return;
+  if (typeof generateEnhancedReport === "function") generateEnhancedReport();
+};
+
+// ── CSV export of the CURRENT filtered view ─────────────────────────────────
+function _rptExportCsv() {
+  const data = window.rawReportData;
+  if (!data) {
+    if (typeof showNotification === "function") showNotification("Generate a report first", "error");
+    return;
   }
+  const s = _rptState;
+  let rows = _rptBuildRows(data).filter(function (r) { return _rptMatches(r, false); });
+  _rptSortRows(rows);
 
-  if (showCash)
-    html += section("cash-section","fas fa-money-bill-wave","#16a34a","#f0fdf4","#16a34a",
-      "Cash Payments", cashLogs.length, cashLogs.map(payRow),
-      cashLogs.reduce((s,l)=>s+(l.amount||0),0), "#1e293b");
+  const q = function (v) {
+    v = String(v == null ? "" : v);
+    return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v;
+  };
+  const lines = ["Type,Date,Time,Room,Guest / Description,Category,Scope,Method,GST Amount,Vendor / Paid To,Amount"];
+  rows.forEach(function (r) {
+    const log = r.log;
+    const isExp = r.kind === "expense";
+    const out = r.kind === "expense" || r.kind === "refund";
+    lines.push([
+      q(r.kind), q(log.date || ""), q(log.time || ""),
+      q(isExp ? "" : log.room || ""),
+      q(isExp ? (log.description || log.name || "") : (log.name || "") + (log.item ? " (" + log.item + ")" : "")),
+      q(isExp ? log.category || "other" : ""),
+      q(isExp ? (log.expense_type || "transaction") : ""),
+      q(log.method || log.payment_method || log.payment_mode || ""),
+      q(isExp ? (parseFloat(log.gst_amount || 0) || 0) : ""),
+      q(isExp ? (log.vendor_name || log.paid_to || "") : ""),
+      (out ? "-" : "") + (Number(log.amount) || 0),
+    ].join(","));
+  });
 
-  if (showOnline)
-    html += section("online-section","fas fa-mobile-alt","#2563eb","#eff6ff","#2563eb",
-      "Online / UPI Payments", onlineLogs.length, onlineLogs.map(payRow),
-      onlineLogs.reduce((s,l)=>s+(l.amount||0),0), "#1e293b");
-
-  if (showExp)
-    html += section("expense-section","fas fa-receipt","#dc2626","#fef2f2","#dc2626",
-      "Expenses" + (catFilter!=="all" ? ` — ${capFirst(catFilter)}` : ""),
-      expLogs.length, expLogs.map(expRow),
-      expLogs.reduce((s,l)=>s+(l.amount||0),0), "#dc2626");
-
-  if (showRef)
-    html += section("refund-section","fas fa-undo","#ea580c","#fff7ed","#ea580c",
-      "Refunds", refLogs.length, refLogs.map(refRow),
-      refLogs.reduce((s,l)=>s+(l.amount||0),0), "#dc2626");
-
-  // Grand total – only when showing all + no filters
-  if (typeFilter==="all" && !search && catFilter==="all") {
-    const tCash   = cashLogs.reduce((s,l)=>s+(l.amount||0),0);
-    const tOnline = onlineLogs.reduce((s,l)=>s+(l.amount||0),0);
-    const tInc    = tCash + tOnline;
-    const tExp    = expLogs.reduce((s,l)=>s+(l.amount||0),0);
-    const tRef    = refLogs.reduce((s,l)=>s+(l.amount||0),0);
-    const net     = tInc - tExp;
-    html += `
-    <div class="grand-total-section">
-      <h3>Grand Total</h3>
-      <div class="transaction-logs">
-        <div class="log-item"><div class="log-details"><div class="log-title">Cash + UPI Income</div></div><div class="log-amount">₹${fmt(tInc)}</div></div>
-        <div class="log-item"><div class="log-details"><div class="log-title">Total Expenses</div></div><div class="log-amount" style="color:#dc2626">₹${fmt(tExp)}</div></div>
-        <div class="log-item"><div class="log-details"><div class="log-title">Total Refunds</div></div><div class="log-amount" style="color:#dc2626">₹${fmt(tRef)}</div></div>
-        <div class="log-item grand-total"><div class="log-details"><div class="log-title">Net Revenue</div></div><div class="log-amount">₹${fmt(net)}</div></div>
-      </div>
-    </div>`;
+  const range = (_rptRange.start || "start") + "_to_" + (_rptRange.end || "end");
+  // \uFEFF BOM so Excel opens the ₹/Unicode text correctly
+  const blob = new Blob(["\uFEFF" + lines.join("\n")], { type: "text/csv;charset=utf-8;" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "Report_" + range + (_rptIsFiltered() ? "_filtered" : "") + ".csv";
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(a.href);
+  if (typeof showNotification === "function") {
+    showNotification("CSV exported (" + rows.length + " rows)", "success");
   }
-
-  reportContent.innerHTML = html;
 }
 
 // Function to toggle collapsible sections
@@ -2204,17 +2649,16 @@ document.addEventListener("DOMContentLoaded", function () {
   // Initialize date preset buttons
   initializeDatePresets();
 
-  // Wire up apply button
+  // Wire up apply button. NOTE: Generate no longer force-switches to the
+  // Analytics view — whichever view (Analytics / Reports) is active stays.
   const applyReportFilterBtn = document.getElementById("apply-report-filter");
   if (applyReportFilterBtn) {
     applyReportFilterBtn.addEventListener("click", generateEnhancedReport);
-
-    // Switch to analytics view after loading
-    applyReportFilterBtn.addEventListener("click", function () {
-      const analyticsBtn = document.querySelector('.view-btn[data-view="analytics"]');
-      if (analyticsBtn) analyticsBtn.click();
-    });
   }
+
+  // Wire the revamped Reports view controls once (chips, search, sort,
+  // advanced filters, export menu, expense edit/delete delegation).
+  _rptWireControls();
 
   // Make global functions accessible
   window.toggleSection = toggleSection;

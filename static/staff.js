@@ -74,8 +74,41 @@
   }
 
   function notify(msg, type) {
-    if (typeof showNotification === "function") showNotification(msg, type || "info");
-    else alert(msg);
+    if (typeof showNotification === "function") { showNotification(msg, type || "info"); return; }
+    // Fallback in-app toast — never a browser alert() popup.
+    var t = document.createElement("div");
+    t.className = "stf-toast stf-toast-" + (type || "info");
+    t.textContent = msg;
+    document.body.appendChild(t);
+    setTimeout(function () { t.classList.add("show"); }, 10);
+    setTimeout(function () { t.classList.remove("show"); setTimeout(function () { t.remove(); }, 250); }, 3200);
+  }
+
+  // Styled confirm dialog — replaces the browser confirm() popup. Returns a
+  // Promise<boolean>. `opts`: { okText, cancelText, danger }.
+  function stfConfirm(message, opts) {
+    opts = opts || {};
+    return new Promise(function (resolve) {
+      var ov = document.createElement("div");
+      ov.className = "stf-confirm-ov";
+      ov.innerHTML =
+        '<div class="stf-confirm" role="dialog" aria-modal="true">' +
+        '  <div class="stf-confirm-msg">' + esc(message) + "</div>" +
+        '  <div class="stf-confirm-actions">' +
+        '    <button type="button" class="stf-confirm-cancel">' + esc(opts.cancelText || "Cancel") + "</button>" +
+        '    <button type="button" class="stf-confirm-ok' + (opts.danger ? " danger" : "") + '">' + esc(opts.okText || "Confirm") + "</button>" +
+        "  </div></div>";
+      document.body.appendChild(ov);
+      requestAnimationFrame(function () { ov.classList.add("show"); });
+      function done(val) {
+        ov.classList.remove("show");
+        setTimeout(function () { ov.remove(); }, 200);
+        resolve(val);
+      }
+      ov.querySelector(".stf-confirm-ok").addEventListener("click", function () { done(true); });
+      ov.querySelector(".stf-confirm-cancel").addEventListener("click", function () { done(false); });
+      ov.addEventListener("click", function (e) { if (e.target === ov) done(false); });
+    });
   }
 
   function esc(s) {
@@ -514,7 +547,6 @@
     var canPay = state.payrollVisible &&
       (can("staff.salary.pay") || can("staff.advance.give"));
     html += '<th class="stf-grid-total-h">Days</th>' +
-      (canPay ? '<th class="stf-grid-pay-h" title="Pay salary / advance">₹</th>' : "") +
       "</tr></thead><tbody>";
 
     // ── one (or two) line(s) per staff ──
@@ -547,8 +579,12 @@
         ? '<b class="advdue" title="Advance to recover from salary">' +
           rup(s.outstanding_advance) + " adv</b>"
         : "";
-      var nameAttrs = showActions && can("staff.payroll.view")
-        ? ' data-open="' + esc(s.id) + '" title="Open ' + esc(s.name) + "'s ledger\""
+      // Tapping the name opens the pay panel when the user can pay/advance;
+      // otherwise (view-only) it opens the ledger. Removes the need for a
+      // separate ₹ pay icon at the end of the row.
+      var nameAttrs = showActions && (canPay || can("staff.payroll.view"))
+        ? ' data-open="' + esc(s.id) + '" title="' +
+          (canPay ? "Pay " + esc(s.name) : "Open " + esc(s.name) + "&rsquo;s ledger") + '"'
         : "";
       var shiftTag = shift
         ? '<span class="stf-shift-tag ' + (shift === "D" ? "day" : "night") +
@@ -592,14 +628,6 @@
           (st ? '<span class="m">' + CELL_LABEL[st] + "</span>" : "") + "</td>";
       }
       html += '<td class="stf-grid-total">' + fmtDays(worked) + "</td>" +
-        (canPay
-          ? (showActions
-              ? '<td class="stf-grid-pay' +
-                (state.quickPay && state.quickPay.staffId === s.id ? " on" : "") +
-                '" data-pay="' + esc(s.id) + '" title="Pay salary / give advance">' +
-                '<i class="fas fa-money-bill-wave"></i></td>'
-              : '<td class="stf-grid-pay stf-grid-pay-empty"></td>')
-          : "") +
         "</tr>";
     });
     html += "</tbody><tfoot><tr>";
@@ -612,7 +640,6 @@
         (dayTotals[d3] ? fmtDays(dayTotals[d3]) : "") + "</td>";
     }
     html += '<td class="stf-grid-foot"></td>' +
-      (canPay ? '<td class="stf-grid-foot"></td>' : "") +
       "</tr></tfoot></table></div>";
 
     html += '<div id="stf-quickpay-slot"></div>';
@@ -644,16 +671,13 @@
         cell.addEventListener("click", function () { onCellTap(cell); });
       });
     }
-    pane.querySelectorAll("[data-pay]").forEach(function (cell) {
-      cell.addEventListener("click", function () {
-        openQuickPay(cell.dataset.pay);
-      });
-    });
-    // Tapping a staff NAME opens their ledger (advances, salaries,
-    // outstanding) without hunting through the Staff & Salary tab.
+    // Tapping a staff NAME opens the pay panel (when the user can pay/give
+    // advances); view-only users get the ledger instead. The old ₹ pay icon
+    // at the end of each row has been removed in favour of this.
     pane.querySelectorAll(".stf-grid-name[data-open]").forEach(function (cell) {
       cell.addEventListener("click", function () {
-        openLedgerFor(cell.dataset.open);
+        if (canPay) openQuickPay(cell.dataset.open);
+        else openLedgerFor(cell.dataset.open);
       });
     });
 
@@ -697,23 +721,25 @@
     });
     var allBtn = document.getElementById("stf-grid-allpresent");
     if (allBtn) allBtn.addEventListener("click", function () {
-      if (!confirm("Mark every unmarked staff as FULL day for today?")) return;
-      allBtn.disabled = true;
-      post("/staff/attendance/mark_all", { date: _todayStr() })
-        .then(function (json) {
-          (json.marked || []).forEach(function (rec) {
-            _setGridRecord(rec.staff_id, rec.date, rec.shift || null,
-                           rec.status, rec);
-          });
-          var parts = [(json.marked || []).length + " marked"];
-          if (json.already_marked) parts.push(json.already_marked + " already marked");
-          if (json.skipped_locked) parts.push(json.skipped_locked + " locked (salary paid)");
-          notify(parts.join(" · "), "success");
-          var wrap = document.querySelector("#stf-pane-attendance .stf-grid-wrap");
-          if (wrap) state.gridScroll = { left: wrap.scrollLeft, top: wrap.scrollTop };
-          renderGrid();
-        })
-        .catch(function (e) { allBtn.disabled = false; notify(e.message, "error"); });
+      stfConfirm("Mark every unmarked staff as FULL day for today?", { okText: "Mark all" }).then(function (ok) {
+        if (!ok) return;
+        allBtn.disabled = true;
+        post("/staff/attendance/mark_all", { date: _todayStr() })
+          .then(function (json) {
+            (json.marked || []).forEach(function (rec) {
+              _setGridRecord(rec.staff_id, rec.date, rec.shift || null,
+                             rec.status, rec);
+            });
+            var parts = [(json.marked || []).length + " marked"];
+            if (json.already_marked) parts.push(json.already_marked + " already marked");
+            if (json.skipped_locked) parts.push(json.skipped_locked + " locked (salary paid)");
+            notify(parts.join(" · "), "success");
+            var wrap = document.querySelector("#stf-pane-attendance .stf-grid-wrap");
+            if (wrap) state.gridScroll = { left: wrap.scrollLeft, top: wrap.scrollTop };
+            renderGrid();
+          })
+          .catch(function (e) { allBtn.disabled = false; notify(e.message, "error"); });
+      });
     });
   }
 
@@ -950,28 +976,28 @@
       if (!keepOpen) closeQuickPay();
       return;
     }
-    var today = _todayStr();
-    var start = s.suggested_period_start || s.joined_date ||
-      today.slice(0, 8) + "01";
-    if (start > today) start = today;
+    // Open with NO dates pre-selected — the operator picks the range
+    // (calendar or by tapping days on the grid) before anything calculates.
     state.quickPay = {
       staffId: staffId,
       mode: can("staff.salary.pay") ? "pay" : "advance",
-      start: start,
-      end: today,
+      start: "",
+      end: "",
       anchor: false,
       preview: null,
-      loading: true,
+      loading: false,
     };
     var wrapEl = document.querySelector("#stf-pane-attendance .stf-grid-wrap");
     if (wrapEl) state.gridScroll = { left: wrapEl.scrollLeft, top: wrapEl.scrollTop };
     renderGrid();
     fetchQuickPreview();
-    var slot = document.getElementById("stf-quickpay-slot");
-    // On phones the grid is tall — "nearest" would leave only the panel's
-    // top edge peeking in at the bottom, so bring it to the middle.
-    var block = window.innerWidth <= 600 ? "center" : "nearest";
-    if (slot) slot.scrollIntoView({ behavior: "smooth", block: block });
+    // Phones show the panel as a centered modal overlay (CSS), so no page
+    // scroll is needed. On larger screens it's an inline strip — bring it
+    // into view.
+    if (window.innerWidth > 600) {
+      var slot = document.getElementById("stf-quickpay-slot");
+      if (slot) slot.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }
   }
 
   function closeQuickPay() {
@@ -986,6 +1012,15 @@
     var qp = state.quickPay;
     if (!qp || qp.mode !== "pay") return;
     if (_qpPreviewTimer) clearTimeout(_qpPreviewTimer);
+    // No range chosen yet → nothing to calculate. Clear any old preview and
+    // let _qpSync show the "pick a date range" prompt.
+    if (!qp.start || !qp.end) {
+      qp.preview = null;
+      qp.loading = false;
+      qp.error = null;
+      _qpSync();
+      return;
+    }
     qp.loading = true;
     _qpSync();                       // in place — the panel NEVER rebuilds here
     _qpPreviewTimer = setTimeout(function () {
@@ -1044,9 +1079,14 @@
     // never overwriting a focused input.
     var picker = qp._rangePicker;
     if (picker && picker.input && document.body.contains(picker.input)) {
-      var selNow = picker.selectedDates.map(_toYMD);
-      if (selNow.length !== 2 || selNow[0] !== qp.start || selNow[1] !== qp.end) {
-        picker.setDate([_ymdDate(qp.start), _ymdDate(qp.end)], false);
+      if (!qp.start || !qp.end) {
+        // Range cleared / not yet chosen — empty the calendar.
+        if (picker.selectedDates.length) picker.clear();
+      } else {
+        var selNow = picker.selectedDates.map(_toYMD);
+        if (selNow.length !== 2 || selNow[0] !== qp.start || selNow[1] !== qp.end) {
+          picker.setDate([_ymdDate(qp.start), _ymdDate(qp.end)], false);
+        }
       }
     } else {
       var startInp = document.getElementById("stf-qp-start");
@@ -1082,12 +1122,16 @@
     // Calculation line: keep the old numbers dimmed while the fresh ones load.
     var calcEl = document.getElementById("stf-qp-calc");
     if (calcEl) {
-      if (pv) {
+      if (!qp.start || !qp.end) {
+        calcEl.textContent = "Select the pay period to see the salary total.";
+      } else if (pv) {
         var c = pv.computed;
         calcEl.innerHTML = "<b>" + fmtDays(c.days_worked) + "</b> days (" +
           c.full_days + " full, " + c.half_days + " half) × " +
           rup(c.daily_wage) + " = <b>" + rup(c.gross) + "</b>";
-      } else if (!qp.loading) {
+      } else if (qp.loading) {
+        calcEl.textContent = "Calculating…";
+      } else {
         calcEl.textContent = "—";
       }
       calcEl.classList.toggle("updating", !!qp.loading);
@@ -1099,11 +1143,14 @@
     var dedWrap = document.getElementById("stf-qp-ded-wrap");
     var dedInp = document.getElementById("stf-qp-ded");
     if (dedWrap) dedWrap.style.display = outstanding > 0 ? "" : "none";
+    var dedHelp = document.getElementById("stf-qp-ded-help");
+    if (dedHelp) dedHelp.textContent = outstanding > 0 ? rup(outstanding) + " due" : "";
     if (dedInp && pv) {
       dedInp.max = outstanding;
+      // Default the advance deduction to 0 — the operator opts in to
+      // recovering an advance rather than it being pre-filled to the max.
       if (!qp.dedTouched) {
-        var adjNow = parseInt(document.getElementById("stf-qp-adj")?.value, 10) || 0;
-        dedInp.value = Math.min(outstanding, Math.max(0, pv.computed.gross + adjNow));
+        dedInp.value = 0;
       }
     }
     _qpRecalcNet();
@@ -1118,14 +1165,22 @@
     var qp = state.quickPay;
     var pv = qp && qp.preview;
     var netEl = document.getElementById("stf-qp-net");
+    var payLbl = document.getElementById("stf-qp-paylbl");
     if (!netEl) return;
-    if (!pv) { netEl.textContent = "—"; return; }
+    if (!pv) {
+      netEl.textContent = "₹0";
+      if (payLbl) payLbl.textContent = "Pay salary";
+      return;
+    }
     var outstanding = Number(pv.outstanding_advance || 0);
     var adj = parseInt(document.getElementById("stf-qp-adj")?.value, 10) || 0;
     var payable = pv.computed.gross + adj;
     var ded = Math.min(parseInt(document.getElementById("stf-qp-ded")?.value, 10) || 0,
       Math.min(outstanding, Math.max(0, payable)));
-    netEl.textContent = rup(payable - ded);
+    var net = payable - ded;
+    netEl.textContent = rup(net);
+    // The button restates the amount so staff see exactly what they'll hand over.
+    if (payLbl) payLbl.textContent = "Pay " + rup(net);
   }
 
   function renderQuickPay() {
@@ -1137,23 +1192,29 @@
     if (!s) { slot.innerHTML = ""; return; }
     var today = _todayStr();
 
-    var head =
-      '<div class="stf-qp-head">' +
-      '  <div class="stf-avatar" style="width:30px;height:30px;font-size:0.8rem;">' + initial(s.name) + "</div>" +
-      '  <div class="who"><b>' + esc(s.name) + "</b>" +
-      '    <span>' + rup(s.daily_wage) + "/day" +
-      (s.outstanding_advance > 0
-        ? ' · <span class="due">advance ' + rup(s.outstanding_advance) + " due</span>"
-        : "") + "</span></div>" +
-      '  <div class="stf-qp-switch">' +
+    var switchBtns =
       (can("staff.salary.pay")
         ? '<button data-qpmode="pay" class="' + (qp.mode === "pay" ? "on" : "") + '">Salary</button>'
         : "") +
       (can("staff.advance.give")
         ? '<button data-qpmode="advance" class="' + (qp.mode === "advance" ? "on" : "") + '">Advance</button>'
+        : "");
+
+    var head =
+      '<div class="stf-qp-head">' +
+      '  <div class="stf-qp-head-top">' +
+      '    <div class="stf-avatar">' + initial(s.name) + "</div>" +
+      '    <div class="who"><b>' + esc(s.name) + "</b>" +
+      '      <span>' + rup(s.daily_wage) + " per day" +
+      (s.outstanding_advance > 0
+        ? ' &nbsp;·&nbsp; <span class="due">' + rup(s.outstanding_advance) + " advance due</span>"
+        : "") + "</span></div>" +
+      (can("staff.payroll.view")
+        ? '    <button class="stf-qp-ledger" id="stf-qp-ledger" title="Open register / ledger" aria-label="Open ledger"><i class="fas fa-book-open"></i></button>'
         : "") +
+      '    <button class="stf-qp-close" id="stf-qp-close" title="Close" aria-label="Close"><i class="fas fa-times"></i></button>' +
       "  </div>" +
-      '  <button class="stf-qp-close" id="stf-qp-close" title="Close">&times;</button>' +
+      (switchBtns ? '  <div class="stf-qp-switch">' + switchBtns + "</div>" : "") +
       "</div>";
 
     var body = "";
@@ -1163,49 +1224,94 @@
       // One "Pick date range" input opening the flatpickr calendar — the
       // same modern selector as the Transactions tab. Native two-input
       // fallback if the library didn't load.
-      var dateRow = _fpLib()
-        ? '<div class="stf-qp-row">' +
-          '  <label class="grow stf-range-lbl"><i class="fas fa-calendar-alt"></i>' +
-          '    <input type="text" id="stf-qp-range" class="stf-range-inp" placeholder="Pick date range" readonly></label>' +
-          '  <span class="hint">or tap days on ' + esc(s.name) + "&rsquo;s row</span>" +
-          "</div>"
-        : '<div class="stf-qp-row">' +
-          '  <label>From <input type="date" id="stf-qp-start" value="' + esc(qp.start) + '" max="' + today + '"></label>' +
-          '  <label>To <input type="date" id="stf-qp-end" value="' + esc(qp.end) + '" max="' + today + '"></label>' +
-          '  <span class="hint">or tap days on ' + esc(s.name) + "&rsquo;s row</span>" +
-          "</div>";
-      body += dateRow +
-        '<div id="stf-qp-notearea"></div>' +
-        '<div class="stf-qp-row calcline"><span id="stf-qp-calc">Calculating…</span></div>' +
-        '<div class="stf-qp-row">' +
-        '  <label>Bonus/fine ± <input type="number" id="stf-qp-adj" value="' + (qp.adj || 0) + '" style="width:76px;"></label>' +
-        '  <label id="stf-qp-ded-wrap" style="display:none;">Deduct advance ' +
-        '    <input type="number" id="stf-qp-ded" min="0" value="' + (qp.ded != null ? qp.ded : 0) + '" style="width:88px;color:var(--stf-danger);font-weight:700;"></label>' +
-        '  <span class="net">Net <b id="stf-qp-net">—</b></span>' +
-        "</div>" +
-        '<div class="stf-qp-row">' +
-        sourceHtml("stf-qp-source").replace('<div class="form-group"><label class="form-label">Paid from</label>', "").replace(/<\/div>$/, "") +
-        '  <button class="stf-btn primary" id="stf-qp-confirm" disabled>' +
-        '<i class="fas fa-check"></i> Pay salary</button>' +
-        "</div>";
-    } else {
+      // Strip sourceHtml's own "Paid from" wrapper — we render our own label.
+      var srcInner = sourceHtml("stf-qp-source")
+        .replace('<div class="form-group"><label class="form-label">Paid from</label>', "")
+        .replace(/<\/div>$/, "");
+
+      var dateField = _fpLib()
+        ? '<div class="stf-range-lbl"><i class="fas fa-calendar-alt"></i>' +
+          '  <input type="text" id="stf-qp-range" class="stf-range-inp" placeholder="Select the pay period" readonly></div>' +
+          '  <span class="stf-qp-help stf-qp-taphint">or tap the days on ' + esc(s.name) + "&rsquo;s row</span>"
+        : '<div class="stf-qp-tworow">' +
+          '  <input type="date" id="stf-qp-start" class="stf-qp-input" value="' + esc(qp.start) + '" max="' + today + '">' +
+          '  <span class="stf-qp-dash">to</span>' +
+          '  <input type="date" id="stf-qp-end" class="stf-qp-input" value="' + esc(qp.end) + '" max="' + today + '"></div>' +
+          '  <span class="stf-qp-help stf-qp-taphint">or tap the days on ' + esc(s.name) + "&rsquo;s row</span>";
+
       body +=
-        '<div class="stf-qp-row">' +
-        '  <label>Amount ₹ <input type="number" id="stf-qp-amount" min="1" placeholder="0" style="width:96px;font-weight:700;"></label>' +
-        '  <label>Date <input type="date" id="stf-qp-adv-date" value="' + today + '" max="' + today + '"></label>' +
-        '  <label class="grow">Note <input type="text" id="stf-qp-note" maxlength="120" placeholder="optional"></label>' +
+        '<div class="stf-qp-field">' +
+        '  <label class="stf-qp-lbl">1 · Salary period</label>' + dateField +
         "</div>" +
-        '<div class="stf-qp-row">' +
-        sourceHtml("stf-qp-source").replace('<div class="form-group"><label class="form-label">Paid from</label>', "").replace(/<\/div>$/, "") +
-        '  <button class="stf-btn primary" id="stf-qp-confirm"><i class="fas fa-hand-holding-dollar"></i> Give advance</button>' +
+        '<div id="stf-qp-notearea"></div>' +
+        '<div class="stf-qp-calcbox" id="stf-qp-calc">Select the pay period to see the salary total.</div>' +
+        '<div class="stf-qp-fieldrow">' +
+        '  <div class="stf-qp-field">' +
+        '    <label class="stf-qp-lbl">Bonus / fine (₹)</label>' +
+        '    <input type="number" id="stf-qp-adj" class="stf-qp-input" value="' + (qp.adj || 0) + '" placeholder="0">' +
+        '    <span class="stf-qp-help">+ to add, − to cut</span>' +
+        "  </div>" +
+        '  <div class="stf-qp-field" id="stf-qp-ded-wrap" style="display:none;">' +
+        '    <label class="stf-qp-lbl">Deduct advance (₹)</label>' +
+        '    <input type="number" id="stf-qp-ded" class="stf-qp-input danger" min="0" value="' + (qp.ded != null ? qp.ded : 0) + '" placeholder="0">' +
+        '    <span class="stf-qp-help" id="stf-qp-ded-help"></span>' +
+        "  </div>" +
         "</div>" +
-        '<div class="stf-qp-row"><span class="hint">Deducted automatically from the next salary; the rest carries forward.</span></div>';
+        '<div class="stf-qp-netcard">' +
+        '  <span class="stf-qp-netlbl">Paying now</span>' +
+        '  <span class="stf-qp-netval" id="stf-qp-net">₹0</span>' +
+        "</div>" +
+        '<div class="stf-qp-field">' +
+        '  <label class="stf-qp-lbl">2 · Paid from</label>' + srcInner +
+        "</div>" +
+        '<button class="stf-btn primary stf-qp-paybtn" id="stf-qp-confirm" disabled>' +
+        '<i class="fas fa-check"></i> <span id="stf-qp-paylbl">Pay salary</span></button>';
+    } else {
+      var srcInnerA = sourceHtml("stf-qp-source")
+        .replace('<div class="form-group"><label class="form-label">Paid from</label>', "")
+        .replace(/<\/div>$/, "");
+      body +=
+        '<div class="stf-qp-fieldrow">' +
+        '  <div class="stf-qp-field">' +
+        '    <label class="stf-qp-lbl">Advance amount (₹)</label>' +
+        '    <input type="number" id="stf-qp-amount" class="stf-qp-input big" min="1" placeholder="0">' +
+        "  </div>" +
+        '  <div class="stf-qp-field">' +
+        '    <label class="stf-qp-lbl">Date</label>' +
+        '    <input type="date" id="stf-qp-adv-date" class="stf-qp-input" value="' + today + '" max="' + today + '">' +
+        "  </div>" +
+        "</div>" +
+        '<div class="stf-qp-field">' +
+        '  <label class="stf-qp-lbl">Note (optional)</label>' +
+        '  <input type="text" id="stf-qp-note" class="stf-qp-input" maxlength="120" placeholder="e.g. festival, medical">' +
+        "</div>" +
+        '<div class="stf-qp-field">' +
+        '  <label class="stf-qp-lbl">Paid from</label>' + srcInnerA +
+        "</div>" +
+        '<button class="stf-btn primary stf-qp-paybtn" id="stf-qp-confirm">' +
+        '<i class="fas fa-hand-holding-dollar"></i> Give advance</button>' +
+        '<div class="stf-qp-help" style="margin-top:0.5rem;">Deducted automatically from the next salary; the rest carries forward.</div>';
     }
 
     slot.innerHTML = '<div class="stf-qp">' + head + body + "</div>";
 
+    // Mobile: the panel is styled as a modal overlay on top of the grid
+    // (see .stf-quickpay-slot CSS). Tapping the dimmed backdrop closes it.
+    // Guarded so a mode-switch re-render doesn't stack duplicate listeners.
+    if (!slot._bdWired) {
+      slot._bdWired = true;
+      slot.addEventListener("click", function (e) {
+        if (e.target === slot) closeQuickPay();   // backdrop only, not the card
+      });
+    }
+
     // ── bindings ──
     document.getElementById("stf-qp-close").addEventListener("click", closeQuickPay);
+    var qpLedgerBtn = document.getElementById("stf-qp-ledger");
+    if (qpLedgerBtn) qpLedgerBtn.addEventListener("click", function () {
+      var sid = state.quickPay && state.quickPay.staffId;
+      if (sid) openLedgerFor(sid);
+    });
     slot.querySelectorAll("[data-qpmode]").forEach(function (b) {
       b.addEventListener("click", function () {
         if (!state.quickPay || state.quickPay.mode === b.dataset.qpmode) return;
@@ -1225,7 +1331,8 @@
         // Date OBJECT, not "Y-m-d" string — strings are parsed with
         // dateFormat ("d M"), which would silently fail here.
         maxDate: _ymdDate(today),
-        defaultDate: [_ymdDate(qp.start), _ymdDate(qp.end)],
+        // No pre-selected range — the calendar opens empty.
+        defaultDate: (qp.start && qp.end) ? [_ymdDate(qp.start), _ymdDate(qp.end)] : null,
         disableMobile: true,
         locale: { rangeSeparator: " – " },
         // Color-code each day the same way the attendance grid does for
@@ -1320,30 +1427,33 @@
     var ded = Math.min(parseInt(document.getElementById("stf-qp-ded")?.value, 10) || 0,
       Math.min(outstanding, Math.max(0, payable)));
     var src = readSource("stf-qp-source");
+    if (!qp.start || !qp.end) { notify("Pick a date range first", "error"); return; }
     var msg = "Pay " + rup(payable - ded) + " to " + s.name + " for " +
       fmtDShort(qp.start) + " – " + fmtDShort(qp.end) +
       (ded ? " (after deducting " + rup(ded) + " advance)" : "") + "?";
-    if (!confirm(msg)) return;
-    btn.disabled = true;
-    post("/staff/" + encodeURIComponent(qp.staffId) + "/pay_salary", {
-      period_start: qp.start,
-      period_end: qp.end,
-      adjustment: adj,
-      adjustment_note: "",
-      advance_deduction: ded,
-      payment_method: src.payment_method,
-      expense_type: src.expense_type,
-    })
-      .then(function (json) {
-        notify(json.message || "Salary paid", "success");
-        state.quickPay = null;
-        state.staffLoaded = false;       // outstanding / paid-until changed
-        state.insights = null;
-        state._gridLoadedMonth = null;   // paid-period locks changed
-        _refreshMoneyViews();
-        loadGrid();
+    stfConfirm(msg, { okText: "Pay salary" }).then(function (ok) {
+      if (!ok) return;
+      btn.disabled = true;
+      post("/staff/" + encodeURIComponent(qp.staffId) + "/pay_salary", {
+        period_start: qp.start,
+        period_end: qp.end,
+        adjustment: adj,
+        adjustment_note: "",
+        advance_deduction: ded,
+        payment_method: src.payment_method,
+        expense_type: src.expense_type,
       })
-      .catch(function (e) { btn.disabled = false; notify(e.message, "error"); });
+        .then(function (json) {
+          notify(json.message || "Salary paid", "success");
+          state.quickPay = null;
+          state.staffLoaded = false;       // outstanding / paid-until changed
+          state.insights = null;
+          state._gridLoadedMonth = null;   // paid-period locks changed
+          _refreshMoneyViews();
+          loadGrid();
+        })
+        .catch(function (e) { btn.disabled = false; notify(e.message, "error"); });
+    });
   }
 
   function submitQuickAdvance(btn) {
@@ -2112,29 +2222,31 @@
       var msg = "Pay " + rup(net) + " to " + staff.name + " for " +
         fmtDShort(pv.period_start) + " – " + fmtDShort(pv.period_end) +
         (ded ? " (after deducting " + rup(ded) + " advance)" : "") + "?";
-      if (!confirm(msg)) return;
-      var btn = document.getElementById("stf-pay-confirm");
-      btn.disabled = true;
-      btn.textContent = "Paying…";
-      post("/staff/" + encodeURIComponent(staff.id) + "/pay_salary", {
-        period_start: pv.period_start,
-        period_end: pv.period_end,
-        adjustment: adj,
-        adjustment_note: document.getElementById("stf-pay-adj-note").value.trim(),
-        advance_deduction: ded,
-        payment_method: src.payment_method,
-        expense_type: src.expense_type,
-      })
-        .then(function (json) {
-          notify(json.message || "Salary paid", "success");
-          _refreshMoneyViews();
-          backToCards(true);
+      stfConfirm(msg, { okText: "Pay salary" }).then(function (ok) {
+        if (!ok) return;
+        var btn = document.getElementById("stf-pay-confirm");
+        btn.disabled = true;
+        btn.textContent = "Paying…";
+        post("/staff/" + encodeURIComponent(staff.id) + "/pay_salary", {
+          period_start: pv.period_start,
+          period_end: pv.period_end,
+          adjustment: adj,
+          adjustment_note: document.getElementById("stf-pay-adj-note").value.trim(),
+          advance_deduction: ded,
+          payment_method: src.payment_method,
+          expense_type: src.expense_type,
         })
-        .catch(function (e) {
-          btn.disabled = false;
-          btn.textContent = "Confirm & Pay";
-          notify(e.message, "error");
-        });
+          .then(function (json) {
+            notify(json.message || "Salary paid", "success");
+            _refreshMoneyViews();
+            backToCards(true);
+          })
+          .catch(function (e) {
+            btn.disabled = false;
+            btn.textContent = "Confirm & Pay";
+            notify(e.message, "error");
+          });
+      });
     });
   }
 
@@ -2271,22 +2383,24 @@
               ? "Delete this advance? Its expense entry is removed too."
               : "Reverse this salary payment? The period opens again and " +
                 "any deducted advance becomes outstanding once more.";
-            if (!confirm(q)) return;
-            var url = kind === "advance"
-              ? "/staff/advance/" + encodeURIComponent(id)
-              : "/staff/salary/" + encodeURIComponent(id);
-            del(url)
-              .then(function (json) {
-                notify(json.message || "Deleted", "success");
-                _refreshMoneyViews();
-                state.staffLoaded = false;
-                loadStaff(true).then(function () {
-                  var fresh = state.staff.find(function (x) { return x.id === staff.id; });
-                  state.payView = { name: "ledger", staff: fresh || staff };
-                  renderPayroll();
-                });
-              })
-              .catch(function (e) { notify(e.message, "error"); });
+            stfConfirm(q, { okText: kind === "advance" ? "Delete" : "Reverse", danger: true }).then(function (ok) {
+              if (!ok) return;
+              var url = kind === "advance"
+                ? "/staff/advance/" + encodeURIComponent(id)
+                : "/staff/salary/" + encodeURIComponent(id);
+              del(url)
+                .then(function (json) {
+                  notify(json.message || "Deleted", "success");
+                  _refreshMoneyViews();
+                  state.staffLoaded = false;
+                  loadStaff(true).then(function () {
+                    var fresh = state.staff.find(function (x) { return x.id === staff.id; });
+                    state.payView = { name: "ledger", staff: fresh || staff };
+                    renderPayroll();
+                  });
+                })
+                .catch(function (e) { notify(e.message, "error"); });
+            });
           });
         });
       })
@@ -2332,7 +2446,18 @@
   // staff member. The grid loads async, so poll until this month's data
   // (staff list + paid periods) is in memory before opening the panel.
   window.openStaffQuickPay = function (staffId) {
+    // 1) Actually NAVIGATE to the Staff tab. Triggered from the Transactions
+    //    tab's Salary tile, the app is showing a different tab; openModal()
+    //    alone only builds content inside the still-hidden #staff-tab, so it
+    //    looked like nothing happened. Clicking the bottom-nav item runs the
+    //    generic handler that un-hides #staff-tab (and calls openStaffModal).
+    var navItem = document.querySelector('.nav-item[data-tab="staff"]');
+    if (navItem) navItem.click();
+    // 2) Build/refresh content and land on the attendance grid. Idempotent —
+    //    safe even if the nav handler already opened the module.
     openModal();
+    // 3) The grid loads async; poll until this month's data (staff list +
+    //    paid periods) is in memory, then pop the quick-pay panel.
     var tries = 0;
     (function waitReady() {
       var ready =

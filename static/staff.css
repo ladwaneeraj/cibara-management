@@ -650,45 +650,67 @@ td.stf-grid-name.stf-grid-foot {
 }
 .stf-qp-head {
   display: flex;
-  align-items: center;
-  gap: 0.6rem;
-  margin-bottom: 0.6rem;
+  flex-direction: column;
+  gap: 0.7rem;
+  margin-bottom: 0.85rem;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid var(--stf-line-soft, #eef2f6);
 }
-.stf-qp-head .who { flex: 1; min-width: 0; line-height: 1.25; }
-.stf-qp-head .who b { font-size: 0.9rem; color: var(--stf-ink); display: block; }
-.stf-qp-head .who span { font-size: 0.72rem; color: var(--stf-ink-3); }
+.stf-qp-head-top { display: flex; align-items: center; gap: 0.6rem; }
+.stf-qp-head .who { flex: 1; min-width: 0; line-height: 1.3; }
+.stf-qp-head .who b {
+  font-size: 0.98rem; font-weight: 700; color: var(--stf-ink);
+  display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.stf-qp-head .who span { font-size: 0.74rem; color: var(--stf-ink-3); }
 .stf-qp-head .who .due { color: var(--stf-danger); font-weight: 600; }
+
+/* Segmented Salary / Advance toggle — full width, clear active state */
 .stf-qp-switch {
   display: flex;
-  gap: 3px;
-  padding: 3px;
-  background: #fff;
+  gap: 4px;
+  padding: 4px;
+  background: var(--stf-canvas, #f8fafc);
   border: 1px solid var(--stf-line);
-  border-radius: 9px;
+  border-radius: 10px;
 }
 .stf-qp-switch button {
+  flex: 1;
   border: none;
   background: transparent;
-  border-radius: 7px;
-  padding: 0.32rem 0.7rem;
-  font-size: 0.75rem;
+  border-radius: 8px;
+  padding: 0.5rem 0.7rem;
+  font-size: 0.82rem;
   font-weight: 600;
   color: var(--stf-ink-2);
   cursor: pointer;
+  transition: background 0.12s, color 0.12s, box-shadow 0.12s;
 }
-.stf-qp-switch button.on { background: var(--stf-primary); color: #fff; }
-.stf-qp-close {
-  background: transparent;
-  border: none;
-  width: 30px;
-  height: 30px;
-  border-radius: 8px;
-  font-size: 1.15rem;
-  line-height: 1;
-  color: var(--stf-ink-3);
+.stf-qp-switch button.on {
+  background: var(--stf-primary);
+  color: #fff;
+  box-shadow: 0 1px 3px rgba(67, 97, 238, 0.3);
+}
+
+/* Circular close + ledger buttons */
+.stf-qp-close, .stf-qp-ledger {
+  flex-shrink: 0;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.9rem;
   cursor: pointer;
+  transition: background 0.12s, color 0.12s;
 }
-.stf-qp-close:hover { background: #fff; color: var(--stf-ink); }
+.stf-qp-close {
+  background: var(--stf-canvas, #f1f5f9);
+  border: 1px solid var(--stf-line, #e2e8f0);
+  color: var(--stf-ink-2, #475569);
+}
+.stf-qp-close:hover { background: #e2e8f0; color: var(--stf-ink); }
 .stf-qp-row {
   display: flex;
   align-items: center;
@@ -1414,7 +1436,7 @@ td.stf-grid-name.stf-grid-foot {
   .stf-grid-pay { font-size: 0.85rem; }
   .stf-btn { min-height: 40px; }
   .stf-nav-btn { width: 38px; height: 38px; }
-  .stf-qp-close { width: 40px; height: 40px; }
+  .stf-qp-close, .stf-qp-ledger { width: 40px; height: 40px; }
   .stf-close { width: 42px; height: 42px; font-size: 1.5rem; }
   .stf-cell-pop .opts button { padding: 0.6rem 0.8rem; font-size: 0.8rem; }
   .stf-qp-switch button { padding: 0.5rem 0.85rem; }
@@ -1463,7 +1485,16 @@ td.stf-grid-name.stf-grid-foot {
     text-overflow: clip;
     line-height: 1.35;
   }
-  .stf-grid-wrap { max-height: max(260px, calc(100dvh - 330px)); }
+  /* Phone: the grid gets a bounded height AND its own vertical scroll, so a
+     long staff list can be scrolled down to the last names. The base rule
+     sets overflow-y:hidden (desktop sizes to content); on phones the
+     max-height would otherwise clip the bottom rows with no way to reach
+     them. overflow-y:auto pairs with overflow-x:auto cleanly (both non-
+     visible), keeping the sticky header pinned during the inner scroll. */
+  .stf-grid-wrap {
+    max-height: max(260px, calc(100dvh - 330px));
+    overflow-y: auto;
+  }
 
   /* Quick-pay panel: stacked, thumb-sized */
   .stf-qp { padding: 0.75rem 0.7rem; }
@@ -1476,8 +1507,8 @@ td.stf-grid-name.stf-grid-foot {
   .stf-qp-row .hint { flex-basis: 100%; }
   .stf-qp .stf-source { flex: 1 1 100%; min-width: 0; }
   .stf-qp .stf-btn { margin-left: 0; width: 100%; padding: 0.75rem 1rem; font-size: 0.88rem; }
-  .stf-qp-head { flex-wrap: wrap; }
-  .stf-qp-head .who { flex-basis: calc(100% - 90px); }
+  /* Header is a column (top row + segmented switch) — no wrap hacks needed. */
+  .stf-qp-head .who { flex-basis: auto; }
 
   /* iOS zooms the page when a focused input's font is under 16px —
      16px inputs keep the viewport still while typing. */
@@ -1511,3 +1542,199 @@ td.stf-grid-name.stf-grid-foot {
   .stf-form { max-width: none; }
   .stf-two-col { gap: 0.5rem; }
 }
+
+/* ============================================================
+   Staff — styled confirm dialog, toast, quick-pay ledger button.
+   Added for the attendance/pay UX changes (no browser popups).
+   ============================================================ */
+
+/* Ledger button in the quick-pay panel header */
+/* .stf-qp-ledger shares the circular sizing with .stf-qp-close (defined
+   above); only the colour scheme differs. */
+.stf-qp-ledger {
+  border: 1px solid #c7d2fe;
+  background: #eef2ff;
+  color: #4338ca;
+}
+.stf-qp-ledger:hover { background: #e0e7ff; }
+
+/* Confirm dialog */
+.stf-confirm-ov {
+  position: fixed; inset: 0; z-index: 4000;
+  background: rgba(15, 23, 42, 0.5);
+  display: flex; align-items: center; justify-content: center;
+  padding: 1rem;
+  opacity: 0; transition: opacity 0.18s ease;
+}
+.stf-confirm-ov.show { opacity: 1; }
+.stf-confirm {
+  background: #fff; border-radius: 14px;
+  max-width: 380px; width: 100%;
+  box-shadow: 0 18px 44px -10px rgba(15, 23, 42, 0.45);
+  padding: 1.1rem 1.15rem 0.9rem;
+  transform: translateY(8px) scale(0.98);
+  transition: transform 0.18s ease;
+  font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+}
+.stf-confirm-ov.show .stf-confirm { transform: none; }
+.stf-confirm-msg { font-size: 0.9rem; color: #1e293b; line-height: 1.45; }
+.stf-confirm-actions {
+  display: flex; justify-content: flex-end; gap: 0.5rem; margin-top: 1.1rem;
+}
+.stf-confirm-actions button {
+  padding: 0.5rem 1rem; border-radius: 9px; font-size: 0.84rem;
+  font-weight: 600; cursor: pointer; font-family: inherit; border: 1px solid transparent;
+}
+.stf-confirm-cancel { background: #f1f5f9; color: #475569; border-color: #e2e8f0; }
+.stf-confirm-cancel:hover { background: #e2e8f0; }
+.stf-confirm-ok { background: #4f46e5; color: #fff; }
+.stf-confirm-ok:hover { background: #4338ca; }
+.stf-confirm-ok.danger { background: #dc2626; }
+.stf-confirm-ok.danger:hover { background: #b91c1c; }
+
+/* Fallback toast (only used if the global showNotification is absent) */
+.stf-toast {
+  position: fixed; left: 50%; bottom: calc(1.2rem + env(safe-area-inset-bottom));
+  transform: translate(-50%, 20px);
+  background: #1e293b; color: #fff;
+  padding: 0.65rem 1rem; border-radius: 10px;
+  font-size: 0.85rem; font-family: 'Inter', system-ui, sans-serif;
+  box-shadow: 0 10px 30px -8px rgba(0,0,0,0.4);
+  z-index: 4100; opacity: 0; transition: opacity 0.2s, transform 0.2s;
+  max-width: min(90vw, 420px);
+}
+.stf-toast.show { opacity: 1; transform: translate(-50%, 0); }
+.stf-toast-success { background: #166534; }
+.stf-toast-error { background: #b91c1c; }
+
+/* ============================================================
+   Quick-pay / advance panel — clearer labelled fields + big amount.
+   ============================================================ */
+.stf-qp-field { margin-bottom: 0.7rem; }
+.stf-qp-fieldrow { display: flex; gap: 0.7rem; flex-wrap: wrap; margin-bottom: 0.7rem; }
+.stf-qp-fieldrow .stf-qp-field { flex: 1 1 140px; margin-bottom: 0; min-width: 0; }
+.stf-qp-lbl {
+  display: block;
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  margin-bottom: 0.3rem;
+}
+.stf-qp-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0.6rem 0.7rem;
+  border: 1px solid var(--stf-line, #e2e8f0);
+  border-radius: 10px;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #0f172a;
+  background: #fff;
+  outline: none;
+}
+.stf-qp-input:focus { border-color: var(--stf-primary, #4361ee); box-shadow: 0 0 0 3px rgba(67,97,238,0.12); }
+.stf-qp-input.danger { color: var(--stf-danger, #dc2626); }
+.stf-qp-input.big { font-size: 1.15rem; font-weight: 800; }
+.stf-qp-help { display: block; font-size: 0.68rem; color: #94a3b8; margin-top: 0.28rem; }
+.stf-qp-tworow { display: flex; align-items: center; gap: 0.5rem; }
+.stf-qp-tworow .stf-qp-input { flex: 1; }
+.stf-qp-dash { color: #94a3b8; font-size: 0.8rem; flex-shrink: 0; }
+
+.stf-qp .stf-range-lbl {
+  display: flex; align-items: center; gap: 0.5rem;
+  padding: 0.6rem 0.7rem;
+  border: 1px solid var(--stf-line, #e2e8f0);
+  border-radius: 10px;
+  background: #fff;
+  cursor: pointer;
+}
+.stf-qp .stf-range-lbl i { color: #94a3b8; font-size: 0.85rem; }
+.stf-qp .stf-range-inp {
+  border: none; outline: none; background: transparent;
+  font-size: 0.95rem; font-weight: 600; color: #0f172a; width: 100%; cursor: pointer;
+}
+
+.stf-qp-calcbox {
+  background: #f8fafc;
+  border: 1px solid var(--stf-line-soft, #eef2f6);
+  border-radius: 10px;
+  padding: 0.6rem 0.75rem;
+  font-size: 0.85rem;
+  color: #475569;
+  margin-bottom: 0.7rem;
+  line-height: 1.4;
+}
+.stf-qp-calcbox b { color: #0f172a; }
+.stf-qp-calcbox.updating { opacity: 0.55; }
+
+.stf-qp-netcard {
+  display: flex; align-items: center; justify-content: space-between;
+  background: linear-gradient(135deg, #ecfdf5, #d1fae5);
+  border: 1px solid #a7f3d0;
+  border-radius: 12px;
+  padding: 0.75rem 0.95rem;
+  margin-bottom: 0.8rem;
+}
+.stf-qp-netlbl { font-size: 0.8rem; font-weight: 700; color: #047857; text-transform: uppercase; letter-spacing: 0.03em; }
+.stf-qp-netval { font-size: 1.55rem; font-weight: 800; color: #065f46; line-height: 1; }
+
+.stf-btn.stf-qp-paybtn {
+  width: 100%;
+  justify-content: center;
+  padding: 0.85rem 1rem;
+  font-size: 0.98rem;
+  border-radius: 12px;
+  margin-left: 0;
+}
+.stf-btn.stf-qp-paybtn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+@media (max-width: 600px) {
+  .stf-qp-netval { font-size: 1.4rem; }
+  .stf-qp-fieldrow { gap: 0.6rem; }
+  .stf-qp-input { font-size: 16px; }
+}
+
+/* ============================================================
+   Mobile: quick-pay / advance panel as a compact modal overlay
+   on top of the attendance grid (instead of an inline strip the
+   user has to scroll to). Tapping a staff name opens it.
+   ============================================================ */
+@media (max-width: 600px) {
+  #stf-quickpay-slot:not(:empty) {
+    position: fixed;
+    inset: 0;
+    z-index: 3600;
+    background: rgba(15, 23, 42, 0.5);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1rem;
+    animation: stfQpFade 0.18s ease;
+  }
+  #stf-quickpay-slot:not(:empty) .stf-qp {
+    width: 100%;
+    max-width: 440px;
+    max-height: 88vh;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    border-radius: 16px;
+    box-shadow: 0 20px 50px -12px rgba(0, 0, 0, 0.5);
+    margin: 0;
+    animation: stfQpPop 0.2s ease-out;
+  }
+  /* The panel header sticks while the body scrolls inside the modal. */
+  #stf-quickpay-slot:not(:empty) .stf-qp-head {
+    position: sticky;
+    top: 0;
+    background: #fff;
+    z-index: 2;
+    padding-top: 0.15rem;
+  }
+  /* The grid sits behind the modal on phones, so "tap the days on the row"
+     isn't reachable — hide that hint here to avoid confusing staff. */
+  #stf-quickpay-slot:not(:empty) .stf-qp-taphint { display: none; }
+}
+@keyframes stfQpFade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes stfQpPop { from { transform: translateY(16px) scale(0.98); } to { transform: none; } }

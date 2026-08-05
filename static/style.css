@@ -5565,3 +5565,70 @@ select.filter-select:disabled, .rpt-gst-toggle.rpt-disabled { opacity: 0.45; poi
   .rpt-stat-lbl { font-size: 0.64rem; }
   .rpt-chip { padding: 0.3rem 0.6rem; font-size: 0.74rem; }
 }
+
+/* ============================================================
+   MANUAL BILL — Register tab modal. Namespaced mb-.
+   ============================================================ */
+#mb-overlay {
+  position: fixed; inset: 0; background: rgba(15,23,42,0.5);
+  z-index: 1300; display: none; align-items: flex-end; justify-content: center;
+}
+#mb-overlay.show { display: flex; }
+.mb-sheet {
+  background: #fff; width: 100%; max-width: 560px;
+  border-radius: 18px 18px 0 0; max-height: 94vh; overflow-y: auto;
+  animation: mbUp 0.22s ease-out; -webkit-overflow-scrolling: touch;
+}
+@keyframes mbUp { from { transform: translateY(40px); opacity: 0.5; } to { transform: none; opacity: 1; } }
+@media (min-width: 640px) {
+  #mb-overlay { align-items: center; padding: 1rem; }
+  .mb-sheet { border-radius: 16px; }
+}
+.mb-hdr {
+  position: sticky; top: 0; background: #fff; z-index: 2;
+  padding: 0.55rem 1rem 0.65rem; border-bottom: 1px solid #f1f5f9;
+  display: flex; align-items: center; gap: 0.6rem;
+}
+.mb-grab { position: absolute; top: 6px; left: 50%; transform: translateX(-50%); width: 38px; height: 4px; border-radius: 4px; background: #e2e8f0; }
+.mb-hdr h3 { margin: 0.35rem 0 0; font-size: 0.98rem; color: #0f172a; flex: 1; display: flex; align-items: center; gap: 0.45rem; }
+.mb-hdr h3 i { color: #7c3aed; }
+.mb-x { border: none; background: #f1f5f9; color: #475569; width: 30px; height: 30px; border-radius: 50%; cursor: pointer; margin-top: 0.35rem; }
+.mb-body { padding: 0.85rem 1rem 1.3rem; }
+.mb-note { font-size: 0.75rem; background: #f5f3ff; color: #5b21b6; border-radius: 9px; padding: 0.5rem 0.65rem; margin: 0 0 0.8rem; line-height: 1.4; }
+.mb-note i { margin-right: 0.25rem; }
+
+.mb-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.6rem 0.7rem; }
+.mb-col2 { grid-column: span 2; }
+.mb-field { display: flex; flex-direction: column; gap: 0.22rem; font-size: 0.76rem; color: #475569; font-weight: 600; }
+.mb-field input { padding: 0.5rem 0.6rem; border: 1px solid #e2e8f0; border-radius: 9px; font-size: 0.88rem; font-weight: 500; color: #0f172a; outline: none; }
+.mb-field input:focus { border-color: #7c3aed; box-shadow: 0 0 0 2px rgba(124,58,237,0.12); }
+.mb-check { display: flex; align-items: center; gap: 0.4rem; font-size: 0.8rem; font-weight: 600; color: #475569; align-self: end; padding-bottom: 0.5rem; }
+.mb-check input { accent-color: #7c3aed; }
+
+.mb-calc { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.35rem 0.8rem; margin: 0.7rem 0; font-size: 0.8rem; color: #475569; min-height: 1.1rem; }
+.mb-calc b { color: #0f172a; }
+.mb-calc small { color: #94a3b8; width: 100%; font-size: 0.68rem; }
+
+.mb-sec { font-size: 0.82rem; font-weight: 700; color: #1e293b; margin: 0.9rem 0 0.5rem; }
+.mb-sec small { font-weight: 500; color: #94a3b8; }
+.mb-payrow { display: grid; grid-template-columns: 1.15fr 1fr 0.9fr auto; gap: 0.4rem; margin-bottom: 0.45rem; align-items: center; }
+.mb-payrow input, .mb-payrow select { padding: 0.45rem 0.5rem; border: 1px solid #e2e8f0; border-radius: 8px; font-size: 0.82rem; outline: none; min-width: 0; }
+.mb-payrow input:focus, .mb-payrow select:focus { border-color: #7c3aed; }
+.mb-pay-del { border: 1px solid #fecaca; background: #fff; color: #c53030; width: 32px; height: 32px; border-radius: 8px; cursor: pointer; flex-shrink: 0; }
+.mb-pay-del:hover { background: #fef2f2; }
+.mb-add-pay { border: 1px dashed #c4b5fd; background: #f5f3ff; color: #6d28d9; border-radius: 9px; padding: 0.45rem 0.8rem; font-size: 0.8rem; font-weight: 600; cursor: pointer; font-family: inherit; }
+.mb-add-pay:hover { background: #ede9fe; }
+
+.mb-balance { display: flex; gap: 1rem; justify-content: flex-end; margin: 0.7rem 0 0; font-size: 0.82rem; color: #475569; }
+.mb-due { color: #dc2626; font-weight: 700; }
+.mb-clear { color: #16a34a; font-weight: 700; }
+
+.mb-submit { width: 100%; justify-content: center; display: flex; align-items: center; gap: 0.4rem; padding: 0.75rem; font-size: 0.92rem; font-weight: 700; margin-top: 1rem; border: none; border-radius: 12px; background: #7c3aed; color: #fff; cursor: pointer; font-family: inherit; }
+.mb-submit:hover { background: #6d28d9; }
+.mb-submit:disabled { opacity: 0.6; cursor: wait; }
+
+@media (max-width: 480px) {
+  .mb-grid { grid-template-columns: 1fr 1fr; }
+  .mb-payrow { grid-template-columns: 1fr 1fr auto; }
+  .mb-payrow .mb-pay-method { grid-column: span 1; }
+}

@@ -1853,6 +1853,12 @@
   // NOT touch the modal markup or buildBillHTML here: user wants the
   // register modal to be the single source of truth for bill rendering.
   window.openRegBill = openRegBill;
+  // Force a full reload of the current register range. Exposed so other
+  // modules (e.g. the manual-bill creator) can refresh the register after
+  // writing a new bill, without reaching into this IIFE's internals.
+  window.reloadRegister = function () {
+    try { loadData(true); } catch (e) { /* register not ready yet */ }
+  };
 
   // ── Generate-Invoice confirmation popup ───────────────────────────────────
   function _genInvEsc(s) {
@@ -1963,6 +1969,19 @@
     const _auth = window.CibaraAuth;
     const _isAdmin = _auth && _auth.isAdmin && _auth.isAdmin();
 
+    // Manual / backdated bill — admin-only (payment.edit). Built into the
+    // toolbar here (buildHTML fully replaces the tab, so a static button in
+    // index.html would be wiped); opens the modal from static/manual-bill.js.
+    const _canManualBill = !!(_auth && _auth.userCan && _auth.userCan("payment.edit"));
+    const manualBillBtn = _canManualBill
+      ? `<button class="reg-icon-btn reg-manual-bill" id="manual-bill-btn"
+             onclick="window.openManualBill && window.openManualBill()"
+             title="Add a manual / backdated bill"
+             style="background:#7c3aed;color:#fff;">
+           <i class="fas fa-file-invoice-dollar"></i>
+         </button>`
+      : "";
+
     // Quick range buttons. Same set for admin (Today / Last 3 Days / Month)
     // as the Bills tab — kept identical so the two tabs feel uniform.
     // Manager / housekeeping see only Today + Last 3 Days (server clamps
@@ -2027,6 +2046,7 @@
   <div class="register-header">
     <h1><i class="fas fa-book"></i> Daily Register</h1>
     <div class="register-toolbar">
+      ${manualBillBtn}
       <button class="reg-customers-btn reg-customers-header-btn" data-perm="customer.manage" onclick="openCustomerManager()" title="Customers">
         <i class="fas fa-users"></i><span class="reg-customers-label"> Customers</span>
       </button>

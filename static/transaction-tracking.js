@@ -600,7 +600,10 @@ class TransactionLogManager {
       type = "";  // REFUND badge already shows it — no duplicate text
       color = 'style="color: var(--danger)"';
     } else if (logType === "expenses") {
-      type = log.category || "Expense";
+      // The category already shows as a colour chip in the title, so don't
+      // repeat it (as a raw slug like "staff_advance") in the subtitle —
+      // leave just the time there.
+      type = "";
       color = 'style="color: var(--danger)"';
       additionalInfo = "";
     } else if (log.item || log.transaction_type === "service") {
@@ -714,11 +717,12 @@ class TransactionLogManager {
         (log.category || "others").slice(1).replace(/_/g, " ");
 
       // Photo icon or attach button. Categories that never carry an
-      // invoice photo (mirrors NO_PHOTO_CATEGORIES in expense.js — keep
-      // the two lists in sync) get NO "Photo" attach button here. An
-      // already-attached photo is still shown, in case category data
-      // changed after the fact.
-      const NO_PHOTO_CATS = ["salary", "rent", "petty_cash"];
+      // invoice photo get NO "Photo" attach button here. An already-attached
+      // photo is still shown, in case category data changed after the fact.
+      // NOTE: salary & staff_advance ARE allowed to attach a receipt/photo
+      // (operators wanted the option), so they're intentionally NOT listed —
+      // this is a deliberate divergence from expense.js's NO_PHOTO_CATEGORIES.
+      const NO_PHOTO_CATS = ["rent", "petty_cash"];
       const _expCat = (log.category || "").toLowerCase();
       let photoHtml = "";
       if (log.invoice_photo_url) {

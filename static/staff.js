@@ -36,7 +36,6 @@
     gridScroll: null,       // {left, top} preserved across cell-tap re-renders
 
     payView: { name: "cards" },  // cards | add | edit | advance | pay | ledger
-    payPreview: null,       // /salary_preview payload for the pay form
 
     insights: null,         // last /staff/analytics payload (SWR cache)
     _gridLoadedMonth: null, // month whose attendance is already in gridData
@@ -302,6 +301,10 @@
     modal.querySelectorAll(".stf-tab-pane").forEach(function (p) {
       p.classList.toggle("active", p.id === "stf-pane-" + tab);
     });
+    // The quick pay/advance panel is rendered inside one pane. Leaving it open
+    // across a tab switch would strand it in the pane the user just left, so
+    // drop it — the panes re-render below and repaint from this state.
+    state.quickPay = null;
     if (tab === "attendance") {
       if (!state.gridMonth) state.gridMonth = _todayStr().slice(0, 7);
       loadGrid();
@@ -967,20 +970,45 @@
     });
   }
 
-  function openQuickPay(staffId, keepOpen) {
+  // Re-render whichever pane currently hosts the panel. The panel lives in
+  // BOTH the attendance grid and the Staff & Salary cards, so opening/closing
+  // it has to refresh the right one — refreshing the grid while the user is on
+  // the cards would leave a stale panel on screen.
+  function _qpRerenderHost() {
+    if (state.quickPay && state.quickPay.host === "payroll") { renderCards(); return; }
+    renderGrid();
+  }
+
+  // opts: { mode: "pay"|"advance", host: "attendance"|"payroll", keepOpen: bool }
+  // `keepOpen` suppresses the tap-again-to-close toggle (used by the
+  // programmatic salary redirect from the expense modal).
+  function openQuickPay(staffId, opts) {
+    // Back-compat: older call sites passed `keepOpen` as a bare boolean.
+    if (typeof opts === "boolean") opts = { keepOpen: opts };
+    opts = opts || {};
     var s = state.staff.find(function (x) { return x.id === staffId; });
     if (!s) return;
-    if (state.quickPay && state.quickPay.staffId === staffId) {
-      // Tap again on ₹ = toggle off. A programmatic open (keepOpen, e.g.
-      // the salary redirect from the expense modal) must NOT toggle-close.
-      if (!keepOpen) closeQuickPay();
+    if (state.quickPay && state.quickPay.staffId === staffId &&
+        (!opts.mode || state.quickPay.mode === opts.mode)) {
+      // Tap again on the same person = toggle off. A programmatic open, or a
+      // tap on the OTHER action for the same person, must not toggle-close.
+      if (!opts.keepOpen) closeQuickPay();
       return;
     }
+    var mode = opts.mode ||
+      (can("staff.salary.pay") ? "pay" : "advance");
+    // Never open a mode the user can't perform.
+    if (mode === "pay" && !can("staff.salary.pay")) mode = "advance";
+    if (mode === "advance" && !can("staff.advance.give")) mode = "pay";
     // Open with NO dates pre-selected — the operator picks the range
     // (calendar or by tapping days on the grid) before anything calculates.
     state.quickPay = {
       staffId: staffId,
-      mode: can("staff.salary.pay") ? "pay" : "advance",
+      mode: mode,
+      // Which pane the panel is rendered into. On "payroll" there is no
+      // attendance grid on screen, so the tap-the-days affordance is hidden
+      // and the date-range picker is the only way to choose the period.
+      host: opts.host === "payroll" ? "payroll" : "attendance",
       start: "",
       end: "",
       anchor: false,
@@ -989,23 +1017,35 @@
     };
     var wrapEl = document.querySelector("#stf-pane-attendance .stf-grid-wrap");
     if (wrapEl) state.gridScroll = { left: wrapEl.scrollLeft, top: wrapEl.scrollTop };
-    renderGrid();
+    _qpRerenderHost();
     fetchQuickPreview();
     // Phones show the panel as a centered modal overlay (CSS), so no page
     // scroll is needed. On larger screens it's an inline strip — bring it
     // into view.
     if (window.innerWidth > 600) {
-      var slot = document.getElementById("stf-quickpay-slot");
+      var slot = _qpSlot();
       if (slot) slot.scrollIntoView({ behavior: "smooth", block: "nearest" });
     }
   }
 
   function closeQuickPay() {
+    var wasHost = state.quickPay && state.quickPay.host;
     state.quickPay = null;
     var wrapEl = document.querySelector("#stf-pane-attendance .stf-grid-wrap");
     if (wrapEl) state.gridScroll = { left: wrapEl.scrollLeft, top: wrapEl.scrollTop };
-    renderGrid();
+    if (wasHost === "payroll") renderCards();
+    else renderGrid();
     _fpSweep();                      // the panel's pickers are orphans now
+  }
+
+  // The panel's host element. Both panes carry a #stf-quickpay-slot, so
+  // resolve against the pane the panel belongs to rather than by id alone —
+  // getElementById would always return the attendance one.
+  function _qpSlot() {
+    var paneId = (state.quickPay && state.quickPay.host === "payroll")
+      ? "stf-pane-payroll" : "stf-pane-attendance";
+    return document.querySelector("#" + paneId + " #stf-quickpay-slot") ||
+      document.getElementById("stf-quickpay-slot");
   }
 
   function fetchQuickPreview() {
@@ -1184,7 +1224,7 @@
   }
 
   function renderQuickPay() {
-    var slot = document.getElementById("stf-quickpay-slot");
+    var slot = _qpSlot();
     if (!slot) return;
     var qp = state.quickPay;
     if (!qp) { slot.innerHTML = ""; return; }
@@ -1232,12 +1272,14 @@
       var dateField = _fpLib()
         ? '<div class="stf-range-lbl"><i class="fas fa-calendar-alt"></i>' +
           '  <input type="text" id="stf-qp-range" class="stf-range-inp" placeholder="Select the pay period" readonly></div>' +
-          '  <span class="stf-qp-help stf-qp-taphint">or tap the days on ' + esc(s.name) + "&rsquo;s row</span>"
+          (qp.host === "payroll" ? "" :
+           '  <span class="stf-qp-help stf-qp-taphint">or tap the days on ' + esc(s.name) + "&rsquo;s row</span>")
         : '<div class="stf-qp-tworow">' +
           '  <input type="date" id="stf-qp-start" class="stf-qp-input" value="' + esc(qp.start) + '" max="' + today + '">' +
           '  <span class="stf-qp-dash">to</span>' +
           '  <input type="date" id="stf-qp-end" class="stf-qp-input" value="' + esc(qp.end) + '" max="' + today + '"></div>' +
-          '  <span class="stf-qp-help stf-qp-taphint">or tap the days on ' + esc(s.name) + "&rsquo;s row</span>";
+          (qp.host === "payroll" ? "" :
+           '  <span class="stf-qp-help stf-qp-taphint">or tap the days on ' + esc(s.name) + "&rsquo;s row</span>");
 
       body +=
         '<div class="stf-qp-field">' +
@@ -1751,8 +1793,6 @@
   function renderPayroll() {
     var v = state.payView;
     if (v.name === "add" || v.name === "edit") return renderStaffForm(v.staff);
-    if (v.name === "advance") return renderAdvanceForm(v.staff);
-    if (v.name === "pay") return renderPayForm(v.staff);
     if (v.name === "ledger") return renderLedger(v.staff);
     renderCards();
   }
@@ -1769,7 +1809,11 @@
       '  <span class="spacer"></span>' +
       '  <label class="stf-inactive-toggle"><input type="checkbox" id="stf-inactive-chk"' +
       (state.includeInactive ? " checked" : "") + "> Show inactive</label>" +
-      "</div>";
+      "</div>" +
+      // Same quick pay/advance panel the attendance grid uses. Pay Salary and
+      // Advance on the cards below open it here instead of a separate
+      // full-screen form, so both tabs settle money through one UI.
+      '<div id="stf-quickpay-slot"></div>';
 
     if (!rows.length) {
       html += '<div class="stf-empty">No staff yet. Add your team to start ' +
@@ -1830,10 +1874,20 @@
       btn.addEventListener("click", function () {
         var s = state.staff.find(function (x) { return x.id === btn.dataset.sid; });
         if (!s) return;
-        state.payView = { name: btn.dataset.act, staff: s };
+        var act = btn.dataset.act;
+        // Pay Salary / Advance open the shared quick panel in this pane.
+        // Edit and Ledger are still their own full-screen views.
+        if (act === "pay" || act === "advance") {
+          openQuickPay(s.id, { mode: act, host: "payroll" });
+          return;
+        }
+        state.payView = { name: act, staff: s };
         renderPayroll();
       });
     });
+
+    // The panel survives a cards re-render (open → renderCards → repaint).
+    renderQuickPay();
   }
 
   // Jump straight to one staff member's ledger (called from the
@@ -1998,257 +2052,6 @@
       : { payment_method: "cash", expense_type: "transaction" };
   }
 
-  // ── Give advance ────────────────────────────────────────────────────────
-
-  function renderAdvanceForm(staff) {
-    var pane = document.getElementById("stf-pane-payroll");
-    var outstanding = Number(staff.outstanding_advance || 0);
-    pane.innerHTML =
-      '<div class="stf-form">' +
-      '  <button class="stf-back-btn" id="stf-adv-back">&#8249; Back</button>' +
-      '  <div class="stf-form-title"><i class="fas fa-hand-holding-usd" style="color:#c53030;"></i> Advance — ' + esc(staff.name) + "</div>" +
-      '  <div class="stf-outstanding-banner' + (outstanding > 0 ? "" : " clear") + '">' +
-      "    <span>Current outstanding advance</span><b>" + rup(outstanding) + "</b>" +
-      "  </div>" +
-      '  <div class="stf-two-col">' +
-      '    <div class="form-group"><label class="form-label">Amount (₹) *</label>' +
-      '      <input class="form-control" type="number" min="1" id="stf-adv-amount" placeholder="0" style="font-weight:700;"></div>' +
-      '    <div class="form-group"><label class="form-label">Date</label>' +
-      '      <input class="form-control" type="date" id="stf-adv-date" value="' + _todayStr() + '" max="' + _todayStr() + '"></div>' +
-      "  </div>" +
-      sourceHtml("stf-adv-source", { books: true }) +
-      '  <div class="form-group"><label class="form-label">Note</label>' +
-      '    <input class="form-control" id="stf-adv-note" maxlength="120" placeholder="Optional — e.g. festival, medical"></div>' +
-      '  <div id="stf-adv-hint" style="font-size:0.72rem;color:#718096;margin-bottom:0.7rem;">' +
-      "    The advance is recorded in expenses too, and gets deducted from " +
-      "    the next salary. Anything not recovered carries forward automatically." +
-      "  </div>" +
-      '  <button class="stf-btn primary block" id="stf-adv-save"><i class="fas fa-hand-holding-dollar"></i> Give Advance</button>' +
-      "</div>";
-
-    _modernDate("stf-adv-date", { maxDate: _todayStr() });
-    document.getElementById("stf-adv-back").addEventListener("click", function () {
-      backToCards(false);
-    });
-    bindSource("stf-adv-source");
-    // Books (opening) source: swap the hint so it's clear no expense row /
-    // counter movement happens for an opening-balance entry.
-    var _advHintDefault =
-      "The advance is recorded in expenses too, and gets deducted from " +
-      "the next salary. Anything not recovered carries forward automatically.";
-    var _advHintBooks =
-      "Opening balance from the paper books — recorded against " + staff.name +
-      " only. No expense entry, no counter or account impact. It still gets " +
-      "deducted from upcoming salaries.";
-    document.querySelectorAll("#stf-adv-source button").forEach(function (b) {
-      b.addEventListener("click", function () {
-        var hint = document.getElementById("stf-adv-hint");
-        if (hint) hint.textContent =
-          b.dataset.src === "books" ? _advHintBooks : _advHintDefault;
-      });
-    });
-    document.getElementById("stf-adv-save").addEventListener("click", function () {
-      var amount = parseInt(document.getElementById("stf-adv-amount").value, 10);
-      if (!(amount > 0)) return notify("Enter the advance amount", "error");
-      var src = readSource("stf-adv-source");
-      var btn = document.getElementById("stf-adv-save");
-      btn.disabled = true;
-      post("/staff/advance", {
-        staff_id: staff.id,
-        amount: amount,
-        date: document.getElementById("stf-adv-date").value,
-        note: document.getElementById("stf-adv-note").value.trim(),
-        payment_method: src.payment_method,
-        expense_type: src.expense_type,
-        opening: !!src.opening,
-      })
-        .then(function (json) {
-          notify(json.message || "Advance recorded", "success");
-          _refreshMoneyViews();
-          backToCards(true);
-        })
-        .catch(function (e) { btn.disabled = false; notify(e.message, "error"); });
-    });
-  }
-
-  // ── Pay salary ──────────────────────────────────────────────────────────
-
-  function renderPayForm(staff) {
-    var pane = document.getElementById("stf-pane-payroll");
-    var defStart = staff.suggested_period_start || staff.joined_date ||
-      _todayStr().slice(0, 8) + "01";
-    if (defStart > _todayStr()) defStart = _todayStr();
-    pane.innerHTML =
-      '<div class="stf-form">' +
-      '  <button class="stf-back-btn" id="stf-pay-back">&#8249; Back</button>' +
-      '  <div class="stf-form-title"><i class="fas fa-money-bill-wave" style="color:#276749;"></i> Pay Salary — ' + esc(staff.name) +
-      '    <span style="font-weight:500;font-size:0.78rem;color:#a0aec0;">· ' + rup(staff.daily_wage) + "/day</span></div>" +
-      '  <div class="stf-two-col">' +
-      '    <div class="form-group"><label class="form-label">From *</label>' +
-      '      <input class="form-control" type="date" id="stf-pay-start" value="' + esc(defStart) + '" max="' + _todayStr() + '"></div>' +
-      '    <div class="form-group"><label class="form-label">To *</label>' +
-      '      <input class="form-control" type="date" id="stf-pay-end" value="' + _todayStr() + '" max="' + _todayStr() + '"></div>' +
-      "  </div>" +
-      (staff.paid_until
-        ? '<div style="font-size:0.72rem;color:#718096;margin:-0.3rem 0 0.6rem;">Already paid till ' + fmtD(staff.paid_until) + " — periods cannot overlap.</div>"
-        : "") +
-      '  <div id="stf-pay-preview"><div class="stf-empty" style="padding:1rem;">Pick the period to see the breakdown…</div></div>' +
-      "</div>";
-
-    document.getElementById("stf-pay-back").addEventListener("click", function () {
-      backToCards(false);
-    });
-
-    var startInp = document.getElementById("stf-pay-start");
-    var endInp = document.getElementById("stf-pay-end");
-    startInp.addEventListener("change", fetchPreview);
-    endInp.addEventListener("change", fetchPreview);
-    // Same modern calendar as the Transactions tab — flatpickr fires
-    // "change" on the original inputs, so fetchPreview wiring is untouched.
-    _modernDate("stf-pay-start", { maxDate: _todayStr() });
-    _modernDate("stf-pay-end", { maxDate: _todayStr() });
-    fetchPreview();
-
-    function fetchPreview() {
-      var start = startInp.value, end = endInp.value;
-      var box = document.getElementById("stf-pay-preview");
-      if (!start || !end) return;
-      box.innerHTML = '<div class="stf-empty" style="padding:1rem;">Calculating…</div>';
-      api("/staff/" + encodeURIComponent(staff.id) +
-          "/salary_preview?start=" + start + "&end=" + end)
-        .then(function (json) {
-          state.payPreview = json;
-          renderPayBreakdown(staff, json);
-        })
-        .catch(function (e) {
-          box.innerHTML = '<div class="stf-empty" style="padding:1rem;color:#c53030;">' + esc(e.message) + "</div>";
-        });
-    }
-  }
-
-  function renderPayBreakdown(staff, pv) {
-    var box = document.getElementById("stf-pay-preview");
-    var c = pv.computed;
-    var outstanding = Number(pv.outstanding_advance || 0);
-
-    var html = "";
-    if (pv.all_days_paid) {
-      html +=
-        '<div class="stf-carry-note" style="background:#fff5f5;border-color:#fed7d7;color:#742a2a;">' +
-        "⚠ Every day in this range is already paid — nothing left to settle. Adjust the dates.</div>";
-    } else if (pv.excluded_days && pv.excluded_days.length) {
-      html +=
-        '<div class="stf-carry-note">' +
-        "ℹ " + pv.excluded_days.length + " already-paid day" +
-        (pv.excluded_days.length > 1 ? "s" : "") + " (" +
-        esc(pv.excluded_days.map(fmtDShort).join(", ")) +
-        ") will be skipped — this payout covers only the unpaid days.</div>";
-    }
-    html +=
-      '<div class="stf-sheet">' +
-      '  <div class="stf-sheet-row"><span>Full days</span><b>' + c.full_days + "</b></div>" +
-      '  <div class="stf-sheet-row"><span>Half days</span><b>' + c.half_days + "</b></div>" +
-      '  <div class="stf-sheet-row"><span>Days worked</span><b>' + fmtDays(c.days_worked) + "</b></div>" +
-      '  <div class="stf-sheet-row"><span>Wages (' + fmtDays(c.days_worked) + " × " + rup(c.daily_wage) + ")</span><b>" + rup(c.gross) + "</b></div>" +
-      "</div>" +
-      '  <div class="stf-two-col">' +
-      '    <div class="form-group"><label class="form-label">Bonus / fine (±₹)</label>' +
-      '      <input class="form-control" type="number" id="stf-pay-adj" value="0"></div>' +
-      '    <div class="form-group"><label class="form-label">Adjustment note</label>' +
-      '      <input class="form-control" id="stf-pay-adj-note" maxlength="120" placeholder="Why?"></div>' +
-      "  </div>" +
-      '  <div class="stf-outstanding-banner' + (outstanding > 0 ? "" : " clear") + '" style="margin-bottom:0.6rem;">' +
-      "    <span>Outstanding advance</span><b>" + rup(outstanding) + "</b>" +
-      "  </div>" +
-      (outstanding > 0
-        ? '<div class="form-group"><label class="form-label">Deduct from this salary (₹)</label>' +
-          '  <input class="form-control" type="number" min="0" max="' + outstanding + '" id="stf-pay-deduct" value="' + pv.suggested_deduction + '" style="font-weight:700;color:#c53030;"></div>'
-        : '<input type="hidden" id="stf-pay-deduct" value="0">') +
-      '  <div class="stf-sheet" id="stf-pay-net-sheet"></div>' +
-      '  <div id="stf-pay-carry"></div>' +
-      sourceHtml("stf-pay-source") +
-      '  <button class="stf-btn primary block" id="stf-pay-confirm"><i class="fas fa-check"></i> Confirm &amp; Pay</button>';
-
-    box.innerHTML = html;
-    bindSource("stf-pay-source");
-
-    var adjInp = document.getElementById("stf-pay-adj");
-    var dedInp = document.getElementById("stf-pay-deduct");
-    adjInp.addEventListener("input", recalc);
-    if (dedInp.tagName === "INPUT" && dedInp.type === "number") {
-      dedInp.addEventListener("input", recalc);
-    }
-    recalc();
-
-    function recalc() {
-      var adj = parseInt(adjInp.value, 10) || 0;
-      var ded = parseInt(dedInp.value, 10) || 0;
-      var payable = c.gross + adj;
-      var maxDed = Math.min(outstanding, Math.max(0, payable));
-      var warn = "";
-      if (ded > maxDed) {
-        warn = "Deduction is capped at " + rup(maxDed) +
-          (outstanding > payable ? " (this salary). The rest carries forward." : ".");
-        ded = maxDed;
-      }
-      var net = payable - ded;
-      var remaining = outstanding - ded;
-
-      document.getElementById("stf-pay-net-sheet").innerHTML =
-        '<div class="stf-sheet-row"><span>Wages + adjustment</span><b>' + rup(payable) + "</b></div>" +
-        '<div class="stf-sheet-row minus"><span>Advance deducted</span><b>− ' + rup(ded) + "</b></div>" +
-        '<div class="stf-sheet-row total"><span>Net to pay now</span><span>' + rup(net) + "</span></div>";
-
-      var carry = document.getElementById("stf-pay-carry");
-      var notes = [];
-      if (warn) notes.push(warn);
-      if (remaining > 0) {
-        notes.push(rup(remaining) + " advance remains and will be deducted from the next salary.");
-      }
-      if (net === 0 && payable > 0) {
-        notes.push("Nothing is handed over — the whole salary goes against the advance.");
-      }
-      carry.innerHTML = notes.length
-        ? '<div class="stf-carry-note">' + esc(notes.join(" ")) + "</div>" : "";
-    }
-
-    document.getElementById("stf-pay-confirm").addEventListener("click", function () {
-      var adj = parseInt(adjInp.value, 10) || 0;
-      var ded = parseInt(dedInp.value, 10) || 0;
-      var payable = c.gross + adj;
-      ded = Math.min(ded, Math.min(outstanding, Math.max(0, payable)));
-      var net = payable - ded;
-      var src = readSource("stf-pay-source");
-      var msg = "Pay " + rup(net) + " to " + staff.name + " for " +
-        fmtDShort(pv.period_start) + " – " + fmtDShort(pv.period_end) +
-        (ded ? " (after deducting " + rup(ded) + " advance)" : "") + "?";
-      stfConfirm(msg, { okText: "Pay salary" }).then(function (ok) {
-        if (!ok) return;
-        var btn = document.getElementById("stf-pay-confirm");
-        btn.disabled = true;
-        btn.textContent = "Paying…";
-        post("/staff/" + encodeURIComponent(staff.id) + "/pay_salary", {
-          period_start: pv.period_start,
-          period_end: pv.period_end,
-          adjustment: adj,
-          adjustment_note: document.getElementById("stf-pay-adj-note").value.trim(),
-          advance_deduction: ded,
-          payment_method: src.payment_method,
-          expense_type: src.expense_type,
-        })
-          .then(function (json) {
-            notify(json.message || "Salary paid", "success");
-            _refreshMoneyViews();
-            backToCards(true);
-          })
-          .catch(function (e) {
-            btn.disabled = false;
-            btn.textContent = "Confirm & Pay";
-            notify(e.message, "error");
-          });
-      });
-    });
-  }
 
   // ── Ledger (advances + salary history for one staff member) ─────────────
 

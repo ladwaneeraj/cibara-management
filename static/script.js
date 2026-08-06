@@ -2484,7 +2484,11 @@ async function addService() {
     // Calculate total price
     const totalPrice = price * quantity;
 
-    // Service name with quantity if more than 1
+    // Display-only label for the toast. It must NOT be stored as the item
+    // name: the quantity already travels in its own field, so baking "× N"
+    // into the name printed it twice on the invoice ("Water 2L × 2" in a row
+    // whose Qty column already said 2) and split the item into two different
+    // names, so repeat sales of the same thing never consolidated.
     const serviceWithQuantity =
       quantity > 1 ? `${service} × ${quantity}` : service;
 
@@ -2506,7 +2510,7 @@ async function addService() {
 
     const _addOnBody = {
       room: roomNumber,
-      item: serviceWithQuantity,
+      item: service,
       price: totalPrice,
       unit_price: price,
       quantity: quantity,
@@ -2538,7 +2542,7 @@ async function addService() {
             if (!rooms[roomNumber].add_ons) rooms[roomNumber].add_ons = [];
             const nowDt = new Date();
             rooms[roomNumber].add_ons.push({
-              room: roomNumber, item: serviceWithQuantity, price: totalPrice,
+              room: roomNumber, item: service, price: totalPrice,
               unit_price: price, quantity: quantity, time: nowDt.toTimeString().slice(0, 5),
               date: nowDt.toISOString().split("T")[0], payment_method: servicePaymentMethod,
               transaction_type: "service", accommodation_charge: isAccommodationCharge,
@@ -2584,7 +2588,7 @@ async function addService() {
           if (!rooms[roomNumber].add_ons) rooms[roomNumber].add_ons = [];
           const nowDt = new Date();
           rooms[roomNumber].add_ons.push({
-            room: roomNumber, item: serviceWithQuantity, price: totalPrice,
+            room: roomNumber, item: service, price: totalPrice,
             unit_price: price, quantity: quantity, time: nowDt.toTimeString().slice(0, 5),
             date: nowDt.toISOString().split("T")[0], payment_method: servicePaymentMethod,
             transaction_type: "service", accommodation_charge: isAccommodationCharge,

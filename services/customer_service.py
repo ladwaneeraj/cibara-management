@@ -1126,6 +1126,11 @@ def _bucket_for(age: int) -> str:
 _AGG_CACHE = {"data": None, "ts": 0.0}
 _AGG_TTL_SECONDS = 300  # 5 minutes
 
+# Safety cap on how many guests are listed per age bucket in bucket_guests
+# (drill-down list). Doesn't affect the bucket *count* used by the chart —
+# only how many names the click-through popover can show.
+_AGE_BUCKET_GUEST_CAP = 300
+
 
 def get_demographics_aggregate(force: bool = False) -> dict:
     """
@@ -1135,9 +1140,10 @@ def get_demographics_aggregate(force: bool = False) -> dict:
     Returns:
         {
           "age": {
-            "buckets":   [{"label": "26-35", "count": N}, ...],
-            "average":   float | None,
-            "count":     int,          # guests with a known age
+            "buckets":       [{"label": "26-35", "count": N}, ...],
+            "average":       float | None,
+            "count":         int,          # guests with a known age
+            "bucket_guests": {"26-35": [{"mobile": "...", "name": "..."}, ...], ...},
           },
           "pincodes": [
             {"pincode": "560001", "guests": N, "visits": M}, ...  # sorted desc
@@ -1149,6 +1155,12 @@ def get_demographics_aggregate(force: bool = False) -> dict:
           }
         }
 
+    `bucket_guests` powers the dashboard's click-to-drill-down (bar → guest
+    list → existing Customer detail modal with docs + stay history). It is
+    deduplicated per guest per bucket (a guest with two demographic entries
+    landing in the same bucket appears once) and capped per bucket so a huge
+    property can't balloon the response.
+
     A 5-minute in-process cache avoids rescanning on every dashboard load.
     """
     import time as _time
@@ -1159,7 +1171,8 @@ def get_demographics_aggregate(force: bool = False) -> dict:
 
     empty = {
         "age": {"buckets": [{"label": l, "count": 0} for l, _, _ in _AGE_BUCKETS],
-                "average": None, "count": 0},
+                "average": None, "count": 0,
+                "bucket_guests": {l: [] for l, _, _ in _AGE_BUCKETS}},
         "pincodes": [],
         "totals": {"customers_scanned": 0, "with_demographics": 0,
                    "generated_at": datetime.now(timezone.utc).isoformat()},
@@ -1174,16 +1187,20 @@ def get_demographics_aggregate(force: bool = False) -> dict:
         age_n = 0
         pin_guests = {}   # pincode -> guest count (per demographic entry)
         pin_visits = {}   # pincode -> visit count (total_stays, once per customer)
+        bucket_guests = {label: [] for label, _, _ in _AGE_BUCKETS}
+        seen_bucket_guest = set()   # (mobile, label) already listed
         scanned = 0
         with_demo = 0
 
         # Pull only the fields we need (saves bandwidth; read count is the same).
         query = _customers_ref.select(
-            ["guest_demographics", "pincode", "dob", "total_stays"]
+            ["guest_demographics", "pincode", "dob", "total_stays", "name"]
         )
         for snap in query.stream():
             scanned += 1
             d = snap.to_dict() or {}
+            mobile = snap.id
+            name = d.get("name") or ""
             entries = list(d.get("guest_demographics", []) or [])
 
             # Back-compat: if no list yet but a top-level pincode/dob exists,
@@ -1202,9 +1219,15 @@ def get_demographics_aggregate(force: bool = False) -> dict:
                 # Age → buckets + running average
                 age = _age_from(e.get("dob"), e.get("birth_year"), today)
                 if age is not None:
-                    bucket_counts[_bucket_for(age)] += 1
+                    label = _bucket_for(age)
+                    bucket_counts[label] += 1
                     age_sum += age
                     age_n += 1
+                    key = (mobile, label)
+                    if (key not in seen_bucket_guest
+                            and len(bucket_guests[label]) < _AGE_BUCKET_GUEST_CAP):
+                        seen_bucket_guest.add(key)
+                        bucket_guests[label].append({"mobile": mobile, "name": name})
                 # Pincode → guest count (each entry) + visit weight (once)
                 pin = e.get("pincode")
                 if pin:
@@ -1219,12 +1242,21 @@ def get_demographics_aggregate(force: bool = False) -> dict:
             key=lambda x: (-x["guests"], -x["visits"], x["pincode"]),
         )
 
+        for label, lo, hi in _AGE_BUCKETS:
+            if bucket_counts[label] > len(bucket_guests[label]):
+                logger.info(
+                    "get_demographics_aggregate: bucket '%s' guest list capped "
+                    "at %d (bucket has %d entries)",
+                    label, _AGE_BUCKET_GUEST_CAP, bucket_counts[label],
+                )
+
         result = {
             "age": {
                 "buckets": [{"label": l, "count": bucket_counts[l]}
                             for l, _, _ in _AGE_BUCKETS],
                 "average": round(age_sum / age_n, 1) if age_n else None,
                 "count": age_n,
+                "bucket_guests": bucket_guests,
             },
             "pincodes": pincodes,
             "totals": {

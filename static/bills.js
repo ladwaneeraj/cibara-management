@@ -1674,11 +1674,14 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
       <i class="fab fa-whatsapp" style="font-size:1.2rem;"></i> Send Invoice via WhatsApp
     </div>
 
-    <div class="bl-view-toggle" id="bl-wa-view-toggle" style="margin-bottom:.9rem;">
-      <span class="bl-view-toggle-label">View</span>
-      <button type="button" class="bl-vt-btn" id="bl-wa-vt-consolidated" data-view="consolidated">Consolidated</button>
-      <button type="button" class="bl-vt-btn" id="bl-wa-vt-detailed" data-view="detailed">Detailed</button>
-      <span class="bl-vt-hint" id="bl-wa-vt-hint"></span>
+    <!-- Only the Consolidated invoice is ever generated or stored. The old
+         Detailed/Consolidated toggle lived here; each flip uploaded another
+         v{n}.pdf to Storage, so a bill accumulated both variants. -->
+    <div class="bl-view-toggle" id="bl-wa-pdf-row" style="margin-bottom:.9rem;">
+      <span class="bl-view-toggle-label">Invoice PDF</span>
+      <span class="bl-vt-hint" id="bl-wa-pdf-status"></span>
+      <button type="button" class="bl-vt-btn" id="bl-wa-regen"
+              title="Only needed if the bill changed after the PDF was saved">Regenerate</button>
     </div>
 
     <div class="bl-wa-section-label">Message Preview</div>
@@ -1910,9 +1913,9 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
       });
 
     // ── "Save & Share" button in bill modal ───────────────────────────────────
-    // Opens the WhatsApp send modal, which (re)generates a fresh Consolidated
-    // PDF by default (Detailed available there as a toggle) — passing along
-    // the bill data we already have avoids a redundant /generate_bill fetch.
+    // Opens the WhatsApp send modal, which reuses the bill's saved Consolidated
+    // PDF and only generates one when none exists. Passing along the bill data
+    // we already have avoids a redundant /generate_bill fetch.
     const bSave = dom("bl-bill-save-pdf");
     if (bSave) {
       bSave.addEventListener("click", async function () {
@@ -1923,6 +1926,7 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
           guest_mobile: _openBillData.guest_mobile,
           bill_number: _openBillData.bill_number,
           total_amount: _openBillData.total_amount,
+          pdf_url: _openBillData.pdf_url || "",
         };
         closeBill();
         await openWhatsAppModal(entry, _openBillData);
@@ -2238,10 +2242,9 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
           return;
         }
 
-        // WhatsApp share button — always opens the send modal, which
-        // itself (re)generates a fresh Consolidated PDF (Detailed available
-        // as a toggle there) rather than trusting any cached pdf_url, so
-        // the view actually sent always matches what's shown/selected.
+        // WhatsApp share button — opens the send modal, which reuses the
+        // bill's saved Consolidated PDF (entry.pdf_url) and generates one
+        // only when it is missing or points at the dead bills/-/ folder.
         const waBtn = e.target.closest(".bl-wa-btn");
         if (waBtn) {
           e.stopPropagation();
@@ -2316,15 +2319,12 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
         if (errEl) errEl.textContent = "";
       });
 
-    // Detailed/Consolidated toggle inside the WhatsApp modal — switching
-    // regenerates the PDF for that view before Send is re-enabled.
-    const waViewToggle = dom("bl-wa-view-toggle");
-    if (waViewToggle)
-      waViewToggle.addEventListener("click", (e) => {
-        const btn = e.target.closest(".bl-vt-btn");
-        if (!btn) return;
-        _waSetViewMode(btn.dataset.view);
-      });
+    // Explicit regenerate inside the WhatsApp modal. Only needed when the bill
+    // changed after its PDF was saved; the modal otherwise reuses the stored
+    // one so a share does not mint another Storage version.
+    const waRegenBtn = dom("bl-wa-regen");
+    if (waRegenBtn)
+      waRegenBtn.addEventListener("click", () => _waRegenerate(true));
 
     _wireSortHeaders();
   }
@@ -2900,10 +2900,10 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
 
   // Single combined helper for cross-module Save-and-Share flows. Called
   // by register.js's bill modal so the Bills and Register tabs both share
-  // the exact same code path: open the WhatsApp send modal, which itself
-  // (re)generates a fresh Consolidated PDF by default (Detailed available
-  // there as a toggle) rather than trusting any cached pdf_url. Returns
-  // true once the modal is open, false only if billId/billData is missing.
+  // the exact same code path: open the WhatsApp send modal, which reuses the
+  // bill's saved Consolidated PDF and only generates one when none exists.
+  // Returns true once the modal is open, false only if billId/billData is
+  // missing.
   window.cibaraSaveAndShareBill = async function(billId, billData) {
     if (!billId || !billData) return false;
     try {
@@ -2913,6 +2913,9 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
         guest_mobile: billData.guest_mobile,
         bill_number:  billData.bill_number,
         total_amount: billData.total_amount,
+        // Carried through so the modal can reuse an already-saved PDF instead
+        // of uploading another Storage version on every share.
+        pdf_url:      billData.pdf_url || "",
       };
       await openWhatsAppModal(entry, billData);
       return true;
@@ -2972,40 +2975,57 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
     );
   }
 
-  // Detailed/Consolidated toggle inside the WhatsApp send modal. Highlights
-  // whichever mode is active and hides for credit-note sends (no view
-  // concept there).
-  function _syncWaViewToggle() {
+  // PDF status line inside the WhatsApp send modal. Replaces the old
+  // Detailed/Consolidated toggle: the shared invoice is always Consolidated,
+  // and an existing saved PDF is reused rather than regenerated. Hidden for
+  // credit-note sends, which carry their own already-generated document.
+  // status: "reused" | "generating" | "fresh" | "failed"
+  function _syncWaPdfStatus(status) {
     const s = state.waModal;
-    const bar = dom("bl-wa-view-toggle");
+    const bar = dom("bl-wa-pdf-row");
     if (!bar) return;
     bar.style.display = s._isCN ? "none" : "flex";
-    const cBtn = dom("bl-wa-vt-consolidated");
-    const dBtn = dom("bl-wa-vt-detailed");
-    if (cBtn) cBtn.classList.toggle("bl-vt-active", s.viewMode === "consolidated");
-    if (dBtn) dBtn.classList.toggle("bl-vt-active", s.viewMode === "detailed");
-    const hint = dom("bl-wa-vt-hint");
+    const hint = dom("bl-wa-pdf-status");
     if (hint) {
-      hint.textContent = s.viewMode === "consolidated"
-        ? "Room nights grouped — days with extras shown separately"
-        : "Every night itemised";
+      hint.textContent = {
+        reused:     "Using the saved invoice PDF",
+        generating: "Preparing invoice PDF…",
+        fresh:      "Invoice PDF generated",
+        failed:     "",
+      }[status] || "";
     }
+    const regen = dom("bl-wa-regen");
+    if (regen) regen.disabled = status === "generating";
   }
 
-  // (Re)generate the PDF for the modal's current viewMode and refresh the
-  // message preview. Always regenerates fresh — never trusts a cached
-  // pdf_url — so the Detailed/Consolidated toggle is guaranteed to send
-  // whatever is actually selected, not a stale PDF from a different view.
-  // A request sequence number guards against a rapid double-toggle: if the
-  // user flips Detailed→Consolidated before the first request lands, the
-  // stale (Detailed) response is discarded instead of overwriting the
-  // newer (Consolidated) selection.
-  async function _waRegenerate() {
+  // Ensure the modal has a shareable PDF URL, then refresh the message preview.
+  //
+  // force=false (modal open): reuse the bill's saved pdf_url when there is one.
+  // Every generation uploads a new, permanent v{n}.pdf (upload_bill_pdf never
+  // overwrites), so unconditional regeneration meant one stored PDF per share.
+  // force=true (Regenerate button): always produce a fresh version. Use after
+  // the bill itself changed — the previously shared link keeps working, since
+  // old versions are left in place.
+  //
+  // A request sequence number guards against overlapping calls: if the user
+  // hits Regenerate twice, the stale response is discarded.
+  async function _waRegenerate(force = false) {
     const s = state.waModal;
     const myReq = (s._waReqSeq = (s._waReqSeq || 0) + 1);
     const sendBtn = dom("bl-wa-send");
     const errEl = dom("bl-wa-error");
     if (errEl) errEl.textContent = "";
+
+    // Nothing to do — a saved PDF already exists and the caller didn't ask for
+    // a fresh one. Note openWhatsAppModal has already filtered out URLs into
+    // the dead shared bills/-/ folder.
+    if (!force && s.pdfUrl) {
+      _syncWaPdfStatus("reused");
+      _updateWaPreview();
+      return;
+    }
+
+    _syncWaPdfStatus("generating");
     if (sendBtn) {
       sendBtn.disabled = true;
       sendBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Preparing…';
@@ -3015,17 +3035,21 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
         const res = await apiFetch(`/generate_bill/${s.billId}`);
         const data = await res.json();
         if (!data.success) throw new Error(data.message || "Could not load bill data.");
-        if (myReq !== s._waReqSeq) return;   // a newer toggle already fired
+        if (myReq !== s._waReqSeq) return;   // a newer request already fired
         s.billData = data.bill;
       }
-      const url = await generateAndUploadPDF(s.billId, s.billData, true, s.viewMode);
-      if (myReq !== s._waReqSeq) return;     // a newer toggle already fired
+      // viewMode is pinned to "consolidated" — the Detailed variant is never
+      // rendered here, so it can never be uploaded to Storage.
+      const url = await generateAndUploadPDF(s.billId, s.billData, true, "consolidated");
+      if (myReq !== s._waReqSeq) return;     // a newer request already fired
       if (!url) throw new Error("PDF generation failed.");
       s.pdfUrl = url;
+      _syncWaPdfStatus("fresh");
       _updateWaPreview();
     } catch (err) {
-      if (myReq !== s._waReqSeq) return;     // a newer toggle superseded this failure
+      if (myReq !== s._waReqSeq) return;     // a newer request superseded this failure
       console.error("[Bills] WA PDF prepare failed:", err);
+      _syncWaPdfStatus("failed");
       if (errEl) errEl.textContent = err.message || "Could not prepare the PDF — try again.";
     } finally {
       if (myReq === s._waReqSeq && sendBtn) {
@@ -3033,16 +3057,6 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
         sendBtn.innerHTML = '<i class="fab fa-whatsapp"></i> Send via WhatsApp';
       }
     }
-  }
-
-  // Switches the modal's view and regenerates the matching PDF. A no-op if
-  // already on that view (avoids a redundant re-render/re-upload).
-  async function _waSetViewMode(mode) {
-    const s = state.waModal;
-    if ((mode !== "detailed" && mode !== "consolidated") || mode === s.viewMode) return;
-    s.viewMode = mode;
-    _syncWaViewToggle();
-    await _waRegenerate();
   }
 
   // entry: {id, guest_name, guest_mobile, bill_number, total_amount, ...} —
@@ -3058,9 +3072,15 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
     s.amount = entry.total_amount || 0;
     s.numberMode = "registered";
     s.billData = billData || null;
-    s.viewMode = "consolidated";
-    s.pdfUrl = null;   // force a fresh regeneration below — never trust a
-                        // pdf_url cached from a possibly different view
+    s.viewMode = "consolidated";   // the only variant ever generated or stored
+    // Reuse the bill's saved PDF when one exists, so opening the modal does not
+    // mint another Storage version. Two URLs are treated as absent:
+    //   - anything under the shared bills/-/ folder, which was overwritten by
+    //     every placeholder-numbered bill (token rotated → 403 on fetch)
+    //   - a missing URL, obviously
+    // Regenerate is available in the modal when the bill has since changed.
+    const _savedUrl = entry.pdf_url || (billData && billData.pdf_url) || "";
+    s.pdfUrl = _savedUrl.includes("bills%2F-%2F") ? null : (_savedUrl || null);
 
     // Update registered number label
     const regLabel = dom("bl-wa-registered-label");
@@ -3091,7 +3111,7 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
     }
     if (errEl) errEl.textContent = "";
 
-    _syncWaViewToggle();
+    _syncWaPdfStatus(s.pdfUrl ? "reused" : "generating");
     _updateWaPreview();
 
     const backdrop = dom("bl-wa-backdrop");
@@ -3838,14 +3858,64 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
   // ── Bill HTML builder ─────────────────────────────────────────────────────────
   // GST rates per 55th GST Council (eff. 22 Sep 2025) + Karnataka place of supply
   // Always shows CGST and SGST rows — 0.00 when rate is exempt (tariff < ₹1,000).
+  // ── Service line consolidation ──────────────────────────────────────────────
+  // Merge repeat sales of the same item at the same unit price into a single
+  // row with summed quantity and amount. The unit price is part of the key on
+  // purpose: if an item was sold at two prices during the stay, merging on name
+  // alone would print one of the two rates against the combined amount and the
+  // row would not foot. Mirrors consolidateServices in register.js and
+  // _consolidate_services in routes/billing.py.
+  function consolidateServices(list) {
+    const grouped = new Map();
+    for (const s of (list || [])) {
+      let name = String(s.item || "Service").trim();
+      let qty = Number(s.quantity || 1);
+      if (!(qty > 0)) qty = 1;
+      // Older rows were saved with the quantity baked into the NAME
+      // ("Water 2L × 2") as well as in the quantity field, so the invoice
+      // printed it twice and two sales of the same item never merged. Strip
+      // the suffix; if the row also lost its quantity (qty 1 carrying a line
+      // price for N), adopt N so the row still foots.
+      const _m = name.match(/\s*[x\u00d7]\s*(\d+)\s*$/i);
+      if (_m) {
+        const _n = Number(_m[1]);
+        name = name.slice(0, _m.index).trim() || "Service";
+        if (qty <= 1 && _n > 1) qty = _n;
+      }
+      // Legacy rows carry no unit_price. Falling back to the LINE price printed
+      // the full line amount in the Rate column (qty 3 x "60.00" against an
+      // amount of 60.00), so the row did not foot and the rate on the invoice
+      // was wrong by a factor of qty. Derive it from the amount instead.
+      const unit = Number(s.unit_price != null ? s.unit_price : (Number(s.price || 0) / qty));
+      const key = `${name.toLowerCase()}|${unit.toFixed(2)}`;
+      const existing = grouped.get(key);
+      if (!existing) {
+        grouped.set(key, {
+          ...s,
+          item: name,
+          quantity: qty,
+          unit_price: unit,
+          price: Number(s.price || 0),
+        });
+      } else {
+        existing.quantity += qty;
+        existing.price    += Number(s.price || 0);
+      }
+    }
+    return [...grouped.values()];
+  }
+
   function buildBillHTML(b, viewModeOverride) {
     const days = b.days_stayed || calcDays(b.checkin_time, b.checkout_time);
     const rate = b.room_price_per_night || b.room_rent || 0;
 
     // ── Separate accommodation add-ons from other services ──────────────────────
+    // Both buckets are consolidated first: create_bill_record writes one entry
+    // per addon payment document, so three separate "Water 1L" sales arrive as
+    // three qty-1 entries. See consolidateServices for the keying rule.
     const services = b.services || [];
-    const accomAddons = services.filter((s) => s.accommodation_charge);
-    const otherServices = services.filter((s) => !s.accommodation_charge);
+    const accomAddons = consolidateServices(services.filter((s) => s.accommodation_charge));
+    const otherServices = consolidateServices(services.filter((s) => !s.accommodation_charge));
     const accomAddonsTotal = accomAddons.reduce(
       (s, x) => s + (x.price || 0),
       0,

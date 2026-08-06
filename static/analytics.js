@@ -391,6 +391,8 @@ function generateGuestAgeChart(agg) {
   const labels = buckets.map((b) => b.label);
   const values = buckets.map((b) => b.count);
 
+  const bucketGuests = age.bucket_guests || {};
+
   const ctx = canvas.getContext("2d");
   canvas.chart = new Chart(ctx, {
     type: "bar",
@@ -416,14 +418,93 @@ function generateGuestAgeChart(agg) {
               const pct = total ? ((c.raw / total) * 100).toFixed(0) : 0;
               return ` ${c.raw} guests (${pct}%)`;
             },
+            afterLabel: (c) => (c.raw > 0 ? "Click to view guests" : ""),
           },
         },
       },
       scales: {
         y: { beginAtZero: true, ticks: { precision: 0 } },
       },
+      onHover: (evt, elements, chart) => {
+        chart.canvas.style.cursor = elements.length ? "pointer" : "default";
+      },
+      onClick: (evt, elements) => {
+        if (!elements.length) return;
+        const label = labels[elements[0].index];
+        _openAgeBucketPopover(label, bucketGuests[label] || [], evt.native);
+      },
     },
   });
+}
+
+// ── Age bucket drill-down: bar click → guest list → existing Customer
+// detail modal (docs + stay history, from customer-manager.js). ───────────
+let _ageBucketPopoverEl = null;
+
+function _closeAgeBucketPopover() {
+  if (_ageBucketPopoverEl) {
+    _ageBucketPopoverEl.remove();
+    _ageBucketPopoverEl = null;
+  }
+  document.removeEventListener("mousedown", _ageBucketPopoverOutsideClick, true);
+}
+
+function _ageBucketPopoverOutsideClick(e) {
+  if (_ageBucketPopoverEl && !_ageBucketPopoverEl.contains(e.target)) {
+    _closeAgeBucketPopover();
+  }
+}
+
+function _ageEsc(str) {
+  return String(str ?? "").replace(/[&<>"']/g, (c) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  }[c]));
+}
+
+function _openAgeBucketPopover(label, guests, nativeEvent) {
+  _closeAgeBucketPopover();
+  if (!guests.length) return;
+
+  const rowsHTML = guests.map((g) => `
+    <div class="age-pop-row" data-mobile="${_ageEsc(g.mobile)}">
+      <span class="age-pop-name">${_ageEsc(g.name || "Unnamed guest")}</span>
+      <span class="age-pop-mobile">${_ageEsc(g.mobile)}</span>
+    </div>`).join("");
+
+  const el = document.createElement("div");
+  el.className = "age-pop";
+  el.innerHTML = `
+    <div class="age-pop-hdr">
+      <span>${_ageEsc(label)} · ${guests.length} guest${guests.length === 1 ? "" : "s"}</span>
+      <button class="age-pop-close" type="button" aria-label="Close">&times;</button>
+    </div>
+    <div class="age-pop-list">${rowsHTML}</div>`;
+  document.body.appendChild(el);
+  _ageBucketPopoverEl = el;
+
+  // Position near the click, then clamp inside the viewport.
+  const pad = 8;
+  let left = nativeEvent.clientX + pad;
+  let top = nativeEvent.clientY + pad;
+  const rect = el.getBoundingClientRect();
+  if (left + rect.width > window.innerWidth - pad) left = window.innerWidth - rect.width - pad;
+  if (top + rect.height > window.innerHeight - pad) top = window.innerHeight - rect.height - pad;
+  el.style.left = `${Math.max(pad, left)}px`;
+  el.style.top = `${Math.max(pad, top)}px`;
+
+  el.querySelector(".age-pop-close").addEventListener("click", _closeAgeBucketPopover);
+  el.querySelectorAll(".age-pop-row").forEach((row) => {
+    row.addEventListener("click", () => {
+      const mobile = row.getAttribute("data-mobile");
+      _closeAgeBucketPopover();
+      if (typeof window.openCustomerDetail === "function") {
+        window.openCustomerDetail(mobile);
+      }
+    });
+  });
+
+  // Defer so the click that opened the popover doesn't immediately close it.
+  setTimeout(() => document.addEventListener("mousedown", _ageBucketPopoverOutsideClick, true), 0);
 }
 
 // ── 8-card KPI grid ──────────────────────────────────────────────────────────

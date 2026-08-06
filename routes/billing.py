@@ -6,6 +6,7 @@ Expense reads use the dedicated `expenses` collection via expense_service.
 Old `logs` collection is NOT used for reads anymore.
 """
 
+import re
 from flask import Blueprint, request, jsonify
 from datetime import datetime, timedelta
 from google.cloud.firestore_v1.base_query import FieldFilter
@@ -2201,38 +2202,73 @@ def _build_bill_html(b: dict) -> str:
     rate       = b.get("room_price_per_night") or b.get("room_rent") or 0
     services   = b.get("services") or []
 
-    accom_addons   = [s for s in services if s.get("accommodation_charge")]
-    other_services = [s for s in services if not s.get("accommodation_charge")]
+    # ── Consolidate duplicate items (e.g. "Water 1L" sold at three separate
+    # times → one row). create_bill_record writes one services[] entry per addon
+    # PAYMENT document, so repeat sales arrive as separate qty-1 entries.
+    def _consolidate_services(svc_list):
+        """Merge entries with the same item name AND the same unit price.
+
+        The unit price is part of the key on purpose. Grouping on name alone
+        would collapse an item sold at two different prices during the stay into
+        one row carrying whichever rate happened to come first, and qty × rate
+        would no longer equal the amount. Any other keys on the original entry
+        (hsn_or_sac, gst_rate, tax_category, …) are carried through so the tax
+        label and summary still see explicitly-stamped values.
+        """
+        grouped = {}
+        for s in svc_list:
+            name = (s.get("item") or "Service").strip()
+            qty = int(s.get("quantity", 1) or 1)
+            if qty <= 0:
+                qty = 1
+            # Older rows were saved with the quantity baked into the NAME
+            # ("Water 2L x 2") as well as in the quantity field, so the invoice
+            # printed it twice and two sales of the same item never merged.
+            # Strip the suffix; if the row also lost its quantity (qty 1 with a
+            # line price for N), adopt N so the row still foots.
+            _m = re.search(r"\s*[x\u00d7]\s*(\d+)\s*$", name, re.I)
+            if _m:
+                _n = int(_m.group(1))
+                name = name[:_m.start()].strip() or "Service"
+                if qty <= 1 and _n > 1:
+                    qty = _n
+            # Legacy rows carry no unit_price. Falling back to the LINE price
+            # printed the full line amount in the Rate column (qty 3 x "60.00"
+            # against an amount of 60.00) — the row read as 180 and the rate on
+            # the invoice was wrong by a factor of qty, which Rule 46 requires
+            # to be correct. Derive it from the amount instead.
+            _u = s.get("unit_price")
+            unit = float(_u) if _u is not None else (float(s.get("price", 0) or 0) / qty)
+            key = (name.lower(), round(unit, 2))
+            if key not in grouped:
+                merged = dict(s)
+                merged.update({
+                    "item":       name,
+                    "quantity":   qty,
+                    "unit_price": unit,
+                    "price":      float(s.get("price", 0) or 0),
+                })
+                grouped[key] = merged
+            else:
+                grouped[key]["quantity"] += qty
+                grouped[key]["price"]    += float(s.get("price", 0) or 0)
+        return list(grouped.values())
+
+    accom_addons   = _consolidate_services(
+        [s for s in services if s.get("accommodation_charge")])
+    other_services = _consolidate_services(
+        [s for s in services if not s.get("accommodation_charge")])
     accom_addons_total = sum(s.get("price", 0) for s in accom_addons)
     other_svc_total    = sum(s.get("price", 0) for s in other_services)
 
-    # ── Water vs non-water split (water = GST 5% inclusive / MRP; others = non-taxable) ──
-    water_services_raw     = [s for s in other_services if "water" in s.get("item", "").lower()]
-    non_water_services_raw = [s for s in other_services if "water" not in s.get("item", "").lower()]
-
-    # ── Consolidate duplicate items (e.g. "Water 2L" added at different times → one row) ──
-    def _consolidate_services(svc_list):
-        """Group by item name, sum qty and price; keep unit_price from first entry."""
-        grouped = {}
-        for s in svc_list:
-            key = (s.get("item") or "Service").strip().lower()
-            if key not in grouped:
-                grouped[key] = {
-                    "item":               s.get("item", "Service"),
-                    "quantity":           int(s.get("quantity", 1)),
-                    "unit_price":         float(s.get("unit_price") or s.get("price", 0)),
-                    "price":              float(s.get("price", 0)),
-                    "accommodation_charge": s.get("accommodation_charge", False),
-                }
-            else:
-                grouped[key]["quantity"] += int(s.get("quantity", 1))
-                grouped[key]["price"]    += float(s.get("price", 0))
-        return list(grouped.values())
-
-    water_services      = _consolidate_services(water_services_raw)
-    non_water_services  = _consolidate_services(non_water_services_raw)
-    water_svc_total     = sum(s.get("price", 0) for s in water_services)
-    non_water_svc_total = sum(s.get("price", 0) for s in non_water_services)
+    # Non-accommodation items are ONE block, priced at MRP (GST-inclusive),
+    # exactly as the bill modal shows them. Water used to get its own section
+    # at ex-GST rates while everything else sat under an "(Non-Taxable)"
+    # heading — that heading was wrong for water, laundry and cold drinks, all
+    # of which do carry GST, and the two-section split made the printed
+    # invoice disagree with the on-screen one. The per-line HSN/SAC label
+    # carries the rate and the Tax Summary below discloses the CGST/SGST, so
+    # Rule 46 is satisfied without repeating the split inside the section.
 
     gst_rate_pct = b.get("gst_rate", 0)
 
@@ -2326,61 +2362,14 @@ def _build_bill_html(b: dict) -> str:
         )
     accom_addon_rows = "".join(_addon_rows_list)
 
-    # ── Water service rows (GST 5% inclusive — show taxable value in Amount col) ──
-    # taxable_value = price / 1.05  (back-calculate from MRP)
-    # final price (MRP) is unchanged — no amount added
-    _water_total_gst = 0.0
-    for _w in water_services:
-        _w_price = float(_w.get("price", 0))
-        _water_total_gst += _w_price - (_w_price / 1.05)
-    if is_inter_state:
-        _water_cgst = 0.0
-        _water_sgst = 0.0
-        _water_igst = _water_total_gst
-    else:
-        _water_cgst = _water_total_gst / 2
-        _water_sgst = _water_total_gst - _water_cgst
-        _water_igst = 0.0
-
-    water_rows = "".join(
-        f'<tr><td>{s.get("item", "Water")}'
-        f'<br><span class="b-sac">HSN: 2201</span></td>'
-        f'<td class="b-tr">{s.get("quantity", 1)}</td>'
-        f'<td class="b-tr">{_f2(float(s.get("unit_price") or s.get("price", 0)) / 1.05)}</td>'
-        f'<td class="b-tr">{_f2(float(s.get("price", 0)) / 1.05)}</td></tr>'
-        for s in water_services
-    )
-    if is_inter_state:
-        water_tax_rows = (
-            f'<tr class="b-gst-row"><td>IGST @ 5%</td>'
-            f'<td class="b-tr">—</td><td class="b-tr">—</td>'
-            f'<td class="b-tr">{_f2(_water_igst)}</td></tr>'
-        )
-    else:
-        water_tax_rows = (
-            f'<tr class="b-gst-row"><td>CGST @ 2.5%</td>'
-            f'<td class="b-tr">—</td><td class="b-tr">—</td>'
-            f'<td class="b-tr">{_f2(_water_cgst)}</td></tr>'
-            f'<tr class="b-gst-row"><td>SGST @ 2.5%</td>'
-            f'<td class="b-tr">—</td><td class="b-tr">—</td>'
-            f'<td class="b-tr">{_f2(_water_sgst)}</td></tr>'
-        )
-    water_svc_section = (
-        f'<tr class="b-sec"><td colspan="4">Packaged Drinking Water (HSN: 2201)</td></tr>'
-        f'{water_rows}'
-        f'{water_tax_rows}'
-        f'<tr class="b-subtotal"><td colspan="3" class="b-tr">Water Total (MRP, incl. GST)</td>'
-        f'<td class="b-tr">{_f2(water_svc_total)}</td></tr>'
-    ) if water_services else ""
-
-    # ── Other service rows (non-water, non-taxable) ──
+    # ── Additional-services rows (MRP, GST-inclusive) ────────────────────────
     other_svc_rows = "".join(
         f'<tr><td>{s.get("item","Service")}'
         f'<br><span class="b-sac">{_service_tax_label(s)}</span></td>'
         f'<td class="b-tr">{s.get("quantity",1)}</td>'
         f'<td class="b-tr">{_f2(s.get("unit_price") or s.get("price",0))}</td>'
         f'<td class="b-tr">{_f2(s.get("price",0))}</td></tr>'
-        for s in non_water_services
+        for s in other_services
     )
 
     # ── GST rows — only if effective accommodation > 0 after discount ────────
@@ -2425,10 +2414,10 @@ def _build_bill_html(b: dict) -> str:
     )
 
     other_svc_section = (
-        f'<tr class="b-sec"><td colspan="4">Additional Services (Non-Taxable)</td></tr>'
+        f'<tr class="b-sec"><td colspan="4">Additional Services</td></tr>'
         f'{other_svc_rows}'
         f'<tr class="b-subtotal"><td colspan="3" class="b-tr">Services Total</td>'
-        f'<td class="b-tr">{_f2(non_water_svc_total)}</td></tr>'
+        f'<td class="b-tr">{_f2(other_svc_total)}</td></tr>'
         if other_svc_rows else ""
     )
 
@@ -2808,11 +2797,14 @@ def _build_bill_html(b: dict) -> str:
                 f'<td class="b-tr">{_f2(cgst+sgst+igst)}</td></tr>'
             )
 
-    # Non-water non-accommodation services (laundry, cold drinks, etc.) —
+    # Every non-accommodation service (water, laundry, cold drinks, …) —
     # aggregate by (HSN/SAC, rate) inferred from the item name. Tax-inclusive
     # pricing: taxable = gross / (1 + rate/100). Exempt items skipped.
+    # Water is NOT special-cased any more: infer_service_tax already maps it to
+    # HSN 2201 @ 5%, so it lands in this loop with everything else and the
+    # summary is built from one code path.
     _by_other = {}
-    for _s in non_water_services:
+    for _s in other_services:
         _hsn, _r, _cat = infer_service_tax(_s)
         if not _hsn or _r <= 0:
             continue  # exempt / un-categorised — no tax row
@@ -2845,23 +2837,6 @@ def _build_bill_html(b: dict) -> str:
             f'<td class="b-tr">{_f2(agg["sgst"])}</td>'
             f'<td class="b-tr">{_f2(agg["igst"])}</td>'
             f'<td class="b-tr">{_f2(agg["cgst"]+agg["sgst"]+agg["igst"])}</td></tr>'
-        )
-
-    # Water (HSN 2201, 5% inclusive)
-    if water_services:
-        _w_taxable = water_svc_total / 1.05 if water_svc_total else 0
-        _tot_taxable += _w_taxable
-        _tot_cgst    += _water_cgst
-        _tot_sgst    += _water_sgst
-        _tot_igst    += _water_igst
-        _tax_sum_rows.append(
-            f'<tr><td>2201</td><td>Packaged Drinking Water</td>'
-            f'<td class="b-tr">5%</td>'
-            f'<td class="b-tr">{_f2(_w_taxable)}</td>'
-            f'<td class="b-tr">{_f2(_water_cgst)}</td>'
-            f'<td class="b-tr">{_f2(_water_sgst)}</td>'
-            f'<td class="b-tr">{_f2(_water_igst)}</td>'
-            f'<td class="b-tr">{_f2(_water_cgst+_water_sgst+_water_igst)}</td></tr>'
         )
 
     if _tax_sum_rows:
@@ -2931,7 +2906,6 @@ def _build_bill_html(b: dict) -> str:
       {gst_rows}
       {round_off_row}
       {accom_subtotal_row}
-      {water_svc_section}
       {other_svc_section}
       {discount_row}
       <tr class="b-grand">

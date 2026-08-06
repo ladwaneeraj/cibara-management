@@ -1182,6 +1182,54 @@
     return gstRate > 0 ? `${prefix}: ${hsnOrSac} - ${gstRate}%` : `${prefix}: ${hsnOrSac}`;
   }
 
+  // ── Service line consolidation ────────────────────────────────────────────
+  // create_bill_record writes one services[] entry per addon PAYMENT document,
+  // so three separate "Water 1L" sales become three qty-1 rows. Merge rows that
+  // are the same item AT THE SAME UNIT PRICE into one line with summed qty and
+  // amount. The unit price is part of the key on purpose: if an item was sold
+  // at two prices during the stay, merging on name alone would print one of the
+  // two rates against the combined amount, and the row would not foot.
+  // Mirrors _consolidate_services in routes/billing.py.
+  function consolidateServices(list) {
+    const grouped = new Map();
+    for (const s of (list || [])) {
+      let name = String(s.item || "Service").trim();
+      let qty = Number(s.quantity || 1);
+      if (!(qty > 0)) qty = 1;
+      // Older rows were saved with the quantity baked into the NAME
+      // ("Water 2L × 2") as well as in the quantity field, so the invoice
+      // printed it twice and two sales of the same item never merged. Strip
+      // the suffix; if the row also lost its quantity (qty 1 carrying a line
+      // price for N), adopt N so the row still foots.
+      const _m = name.match(/\s*[x\u00d7]\s*(\d+)\s*$/i);
+      if (_m) {
+        const _n = Number(_m[1]);
+        name = name.slice(0, _m.index).trim() || "Service";
+        if (qty <= 1 && _n > 1) qty = _n;
+      }
+      // Legacy rows carry no unit_price. Falling back to the LINE price printed
+      // the full line amount in the Rate column (qty 3 x "60.00" against an
+      // amount of 60.00), so the row did not foot and the rate on the invoice
+      // was wrong by a factor of qty. Derive it from the amount instead.
+      const unit = Number(s.unit_price != null ? s.unit_price : (Number(s.price || 0) / qty));
+      const key = `${name.toLowerCase()}|${unit.toFixed(2)}`;
+      const existing = grouped.get(key);
+      if (!existing) {
+        grouped.set(key, {
+          ...s,
+          item: name,
+          quantity: qty,
+          unit_price: unit,
+          price: Number(s.price || 0),
+        });
+      } else {
+        existing.quantity += qty;
+        existing.price    += Number(s.price || 0);
+      }
+    }
+    return [...grouped.values()];
+  }
+
   // ══════════════════════════════════════════════════════════════════════════
   // FOLIO VIEW MODES — Detailed vs Consolidated (Register-tab bill modal)
   // The bill stores one folio entry per night. Detailed itemises every night;
@@ -1249,8 +1297,9 @@
     const days = b.days_stayed || calcDays(b.checkin_time, b.checkout_time);
     const rate = b.room_price_per_night || b.room_rent || 0;
     const services = b.services || [];
-    const accomAddons  = services.filter(s => s.accommodation_charge);
-    const otherSvcs    = services.filter(s => !s.accommodation_charge);
+    // Consolidate repeat sales of the same item at the same rate into one row.
+    const accomAddons  = consolidateServices(services.filter(s => s.accommodation_charge));
+    const otherSvcs    = consolidateServices(services.filter(s => !s.accommodation_charge));
     const accomAddonsTotal = accomAddons.reduce((s,x) => s+(x.price||0), 0);
     const otherSvcTotal    = otherSvcs.reduce((s,x) => s+(x.price||0), 0);
     const gstRatePct = typeof b.gst_rate === "number" ? b.gst_rate :
@@ -1333,6 +1382,11 @@
       `<tr><td>${s.item}<br><span class="b-sac">SAC: 996311</span></td><td class="b-tr">${s.quantity||1}</td>
        <td class="b-tr">${fix2(s.unit_price||s.price||0)}</td>
        <td class="b-tr">${fix2(s.price||0)}</td></tr>`).join("");
+    // Non-accommodation items. Prices are collected at MRP, so rows print the
+    // MRP rate and amount, and the section closes with a single Services Total.
+    // The per-line HSN/SAC label carries the rate, and the HSN/SAC Tax Summary
+    // at the foot of the bill breaks out the CGST/SGST — no need to repeat the
+    // tax split inside the section.
     const otherSvcRows = otherSvcs.map(s =>
       `<tr><td>${s.item}<br><span class="b-sac">${serviceTaxLabel(s)}</span></td><td class="b-tr">${s.quantity||1}</td>
        <td class="b-tr">${fix2(s.unit_price||s.price||0)}</td>
@@ -1480,8 +1534,12 @@
     const accomSubtotalRow = accomAddons.length > 0 || days > 1 || roomSegments.length > 0
       ? `<tr class="b-subtotal"><td colspan="3" class="b-tr">Accommodation Total (incl. GST)</td>
          <td class="b-tr">${fix2(accomTotal)}</td></tr>` : "";
+    // Heading is no longer "(Non-Taxable)". The block mixes taxed items (water
+    // at 5%, cold drinks, laundry) with genuinely exempt ones, and the Tax
+    // Summary below does charge CGST/SGST on the taxed lines — the old label
+    // contradicted both the per-line HSN/rate and the summary table.
     const otherSvcSection = otherSvcRows
-      ? `<tr class="b-sec"><td colspan="4">Additional Services (Non-Taxable)</td></tr>
+      ? `<tr class="b-sec"><td colspan="4">Additional Services</td></tr>
          ${otherSvcRows}
          <tr class="b-subtotal"><td colspan="3" class="b-tr">Services Total</td>
            <td class="b-tr">${fix2(otherSvcTotal)}</td></tr>` : "";

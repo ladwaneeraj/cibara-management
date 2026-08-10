@@ -74,7 +74,10 @@ _id_model = None
 # The "never guess" instruction is critical — without it the model
 # fabricates plausible-looking GSTINs for non-GST bills.
 _PROMPT = """\
-You are extracting fields from an Indian invoice or bill photo.
+You are extracting fields from an Indian invoice or bill. The input is either
+a photograph of a paper bill or a PDF invoice; treat both the same way. If a
+PDF contains several pages, extract from the page carrying the invoice header
+and totals.
 Return ONLY a single JSON object with the keys listed below.
 
 Schema:

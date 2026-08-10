@@ -1090,13 +1090,10 @@ def create_bill_record(room, room_data, checkout_time, batch=None,
         # If AC / Extra Bed were added as services from the checkout modal they are
         # stored with accommodation_charge=True and included here.
 
-        def _gst_rate_for_price(price):
-            if price < 1000:
-                return 0
-            elif price <= 7500:
-                return 5
-            else:
-                return 18
+        # Slab comes from _slab_for_value — the single definition of the
+        # accommodation rate table. It used to be re-typed here and in three
+        # other places; a rate change then needed four coordinated edits.
+        _gst_rate_for_price = _slab_for_value
 
         accommodation_addons_total = sum(
             s["price"] for s in services if s.get("accommodation_charge", False)
@@ -2283,6 +2280,286 @@ def compute_gst_split(gst_amount, recipient_state_code=""):
         half = round(total / 2, 2)
         return (half, round(total - half, 2), 0.0)
     return (0.0, 0.0, round(total, 2))
+
+
+# ============================================================================
+# SUPPLY CLASSIFICATION — non-accommodation items
+# ============================================================================
+#
+# Kept here rather than in routes/billing.py so that the invoice renderer,
+# the register payload and any report all classify a service line the same
+# way. It used to live in billing.py while the browser carried its own
+# incompatible rule ("does the item name contain the word water?"), which is
+# why a ₹500 laundry charge printed "SAC: 999721 - 18%" on the invoice and
+# contributed ₹0 to the GSTR-1 workbook.
+
+# (keyword tuple, HSN/SAC, rate %, category)
+_SERVICE_TAX_RULES = (
+    (("water", "bisleri", "aquafina", "kinley", "bailley"), "2201", 5, "goods"),
+    (("cold drink", "soft drink", "coke", "pepsi", "soda", "thums up",
+      "sprite", "fanta", "limca", "maaza", "frooti"), "2202", 12, "goods"),
+    (("tea", "coffee"), "996331", 5, "service"),
+    (("snack", "biscuit", "namkeen", "chip", "wafer", "lays", "kurkure"),
+     "1905", 5, "goods"),
+    (("laundry", "ironing", "wash", "dry clean"), "999721", 18, "service"),
+    (("taxi", "transport", "pickup", "drop", "auto", "cab"), "996412", 5, "service"),
+)
+
+
+def infer_service_tax(svc):
+    """Return (hsn_or_sac, gst_rate_pct, tax_category) for a NON-accommodation line.
+
+    Resolution order:
+      1. Explicit fields stored on the service dict (`hsn_or_sac`, `gst_rate`,
+         `tax_category`) — always win, so an operator override is never
+         second-guessed by a keyword.
+      2. Item-name keywords, per _SERVICE_TAX_RULES.
+      3. Exempt — empty HSN, 0%. Covers deposits, refundable items and
+         anything not yet categorised.
+
+    NOTE: the keyword rules are a convenience, not tax advice. Any item whose
+    name does not match a rule is billed at 0%. Review _SERVICE_TAX_RULES
+    against your actual inventory, and prefer stamping `hsn_or_sac`/`gst_rate`
+    explicitly on the service record for anything material.
+    """
+    svc = svc or {}
+    if svc.get("hsn_or_sac"):
+        try:
+            rate = int(svc.get("gst_rate") or 0)
+        except (TypeError, ValueError):
+            rate = 0
+        return (str(svc["hsn_or_sac"]), rate, svc.get("tax_category", "goods"))
+
+    name = (svc.get("item") or "").lower()
+    for keywords, hsn, rate, category in _SERVICE_TAX_RULES:
+        if any(k in name for k in keywords):
+            return (hsn, rate, category)
+    return ("", 0, "exempt")
+
+
+def service_tax_label(svc):
+    """Sub-line label for a service row: 'HSN: 2201 - 5%' / 'Non-taxable'."""
+    hsn, rate, cat = infer_service_tax(svc)
+    if not hsn:
+        return "Non-taxable"
+    prefix = "HSN" if cat == "goods" else "SAC"
+    return f"{prefix}: {hsn} - {rate}%" if rate > 0 else f"{prefix}: {hsn}"
+
+
+# ============================================================================
+# THE TAX BREAKUP — one rate-wise computation for every surface
+# ============================================================================
+
+# Place of supply for everything this property sells is Karnataka (29):
+#   • Accommodation — Section 12(3)(b) IGST Act: the location of the
+#     immovable property, NOT the recipient's state.
+#   • Goods handed over at the counter (water, cold drinks) — Section 10(1)(c)
+#     IGST Act: where the goods are at the time of delivery.
+#   • Services performed at the property (laundry, tea/coffee) — Section 12(2).
+# So a lodge invoice is ALWAYS intra-state CGST+SGST, even for a B2B guest
+# registered in another state. Their state belongs in the BILL TO block and in
+# the GSTR-1 recipient details; it must never flip the tax heads.
+#
+# Every storage path already hardcodes recipient_state_code="29" for this
+# reason (create_bill_record, refresh_bill_pricing, update_bill_gst,
+# compute_daily_folio). The IGST column is retained everywhere, always 0.00,
+# because GSTR-1 expects the column to exist.
+PLACE_OF_SUPPLY_STATE = "Karnataka"
+PLACE_OF_SUPPLY_CODE = "29"
+
+ACCOMMODATION_SAC = "996311"
+
+
+def bill_tax_breakup(bill):
+    """Authoritative rate-wise tax breakup for one bill.
+
+    THE single tax computation. The invoice's HSN/SAC summary, the Bills-tab
+    tally, the bills table and the GSTR-1 export workbook all consume this, so
+    the figures a guest sees, the figures on screen and the figures filed are
+    the same numbers by construction rather than by three implementations
+    happening to agree.
+
+    Accommodation figures are taken from the stored per-night folio and grouped
+    by each night's OWN slab. That matters: a stay with a ₹1,150 night at 5%
+    and a ₹950 night that is exempt must produce two rows. Collapsing it into
+    one row keyed on a single "representative" rate — which is what the browser
+    used to do — yields a row where Taxable x Rate does not equal the tax, and
+    the GSTN utility rejects or silently restates it.
+
+    On rounding: rows SUM the stored per-night figures rather than recomputing
+    tax as taxable x rate. Each night is a separate supply whose tax was
+    already rounded to the paisa when the folio was written, so summing keeps
+    (taxable + tax) exactly equal to the amount charged — the number the guest
+    pays and the invoice must foot to. The cost is that a row aggregating N
+    nights can differ from taxable x rate by up to half a paisa per night
+    (a 30-night stay drifts about 9 paise). Recomputing instead would make
+    that check exact and leave the invoice not footing, which is the worse
+    failure: a guest disputing a total is a real problem, a nine-paise
+    rounding difference in a rate-wise summary is not.
+
+    Returns
+    -------
+    dict with:
+        rows      list of {hsn, description, rate, taxable, cgst, sgst, igst,
+                           tax, category}  — category is "accommodation" or
+                           "service"; one row per (code, rate).
+        taxable / cgst / sgst / igst / tax   totals, each the sum of the
+                           ROUNDED row values so the printed rows add up to
+                           the printed total exactly.
+        exempt_value       value of supply carried at 0% (not in `taxable`).
+        source             "folio" | "aggregate" | "legacy" — provenance of
+                           the accommodation figures, for diagnostics.
+    """
+    bill = bill or {}
+
+    def _f(v):
+        try:
+            return float(v or 0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    # A cancelled (reverted) bill carries ZERO output tax. Reverting does not
+    # clear accommodation_taxable / gst_amount / daily_folio from the record —
+    # they are kept for audit — so anything reading those fields without this
+    # guard reports tax against a bill that was undone. The browser used to do
+    # exactly that and printed a GST figure on CANCELLED rows.
+    if (bill.get("status") or "").lower() == "cancelled":
+        return {"rows": [], "taxable": 0.0, "cgst": 0.0, "sgst": 0.0,
+                "igst": 0.0, "tax": 0.0, "exempt_value": 0.0,
+                "source": "cancelled"}
+
+    # ── Accommodation ─────────────────────────────────────────────────────
+    accom = {}          # rate -> {taxable, cgst, sgst, igst}
+    exempt_value = 0.0
+    folio = bill.get("daily_folio")
+    folio = folio if isinstance(folio, list) else []
+
+    def _bucket(rate, taxable, cgst, sgst, igst=0.0):
+        agg = accom.setdefault(int(rate), {"taxable": 0.0, "cgst": 0.0,
+                                           "sgst": 0.0, "igst": 0.0})
+        agg["taxable"] += taxable
+        agg["cgst"] += cgst
+        agg["sgst"] += sgst
+        agg["igst"] += igst
+
+    if folio:
+        source = "folio"
+        for e in folio:
+            _bucket(_f(e.get("day_gst_rate")), _f(e.get("day_taxable")),
+                    _f(e.get("day_cgst")), _f(e.get("day_sgst")),
+                    _f(e.get("day_igst")))
+    elif _f(bill.get("accommodation_taxable")) > 0 or _f(bill.get("gst_amount")) > 0:
+        # Pre-folio bill: use the stored stay-level aggregates. `gst_rate` on
+        # these records is a single slab, which is accurate because pre-folio
+        # bills were only ever computed at one slab.
+        source = "aggregate"
+        gst = _f(bill.get("gst_amount"))
+        cgst = _f(bill.get("cgst_amount")) or round(gst / 2, 2)
+        sgst = _f(bill.get("sgst_amount")) or round(gst - round(gst / 2, 2), 2)
+        _bucket(_f(bill.get("gst_rate")), _f(bill.get("accommodation_taxable")),
+                cgst, sgst, _f(bill.get("igst_amount")))
+    else:
+        # Nothing stored at all. Recompute from the room charge, netting the
+        # accommodation share of any discount, and pick the slab from the
+        # POST-discount per-night value (Section 15(3)(a)) — the same rule
+        # compute_daily_folio applies.
+        source = "legacy"
+        days = int(bill.get("days_stayed") or 1) or 1
+        rate_per_night = _f(bill.get("room_price_per_night") or bill.get("room_rent"))
+        room_total = _f(bill.get("room_charges_total")) or rate_per_night * days
+        services = bill.get("services") or []
+        addons = sum(_f(s.get("price")) for s in services
+                     if s.get("accommodation_charge"))
+        others = sum(_f(s.get("price")) for s in services
+                     if not s.get("accommodation_charge"))
+        gross_accom = room_total + addons
+        discounts = _f(bill.get("discounts"))
+        gross_all = gross_accom + others
+        accom_disc = (min(discounts * (gross_accom / gross_all), gross_accom)
+                      if gross_all > 0 else 0.0)
+        net = max(gross_accom - accom_disc, 0.0)
+        slab = _slab_for_value(net / days) if days else 0
+        if slab > 0 and net > 0:
+            gst = round(net * slab / (100 + slab), 2)
+            cgst = round(gst / 2, 2)
+            _bucket(slab, round(net - gst, 2), cgst, round(gst - cgst, 2))
+        elif net > 0:
+            _bucket(0, net, 0.0, 0.0)
+
+    rows = []
+    for rate in sorted(accom):
+        agg = accom[rate]
+        taxable = round(agg["taxable"], 2)
+        cgst = round(agg["cgst"], 2)
+        sgst = round(agg["sgst"], 2)
+        igst = round(agg["igst"], 2)
+        if rate <= 0:
+            # Exempt supply is reported separately: it has a value but no
+            # taxable base, and folding it into a rated row is what made
+            # Taxable x Rate disagree with the tax.
+            exempt_value += taxable
+            if taxable <= 0:
+                continue
+            rows.append({"hsn": ACCOMMODATION_SAC, "description": "Accommodation",
+                         "rate": 0, "taxable": taxable, "cgst": 0.0, "sgst": 0.0,
+                         "igst": 0.0, "tax": 0.0, "category": "accommodation"})
+            continue
+        if taxable <= 0 and (cgst + sgst + igst) <= 0:
+            continue
+        rows.append({"hsn": ACCOMMODATION_SAC, "description": "Accommodation",
+                     "rate": rate, "taxable": taxable, "cgst": cgst, "sgst": sgst,
+                     "igst": igst, "tax": round(cgst + sgst + igst, 2),
+                     "category": "accommodation"})
+
+    # ── Non-accommodation services ────────────────────────────────────────
+    # Prices are collected at MRP, so the taxable base is back-calculated.
+    svc_groups = {}
+    for s in (bill.get("services") or []):
+        if s.get("accommodation_charge"):
+            continue           # already inside the folio
+        hsn, rate, category = infer_service_tax(s)
+        gross = _f(s.get("price"))
+        if gross <= 0:
+            continue
+        if not hsn or rate <= 0:
+            exempt_value += round(gross, 2)
+            continue
+        key = (hsn, rate)
+        grp = svc_groups.setdefault(key, {"taxable": 0.0, "tax": 0.0,
+                                          "description": s.get("item") or "Service",
+                                          "category": category})
+        taxable = gross / (1 + rate / 100.0)
+        grp["taxable"] += taxable
+        grp["tax"] += gross - taxable
+
+    for (hsn, rate) in sorted(svc_groups):
+        grp = svc_groups[(hsn, rate)]
+        taxable = round(grp["taxable"], 2)
+        tax = round(grp["tax"], 2)
+        cgst = round(tax / 2, 2)
+        rows.append({"hsn": hsn, "description": grp["description"], "rate": rate,
+                     "taxable": taxable, "cgst": cgst, "sgst": round(tax - cgst, 2),
+                     "igst": 0.0, "tax": tax, "category": "service"})
+
+    # Totals sum the ROUNDED row values, so the printed rows add to the
+    # printed total to the paise.
+    #
+    # The Taxable column includes exempt rows. GSTR-1 Table 12 reports the
+    # value of a nil-rated supply in that column with zero tax against it, and
+    # excluding it here would print a column of figures that does not add up to
+    # its own total — an exempt-only invoice showed a 900.00 row above a 0.00
+    # total. `exempt_value` is carried separately for callers that need the
+    # split.
+    return {
+        "rows": rows,
+        "taxable": round(sum(r["taxable"] for r in rows), 2),
+        "cgst": round(sum(r["cgst"] for r in rows), 2),
+        "sgst": round(sum(r["sgst"] for r in rows), 2),
+        "igst": round(sum(r["igst"] for r in rows), 2),
+        "tax": round(sum(r["tax"] for r in rows), 2),
+        "exempt_value": round(exempt_value, 2),
+        "source": source,
+    }
 
 
 # ============================================================================

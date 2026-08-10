@@ -21,8 +21,9 @@ from config import (
     get_billing_config, invalidate_billing_config_cache,
     get_ui_config, invalidate_ui_config_cache,
     validate_gstin, derive_state_from_gstin, classify_invoice_type,
-    compute_gst_split, _STATE_CODE_TO_NAME,
+    compute_gst_split, _STATE_CODE_TO_NAME, _slab_for_value,
     create_credit_note, compute_credit_components, CN_REASONS,
+    bill_tax_breakup, PLACE_OF_SUPPLY_STATE, PLACE_OF_SUPPLY_CODE,
 )
 from services import payment_service, pdf_service, expense_service
 from services import system_alerts
@@ -529,8 +530,20 @@ def get_register_data():
                     "sac_or_hsn":             bill_data.get("sac_or_hsn", "9963"),
                     "service_description":    bill_data.get("service_description", ""),
                     "against_booking_id":     bill_data.get("against_booking_id", ""),
-                    # Accommodation taxable + GST amount from create_bill_record —
-                    # the export reads these to fill GSTR-1 columns directly.
+                    # THE tax figures for this bill — rate-wise, computed by
+                    # config.bill_tax_breakup from the stored per-night folio.
+                    # The invoice's HSN/SAC summary is built from this same
+                    # call, so the tally, the bills table and the GSTR-1 export
+                    # cannot disagree with the document the guest was given.
+                    #
+                    # Before this, the browser re-derived tax from
+                    # room_rent x days. That silently collapsed mixed-slab
+                    # stays onto one rate, ignored room transfers, and left
+                    # accommodation add-ons untaxed whenever the bare room
+                    # rate fell below the exemption threshold.
+                    "tax_breakup": bill_tax_breakup(bill_data),
+                    # Legacy aggregates. Retained for backward compatibility
+                    # with older clients; new code must use tax_breakup.
                     "accommodation_taxable": bill_data.get("accommodation_taxable", 0),
                     "non_accommodation_total": bill_data.get("non_accommodation_total", 0),
                     "gst_amount":            bill_data.get("gst_amount", 0),
@@ -704,6 +717,11 @@ def get_register_data():
                                                "ota" if is_mmt else "hotel"),
                     "guest_count": bill.get("guest_count", 1),
                     "services": bill.get("services", []),
+                    # Recovered rows carry a tax breakup too. They previously
+                    # shipped none of the tax fields at all, which forced the
+                    # browser into its least accurate re-derivation path for
+                    # exactly the bills whose data was already suspect.
+                    "tax_breakup": bill_tax_breakup(bill),
                     # Marks a payments-reconstructed row (bill was missing or in
                     # an excluded status). Useful for debugging / UI hinting.
                     "recovered": True,
@@ -835,6 +853,53 @@ def generate_bill(entry_id):
     except Exception as e:
         logger.error(f"Error generating bill: {str(e)}", exc_info=True)
         return jsonify(success=False, message=f"Error: {str(e)}")
+
+
+@billing_bp.route("/bill_html/<entry_id>", methods=["GET"])
+def bill_html(entry_id):
+    """Return the rendered bill HTML fragment for the browser's bill modal.
+
+    This is what makes the modal, Print, the saved PDF and the WhatsApp copy
+    the same document: all four originate from `_build_bill_html`. The modals
+    inject this fragment verbatim and Print clones it, so what the operator
+    sees on screen is byte-identical to what the PDF is built from.
+
+    Query params:
+        view — "detailed" | "consolidated". Anything else (including absent)
+               auto-selects, matching the modal toggle's default.
+
+    Returns {success, html, view, collapsible}. `view` is the mode actually
+    applied and `collapsible` says whether Consolidated would merge anything.
+    Both are returned so the browser can drive its toggle without carrying a
+    second copy of the folio-grouping rules — that duplication is what let the
+    modal and the PDF disagree in the first place.
+
+    Auth matches /generate_bill: both expose the same bill record, this one
+    merely pre-rendered, so gating them differently would be inconsistent.
+    """
+    try:
+        bill_doc = bills_ref.document(entry_id).get()
+        if not bill_doc.exists:
+            return jsonify(success=False, message="Bill not found"), 404
+
+        bill_data = bill_doc.to_dict() or {}
+        bill_data["id"] = entry_id
+
+        view = (request.args.get("view") or "").strip().lower()
+        if view not in ("detailed", "consolidated"):
+            view = None
+
+        folio = bill_data.get("daily_folio")
+        html = _build_bill_html(bill_data, view=view)
+        return jsonify(success=True, html=html,
+                       view=_resolve_view_mode(bill_data, view),
+                       collapsible=_folio_is_collapsible(
+                           folio if isinstance(folio, list) else []))
+
+    except Exception as e:
+        logger.error(f"Error rendering bill HTML for {entry_id}: {e}",
+                     exc_info=True)
+        return jsonify(success=False, message=f"Error: {e}"), 500
 
 
 @billing_bp.route("/get_bill/<bill_number>", methods=["GET"])
@@ -1903,12 +1968,8 @@ def edit_bill_room_price():
         else:
             # Defensive fallback (malformed checkin_time) — single-slab inclusive
             # math identical to create_bill_record's own fallback branch.
-            def _gst_rate_for_price(price):
-                if price < 1000:
-                    return 0
-                elif price <= 7500:
-                    return 5
-                return 18
+            # Single definition of the accommodation slab table.
+            from config import _slab_for_value as _gst_rate_for_price
             _accom     = room_charges_total + accommodation_addons_total
             _eff_accom = _accom - min(total_discounts, _accom)
             # Slab from the POST-discount per-night value of supply
@@ -2120,83 +2181,268 @@ def _f2(n):
     return f"{float(n or 0):.2f}"
 
 
-def infer_service_tax(svc: dict) -> tuple:
-    """
-    Return (hsn_or_sac, gst_rate_pct, tax_category) for a non-accommodation
-    service. Used for render-time tagging and for stamping new addon records.
+# Supply classification for non-accommodation lines now lives in config.py so
+# the invoice, the register payload and every report classify a service line
+# identically. Re-exported here because existing call sites import these names
+# from routes.billing.
+from config import infer_service_tax, service_tax_label as _service_tax_label  # noqa: E402,F401
 
-    Resolution order:
-      1. Explicit fields on the service dict (forward-compatible schema):
-         `hsn_or_sac`, `gst_rate`, `tax_category` — used as-is when present.
-      2. Item-name heuristics — covers the inventory most small lodges sell:
-         packaged water, cold drinks, tea/coffee, snacks, laundry, transport.
-      3. Default — empty HSN, 0%, "exempt" (security deposits, refundable
-         items, anything the operator hasn't categorised).
 
-    Categories:
-      "accommodation" — only set when the caller already knows; this helper
-                        is only called for non-accommodation lines.
-      "goods"         — physical items, HSN code.
-      "service"       — SAC code.
-      "exempt"        — no GST.
+# ══════════════════════════════════════════════════════════════════════════════
+# FOLIO VIEW MODES — Detailed vs Consolidated
+#
+# A bill stores one folio entry per night. Detailed itemises every night;
+# Consolidated collapses runs of add-on-free nights that share the same room,
+# GST slab and nightly rate into a single room block, leaving nights that
+# carry extras itemised in full.
+#
+# This is PURE PRESENTATION. Storage, GST computation and every stored total
+# are untouched — the two views render identical money from the same folio.
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _folio_night_key(e: dict) -> str:
+    """Two nights merge only when room, GST slab and nightly rate all match."""
+    return "|".join([
+        str(e.get("room") or ""),
+        str(float(e.get("day_gst_rate") or 0)),
+        str(float(e.get("base_rate") or 0)),
+    ])
+
+
+def _folio_night_has_extras(e: dict) -> bool:
+    """A night with add-ons is always shown in full and breaks the run."""
+    addons = e.get("addons")
+    return isinstance(addons, list) and len(addons) > 0
+
+
+def _group_folio(folio: list) -> list:
+    """folio[] -> blocks. {"kind":"run","entries":[...]} | {"kind":"day","entries":[one]}
+
+    A run of 2+ consecutive, add-on-free, identically-priced nights in the same
+    room becomes one "run" block. Everything else stays a per-day block.
     """
-    if svc.get("hsn_or_sac"):
-        return (
-            str(svc["hsn_or_sac"]),
-            int(svc.get("gst_rate") or 0),
-            svc.get("tax_category", "goods"),
+    blocks = []
+    run = []
+
+    def flush():
+        nonlocal run
+        if not run:
+            return
+        blocks.append({"kind": "run" if len(run) >= 2 else "day", "entries": run})
+        run = []
+
+    for e in folio or []:
+        if _folio_night_has_extras(e):
+            flush()
+            blocks.append({"kind": "day", "entries": [e]})
+            continue
+        if run and _folio_night_key(run[0]) != _folio_night_key(e):
+            flush()
+        run.append(e)
+    flush()
+    return blocks
+
+
+def _folio_is_collapsible(folio) -> bool:
+    """True when Consolidated would actually merge something (a run of 2+)."""
+    if not isinstance(folio, list) or len(folio) < 2:
+        return False
+    return any(blk["kind"] == "run" for blk in _group_folio(folio))
+
+
+def _resolve_view_mode(b: dict, view: str = None) -> str:
+    """Effective view mode: an explicit caller choice wins, else auto.
+
+    Auto mirrors the browser toggle's default — a folio that has something to
+    collapse renders Consolidated, anything else renders Detailed. Passing an
+    explicit "detailed"/"consolidated" (the modal toggle, or the PDF pin) skips
+    the heuristic.
+    """
+    if view in ("detailed", "consolidated"):
+        return view
+    folio = b.get("daily_folio")
+    folio = folio if isinstance(folio, list) else []
+    return "consolidated" if _folio_is_collapsible(folio) else "detailed"
+
+
+_DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+
+
+def _fmt_day_date(iso_or_space) -> str:
+    """'2026-05-12 14:20' -> '12 May 2026 (Tue)'."""
+    if not iso_or_space:
+        return ""
+    try:
+        from datetime import datetime as _dt
+        s = str(iso_or_space).replace("T", " ")
+        y, m, d = s.split(" ")[0].split("-")
+        month = _MONTHS[int(m) - 1]
+        weekday = _DAY_NAMES[_dt(int(y), int(m), int(d)).weekday()]
+        return f"{int(d)} {month} {y} ({weekday})"
+    except Exception:
+        return str(iso_or_space)[:10] if iso_or_space else ""
+
+
+def _render_folio_day(e: dict, b: dict) -> str:
+    """One night in full: header, room rent, add-ons, per-day discount, total."""
+    di        = e.get("day_index", 1)
+    di_room   = e.get("room") or b.get("room", "")
+    di_base   = float(e.get("base_rate", 0) or 0)
+    di_addons = e.get("addons") or []
+    di_total  = float(e.get("day_total", 0) or 0)
+    di_disc   = float(e.get("discount_allocated", 0) or 0)
+    date_disp = _fmt_day_date(e.get("day_start", ""))
+
+    out = (
+        f'<tr class="b-day-header"><td colspan="4" style="text-align:center;">'
+        f'Day {di} &nbsp;&mdash;&nbsp; {date_disp} &nbsp;&middot;&nbsp; Rm {di_room}'
+        f'</td></tr>'
+        f'<tr><td>Room Rent<br><span class="b-sac">SAC: 996311</span></td>'
+        f'<td class="b-tr">1</td>'
+        f'<td class="b-tr">{_f2(di_base)}</td>'
+        f'<td class="b-tr">{_f2(di_base)}</td></tr>'
+    )
+
+    for a in di_addons:
+        a_gross = float(a.get("price", 0) or 0)
+        a_unit  = float(a.get("unit_price") or a.get("price", 0) or 0)
+        a_qty   = int(a.get("quantity", 1) or 1)
+        out += (
+            f'<tr><td>{a.get("item", "Service")}'
+            f'<br><span class="b-sac">SAC: 996311</span></td>'
+            f'<td class="b-tr">{a_qty}</td>'
+            f'<td class="b-tr">{_f2(a_unit)}</td>'
+            f'<td class="b-tr">{_f2(a_gross)}</td></tr>'
         )
 
-    name = (svc.get("item") or "").lower()
+    if di_disc > 0:
+        out += (
+            f'<tr><td colspan="3" style="text-align:right;color:#2e7d32;font-weight:600;">'
+            f'Less: Discount allocated to Day {di}</td>'
+            f'<td class="b-tr" style="color:#2e7d32;font-weight:700;">- {_f2(di_disc)}</td></tr>'
+        )
 
-    # Water (HSN 2201, 5%)
-    if any(k in name for k in ("water", "bisleri", "aquafina", "kinley", "bailley")):
-        return ("2201", 5, "goods")
-
-    # Cold drinks / sodas (HSN 2202, 12%)
-    if any(k in name for k in (
-        "cold drink", "soft drink", "coke", "pepsi", "soda",
-        "thums up", "sprite", "fanta", "limca", "maaza", "frooti"
-    )):
-        return ("2202", 12, "goods")
-
-    # Tea / coffee served (SAC 996331, 5%)
-    if any(k in name for k in ("tea", "coffee")):
-        return ("996331", 5, "service")
-
-    # Snacks / biscuits / namkeen (HSN 1905, 5%)
-    if any(k in name for k in ("snack", "biscuit", "namkeen", "chip", "wafer", "lays", "kurkure")):
-        return ("1905", 5, "goods")
-
-    # Laundry / ironing (SAC 999721, 18%)
-    if any(k in name for k in ("laundry", "ironing", "wash", "dry clean")):
-        return ("999721", 18, "service")
-
-    # Transport / taxi / pickup-drop (SAC 996412, 5%)
-    if any(k in name for k in ("taxi", "transport", "pickup", "drop", "auto", "cab")):
-        return ("996412", 5, "service")
-
-    # Default — non-taxable / un-categorised
-    return ("", 0, "exempt")
+    out += (
+        f'<tr class="b-day-total"><td colspan="3" class="b-tr">'
+        f'Day {di} Total (incl. GST)</td>'
+        f'<td class="b-tr">{_f2(di_total)}</td></tr>'
+    )
+    return out
 
 
-def _service_tax_label(svc: dict) -> str:
-    """Render a sub-line label for a non-accommodation service.
-       'HSN: 2201 - 5%' for goods, 'SAC: 999721 - 18%' for services, or
-       'Non-taxable' for exempt items."""
-    hsn, rate, cat = infer_service_tax(svc)
-    if not hsn:
-        return "Non-taxable"
-    prefix = "HSN" if cat == "goods" else "SAC"
-    if rate > 0:
-        return f"{prefix}: {hsn} - {rate}%"
-    return f"{prefix}: {hsn}"
+def _render_folio_run(entries: list, b: dict) -> str:
+    """A run of identical add-on-free nights collapsed into one room block.
 
-def _build_bill_html(b: dict) -> str:
+    Qty is the night count and Rate the (shared) nightly rate, so the block
+    still foots to the same money the per-day view would print. Amounts are
+    summed from the stored per-night fields rather than recomputed.
+    """
+    n     = len(entries)
+    first = entries[0]
+    last  = entries[n - 1]
+    room  = first.get("room") or b.get("room", "")
+    base  = float(first.get("base_rate", 0) or 0)
+    tot_disc = sum(float(e.get("discount_allocated", 0) or 0) for e in entries)
+    tot_day  = sum(float(e.get("day_total", 0) or 0) for e in entries)
+    d1 = _fmt_day_date(first.get("day_start", ""))
+    d2 = _fmt_day_date(last.get("day_start", ""))
+
+    out = (
+        f'<tr class="b-day-header"><td colspan="4" style="text-align:center;">'
+        f'Room Rent &nbsp;&mdash;&nbsp; {d1} &nbsp;to&nbsp; {d2} '
+        f'&nbsp;&middot;&nbsp; {n} nights &nbsp;&middot;&nbsp; Rm {room}'
+        f'</td></tr>'
+        f'<tr><td>Room Rent<br><span class="b-sac">SAC: 996311</span></td>'
+        f'<td class="b-tr">{n}</td>'
+        f'<td class="b-tr">{_f2(base)}</td>'
+        f'<td class="b-tr">{_f2(base * n)}</td></tr>'
+    )
+
+    if tot_disc > 0:
+        out += (
+            f'<tr><td colspan="3" style="text-align:right;color:#2e7d32;font-weight:600;">'
+            f'Less: Discount allocated to these {n} nights</td>'
+            f'<td class="b-tr" style="color:#2e7d32;font-weight:700;">- {_f2(tot_disc)}</td></tr>'
+        )
+
+    out += (
+        f'<tr class="b-day-total"><td colspan="3" class="b-tr">'
+        f'Room Charges ({n} nights) Total (incl. GST)</td>'
+        f'<td class="b-tr">{_f2(tot_day)}</td></tr>'
+    )
+    return out
+
+
+# ── Shared document chrome ───────────────────────────────────────────────────
+# The letterhead and footer are identical on every document this property
+# issues. They are built here rather than typed into each renderer because the
+# tax invoice and the credit note had already drifted: the credit note omitted
+# the phone line, separated the GSTIN bar with full stops instead of middots,
+# and hardcoded "Rs." where the invoice used the rupee glyph.
+
+SUPPLIER_NAME    = "CIBARA COMFORTS"
+SUPPLIER_ENTITY  = "A Unit of Cibara Enterprise"
+SUPPLIER_ADDRESS = "Opposite Bus Stand Road, Harihar, Karnataka &ndash; 577601"
+SUPPLIER_PHONE   = "+91 9482831381"
+SUPPLIER_GSTIN   = "29AAWFC1962B1Z9"
+
+
+def _letterhead(title: str) -> str:
+    """Supplier block + document title. `title` is e.g. 'TAX INVOICE'."""
+    return (
+        f'<div class="b-header-block">'
+        f'<div class="b-lodge-name">{SUPPLIER_NAME}</div>'
+        f'<div class="b-lodge-entity">{SUPPLIER_ENTITY}</div>'
+        f'<div class="b-lodge-sub">{SUPPLIER_ADDRESS}</div>'
+        f'<div class="b-lodge-sub">Ph: {SUPPLIER_PHONE}</div>'
+        f'<div class="b-gstin-bar">GSTIN: {SUPPLIER_GSTIN} &nbsp;&middot;&nbsp; '
+        f'SAC: 9963 &nbsp;&middot;&nbsp; {PLACE_OF_SUPPLY_STATE} '
+        f'(KA &ndash; {PLACE_OF_SUPPLY_CODE})</div>'
+        f'<div class="b-title">{title}</div>'
+        f'</div>'
+    )
+
+
+def _doc_footer(*lines: str) -> str:
+    return ('<div class="b-footer">'
+            + "".join(f'<p>{ln}</p>' for ln in lines)
+            + '</div>')
+
+
+def _signature_block(left: str, right: str = "Authorised Signatory") -> str:
+    return (f'<table class="b-sig"><tr>'
+            f'<td><div class="b-sig-line">{left}</div></td>'
+            f'<td style="text-align:right"><div class="b-sig-line">{right}</div></td>'
+            f'</tr></table>')
+
+
+def _build_bill_html(b: dict, view: str = None) -> str:
     """Build the bill HTML fragment from a bill record dict.
 
-    Mirrors the JS buildBillHTML() function in bills.js so the server-generated
-    PDF is visually identical to what the browser modal shows.
+    THE single bill renderer. Every surface goes through this function:
+
+      • the Bills-tab and Register-tab modals, via GET /bill_html
+      • Print, which clones exactly what those modals injected
+      • the PDF saved to Firebase Storage, via /render_bill_pdf and
+        auto_generate_bill_pdf
+      • the WhatsApp share, which sends that same stored PDF
+
+    There is deliberately no second implementation. The browser used to carry
+    its own copy in bills.js and register.js; those drifted from this one (the
+    modal collapsed multi-night stays while the PDF itemised them, and the PDF
+    dropped OTA payments), which is precisely why the client renderers were
+    removed in favour of fetching this output.
+
+    Args:
+        b:    the bill record.
+        view: "detailed" | "consolidated" | None. None auto-selects, matching
+              the modal toggle's default. The PDF/WhatsApp path pins
+              "consolidated" so a guest always receives the same layout
+              regardless of what the operator happened to be looking at.
+
+    Emits the ₹ glyph. `_build_pdf_html` substitutes "Rs." for xhtml2pdf, which
+    cannot render U+20B9 — so the browser gets ₹ and the PDF gets Rs. from this
+    one source.
     """
     days       = b.get("days_stayed", 1)
     rate       = b.get("room_price_per_night") or b.get("room_rent") or 0
@@ -2272,17 +2518,24 @@ def _build_bill_html(b: dict) -> str:
 
     gst_rate_pct = b.get("gst_rate", 0)
 
-    # ── Place of supply / tax head determination ──────────────────────────────
-    # Supplier is in Karnataka (KA-29). When the bill carries a non-KA
-    # recipient_state_code (B2B with non-KA GSTIN, or B2CL flagged via
-    # /update_bill_gst), the supply is INTER-state and IGST applies INSTEAD of
-    # CGST+SGST. Without this fork the PDF would always print CGST+SGST,
-    # giving the customer a document that doesn't match the GSTR-1 filing.
-    recipient_state_code = (b.get("recipient_state_code") or "29").strip() or "29"
-    is_inter_state       = recipient_state_code != "29"
-    cgst_rate = gst_rate_pct / 2 if not is_inter_state else 0
-    sgst_rate = gst_rate_pct / 2 if not is_inter_state else 0
-    igst_rate = gst_rate_pct     if is_inter_state     else 0
+    # ── Place of supply / tax heads ───────────────────────────────────────────
+    # ALWAYS Karnataka (29), ALWAYS CGST+SGST. Section 12(3)(b) IGST Act puts
+    # the place of supply of accommodation at the location of the immovable
+    # property, not at the recipient's state; goods handed over at the counter
+    # (Section 10(1)(c)) and services performed on site (Section 12(2)) are
+    # likewise local. A lodge invoice is never inter-state.
+    #
+    # This block used to branch on recipient_state_code and print IGST for an
+    # out-of-state B2B guest. Every storage path — create_bill_record,
+    # refresh_bill_pricing, update_bill_gst, compute_daily_folio — hardcodes
+    # recipient_state_code="29" for exactly this reason, so that invoice
+    # disagreed with both the stored bill and the GSTR-1 filing, and the
+    # recipient's ITC claim would not have matched.
+    #
+    # The recipient's own state still appears in the BILL TO block and in the
+    # GSTR-1 recipient details. It just cannot move the tax heads.
+    cgst_rate = gst_rate_pct / 2
+    sgst_rate = gst_rate_pct / 2
 
     # Use the stored room_charges_total when available — this is always correct,
     # including when the room price changed mid-stay (room transfer or AC add-on).
@@ -2307,15 +2560,10 @@ def _build_bill_html(b: dict) -> str:
         gst_amt     = effective_accom * gst_rate_pct / gst_divisor
     else:
         gst_amt = 0
-    # Route the GST amount to the correct tax head(s) based on place of supply.
-    if is_inter_state:
-        cgst = 0.0
-        sgst = 0.0
-        igst = gst_amt
-    else:
-        cgst = gst_amt / 2
-        sgst = gst_amt - cgst   # SGST absorbs any paise rounding drift
-        igst = 0.0
+    # Intra-state always — see the place-of-supply note above.
+    cgst = gst_amt / 2
+    sgst = gst_amt - cgst   # SGST absorbs any paise rounding drift
+    igst = 0.0
     accom_base = effective_accom - gst_amt   # net taxable base (excl. GST)
     svc_total_all = b.get("services_total") or 0
     # Use stored total_amount when available (authoritative figure from billing).
@@ -2323,10 +2571,15 @@ def _build_bill_html(b: dict) -> str:
 
     cash_paid    = b.get("payment_cash") or 0
     online_paid  = b.get("payment_online") or 0
+    # OTA/MMT prepaid room charge — collected by the channel up front and
+    # settled to the bank later. It is a real payment against this bill and is
+    # already netted off the stored `balance`, so it must count toward
+    # Total Paid or the Payment Details block does not foot.
+    ota_paid     = b.get("payment_ota") or 0
     refunds      = b.get("refunds") or 0
     refund_cash  = b.get("refund_cash") or 0
     refund_online = b.get("refund_online") or 0
-    total_paid   = cash_paid + online_paid
+    total_paid   = cash_paid + online_paid + ota_paid
     net_collected = total_paid - refunds
     balance      = b.get("balance") or 0
 
@@ -2374,21 +2627,14 @@ def _build_bill_html(b: dict) -> str:
 
     # ── GST rows — only if effective accommodation > 0 after discount ────────
     if gst_rate_pct > 0 and effective_accom > 0:
-        if is_inter_state:
-            gst_rows = (
-                f'<tr class="b-gst-row"><td>IGST @ {igst_rate}%</td>'
-                f'<td class="b-tr">—</td><td class="b-tr">—</td>'
-                f'<td class="b-tr">{_f2(igst)}</td></tr>'
-            )
-        else:
-            gst_rows = (
-                f'<tr class="b-gst-row"><td>CGST @ {cgst_rate}%</td>'
-                f'<td class="b-tr">—</td><td class="b-tr">—</td>'
-                f'<td class="b-tr">{_f2(cgst)}</td></tr>'
-                f'<tr class="b-gst-row"><td>SGST @ {sgst_rate}%</td>'
-                f'<td class="b-tr">—</td><td class="b-tr">—</td>'
-                f'<td class="b-tr">{_f2(sgst)}</td></tr>'
-            )
+        gst_rows = (
+            f'<tr class="b-gst-row"><td>CGST @ {cgst_rate}%</td>'
+            f'<td class="b-tr">—</td><td class="b-tr">—</td>'
+            f'<td class="b-tr">{_f2(cgst)}</td></tr>'
+            f'<tr class="b-gst-row"><td>SGST @ {sgst_rate}%</td>'
+            f'<td class="b-tr">—</td><td class="b-tr">—</td>'
+            f'<td class="b-tr">{_f2(sgst)}</td></tr>'
+        )
     elif gst_rate_pct > 0 and effective_accom <= 0:
         # Full discount — GST waived per Sec 15(3)(a) CGST Act
         gst_rows = (
@@ -2456,133 +2702,88 @@ def _build_bill_html(b: dict) -> str:
     # rendering above (room_rent_rows + accom_addon_rows + taxable_base_row
     # + gst_rows + round_off_row + accom_subtotal_row) stays in effect.
     _folio = b.get("daily_folio") or []
+    _folio_html_parts = []
+    _view_mode = _resolve_view_mode(b, view)
     if _folio:
-        # ── Per-day folio rendering — matches the eZee/Hotelogix layout ─────────
-        # Each Day gets a section header, gross line items, and a Day Total row.
-        # GST breakdown lives in the Tax Summary table (built below) — Rule 46
-        # is satisfied by the summary, and the per-day section stays uncluttered.
-        from datetime import datetime as _dt
-        _DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
-        def _fmt_day_date(iso_or_space):
-            """'2026-05-12 14:20' → '12 May 2026 (Tue)'."""
-            if not iso_or_space:
-                return ""
-            try:
-                s = iso_or_space.replace("T", " ")
-                ymd = s.split(" ")[0]
-                y, m, d = ymd.split("-")
-                month = _MONTHS[int(m) - 1]
-                weekday = _DAY_NAMES[_dt(int(y), int(m), int(d)).weekday()]
-                return f"{int(d)} {month} {y} ({weekday})"
-            except Exception:
-                return iso_or_space[:10] if iso_or_space else ""
-
-        _folio_html_parts = []
-        for _e in _folio:
-            _di       = _e.get("day_index", 1)
-            _di_room  = _e.get("room", b.get("room", ""))
-            _di_base_gross = float(_e.get("base_rate", 0) or 0)
-            _di_addons     = _e.get("addons", []) or []
-            _di_total      = float(_e.get("day_total", 0) or 0)
-            _di_discount   = float(_e.get("discount_allocated", 0) or 0)
-            _di_start      = _e.get("day_start", "")
-            _di_date_disp  = _fmt_day_date(_di_start)
-
-            # ─ Day header — centered with subtle background
-            _folio_html_parts.append(
-                f'<tr class="b-day-header"><td colspan="4" style="text-align:center;">'
-                f'Day {_di} &nbsp;&mdash;&nbsp; {_di_date_disp} &nbsp;&middot;&nbsp; Rm {_di_room}'
-                f'</td></tr>'
-            )
-
-            # Room Rent — gross (incl. GST), 1 qty per night
-            _folio_html_parts.append(
-                f'<tr><td>Room Rent'
-                f'<br><span class="b-sac">SAC: 996311</span></td>'
-                f'<td class="b-tr">1</td>'
-                f'<td class="b-tr">{_f2(_di_base_gross)}</td>'
-                f'<td class="b-tr">{_f2(_di_base_gross)}</td></tr>'
-            )
-
-            # Accommodation addons for this day — gross amounts
-            for _a in _di_addons:
-                _a_gross = float(_a.get("price", 0) or 0)
-                _a_unit  = float(_a.get("unit_price") or _a.get("price", 0) or 0)
-                _a_qty   = int(_a.get("quantity", 1) or 1)
+        # ── Folio rendering — eZee/Hotelogix-style layout ──────────────────────
+        # Each block gets a header, gross line items, and a total row. The GST
+        # breakdown lives in the Tax Summary table below — Rule 46 is satisfied
+        # by that summary, so these sections stay uncluttered.
+        #
+        # Detailed     — one section per night.
+        # Consolidated — runs of add-on-free, same-room, same-rate, same-slab
+        #                nights collapse into a single room block; nights with
+        #                extras stay itemised. Same money either way: the run
+        #                block sums the stored per-night totals rather than
+        #                recomputing them.
+        if _view_mode == "consolidated":
+            for _blk in _group_folio(_folio):
                 _folio_html_parts.append(
-                    f'<tr><td>{_a.get("item", "Service")}'
-                    f'<br><span class="b-sac">SAC: 996311</span></td>'
-                    f'<td class="b-tr">{_a_qty}</td>'
-                    f'<td class="b-tr">{_f2(_a_unit)}</td>'
-                    f'<td class="b-tr">{_f2(_a_gross)}</td></tr>'
+                    _render_folio_run(_blk["entries"], b) if _blk["kind"] == "run"
+                    else _render_folio_day(_blk["entries"][0], b)
                 )
+        else:
+            for _e in _folio:
+                _folio_html_parts.append(_render_folio_day(_e, b))
 
-            # Per-day discount line, if any
-            if _di_discount > 0:
-                _folio_html_parts.append(
-                    f'<tr><td colspan="3" style="text-align:right;color:#2e7d32;font-weight:600;">'
-                    f'Less: Discount allocated to Day {_di}</td>'
-                    f'<td class="b-tr" style="color:#2e7d32;font-weight:700;">- {_f2(_di_discount)}</td></tr>'
-                )
-
-            # Day Total — gross (incl. GST)
-            _folio_html_parts.append(
-                f'<tr class="b-day-total"><td colspan="3" class="b-tr">'
-                f'Day {_di} Total (incl. GST)</td>'
-                f'<td class="b-tr">{_f2(_di_total)}</td></tr>'
-            )
-
-        room_rent_rows     = "".join(_folio_html_parts)
-        accom_addon_rows   = ""
-        taxable_base_row   = ""
-        gst_rows           = ""
-        round_off_row      = ""
-        accom_subtotal_row = (
-            f'<tr class="b-subtotal">'
-            f'<td colspan="3" class="b-tr">Accommodation Total (all days, incl. GST)</td>'
-            f'<td class="b-tr">{_f2(sum(float(e.get("day_total", 0) or 0) for e in _folio))}</td></tr>'
-        )
-
-        # ── Refund rows ──
+    # ── Refund rows ──
     refund_rows = ""
     if refunds > 0:
         if refund_cash > 0:
             refund_rows += (
                 f'<tr><td>Refund Given (Cash)</td>'
-                f'<td class="b-tr" style="color:#c00;">- Rs. {_f2(refund_cash)}</td></tr>'
+                f'<td class="b-tr" style="color:#c00;">- ₹ {_f2(refund_cash)}</td></tr>'
             )
         if refund_online > 0:
             refund_rows += (
                 f'<tr><td>Refund Given (UPI)</td>'
-                f'<td class="b-tr" style="color:#c00;">- Rs. {_f2(refund_online)}</td></tr>'
+                f'<td class="b-tr" style="color:#c00;">- ₹ {_f2(refund_online)}</td></tr>'
             )
         if not refund_cash and not refund_online:
             refund_rows += (
                 f'<tr><td>Refund Given</td>'
-                f'<td class="b-tr" style="color:#c00;">- Rs. {_f2(refunds)}</td></tr>'
+                f'<td class="b-tr" style="color:#c00;">- ₹ {_f2(refunds)}</td></tr>'
             )
         refund_rows += (
             f'<tr class="b-subtotal"><td>Net Collected</td>'
-            f'<td class="b-tr">Rs. {_f2(net_collected)}</td></tr>'
+            f'<td class="b-tr">₹ {_f2(net_collected)}</td></tr>'
         )
+
+    # OTA-prepaid row. MMT and similar channels collect the room charge up
+    # front and settle to the bank later, so the guest owes nothing further.
+    # `payment_ota` is stored on the bill and is already netted off the stored
+    # `balance`; omitting it here (as this renderer previously did) left the
+    # Payment Details block not footing on every OTA bill — Total Paid short by
+    # the OTA amount while Balance Due correctly read zero.
+    ota_paid_row = (
+        f'<tr><td>Paid via MMT (OTA)</td>'
+        f'<td class="b-tr">₹ {_f2(ota_paid)}</td></tr>'
+        if ota_paid > 0 else ""
+    )
 
     balance_row = (
         f'<tr><td style="font-weight:800;color:#c62828;">Balance Due</td>'
-        f'<td class="b-tr" style="font-weight:800;color:#c62828;">Rs. {_f2(balance)}</td></tr>'
+        f'<td class="b-tr" style="font-weight:800;color:#c62828;">₹ {_f2(balance)}</td></tr>'
         if balance > 0 else ""
     )
 
-    paid_full_row = ""  # removed — balance row already shows ₹0 when settled
+    # Show OVERPAID only when (Total Paid − refunds) exceeds the grand total.
+    # There is deliberately no "PAID IN FULL" line — a cleanly settled bill
+    # prints nothing extra, and the Balance Due row above covers the shortfall
+    # case.
+    _overpaid = (total_paid - refunds) - (grand_total or 0)
+    overpaid_row = (
+        f'<tr><td style="font-weight:800;color:#b45309;">OVERPAID — refund due</td>'
+        f'<td class="b-tr" style="font-weight:800;color:#b45309;">₹ {_f2(_overpaid)}</td></tr>'
+        if _overpaid > 0.5 else ""
+    )
 
-    # ── Helper: GST slab for a given per-night price ─────────────────────────
-    def _seg_gst_rate(price):
-        if price < 1000: return 0
-        elif price <= 7500: return 5
-        else: return 18
-
+    # ── Helper: pre-GST taxable value for a legacy room segment ──────────────
+    # The slab comes from _slab_for_value, the single definition of the
+    # accommodation rate table. This was the last of seven hand-written copies.
     def _seg_taxable(total_incl, price):
         """Pre-GST taxable value for a segment given its inclusive total."""
-        r = _seg_gst_rate(price)
+        r = _slab_for_value(price)
         return total_incl / (1 + r / 100) if r > 0 else total_incl
 
     # ── Room Rent rows: pre-GST values, one per segment for transfer stays ────
@@ -2672,18 +2873,19 @@ def _build_bill_html(b: dict) -> str:
 
     # ── Folio override (LAST WINS) ────────────────────────────────────────────
     # The legacy room_rent_rows reassignment in the if/elif/else chain above
-    # runs AFTER the per-day folio renderer earlier in this function, so it
-    # would overwrite the clean per-day HTML. Re-apply the override here so
-    # the final rendered HTML uses the per-day folio layout when present.
+    # runs AFTER the folio renderer earlier in this function, so it would
+    # overwrite the clean folio HTML. Re-apply the override here so the final
+    # rendered HTML uses the folio layout when present.
     if _folio:
-        try:
-            room_rent_rows = "".join(_folio_html_parts)
-        except NameError:
-            pass
+        room_rent_rows   = "".join(_folio_html_parts)
         accom_addon_rows = ""
         taxable_base_row = ""
         gst_rows         = ""
         round_off_row    = ""
+        # Each folio block already prints its own "Less: Discount allocated
+        # to …" line, so the trailing bill-level Discount row would show the
+        # same reduction a second time immediately above GRAND TOTAL.
+        discount_row     = ""
         accom_subtotal_row = (
             f'<tr class="b-subtotal">'
             f'<td colspan="3" class="b-tr">Accommodation Total (all days, incl. GST)</td>'
@@ -2702,7 +2904,7 @@ def _build_bill_html(b: dict) -> str:
     rcpt_trade_name   = (b.get("recipient_trade_name") or "").strip()
     rcpt_address      = (b.get("recipient_address")    or "").strip()
     rcpt_state        = (b.get("recipient_state")      or "Karnataka").strip()
-    rcpt_state_code   = (b.get("recipient_state_code") or "29").strip()
+    rcpt_state_code   = (b.get("recipient_state_code")  or "29").strip() or "29"
 
     if invoice_type == "B2B":
         recipient_block = f"""
@@ -2739,105 +2941,26 @@ def _build_bill_html(b: dict) -> str:
     else:
         recipient_block = ""
 
-    # ── Tax Summary by HSN/SAC ────────────────────────────────────────────────
-    # Rule 46(j)(k): tax rate and amount must be on the invoice. We already show
-    # this per-night inside the line-items table; the summary below aggregates
-    # by (HSN/SAC, rate) so the recipient can see total tax exposure at a glance.
-    # Standard practice in eZee/Hotelogix-style PMS invoices.
-    _tax_sum_rows = []
-    _tot_taxable = _tot_cgst = _tot_sgst = _tot_igst = 0.0
-
-    # Accommodation: aggregate from folio if present, else from the bill totals
-    if _folio:
-        _by_rate = {}
-        for _e in _folio:
-            _r = float(_e.get("day_gst_rate", 0) or 0)
-            _t = float(_e.get("day_taxable", 0) or 0)
-            _cg = float(_e.get("day_cgst", 0) or 0)
-            _sg = float(_e.get("day_sgst", 0) or 0)
-            _ig = float(_e.get("day_igst", 0) or 0)
-            agg = _by_rate.setdefault(_r, {"taxable": 0, "cgst": 0, "sgst": 0, "igst": 0})
-            agg["taxable"] += _t
-            agg["cgst"]    += _cg
-            agg["sgst"]    += _sg
-            agg["igst"]    += _ig
-        for _r in sorted(_by_rate):
-            agg = _by_rate[_r]
-            _tot_taxable += agg["taxable"]
-            _tot_cgst    += agg["cgst"]
-            _tot_sgst    += agg["sgst"]
-            _tot_igst    += agg["igst"]
-            _label = "Accommodation"
-            _rate_disp = f"{_r}%" if _r > 0 else "Exempt"
-            _tax_sum_rows.append(
-                f'<tr><td>996311</td><td>{_label}</td>'
-                f'<td class="b-tr">{_rate_disp}</td>'
-                f'<td class="b-tr">{_f2(agg["taxable"])}</td>'
-                f'<td class="b-tr">{_f2(agg["cgst"])}</td>'
-                f'<td class="b-tr">{_f2(agg["sgst"])}</td>'
-                f'<td class="b-tr">{_f2(agg["igst"])}</td>'
-                f'<td class="b-tr">{_f2(agg["cgst"]+agg["sgst"]+agg["igst"])}</td></tr>'
-            )
-    else:
-        # Legacy (non-folio) bill: single accommodation row from already-computed
-        # bill-level totals (accom_base, cgst, sgst, igst).
-        if accom_base > 0 or (cgst+sgst+igst) > 0:
-            _tot_taxable += accom_base
-            _tot_cgst    += cgst
-            _tot_sgst    += sgst
-            _tot_igst    += igst
-            _rate_disp = f"{gst_rate_pct}%" if gst_rate_pct > 0 else "Exempt"
-            _tax_sum_rows.append(
-                f'<tr><td>996311</td><td>Accommodation</td>'
-                f'<td class="b-tr">{_rate_disp}</td>'
-                f'<td class="b-tr">{_f2(accom_base)}</td>'
-                f'<td class="b-tr">{_f2(cgst)}</td>'
-                f'<td class="b-tr">{_f2(sgst)}</td>'
-                f'<td class="b-tr">{_f2(igst)}</td>'
-                f'<td class="b-tr">{_f2(cgst+sgst+igst)}</td></tr>'
-            )
-
-    # Every non-accommodation service (water, laundry, cold drinks, …) —
-    # aggregate by (HSN/SAC, rate) inferred from the item name. Tax-inclusive
-    # pricing: taxable = gross / (1 + rate/100). Exempt items skipped.
-    # Water is NOT special-cased any more: infer_service_tax already maps it to
-    # HSN 2201 @ 5%, so it lands in this loop with everything else and the
-    # summary is built from one code path.
-    _by_other = {}
-    for _s in other_services:
-        _hsn, _r, _cat = infer_service_tax(_s)
-        if not _hsn or _r <= 0:
-            continue  # exempt / un-categorised — no tax row
-        _gross = float(_s.get("price", 0) or 0)
-        _tax_inc = _gross - (_gross / (1 + _r / 100.0))
-        _half_split = round(_tax_inc / 2, 2)
-        _key = (_hsn, _r, _cat)
-        if _key not in _by_other:
-            _by_other[_key] = {"taxable": 0.0, "cgst": 0.0, "sgst": 0.0,
-                               "igst": 0.0, "desc": _s.get("item", "Service")}
-        agg = _by_other[_key]
-        agg["taxable"] += (_gross / (1 + _r / 100.0))
-        if is_inter_state:
-            agg["igst"] += _tax_inc
-        else:
-            agg["cgst"] += _half_split
-            agg["sgst"] += _tax_inc - _half_split
-    for (_hsn, _r, _cat), agg in _by_other.items():
-        _tot_taxable += agg["taxable"]
-        _tot_cgst    += agg["cgst"]
-        _tot_sgst    += agg["sgst"]
-        _tot_igst    += agg["igst"]
-        # First service name in the bucket — short label for the row.
-        _label = agg["desc"]
-        _tax_sum_rows.append(
-            f'<tr><td>{_hsn}</td><td>{_label}</td>'
-            f'<td class="b-tr">{_r}%</td>'
-            f'<td class="b-tr">{_f2(agg["taxable"])}</td>'
-            f'<td class="b-tr">{_f2(agg["cgst"])}</td>'
-            f'<td class="b-tr">{_f2(agg["sgst"])}</td>'
-            f'<td class="b-tr">{_f2(agg["igst"])}</td>'
-            f'<td class="b-tr">{_f2(agg["cgst"]+agg["sgst"]+agg["igst"])}</td></tr>'
-        )
+    # ── Tax Summary by HSN/SAC — Rule 46(j)(k) ───────────────────────────────
+    # Built from config.bill_tax_breakup, the one rate-wise tax computation
+    # shared with the register payload and the GSTR-1 export. The invoice and
+    # the return therefore carry identical figures by construction.
+    #
+    # Rows are grouped by each night's OWN slab, so a stay that crosses a slab
+    # boundary prints one row per rate and Taxable x Rate reconciles to the tax
+    # on every line. Totals are the sum of the ROUNDED rows, so what is printed
+    # adds up to what is printed.
+    _breakup = bill_tax_breakup(b)
+    _tax_sum_rows = [
+        f'<tr><td>{_r["hsn"]}</td><td>{_r["description"]}</td>'
+        f'<td class="b-tr">{str(_r["rate"]) + "%" if _r["rate"] > 0 else "Exempt"}</td>'
+        f'<td class="b-tr">{_f2(_r["taxable"])}</td>'
+        f'<td class="b-tr">{_f2(_r["cgst"])}</td>'
+        f'<td class="b-tr">{_f2(_r["sgst"])}</td>'
+        f'<td class="b-tr">{_f2(_r["igst"])}</td>'
+        f'<td class="b-tr">{_f2(_r["tax"])}</td></tr>'
+        for _r in _breakup["rows"]
+    ]
 
     if _tax_sum_rows:
         tax_summary_table = (
@@ -2851,11 +2974,11 @@ def _build_bill_html(b: dict) -> str:
             '</tr></thead><tbody>'
             + "".join(_tax_sum_rows)
             + f'<tr class="b-tax-sum-total"><td colspan="3" class="b-tr">Total</td>'
-            f'<td class="b-tr">{_f2(_tot_taxable)}</td>'
-            f'<td class="b-tr">{_f2(_tot_cgst)}</td>'
-            f'<td class="b-tr">{_f2(_tot_sgst)}</td>'
-            f'<td class="b-tr">{_f2(_tot_igst)}</td>'
-            f'<td class="b-tr">{_f2(_tot_cgst+_tot_sgst+_tot_igst)}</td></tr>'
+            f'<td class="b-tr">{_f2(_breakup["taxable"])}</td>'
+            f'<td class="b-tr">{_f2(_breakup["cgst"])}</td>'
+            f'<td class="b-tr">{_f2(_breakup["sgst"])}</td>'
+            f'<td class="b-tr">{_f2(_breakup["igst"])}</td>'
+            f'<td class="b-tr">{_f2(_breakup["tax"])}</td></tr>'
             '</tbody></table>'
         )
     else:
@@ -2863,14 +2986,7 @@ def _build_bill_html(b: dict) -> str:
 
     return f"""
 <div class="b-bill-wrap">
-  <div class="b-header-block">
-    <div class="b-lodge-name">CIBARA COMFORTS</div>
-    <div class="b-lodge-entity">A Unit of Cibara Enterprise</div>
-    <div class="b-lodge-sub">Opposite Bus Stand Road, Harihar, Karnataka - 577601</div>
-    <div class="b-lodge-sub">Ph: +91 9482831381</div>
-    <div class="b-gstin-bar">GSTIN: 29AAWFC1962B1Z9 &nbsp;.&nbsp; SAC: 9963 &nbsp;.&nbsp; Karnataka (KA - 29)</div>
-    <div class="b-title">TAX INVOICE</div>
-  </div>
+  {_letterhead("TAX INVOICE")}
   <table class="b-info-outer">
     <tr>
       <td class="b-info-col">
@@ -2885,7 +3001,7 @@ def _build_bill_html(b: dict) -> str:
         <div class="b-row"><span class="b-lbl">Check-out:</span> {_fmt_bill_dt(b.get("checkout_time"))}</div>
         <div class="b-row"><span class="b-lbl">Days Stayed:</span> {days}</div>
         <div class="b-row"><span class="b-lbl">Bill Date:</span> {bill_date}</div>
-        <div class="b-row"><span class="b-lbl">Place of Supply:</span> {rcpt_state} ({rcpt_state_code if rcpt_state_code.startswith('0') or rcpt_state_code.isdigit() else '29'} - {'IGST' if is_inter_state else 'CGST+SGST'})</div>
+        <div class="b-row"><span class="b-lbl">Place of Supply:</span> {PLACE_OF_SUPPLY_STATE} ({PLACE_OF_SUPPLY_CODE}) &ndash; CGST+SGST</div>
         <div class="b-row"><span class="b-lbl">Reverse Charge:</span> No</div>
       </td>
     </tr>
@@ -2895,7 +3011,7 @@ def _build_bill_html(b: dict) -> str:
     <thead>
       <tr>
         <th>Description</th><th class="b-tr">Qty</th>
-        <th class="b-tr">Rate (Rs.)</th><th class="b-tr">Amount (Rs.)</th>
+        <th class="b-tr">Rate (₹)</th><th class="b-tr">Amount (₹)</th>
       </tr>
     </thead>
     <tbody>
@@ -2910,7 +3026,7 @@ def _build_bill_html(b: dict) -> str:
       {discount_row}
       <tr class="b-grand">
         <td colspan="3" class="b-tr">GRAND TOTAL</td>
-        <td class="b-tr">Rs. {_f2(grand_total)}</td>
+        <td class="b-tr">₹ {_f2(grand_total)}</td>
       </tr>
     </tbody>
   </table>
@@ -2919,25 +3035,20 @@ def _build_bill_html(b: dict) -> str:
     <div class="b-pay-title">Payment Details</div>
     <table class="b-tbl">
       <tbody>
-        <tr><td>Cash Paid</td><td class="b-tr">Rs. {_f2(cash_paid)}</td></tr>
-        <tr><td>Online / UPI Paid</td><td class="b-tr">Rs. {_f2(online_paid)}</td></tr>
-        <tr class="b-subtotal"><td>Total Paid</td><td class="b-tr">Rs. {_f2(total_paid)}</td></tr>
+        <tr><td>Cash Paid</td><td class="b-tr">₹ {_f2(cash_paid)}</td></tr>
+        <tr><td>Online / UPI Paid</td><td class="b-tr">₹ {_f2(online_paid)}</td></tr>
+        {ota_paid_row}
+        <tr class="b-subtotal"><td>Total Paid</td><td class="b-tr">₹ {_f2(total_paid)}</td></tr>
         {refund_rows}
         {balance_row}
-        {paid_full_row}
+        {overpaid_row}
       </tbody>
     </table>
   </div>
-  <table class="b-sig">
-    <tr>
-      <td><div class="b-sig-line">Guest Signature</div></td>
-      <td style="text-align:right"><div class="b-sig-line">Authorised Signatory</div></td>
-    </tr>
-  </table>
-  <div class="b-footer">
-    <p>Thank you for staying at Cibara Comforts. We look forward to welcoming you again!</p>
-    <p>This is a computer-generated invoice.</p>
-  </div>
+  {_signature_block("Guest Signature")}
+  {_doc_footer(
+      "Thank you for staying at Cibara Comforts. We look forward to welcoming you again!",
+      "This is a computer-generated invoice.")}
 </div>"""
 
 
@@ -2964,7 +3075,10 @@ def auto_generate_bill_pdf(bill_id: str, bill_record: dict):
             logger.info(f"[auto_pdf] Bill {bill_id} pdf_url points to the dead "
                         f"shared bills/-/ folder — regenerating.")
 
-        html_body  = _build_bill_html(bill_record)
+        # Consolidated, same as /render_bill_pdf — a PDF minted automatically at
+        # checkout must be indistinguishable from one regenerated later from the
+        # modal, or the guest's copy would depend on which path happened to run.
+        html_body  = _build_bill_html(bill_record, view="consolidated")
         full_html  = _build_pdf_html(html_body)
 
         from xhtml2pdf import pisa
@@ -3116,19 +3230,23 @@ def _build_pdf_html(html_body: str) -> str:
 @billing_bp.route("/render_bill_pdf", methods=["POST"])
 def render_bill_pdf():
     """
-    Server-side HTML->PDF using xhtml2pdf, upload to Storage, return URL.
+    Render a bill to PDF via xhtml2pdf, upload to Storage, return the URL.
 
-    Two modes:
+    The PDF is ALWAYS rendered server-side from `_build_bill_html`, pinned to
+    the Consolidated view. Callers pass only `bill_id` (plus optional `force`).
 
-    1. **Client-rendered** (legacy): client builds the bill HTML in JS and
-       POSTs `html_content` + `bill_id`. Server wraps in the PDF chrome and
-       converts to PDF. Used by the Bills tab's in-browser preview path.
+    A `html_content` field used to be accepted, letting the browser supply its
+    own rendering of the bill. That is deliberately no longer honoured. It was
+    the source of the layout split this endpoint now prevents: the Bills tab
+    POSTed its own `buildBillHTML` output, so the PDF saved to Storage — and
+    therefore the invoice sent to the guest on WhatsApp — was drawn by a
+    different renderer than the one behind the modal the operator printed from.
+    Requests still carrying `html_content` are served correctly; the field is
+    just ignored, and logged once so any stale client can be tracked down.
 
-    2. **Server-rendered** (new): client POSTs just `bill_id` (with optional
-       `force: true`). Server fetches the bill record from Firestore, calls
-       `_build_bill_html` directly, and converts. Used when the client doesn't
-       have an up-to-date renderer — e.g. force-regenerating an old bill so it
-       picks up the new per-night folio layout.
+    Consolidated is pinned rather than following the operator's toggle so a
+    guest always receives the same layout, and so a bill maps to exactly one
+    stored PDF regardless of who generated it.
 
     `force: true` bypasses the "skip if pdf_url exists" guard so the new PDF
     overwrites the cached one in Firebase Storage.
@@ -3137,8 +3255,13 @@ def render_bill_pdf():
         data        = request.json or {}
         bill_id     = (data.get("bill_id") or "").strip()
         bill_number = (data.get("bill_number") or data.get("invoice_no") or "").strip()
-        html_body   = (data.get("html_content") or "").strip()
         force       = bool(data.get("force"))
+
+        if (data.get("html_content") or "").strip():
+            logger.warning(
+                "render_bill_pdf: ignoring html_content from a stale client "
+                f"(bill {bill_id}) — the PDF is rendered server-side."
+            )
 
         if not bill_id:
             return jsonify(success=False, message="bill_id is required"), 400
@@ -3159,25 +3282,24 @@ def render_bill_pdf():
         # (overwritten + token rotated → 403); fall through and regenerate.
         if "bills%2F-%2F" in existing_url:
             existing_url = ""
-        if existing_url and not force and not html_body:
-            # No fresh HTML to render and force not requested — return cached.
+        if existing_url and not force:
+            # A PDF already exists and no regeneration was requested. Reuse it
+            # so repeat shares of an unchanged bill don't archive a new version
+            # on every send.
             logger.info(f"render_bill_pdf: PDF already exists for {bill_id}, skipping")
             return jsonify(success=True, pdf_url=existing_url,
                            version=None, skipped=True)
 
         # ── Build the HTML body ───────────────────────────────────────────────
-        # If the caller passed pre-built HTML, use it (client-rendered mode).
-        # Otherwise build it server-side from the bill record — this is the
-        # path that picks up the latest _build_bill_html (per-night folio,
-        # IGST routing, etc.) when force-regenerating an existing bill.
-        if not html_body:
-            try:
-                html_body = _build_bill_html(bill_data)
-            except Exception as _be:
-                logger.error(f"render_bill_pdf: _build_bill_html failed for "
-                             f"{bill_id}: {_be}", exc_info=True)
-                return jsonify(success=False,
-                               message=f"HTML build failed: {_be}"), 500
+        # One renderer, Consolidated pinned. See the docstring for why client
+        # HTML is not accepted here.
+        try:
+            html_body = _build_bill_html(bill_data, view="consolidated")
+        except Exception as _be:
+            logger.error(f"render_bill_pdf: _build_bill_html failed for "
+                         f"{bill_id}: {_be}", exc_info=True)
+            return jsonify(success=False,
+                           message=f"HTML build failed: {_be}"), 500
 
         try:
             from xhtml2pdf import pisa
@@ -3212,7 +3334,7 @@ def render_bill_pdf():
             logger.warning(f"render_bill_pdf: failed to stamp pdf_url on {bill_id}: {_ue}")
         return jsonify(success=True, pdf_url=upload["url"], version=upload["version"],
                        message=f"PDF v{upload['version']} generated successfully",
-                       mode="client" if (data.get("html_content") or "").strip() else "server")
+                       mode="server")
 
     except Exception as e:
         logger.error(f"render_bill_pdf error: {str(e)}", exc_info=True)
@@ -3914,6 +4036,19 @@ def get_credit_note(cn_id):
 
 
 def _build_credit_note_html(cn: dict, original_bill=None) -> str:
+    """Section 34 credit note.
+
+    A credit note is a legally distinct document from a tax invoice, so it has
+    its own body — but it shares the letterhead, signature block and footer
+    helpers with _build_bill_html so the two can never drift apart again. It
+    previously carried its own copy of the supplier block, which had already
+    lost the phone line and used different separators.
+
+    Tax heads follow the original invoice: ALWAYS CGST+SGST. A credit note
+    reverses the liability created by the invoice, so routing it to IGST when
+    the recipient happens to sit outside Karnataka would reverse a head that
+    was never charged. See the place-of-supply note in _build_bill_html.
+    """
     cn_no   = cn.get("cn_number") or "N/A"
     cn_date = cn.get("cn_date") or "-"
     against_bill_no   = cn.get("against_bill_number") or "-"
@@ -3922,26 +4057,24 @@ def _build_credit_note_html(cn: dict, original_bill=None) -> str:
     reason_text       = cn.get("reason_text") or ""
     rcpt_gstin        = (cn.get("recipient_gstin") or "").strip()
     rcpt_legal_name   = cn.get("recipient_legal_name") or cn.get("guest_name") or ""
-    rcpt_state        = cn.get("recipient_state") or "Karnataka"
-    rcpt_state_code   = cn.get("recipient_state_code") or "29"
+    rcpt_state        = cn.get("recipient_state") or PLACE_OF_SUPPLY_STATE
+    rcpt_state_code   = (cn.get("recipient_state_code") or PLACE_OF_SUPPLY_CODE)
 
     taxable = float(cn.get("credit_amount_taxable") or 0)
-    cgst    = float(cn.get("credit_amount_cgst") or 0)
-    sgst    = float(cn.get("credit_amount_sgst") or 0)
-    igst    = float(cn.get("credit_amount_igst") or 0)
     total   = float(cn.get("credit_amount_total") or 0)
     rate    = int(cn.get("gst_rate") or 0)
     sac_hsn = cn.get("sac_or_hsn") or "9963"
 
-    # Inter-state CN? Mirror the bill's tax-head routing: if the recipient is
-    # outside Karnataka, the credit is to IGST rather than CGST+SGST. For
-    # legacy CNs created before the credit_amount_igst field existed, fall
-    # back to treating (cgst + sgst) as the IGST when state is non-KA.
-    is_inter_state_cn = (rcpt_state_code or "29") != "29"
-    if is_inter_state_cn and igst == 0 and (cgst + sgst) > 0:
-        igst = cgst + sgst
-        cgst = 0.0
-        sgst = 0.0
+    # Fold any legacy IGST back into CGST+SGST. Some credit notes were written
+    # while the renderer still branched on the recipient's state, so the stored
+    # split can name a head the original invoice never charged.
+    cgst = float(cn.get("credit_amount_cgst") or 0)
+    sgst = float(cn.get("credit_amount_sgst") or 0)
+    igst = float(cn.get("credit_amount_igst") or 0)
+    if igst > 0:
+        cgst = round(igst / 2, 2)
+        sgst = round(igst - cgst, 2)
+        igst = 0.0
 
     recipient_block = ""
     if rcpt_gstin:
@@ -3949,7 +4082,7 @@ def _build_credit_note_html(cn: dict, original_bill=None) -> str:
             f'<table class="b-info-outer" style="margin-top:6px;">'
             f'<tr><td class="b-info-col" colspan="2" style="background:#f8f9fc;">'
             f'<div class="b-row" style="font-weight:bold;color:#1a1a1a;">'
-            f'BILL TO (Recipient - Registered)</div>'
+            f'BILL TO (Recipient &mdash; Registered)</div>'
             f'<div class="b-row"><span class="b-lbl">Legal Name:</span> {rcpt_legal_name}</div>'
             f'<div class="b-row"><span class="b-lbl">GSTIN:</span> {rcpt_gstin}</div>'
             f'<div class="b-row"><span class="b-lbl">State:</span> {rcpt_state} ({rcpt_state_code})</div>'
@@ -3966,13 +4099,7 @@ def _build_credit_note_html(cn: dict, original_bill=None) -> str:
 
     return (
         f'<div class="b-bill-wrap">'
-        f'<div class="b-header-block">'
-        f'<div class="b-lodge-name">CIBARA COMFORTS</div>'
-        f'<div class="b-lodge-entity">A Unit of Cibara Enterprise</div>'
-        f'<div class="b-lodge-sub">Opposite Bus Stand Road, Harihar, Karnataka - 577601</div>'
-        f'<div class="b-gstin-bar">GSTIN: 29AAWFC1962B1Z9 . SAC: 9963 . Karnataka (KA - 29)</div>'
-        f'<div class="b-title">CREDIT NOTE</div>'
-        f'</div>'
+        + _letterhead("CREDIT NOTE") +
         f'<table class="b-info-outer">'
         f'<tr>'
         f'<td class="b-info-col">'
@@ -3985,38 +4112,30 @@ def _build_credit_note_html(cn: dict, original_bill=None) -> str:
         f'<div class="b-row"><span class="b-lbl">Guest Name:</span> {cn.get("guest_name","")}</div>'
         f'<div class="b-row"><span class="b-lbl">Room:</span> {cn.get("room","")}</div>'
         f'<div class="b-row"><span class="b-lbl">Reason:</span> {reason.replace("_"," ").title()}</div>'
-        f'<div class="b-row"><span class="b-lbl">Place of Supply:</span> {rcpt_state} ({rcpt_state_code}) - {"IGST" if is_inter_state_cn else "CGST+SGST"}</div>'
+        f'<div class="b-row"><span class="b-lbl">Place of Supply:</span> '
+        f'{PLACE_OF_SUPPLY_STATE} ({PLACE_OF_SUPPLY_CODE}) &ndash; CGST+SGST</div>'
         f'</td>'
         f'</tr></table>'
         f'{recipient_block}'
         f'<table class="b-tbl">'
-        f'<thead><tr><th>Description</th><th class="b-tr">Amount (Rs.)</th></tr></thead>'
+        f'<thead><tr><th>Description</th><th class="b-tr">Amount (₹)</th></tr></thead>'
         f'<tbody>'
-        f'<tr class="b-sec"><td colspan="2">CREDIT (Reversal of Output Tax - Section 34 CGST Act)</td></tr>'
+        f'<tr class="b-sec"><td colspan="2">CREDIT (Reversal of Output Tax &mdash; Section 34 CGST Act)</td></tr>'
         f'<tr><td>Taxable Value Reversed (SAC: {sac_hsn})</td>'
         f'<td class="b-tr" style="color:#c62828;">- {_f2(taxable)}</td></tr>'
-        + (
-            f'<tr class="b-gst-row"><td>IGST @ {rate}%</td>'
-            f'<td class="b-tr" style="color:#c62828;">- {_f2(igst)}</td></tr>'
-            if is_inter_state_cn else
-            f'<tr class="b-gst-row"><td>CGST @ {rate/2:.1f}%</td>'
-            f'<td class="b-tr" style="color:#c62828;">- {_f2(cgst)}</td></tr>'
-            f'<tr class="b-gst-row"><td>SGST @ {rate/2:.1f}%</td>'
-            f'<td class="b-tr" style="color:#c62828;">- {_f2(sgst)}</td></tr>'
-        ) +
+        f'<tr class="b-gst-row"><td>CGST @ {rate/2:.1f}%</td>'
+        f'<td class="b-tr" style="color:#c62828;">- {_f2(cgst)}</td></tr>'
+        f'<tr class="b-gst-row"><td>SGST @ {rate/2:.1f}%</td>'
+        f'<td class="b-tr" style="color:#c62828;">- {_f2(sgst)}</td></tr>'
         f'<tr class="b-grand"><td class="b-tr">TOTAL CREDIT</td>'
-        f'<td class="b-tr" style="color:#c62828;">- Rs. {_f2(total)}</td></tr>'
+        f'<td class="b-tr" style="color:#c62828;">- ₹ {_f2(total)}</td></tr>'
         f'</tbody></table>'
         f'{reason_box}'
-        f'<table class="b-sig">'
-        f'<tr>'
-        f'<td><div class="b-sig-line">Recipient Acknowledgement</div></td>'
-        f'<td style="text-align:right"><div class="b-sig-line">Authorised Signatory</div></td>'
-        f'</tr></table>'
-        f'<div class="b-footer">'
-        f'<p>Section 34 Credit Note - reduces output tax liability for the supplier.</p>'
-        f'<p>This is a computer-generated credit note.</p>'
-        f'</div></div>'
+        + _signature_block("Recipient Acknowledgement") +
+        _doc_footer(
+            "Section 34 Credit Note &mdash; reduces output tax liability for the supplier.",
+            "This is a computer-generated credit note.")
+        + '</div>'
     )
 
 

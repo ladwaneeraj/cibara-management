@@ -884,141 +884,102 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
     return document.getElementById(id);
   }
 
-  // ── GST rates per 55th GST Council (effective 22 Sep 2025), SAC 9963 ─────────
-  // < ₹1,000/night  → Exempt (0%)
-  // ₹1,000–₹7,500   → 5%  (CGST 2.5% + SGST 2.5%) — no ITC
-  // > ₹7,500/night  → 18% (CGST 9%   + SGST 9%)   — ITC available
-  function gstAmounts(ratePerNight, days) {
-    const total = (ratePerNight || 0) * (days || 1);
-    if (ratePerNight > 7500) {
-      const base = total / 1.18;
-      const gst = total - base;
-      return {
-        base,
-        cgst: gst / 2,
-        sgst: gst / 2,
-        total,
-        cgstRate: 9,
-        sgstRate: 9,
-      };
-    } else if (ratePerNight >= 1000) {
-      const base = total / 1.05;
-      const gst = total - base;
-      return {
-        base,
-        cgst: gst / 2,
-        sgst: gst / 2,
-        total,
-        cgstRate: 2.5,
-        sgstRate: 2.5,
-      };
+  // ══════════════════════════════════════════════════════════════════════════
+  // TAX FIGURES — read from the server, never recomputed here
+  // ──────────────────────────────────────────────────────────────────────────
+  // This module used to carry gstAmounts / waterGst / accomGst /
+  // accomTaxFromEntry and derive GST in the browser from room_rent x days.
+  // Everything downstream — the tally, the bills table, and the GSTR-1 export
+  // workbook the CA files — was built from that derivation, independently of
+  // the invoice the guest was actually given. It was wrong in ways that
+  // mattered:
+  //
+  //   • A stay crossing a slab boundary (a 1,150 night at 5% plus a 950 night
+  //     that is exempt) was collapsed onto ONE representative rate, producing
+  //     a GSTR-1 row where Taxable x Rate did not equal the tax.
+  //   • A room transfer multiplied the CURRENT room's rate by the whole stay
+  //     length, inventing a value of supply that never existed.
+  //   • An accommodation add-on was taxed at the slab picked from the bare
+  //     room rate, so 900 room + 300 extra bed came out exempt when the real
+  //     value of supply was 1,200 and attracted 5%.
+  //   • Only the literal word "water" was ever taxed; laundry at 18% and cold
+  //     drinks at 12% printed a rate on the invoice and contributed nothing.
+  //
+  // The server now ships `tax_breakup` on every register entry, computed by
+  // config.bill_tax_breakup from the stored per-night folio — the same call
+  // that builds the invoice's HSN/SAC summary. Read it; do not second-guess it.
+
+  // Empty breakup — used for cancelled bills and for any entry an older
+  // server build did not stamp.
+  const EMPTY_TAX = { rows: [], taxable: 0, cgst: 0, sgst: 0, igst: 0,
+                      tax: 0, exempt_value: 0, source: "none" };
+
+  /**
+   * Authoritative tax figures for one register entry.
+   *
+   * Returns the server's breakup plus a few convenience totals:
+   *   rows        rate-wise rows: {hsn, description, rate, taxable, cgst,
+   *               sgst, igst, tax, category}
+   *   accomTax / serviceTax   tax split by category
+   *   accomTaxable / serviceTaxable
+   *
+   * A cancelled bill contributes nothing: the stored aggregates are NOT
+   * cleared on revert, so reading them without this guard kept printing tax
+   * against a CANCELLED row.
+   */
+  function billTax(e) {
+    const empty = { ...EMPTY_TAX, rows: [], accomTax: 0, serviceTax: 0,
+                    accomTaxable: 0, serviceTaxable: 0 };
+    if (!e || e.status === "cancelled") return empty;
+
+    const bt = e.tax_breakup;
+    if (!bt || !Array.isArray(bt.rows)) {
+      // Older server build, or a payload that predates tax_breakup. Report
+      // zero rather than guessing — a silent wrong number in a GST return is
+      // worse than a visible zero, and the console line says why.
+      if (!billTax._warned) {
+        billTax._warned = true;
+        console.warn("[Bills] entry has no tax_breakup from the server; " +
+                     "tax figures will read 0. Server needs redeploying.");
+      }
+      return empty;
     }
-    return { base: total, cgst: 0, sgst: 0, total, cgstRate: 0, sgstRate: 0 };
-  }
 
-  /**
-   * Calculates GST for packaged drinking water (HSN 2201, 5% inclusive/MRP).
-   * Only services where item contains "water" AND accommodation_charge != true.
-   * Returns { mrp, taxable, cgst, sgst, qty }
-   */
-  function waterGst(services) {
-    let mrp = 0, taxable = 0, cgst = 0, sgst = 0, qty = 0;
-    (services || [])
-      .filter(s => (s.item || '').toLowerCase().includes('water') && !s.accommodation_charge)
-      .forEach(w => {
-        const p = parseFloat(w.price || 0);
-        const t = p / 1.05;
-        const g = p - t;
-        mrp      += p;
-        taxable  += t;
-        cgst     += g / 2;
-        sgst     += g / 2;
-        qty      += parseFloat(w.quantity || 1);
-      });
-    return { mrp, taxable, cgst, sgst, qty };
-  }
+    const rows = bt.rows;
+    const sum = (pred, key) => rows.reduce(
+      (acc, r) => acc + (pred(r) ? Number(r[key] || 0) : 0), 0);
+    const isAccom = (r) => r.category === "accommodation";
+    const isSvc   = (r) => r.category !== "accommodation";
 
-  /**
-   * Calculates total accommodation GST (room + accommodation_charge add-ons).
-   * Extra bed, AC etc. (accommodation_charge=true) are taxed at same slab as room.
-   * Returns { taxable, cgst, sgst, cgstRate }
-   */
-  function accomGst(e, days) {
-    const rate = e.room_rent || e.room_price_per_night || 0;
-    const { base, cgst, sgst, cgstRate } = gstAmounts(rate, days);
-    // Add accommodation add-ons (extra bed, AC) — same slab
-    let accomAddonBase = 0, accomCgst = 0, accomSgst = 0;
-    (e.services || [])
-      .filter(s => s.accommodation_charge && !(s.item || '').toLowerCase().includes('water'))
-      .forEach(s => {
-        const p = parseFloat(s.price || 0);
-        if (cgstRate > 0) {
-          const rate2 = cgstRate * 2; // total %
-          const divisor = 1 + rate2 / 100;
-          const b = p / divisor;
-          accomAddonBase += b;
-          accomCgst += (p - b) / 2;
-          accomSgst += (p - b) / 2;
-        } else {
-          accomAddonBase += p;
-        }
-      });
     return {
-      taxable: base + accomAddonBase,
-      cgst: cgst + accomCgst,
-      sgst: sgst + accomSgst,
-      cgstRate,
+      ...bt,
+      rows,
+      accomTax:       sum(isAccom, "tax"),
+      serviceTax:     sum(isSvc,   "tax"),
+      accomTaxable:   sum(isAccom, "taxable"),
+      serviceTaxable: sum(isSvc,   "taxable"),
     };
   }
 
-  /**
-   * Authoritative accommodation tax figures for a register entry —
-   * Section 15(3)(a): the taxable value is NET of the on-invoice discount.
-   * Priority:
-   *   1. stored bill aggregates from create_bill_record (already net of
-   *      the discount share allocated to accommodation),
-   *   2. legacy recompute via accomGst(), then net out the proportional
-   *      accommodation discount share (mirrors the backend allocation).
-   * Same return shape as accomGst(): { taxable, cgst, sgst, cgstRate }.
-   */
-  function accomTaxFromEntry(e, days) {
-    const rate = e.room_rent || e.room_price_per_night || 0;
-    // Slab follows the pre-discount tariff (display fallback only).
-    const slabRate = typeof e.gst_rate === "number" ? e.gst_rate
-      : rate > 7500 ? 18 : rate >= 1000 ? 5 : 0;
-    if (typeof e.accommodation_taxable === "number" && e.accommodation_taxable > 0) {
-      const g = typeof e.gst_amount === "number" ? e.gst_amount : 0;
-      return {
-        taxable: e.accommodation_taxable,
-        cgst: g / 2,
-        sgst: g - g / 2,
-        cgstRate: slabRate / 2,
-      };
-    }
-    const gross = accomGst(e, days);
-    const discAll = Number(e.discounts || 0);
-    if (discAll <= 0) return gross;
-    const accomIncl = rate * (days || 1) + (e.services || [])
-      .filter(s => s.accommodation_charge && !(s.item || "").toLowerCase().includes("water"))
-      .reduce((s, x) => s + parseFloat(x.price || 0), 0);
-    const otherIncl = (e.services || [])
-      .filter(s => !s.accommodation_charge)
-      .reduce((s, x) => s + parseFloat(x.price || 0), 0);
-    const grossAll = accomIncl + otherIncl;
-    const accomDisc = grossAll > 0
-      ? Math.min(discAll * (accomIncl / grossAll), accomIncl) : 0;
-    const net = Math.max(accomIncl - accomDisc, 0);
-    // Slab follows the POST-discount value of supply per night
-    // (Section 15(3)(a); transaction-value basis) — mirrors
-    // config.compute_daily_folio.
-    const netPerNight = net / (days || 1);
-    const pct = netPerNight < 1000 ? 0 : netPerNight <= 7500 ? 5 : 18;
-    if (pct > 0) {
-      const base = net / (1 + pct / 100);
-      const g = net - base;
-      return { taxable: base, cgst: g / 2, sgst: g - g / 2, cgstRate: pct / 2 };
-    }
-    return { taxable: net, cgst: 0, sgst: 0, cgstRate: 0 };
+  // Value of supply carried at 0% on the ACCOMMODATION lines. `exempt_value`
+  // on the breakup pools exempt accommodation with exempt services; the
+  // export needs them apart so an exempt night is not reported as a service.
+  function _accomExemptValue(bt) {
+    return (bt.rows || [])
+      .filter((r) => r.category === "accommodation" && Number(r.rate || 0) <= 0)
+      .reduce((s, r) => s + Number(r.taxable || 0), 0);
+  }
+
+  // Rate actually charged on the accommodation lines, for display only.
+  // Returns "" when the stay spans more than one slab — printing a single
+  // number there would misrepresent the bill.
+  function accomRateLabel(e) {
+    const rates = [...new Set(billTax(e).rows
+      .filter((r) => r.category === "accommodation")
+      .map((r) => Number(r.rate || 0)))];
+    if (rates.length === 0) return "";
+    if (rates.length > 1) return "Mixed";
+    return rates[0] > 0 ? `${rates[0]}%` : "Exempt";
   }
 
   // ── GST month lock modal (admin) ──────────────────────────────────────────
@@ -1661,7 +1622,7 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
 </div>
 
 <!-- PDF Generation Overlay -->
-<div id="bl-pdf-gen-overlay">
+<div id="bl-pdf-gen-overlay" data-no-back>
   <div class="bl-pdf-spinner"></div>
   <div class="bl-pdf-overlay-text" id="bl-pdf-overlay-text">Generating PDF…</div>
   <div class="bl-pdf-overlay-sub">Please wait, this takes a few seconds</div>
@@ -1900,15 +1861,22 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
     // view is currently on screen.
     const vtBar = dom("bl-view-toggle");
     if (vtBar)
-      vtBar.addEventListener("click", (e) => {
+      vtBar.addEventListener("click", async (e) => {
         const btn = e.target.closest(".bl-vt-btn");
-        if (!btn || !_openBillData) return;
+        if (!btn || !_openBillId) return;
         const mode = btn.dataset.view;
         if (mode !== "detailed" && mode !== "consolidated") return;
-        const prevMode = resolveViewMode(_openBillData);
+        const prevMode = _openBillView;
         _billViewMode = mode;
         try { localStorage.setItem("cibara_bill_view", mode); } catch (_e) {}
-        if (mode !== prevMode) _renderOpenBill();
+        if (mode !== prevMode) {
+          try {
+            await _renderOpenBill(mode);
+          } catch (err) {
+            console.error("[Bills] view toggle re-render failed:", err);
+            return;   // leave the current view on screen rather than blanking it
+          }
+        }
         _syncViewToggle();
       });
 
@@ -2590,20 +2558,21 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
       // carry ZERO output tax and no collections — never count them.
       if (e.status === "cancelled") continue;
       live++;
+      // GST accrues on the INVOICE, not on collection. A bill with money
+      // still outstanding has already created the liability, so its tax is
+      // counted here. This used to `continue` before the tally, which meant
+      // the headline GST figure and the GSTR-1 export — which never skipped
+      // unpaid bills — disagreed by construction.
+      const bt = billTax(e);
+      totalAccomGst += bt.accomTax;
+      totalWaterGst += bt.serviceTax;
+
       if ((e.balance || 0) > 0) {
         pending++;
-        continue;
+        continue;               // still excluded from CASH/UPI collections
       }
       cash += e.payment_cash || 0;
       upi  += e.payment_online || 0;
-
-      // GST tally — only for fully paid entries
-      const days = e.days_stayed || calcDays(e.checkin_time, e.checkout_time);
-      const ag   = accomTaxFromEntry(e, days);
-      totalAccomGst += ag.cgst + ag.sgst;
-
-      const wg  = waterGst(e.services || []);
-      totalWaterGst += wg.cgst + wg.sgst;
     }
     const revenue = cash + upi;
     const totalGst = totalAccomGst + totalWaterGst;
@@ -2841,14 +2810,22 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
   }
 
   /**
-   * Generate bill PDF server-side (xhtml2pdf via Flask /render_bill_pdf).
-   * Sends the bill HTML fragment to the server; server adds CSS, converts to
-   * PDF bytes, uploads to Firebase Storage, and returns the download URL.
-   * No html2canvas, no DOM tricks, no blank-page issues.
+   * Generate the bill PDF and save it to Firebase Storage.
+   *
+   * The server renders it from `_build_bill_html` — the same function behind
+   * the modal — and uploads it. The browser deliberately sends NO html_content:
+   * this used to POST a locally-built `buildBillHTML(...)`, which is exactly
+   * why the stored PDF looked nothing like the modal the operator printed.
+   *
+   * Returns the Storage URL. That one stored artifact is what gets shared on
+   * WhatsApp; nothing re-renders the invoice a second time for the guest.
+   *
+   * `force` regenerates even when a PDF already exists — used by the Regenerate
+   * button after a bill has changed.
    */
   // silent=true → no overlay, no alert; used when auto-triggered after checkout.
-  async function generateAndUploadPDF(billId, billData, silent = false, viewMode) {
-    const folderNo = billData.bill_number || billId;
+  async function generateAndUploadPDF(billId, billData, silent = false, force = false) {
+    const folderNo = (billData && billData.bill_number) || billId;
 
     if (!silent) showPdfOverlay("Generating invoice PDF…");
 
@@ -2861,7 +2838,7 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
         body: JSON.stringify({
           bill_id: billId,
           bill_number: folderNo,
-          html_content: buildBillHTML(billData, viewMode),
+          force: !!force,
         }),
       });
 
@@ -3038,9 +3015,11 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
         if (myReq !== s._waReqSeq) return;   // a newer request already fired
         s.billData = data.bill;
       }
-      // viewMode is pinned to "consolidated" — the Detailed variant is never
-      // rendered here, so it can never be uploaded to Storage.
-      const url = await generateAndUploadPDF(s.billId, s.billData, true, "consolidated");
+      // The server pins Consolidated for every PDF, so the Detailed variant
+      // can never reach Storage or a guest regardless of the operator's toggle.
+      // `force` is passed through so Regenerate produces a fresh version rather
+      // than getting the cached URL back.
+      const url = await generateAndUploadPDF(s.billId, s.billData, true, force);
       if (myReq !== s._waReqSeq) return;     // a newer request already fired
       if (!url) throw new Error("PDF generation failed.");
       s.pdfUrl = url;
@@ -3268,12 +3247,17 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
 
     const billNo = e.bill_number || "-";
 
-    // GST summary cell — net of on-invoice discount (Section 15(3)(a))
-    const { cgst, sgst, cgstRate } = accomTaxFromEntry(e, days);
-    const gstTotal = cgst + sgst;
+    // GST cell — the bill's TOTAL output tax, straight from the server's
+    // breakup. It now includes service tax (laundry, water, cold drinks), so
+    // this column sums to the tally above it; it used to show accommodation
+    // only while the tally counted both. The rate label reads "Mixed" for a
+    // stay that spans slabs rather than picking one and misstating the rest.
+    const _bt = billTax(e);
+    const gstTotal = _bt.tax;
+    const _rateLabel = accomRateLabel(e);
     const gstCell =
       gstTotal > 0
-        ? `<span style="font-size:.73rem;">₹${inr(Math.round(gstTotal))}<br><span style="font-size:.65rem;color:#888;">${cgstRate * 2}% GST</span></span>`
+        ? `<span style="font-size:.73rem;">₹${inr(Math.round(gstTotal))}<br><span style="font-size:.65rem;color:#888;">${_rateLabel} GST</span></span>`
         : `<span style="color:#aaa;font-size:.73rem;">Exempt</span>`;
 
     // Source badge
@@ -3497,13 +3481,35 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
     if (_vm === "detailed" || _vm === "consolidated") _billViewMode = _vm;
   } catch (_e) { /* localStorage unavailable — use auto */ }
 
+  // Last view mode / collapsibility the server reported for the open bill.
+  // The browser no longer derives either: /bill_html decides, and returns both
+  // alongside the HTML it rendered.
+  let _openBillView = null;
+  let _openBillCollapsible = false;
+
   // (Re)render the open bill into the print area, keeping the inline
   // attribution banner. Called on open and whenever the view toggle changes.
-  function _renderOpenBill() {
+  //
+  // The bill HTML is FETCHED, not built here. `_build_bill_html` on the server
+  // is the only renderer, so the modal, Print, the stored PDF and the guest's
+  // WhatsApp copy are the same document. This function used to call a local
+  // buildBillHTML(), which is how the Bills tab came to print a different
+  // invoice than the one it uploaded to Storage.
+  async function _renderOpenBill(view) {
     const area = dom("bl-bill-print-area");
-    if (!area || !_openBillData) return;
-    area.innerHTML = buildBillHTML(_openBillData);
-    if (window.CibaraAttribution && _openBillId) {
+    if (!area || !_openBillId) return;
+
+    const qs = (view === "detailed" || view === "consolidated")
+      ? `?view=${view}` : "";
+    const res = await apiFetch(`/bill_html/${_openBillId}${qs}`);
+    const data = await res.json();
+    if (!data.success) throw new Error(data.message || "Could not render bill.");
+
+    area.innerHTML = data.html;
+    _openBillView = data.view;
+    _openBillCollapsible = !!data.collapsible;
+
+    if (window.CibaraAttribution) {
       const attrEl = document.createElement("div");
       attrEl.style.cssText = "margin: 0 0 10px 0;";
       area.insertBefore(attrEl, area.firstChild);
@@ -3513,18 +3519,16 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
 
   // Show the Detailed/Consolidated toggle only when the open bill has a
   // multi-night folio that can actually be consolidated, and highlight the
-  // button matching the resolved view mode.
+  // button matching the mode the server applied.
   function _syncViewToggle() {
     const bar = dom("bl-view-toggle");
     if (!bar) return;
-    const folio = Array.isArray(_openBillData && _openBillData.daily_folio)
-      ? _openBillData.daily_folio : [];
-    if (!folioIsCollapsible(folio)) {
+    if (!_openBillCollapsible) {
       bar.style.display = "none";
       return;
     }
     bar.style.display = "flex";
-    const mode = resolveViewMode(_openBillData);
+    const mode = _openBillView;
     const dBtn = dom("bl-vt-detailed");
     const cBtn = dom("bl-vt-consolidated");
     if (dBtn) dBtn.classList.toggle("bl-vt-active", mode === "detailed");
@@ -3553,17 +3557,22 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
 
     _openBillId = null;
     _openBillData = null;
+    _openBillView = null;
+    _openBillCollapsible = false;
 
     try {
+      // The bill record is still fetched: the action buttons (Save & Share,
+      // Recalculate, Edit Price) act on its fields. The rendered invoice comes
+      // separately from /bill_html so the browser never re-derives layout.
       const res = await apiFetch(`/generate_bill/${id}`);
       const data = await res.json();
       if (data.success) {
         _openBillId = id;
         _openBillData = data.bill;
-        // Render the bill body (Detailed/Consolidated per resolveViewMode)
-        // with its inline attribution banner, then show the view toggle
-        // when this stay has a folio that can be consolidated.
-        _renderOpenBill();
+        // Render the bill body with its inline attribution banner, then show
+        // the view toggle when the server reports a collapsible folio. Honour
+        // the operator's saved preference; null means let the server auto-pick.
+        await _renderOpenBill(_billViewMode);
         _syncViewToggle();
         if (saveBtn) {
           saveBtn.disabled = false;
@@ -3579,8 +3588,8 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
         }
       }
     } catch (err) {
-      // Surface the real error — bare `catch` was hiding render exceptions
-      // from buildBillHTML behind a generic "Network error" string.
+      // Surface the real error — a bare catch was hiding render failures
+      // behind a generic "Network error" string.
       console.error("[Bills] openBill failed:", err);
       const _msg = (err && (err.message || err.toString())) || "Network error";
       area.innerHTML = `<div class="bl-state" style="color:#c00"><i class="fas fa-times-circle"></i><p>${_msg}</p></div>`;
@@ -3592,853 +3601,26 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
   }
 
   // ══════════════════════════════════════════════════════════════════════════
-  // FOLIO VIEW MODES — Detailed vs Consolidated
+  // BILL RENDERING — server-side, deliberately not here
   // ──────────────────────────────────────────────────────────────────────────
-  // The bill stores one folio entry per night (b.daily_folio). The Detailed
-  // view itemises every night. The Consolidated view collapses consecutive
-  // add-on-free nights that share the same room, GST rate and nightly rate
-  // into a single room block, and shows ONLY the nights that carry extra
-  // items in full detail. Both views are pure renderings of the same stored
-  // data — nothing about storage or GST computation changes.
+  // This module used to carry its own buildBillHTML() plus the folio grouping
+  // helpers (folioNightKey / groupFolio / renderFolioNight / renderFolioRun)
+  // and a local consolidateServices(). All of it is gone.
+  //
+  // Those ~850 lines were one of FOUR copies of the same invoice layout, and
+  // they had drifted the furthest: block headers read "Night 1" against a raw
+  // 2026-08-06 date instead of "Day 1 — 6 Aug 2026 (Thu)", the SAC sub-line and
+  // the HSN/SAC Tax Summary table were missing entirely, and the headers were
+  // wrapped in U+2500 box-drawing characters that xhtml2pdf cannot render in
+  // WinAnsi — so every folio PDF sent to a guest showed filled black boxes.
+  // Because generateAndUploadPDF POSTed this renderer's output as
+  // html_content, that drifted layout was what got stored and shared, while
+  // the operator printed the Register tab's very different rendering.
+  //
+  // The bill HTML now comes from GET /bill_html, rendered by
+  // _build_bill_html in routes/billing.py. Change the invoice layout there and
+  // every surface — modal, Print, stored PDF, WhatsApp — moves together.
   // ══════════════════════════════════════════════════════════════════════════
-
-  // Grouping key for a collapsible night. Two consecutive plain nights merge
-  // only when room, GST slab and nightly rate all match — so a rate change,
-  // slab change or room transfer mid-stay correctly starts a new block.
-  function folioNightKey(e) {
-    return [
-      e.room || "",
-      Number(e.day_gst_rate || 0),
-      Number(e.base_rate || 0),
-    ].join("|");
-  }
-
-  // A night is "plain" (collapsible) only when it has no add-on line items.
-  // Any night with add-ons is always shown in full and breaks the run.
-  function folioNightHasExtras(e) {
-    return Array.isArray(e.addons) && e.addons.length > 0;
-  }
-
-  // Pure function: folio[] -> ordered blocks.
-  //   { kind: "run", entries: [...] }  — 2+ collapsible nights, one block
-  //   { kind: "day", entries: [one] }  — shown in full detail
-  // A run of a single night is emitted as a "day" (collapsing one night is
-  // pointless and would look inconsistent).
-  function groupFolio(folio) {
-    const blocks = [];
-    let run = [];
-    const flush = () => {
-      if (run.length === 0) return;
-      blocks.push({ kind: run.length >= 2 ? "run" : "day", entries: run });
-      run = [];
-    };
-    for (const e of folio) {
-      if (folioNightHasExtras(e)) {
-        flush();
-        blocks.push({ kind: "day", entries: [e] });
-        continue;
-      }
-      if (run.length > 0 && folioNightKey(run[0]) !== folioNightKey(e)) {
-        flush();
-      }
-      run.push(e);
-    }
-    flush();
-    return blocks;
-  }
-
-  // True when the Consolidated view would actually merge something — i.e.
-  // there is at least one run of 2+ collapsible nights. Drives whether the
-  // toggle is shown and what "auto" mode resolves to.
-  function folioIsCollapsible(folio) {
-    if (!Array.isArray(folio) || folio.length < 2) return false;
-    return groupFolio(folio).some((blk) => blk.kind === "run");
-  }
-
-  // Resolve the effective view mode for a bill. An explicit operator choice
-  // (stored in _billViewMode) always wins; otherwise "auto" — Consolidated
-  // when the stay has a collapsible run, Detailed when it does not.
-  function resolveViewMode(b) {
-    if (_billViewMode === "detailed" || _billViewMode === "consolidated") {
-      return _billViewMode;
-    }
-    const folio = Array.isArray(b && b.daily_folio) ? b.daily_folio : [];
-    return folioIsCollapsible(folio) ? "consolidated" : "detailed";
-  }
-
-  // Render ONE folio night in full detail (Night header, Room Rent, add-ons,
-  // taxable base, tax-head split, night total). Used by the Detailed view and
-  // for every add-on night inside the Consolidated view. Returns a <tr> string.
-  function renderFolioNight(e, b) {
-    const parts = [];
-    const di          = e.day_index || 1;
-    const diRoom      = e.room || (b && b.room) || "";
-    const diRate      = Number(e.day_gst_rate || 0);
-    const diDivisor   = diRate > 0 ? (1 + diRate / 100) : 1;
-    const diBase      = Number(e.base_rate || 0);
-    const diAddons    = Array.isArray(e.addons) ? e.addons : [];
-    const diTotal     = Number(e.day_total || 0);
-    const diTaxable   = Number(e.day_taxable || 0);
-    const diCgst      = Number(e.day_cgst || 0);
-    const diSgst      = Number(e.day_sgst || 0);
-    const diIgst      = Number(e.day_igst || 0);
-    const diDiscount  = Number(e.discount_allocated || 0);
-    const diStart     = e.day_start || "";
-
-    // Per-line discount allocation (proportional)
-    const diGrossPre = diBase + diAddons.reduce(
-      (s, a) => s + Number(a.price || 0), 0);
-    const baseDisc = (diDiscount > 0 && diGrossPre > 0)
-      ? diDiscount * (diBase / diGrossPre) : 0;
-    const baseEffGross = diBase - baseDisc;
-    const baseTaxable  = baseEffGross / diDivisor;
-
-    // ─ Night N · DATE · Rm X ─
-    parts.push(`<tr class="b-sec"><td colspan="4" style="text-align:center;">
-      ─ Night ${di} &nbsp;·&nbsp; ${diStart.slice(0, 10)} &nbsp;·&nbsp; Rm ${diRoom} ─
-    </td></tr>`);
-
-    parts.push(`<tr>
-      <td>Room Rent</td>
-      <td class="b-tr">1</td>
-      <td class="b-tr">${fix2(baseTaxable)}</td>
-      <td class="b-tr">${fix2(baseTaxable)}</td>
-    </tr>`);
-
-    for (const a of diAddons) {
-      const aGross = Number(a.price || 0);
-      const aUnit  = Number(a.unit_price || a.price || 0);
-      const aQty   = Number(a.quantity || 1);
-      const aDisc = (diDiscount > 0 && diGrossPre > 0)
-        ? diDiscount * (aGross / diGrossPre) : 0;
-      const aEffGross = aGross - aDisc;
-      const aTaxable  = aEffGross / diDivisor;
-      const aUnitTaxable = aUnit / diDivisor;
-      parts.push(`<tr>
-        <td>${a.item || "Service"}</td>
-        <td class="b-tr">${aQty}</td>
-        <td class="b-tr">${fix2(aUnitTaxable)}</td>
-        <td class="b-tr">${fix2(aTaxable)}</td>
-      </tr>`);
-    }
-
-    if (diDiscount > 0) {
-      parts.push(`<tr>
-        <td colspan="3" style="text-align:right;color:#2e7d32;font-weight:600;">
-          Less: Discount allocated to Night ${di}
-        </td>
-        <td class="b-tr" style="color:#2e7d32;font-weight:700;">− ${fix2(diDiscount)}</td>
-      </tr>`);
-    }
-
-    parts.push(`<tr class="b-gst-row">
-      <td>Taxable Base (excl. GST)</td>
-      <td class="b-tr">—</td><td class="b-tr">—</td>
-      <td class="b-tr">${fix2(diTaxable)}</td>
-    </tr>`);
-
-    if (diRate > 0 && diTaxable > 0) {
-      if (diIgst > 0) {
-        parts.push(`<tr class="b-gst-row">
-          <td>IGST @ ${diRate}%</td>
-          <td class="b-tr">—</td><td class="b-tr">—</td>
-          <td class="b-tr">${fix2(diIgst)}</td>
-        </tr>`);
-      } else {
-        const half = diRate / 2;
-        parts.push(`<tr class="b-gst-row">
-          <td>CGST @ ${half}%</td>
-          <td class="b-tr">—</td><td class="b-tr">—</td>
-          <td class="b-tr">${fix2(diCgst)}</td>
-        </tr>`);
-        parts.push(`<tr class="b-gst-row">
-          <td>SGST @ ${half}%</td>
-          <td class="b-tr">—</td><td class="b-tr">—</td>
-          <td class="b-tr">${fix2(diSgst)}</td>
-        </tr>`);
-      }
-    } else if (diRate === 0 && diTaxable > 0) {
-      parts.push(`<tr class="b-gst-row">
-        <td colspan="3" style="color:#888;">GST Exempt (per-night value &lt; ₹1,000)</td>
-        <td class="b-tr">0.00</td>
-      </tr>`);
-    }
-
-    parts.push(`<tr class="b-subtotal">
-      <td colspan="3" class="b-tr">Night ${di} Total (incl. GST)</td>
-      <td class="b-tr">${fix2(diTotal)}</td>
-    </tr>`);
-    return parts.join("");
-  }
-
-  // Render a run of consecutive add-on-free nights as ONE consolidated block.
-  // groupFolio guarantees every night in the run shares room, GST rate and
-  // nightly rate. All amounts are SUMMED from the stored per-night fields —
-  // never recomputed from rate × nights — so the consolidated total
-  // reconciles to the paisa with the Detailed view and the grand total.
-  function renderFolioRun(entries, b) {
-    const parts = [];
-    const n     = entries.length;
-    const first = entries[0];
-    const last  = entries[n - 1];
-    const room  = first.room || (b && b.room) || "";
-    const rate  = Number(first.day_gst_rate || 0);
-    const sum   = (k) => entries.reduce((s, e) => s + Number(e[k] || 0), 0);
-    const total    = sum("day_total");
-    const taxable  = sum("day_taxable");
-    const cgst     = sum("day_cgst");
-    const sgst     = sum("day_sgst");
-    const igst     = sum("day_igst");
-    const discount = sum("discount_allocated");
-    const d1 = (first.day_start || "").slice(0, 10);
-    const d2 = (last.day_start  || "").slice(0, 10);
-    const perNightTaxable = n ? taxable / n : 0;
-
-    // ─ Room Rent · DATE1 – DATE2 · N nights · Rm X ─
-    parts.push(`<tr class="b-sec"><td colspan="4" style="text-align:center;">
-      ─ Room Rent &nbsp;·&nbsp; ${d1} – ${d2} &nbsp;·&nbsp; ${n} nights &nbsp;·&nbsp; Rm ${room} ─
-    </td></tr>`);
-
-    parts.push(`<tr>
-      <td>Room Rent</td>
-      <td class="b-tr">${n}</td>
-      <td class="b-tr">${fix2(perNightTaxable)}</td>
-      <td class="b-tr">${fix2(taxable)}</td>
-    </tr>`);
-
-    if (discount > 0) {
-      parts.push(`<tr>
-        <td colspan="3" style="text-align:right;color:#2e7d32;font-weight:600;">
-          Less: Discount allocated to these ${n} nights
-        </td>
-        <td class="b-tr" style="color:#2e7d32;font-weight:700;">− ${fix2(discount)}</td>
-      </tr>`);
-    }
-
-    parts.push(`<tr class="b-gst-row">
-      <td>Taxable Base (excl. GST)</td>
-      <td class="b-tr">—</td><td class="b-tr">—</td>
-      <td class="b-tr">${fix2(taxable)}</td>
-    </tr>`);
-
-    if (rate > 0 && taxable > 0) {
-      if (igst > 0) {
-        parts.push(`<tr class="b-gst-row">
-          <td>IGST @ ${rate}%</td>
-          <td class="b-tr">—</td><td class="b-tr">—</td>
-          <td class="b-tr">${fix2(igst)}</td>
-        </tr>`);
-      } else {
-        const half = rate / 2;
-        parts.push(`<tr class="b-gst-row">
-          <td>CGST @ ${half}%</td>
-          <td class="b-tr">—</td><td class="b-tr">—</td>
-          <td class="b-tr">${fix2(cgst)}</td>
-        </tr>`);
-        parts.push(`<tr class="b-gst-row">
-          <td>SGST @ ${half}%</td>
-          <td class="b-tr">—</td><td class="b-tr">—</td>
-          <td class="b-tr">${fix2(sgst)}</td>
-        </tr>`);
-      }
-    } else if (rate === 0 && taxable > 0) {
-      parts.push(`<tr class="b-gst-row">
-        <td colspan="3" style="color:#888;">GST Exempt (per-night value &lt; ₹1,000)</td>
-        <td class="b-tr">0.00</td>
-      </tr>`);
-    }
-
-    parts.push(`<tr class="b-subtotal">
-      <td colspan="3" class="b-tr">Room Charges · ${d1} – ${d2} (${n} nights, incl. GST)</td>
-      <td class="b-tr">${fix2(total)}</td>
-    </tr>`);
-    return parts.join("");
-  }
-
-  // ── Bill HTML builder ─────────────────────────────────────────────────────────
-  // GST rates per 55th GST Council (eff. 22 Sep 2025) + Karnataka place of supply
-  // Always shows CGST and SGST rows — 0.00 when rate is exempt (tariff < ₹1,000).
-  // ── Service line consolidation ──────────────────────────────────────────────
-  // Merge repeat sales of the same item at the same unit price into a single
-  // row with summed quantity and amount. The unit price is part of the key on
-  // purpose: if an item was sold at two prices during the stay, merging on name
-  // alone would print one of the two rates against the combined amount and the
-  // row would not foot. Mirrors consolidateServices in register.js and
-  // _consolidate_services in routes/billing.py.
-  function consolidateServices(list) {
-    const grouped = new Map();
-    for (const s of (list || [])) {
-      let name = String(s.item || "Service").trim();
-      let qty = Number(s.quantity || 1);
-      if (!(qty > 0)) qty = 1;
-      // Older rows were saved with the quantity baked into the NAME
-      // ("Water 2L × 2") as well as in the quantity field, so the invoice
-      // printed it twice and two sales of the same item never merged. Strip
-      // the suffix; if the row also lost its quantity (qty 1 carrying a line
-      // price for N), adopt N so the row still foots.
-      const _m = name.match(/\s*[x\u00d7]\s*(\d+)\s*$/i);
-      if (_m) {
-        const _n = Number(_m[1]);
-        name = name.slice(0, _m.index).trim() || "Service";
-        if (qty <= 1 && _n > 1) qty = _n;
-      }
-      // Legacy rows carry no unit_price. Falling back to the LINE price printed
-      // the full line amount in the Rate column (qty 3 x "60.00" against an
-      // amount of 60.00), so the row did not foot and the rate on the invoice
-      // was wrong by a factor of qty. Derive it from the amount instead.
-      const unit = Number(s.unit_price != null ? s.unit_price : (Number(s.price || 0) / qty));
-      const key = `${name.toLowerCase()}|${unit.toFixed(2)}`;
-      const existing = grouped.get(key);
-      if (!existing) {
-        grouped.set(key, {
-          ...s,
-          item: name,
-          quantity: qty,
-          unit_price: unit,
-          price: Number(s.price || 0),
-        });
-      } else {
-        existing.quantity += qty;
-        existing.price    += Number(s.price || 0);
-      }
-    }
-    return [...grouped.values()];
-  }
-
-  function buildBillHTML(b, viewModeOverride) {
-    const days = b.days_stayed || calcDays(b.checkin_time, b.checkout_time);
-    const rate = b.room_price_per_night || b.room_rent || 0;
-
-    // ── Separate accommodation add-ons from other services ──────────────────────
-    // Both buckets are consolidated first: create_bill_record writes one entry
-    // per addon payment document, so three separate "Water 1L" sales arrive as
-    // three qty-1 entries. See consolidateServices for the keying rule.
-    const services = b.services || [];
-    const accomAddons = consolidateServices(services.filter((s) => s.accommodation_charge));
-    const otherServices = consolidateServices(services.filter((s) => !s.accommodation_charge));
-    const accomAddonsTotal = accomAddons.reduce(
-      (s, x) => s + (x.price || 0),
-      0,
-    );
-    const otherSvcTotal = otherServices.reduce((s, x) => s + (x.price || 0), 0);
-
-    // ── Water vs non-water split (water = GST 5% inclusive/MRP; others = non-taxable) ──
-    const waterServices    = otherServices.filter((s) => (s.item || "").toLowerCase().includes("water"));
-    const nonWaterServices = otherServices.filter((s) => !(s.item || "").toLowerCase().includes("water"));
-    const waterSvcTotal    = waterServices.reduce((s, x) => s + (x.price || 0), 0);
-    const nonWaterSvcTotal = nonWaterServices.reduce((s, x) => s + (x.price || 0), 0);
-
-    // ── GST calculation ──────────────────────────────────────────────────────────
-    // Use stored gst_rate from backend when available (includes accommodation add-ons
-    // in the taxable base). Fall back to on-the-fly calculation for older bills.
-    const gstRatePct =
-      typeof b.gst_rate === "number"
-        ? b.gst_rate
-        : rate > 7500
-          ? 18
-          : rate >= 1000
-            ? 5
-            : 0;
-    const cgstRate = gstRatePct / 2;
-    const sgstRate = gstRatePct / 2;
-
-    // Use stored room_charges_total when available — this is always correct,
-    // including when the room price changed mid-stay (room transfer or AC add-on).
-    // Fall back to rate × days only for old bills that pre-date this field.
-    const roomCharges = (typeof b.room_charges_total === "number" && b.room_charges_total > 0)
-      ? b.room_charges_total
-      : rate * days;
-    const accomTotal = roomCharges + accomAddonsTotal;
-
-    // GST display strategy:
-    // config.py now stores gst_amount using inclusive back-calculation AND
-    // per-segment logic (so room transfers with different slabs are correct).
-    // We TRUST the stored value — but old bills used the exclusive formula
-    // (rate/100 instead of rate/(100+rate)) producing a slightly higher number.
-    // Detect old bills: if stored value ≈ accomTotal × rate/100, it is the
-    // wrong exclusive formula → recalculate with inclusive formula.
-    // Otherwise (stored < exclusive result, e.g. room transfers with exempt
-    // segments, or already-correct inclusive bills) → use stored value.
-    let cgst, sgst, accomBase;
-    if (typeof b.gst_amount === "number" && gstRatePct > 0) {
-      const exclusiveGst = accomTotal * gstRatePct / 100;
-      const isOldExclusiveBill = Math.abs(b.gst_amount - exclusiveGst) < 0.10;
-      let gstAmt;
-      if (isOldExclusiveBill) {
-        // Old bill — recalculate correctly (inclusive back-calculation on full total)
-        gstAmt = accomTotal * gstRatePct / (100 + gstRatePct);
-      } else {
-        // New bill or room-transfer bill — trust stored per-segment value
-        gstAmt = b.gst_amount;
-      }
-      cgst      = gstAmt / 2;
-      sgst      = cgst;
-      accomBase = accomTotal - gstAmt;
-    } else if (gstRatePct > 0) {
-      // No stored value — back-calculate
-      const gstAmt = accomTotal * gstRatePct / (100 + gstRatePct);
-      cgst      = gstAmt / 2;
-      sgst      = cgst;
-      accomBase = accomTotal - gstAmt;
-    } else {
-      cgst = 0; sgst = 0; accomBase = accomTotal;
-    }
-
-    // ── Discount — recalculate GST on post-discount accommodation ────────────
-    // Sec 15(3)(a) CGST Act: pre-supply discounts reduce the taxable value.
-    // Prorate: discount applied to accommodation first, excess to services.
-    const discounts = b.discounts || 0;
-    const discountOnAccom   = Math.min(discounts, accomTotal);
-    const effectiveAccom    = accomTotal - discountOnAccom;  // post-discount base
-
-    // Recalculate GST on effective accommodation (overwrites earlier cgst/sgst)
-    if (gstRatePct > 0 && effectiveAccom > 0) {
-      const effGst = effectiveAccom * gstRatePct / (100 + gstRatePct);
-      cgst      = effGst / 2;
-      sgst      = cgst;
-      accomBase = effectiveAccom - effGst;
-    } else if (gstRatePct > 0 && effectiveAccom <= 0) {
-      cgst = 0; sgst = 0; accomBase = 0;
-    }
-    // (if gstRatePct == 0, cgst/sgst are already 0 from above)
-
-    const svcTotalAll = b.services_total || 0; // includes both types
-    const grandTotal = (typeof b.total_amount === "number" && b.total_amount > 0)
-      ? b.total_amount
-      : roomCharges + svcTotalAll - discounts;
-
-    // Payment
-    const cashPaid = b.payment_cash || 0;
-    const onlinePaid = b.payment_online || 0;
-    // OTA-settled (MMT prepaid the room; settles to the bank later). Counted
-    // as paid against the invoice so Total Paid reconciles with the grand
-    // total and the balance reads zero — but it is NOT a front-desk receipt.
-    const otaPaid = b.payment_ota || 0;
-    const refunds = b.refunds || 0;
-    const refundCash = b.refund_cash || 0;
-    const refundOnline = b.refund_online || 0;
-    const totalPaid = cashPaid + onlinePaid + otaPaid;
-    const netCollected = totalPaid - refunds;
-    const balance = b.balance || 0;
-
-    const displayBillNo = b.bill_number || "N/A";
-    const billDate = fmtBillDT(b.checkout_time);
-
-    // ── Accommodation add-on rows ────────────────────────────────────────────────
-    let accomAddonRows = accomAddons
-      .map(
-        (s) => `
-      <tr>
-        <td>${s.item}</td>
-        <td class="b-tr">${s.quantity || 1}</td>
-        <td class="b-tr">${fix2(s.unit_price || s.price || 0)}</td>
-        <td class="b-tr">${fix2(s.price || 0)}</td>
-      </tr>`,
-      )
-      .join("");
-
-    // ── Water service rows (GST 5% inclusive — show taxable value in Amount col) ──
-    // taxable_value = price / 1.05  (back-calculate from MRP — price does NOT change)
-    let waterCgst = 0, waterSgst = 0;
-    waterServices.forEach((s) => {
-      const wGst = (s.price || 0) - (s.price || 0) / 1.05;
-      waterCgst += wGst / 2;
-      waterSgst += wGst / 2;
-    });
-    const waterRows = waterServices
-      .map((s) => `
-      <tr>
-        <td>${s.item || "Water"}</td>
-        <td class="b-tr">${s.quantity || 1}</td>
-        <td class="b-tr">${fix2((s.unit_price || s.price || 0) / 1.05)}</td>
-        <td class="b-tr">${fix2((s.price || 0) / 1.05)}</td>
-      </tr>`)
-      .join("");
-    const waterSvcSection = waterRows
-      ? `<tr class="b-sec"><td colspan="4">Packaged Drinking Water (HSN: 2201)</td></tr>
-         ${waterRows}
-         <tr class="b-gst-row">
-           <td>CGST @ 2.5%</td>
-           <td class="b-tr">—</td><td class="b-tr">—</td>
-           <td class="b-tr">${fix2(waterCgst)}</td>
-         </tr>
-         <tr class="b-gst-row">
-           <td>SGST @ 2.5%</td>
-           <td class="b-tr">—</td><td class="b-tr">—</td>
-           <td class="b-tr">${fix2(waterSgst)}</td>
-         </tr>
-         <tr class="b-subtotal">
-           <td colspan="3" class="b-tr">Water Total (MRP, incl. GST)</td>
-           <td class="b-tr">${fix2(waterSvcTotal)}</td>
-         </tr>`
-      : "";
-
-    // ── Other services rows (non-water, non-taxable) ─────────────────────────────
-    const otherSvcRows = nonWaterServices
-      .map(
-        (s) => `
-      <tr>
-        <td>${s.item}</td>
-        <td class="b-tr">${s.quantity || 1}</td>
-        <td class="b-tr">${fix2(s.unit_price || s.price || 0)}</td>
-        <td class="b-tr">${fix2(s.price || 0)}</td>
-      </tr>`,
-      )
-      .join("");
-
-    // ── GST rows — recalculated post-discount (Sec 15(3)(a) CGST Act) ───────────
-    let gstRows;
-    if (gstRatePct > 0 && effectiveAccom > 0) {
-      // Normal: GST on net accommodation after discount
-      gstRows = `
-        <tr class="b-gst-row">
-          <td>CGST @ ${cgstRate}%</td>
-          <td class="b-tr">—</td><td class="b-tr">—</td>
-          <td class="b-tr">${fix2(cgst)}</td>
-        </tr>
-        <tr class="b-gst-row">
-          <td>SGST @ ${sgstRate}%</td>
-          <td class="b-tr">—</td><td class="b-tr">—</td>
-          <td class="b-tr">${fix2(sgst)}</td>
-        </tr>`;
-    } else if (gstRatePct > 0 && effectiveAccom <= 0) {
-      // Full discount — GST waived
-      gstRows = `
-        <tr class="b-gst-row">
-          <td colspan="3" style="color:#2e7d32;">GST Nil (Discount applied — Sec 15(3)(a) CGST Act)</td>
-          <td class="b-tr">0.00</td>
-        </tr>`;
-    } else {
-      // Exempt slab (< ₹1,000/night)
-      gstRows = `
-        <tr class="b-gst-row">
-          <td colspan="3" style="color:#888;">GST Exempt (Room rate below ₹1,000/night)</td>
-          <td class="b-tr">0.00</td>
-        </tr>`;
-    }
-
-    // Helper: GST slab for a given per-night price
-    function segGstRate(p) {
-      return p < 1000 ? 0 : p <= 7500 ? 5 : 18;
-    }
-    function segTaxable(totalIncl, price) {
-      const r = segGstRate(price);
-      return r > 0 ? totalIncl / (1 + r / 100) : totalIncl;
-    }
-
-    // ── Room Rent rows: pre-GST taxable values, one per segment for transfers ──
-    const roomSegments = b.room_segments || [];
-
-    // Detect format: new format has "room" key; old format has "from_room" key
-    const isNewFormat = roomSegments.length > 0 && "room" in roomSegments[0];
-    const isMultiRoom = (isNewFormat && roomSegments.length > 1)
-                     || (!isNewFormat && roomSegments.length > 0);
-
-    // Accommodation subtotal row (when add-ons, multi-day, or multi-room)
-    const accomSubtotalRow =
-      accomAddons.length > 0 || days > 1 || isMultiRoom
-        ? `<tr class="b-subtotal">
-           <td colspan="3" class="b-tr">Accommodation Total (incl. GST)</td>
-           <td class="b-tr">${fix2(accomTotal)}</td>
-         </tr>`
-        : "";
-
-    // Other services section (non-water, non-accommodation, non-taxable)
-    const otherSvcSection = otherSvcRows
-      ? `<tr class="b-sec"><td colspan="4">Additional Services (Non-Taxable)</td></tr>
-         ${otherSvcRows}
-         <tr class="b-subtotal">
-           <td colspan="3" class="b-tr">Services Total</td>
-           <td class="b-tr">${fix2(nonWaterSvcTotal)}</td>
-         </tr>`
-      : "";
-
-    let roomRentRows = "";
-    if (isNewFormat && roomSegments.length > 1) {
-      // NEW FORMAT — multi-room: render all segments from clean array
-      for (const seg of roomSegments) {
-        const segNights = seg.nights || 0;
-        if (segNights > 0) {
-          const segTax  = segTaxable(seg.total || 0, seg.rate || 0);
-          const segRate = segNights ? segTax / segNights : 0;
-          roomRentRows += `<tr>
-            <td>Room Rent – Rm ${seg.room || ""}</td>
-            <td class="b-tr">${segNights}</td>
-            <td class="b-tr">${fix2(segRate)}</td>
-            <td class="b-tr">${fix2(segTax)}</td>
-          </tr>`;
-        }
-      }
-    } else if (!isNewFormat && roomSegments.length > 0) {
-      // OLD FORMAT — backward compat for bills before this change
-      const currentRoomNo    = b.current_room || b.room || "";
-      const currentRoomDays  = b.current_room_days;
-      const currentRoomPrice = b.current_room_price;
-      const currentRoomTotal = b.current_room_total;
-      for (const seg of roomSegments) {
-        if ((seg.days || 0) > 0) {
-          const segTax  = segTaxable(seg.total || 0, seg.price || 0);
-          const segRate = seg.days ? segTax / seg.days : 0;
-          roomRentRows += `<tr>
-            <td>Room Rent – Rm ${seg.from_room || ""}</td>
-            <td class="b-tr">${seg.days}</td>
-            <td class="b-tr">${fix2(segRate)}</td>
-            <td class="b-tr">${fix2(segTax)}</td>
-          </tr>`;
-        }
-      }
-      if ((currentRoomDays || 0) > 0) {
-        const currTax  = segTaxable(currentRoomTotal || 0, currentRoomPrice || 0);
-        const currRate = currentRoomDays ? currTax / currentRoomDays : 0;
-        roomRentRows += `<tr>
-          <td>Room Rent – Rm ${currentRoomNo}</td>
-          <td class="b-tr">${currentRoomDays}</td>
-          <td class="b-tr">${fix2(currRate)}</td>
-          <td class="b-tr">${fix2(currTax)}</td>
-        </tr>`;
-      }
-    } else {
-      // Single-room stay — show pre-GST taxable base
-      roomRentRows = `<tr>
-        <td>Room Rent</td>
-        <td class="b-tr">${days}</td>
-        <td class="b-tr">${fix2(accomBase / (days || 1))}</td>
-        <td class="b-tr">${fix2(accomBase)}</td>
-      </tr>`;
-    }
-
-    // For add-on stays show a "Taxable Base" row so math is transparent
-    let taxableBaseRow = accomAddons.length > 0
-      ? `<tr class="b-gst-row">
-           <td>Taxable Base (excl. GST)</td>
-           <td class="b-tr">—</td><td class="b-tr">—</td>
-           <td class="b-tr">${fix2(accomBase)}</td>
-         </tr>`
-      : "";
-
-    // Discount row
-    const discountRow =
-      discounts > 0
-        ? `<tr>
-           <td colspan="3" style="text-align:right;color:#2e7d32;font-weight:600;">
-             Discount
-           </td>
-           <td class="b-tr" style="color:#2e7d32;font-weight:700;">− ${fix2(discounts)}</td>
-         </tr>`
-        : "";
-
-    // Round-off row — GST back-calculation can leave a ₹0.01 gap between
-    // (taxable_base + CGST + SGST) and the inclusive MRP. Show when ≥ ₹0.01.
-    const computedAccomSum = Math.round((accomBase + cgst + sgst) * 100) / 100;
-    const roundDiff = Math.round((effectiveAccom - computedAccomSum) * 100) / 100;
-    let roundOffRow = Math.abs(roundDiff) >= 0.01
-      ? `<tr class="b-gst-row">
-           <td colspan="3" style="text-align:right;color:#aaa;">Round-off</td>
-           <td class="b-tr" style="color:#aaa;">${roundDiff > 0 ? "+" : ""}${fix2(roundDiff)}</td>
-         </tr>`
-      : "";
-
-    // ── Inter-state detection (drives CGST+SGST vs IGST display) ────────────
-    const rcptStateCode = (b.recipient_state_code || "29").trim() || "29";
-    const isInterState  = rcptStateCode !== "29";
-    const rcptStateName = b.recipient_state || "Karnataka";
-
-    // ── Daily folio per-night rendering ─────────────────────────────────────
-    // When `b.daily_folio` is present (bills created post-folio-migration),
-    // render one section per night with its own room rent, addons, taxable
-    // base, tax-head split, and night total. Matches the backend PDF
-    // builder so the in-browser preview and the downloadable PDF are
-    // visually identical. Legacy bills without folio fall through to the
-    // single-block rendering above.
-    let accomSubtotalRowFinal = accomSubtotalRow;
-    const folio = Array.isArray(b.daily_folio) ? b.daily_folio : [];
-    if (folio.length > 0) {
-      // Detailed itemises every night; Consolidated collapses runs of
-      // add-on-free nights into one room block (see groupFolio) and shows
-      // only the days with extras in full. Both views sum to the identical
-      // Accommodation Total — all amounts come straight from the stored
-      // per-night folio fields, never recomputed.
-      const viewMode = viewModeOverride || resolveViewMode(b);
-
-      let allNightsTotal = 0;
-      for (const e of folio) allNightsTotal += Number(e.day_total || 0);
-
-      const folioParts = [];
-      if (viewMode === "consolidated") {
-        for (const blk of groupFolio(folio)) {
-          folioParts.push(
-            blk.kind === "run"
-              ? renderFolioRun(blk.entries, b)
-              : renderFolioNight(blk.entries[0], b),
-          );
-        }
-      } else {
-        for (const e of folio) folioParts.push(renderFolioNight(e, b));
-      }
-
-      // Override the legacy single-block accommodation rows
-      roomRentRows = folioParts.join("");
-      accomAddonRows = "";
-      taxableBaseRow = "";
-      gstRows = "";
-      roundOffRow = "";
-      accomSubtotalRowFinal = `<tr class="b-subtotal">
-        <td colspan="3" class="b-tr">Accommodation Total (all nights, incl. GST)</td>
-        <td class="b-tr">${fix2(allNightsTotal)}</td>
-      </tr>`;
-    }
-
-    return `
-<div class="b-bill-wrap">
-
-  <!-- ── Header ── -->
-  <div class="b-header-block">
-    <div class="b-lodge-name">CIBARA COMFORTS</div>
-    <div class="b-lodge-entity">A Unit of Cibara Enterprise</div>
-    <div class="b-lodge-sub">Opposite Bus Stand Road, Harihar, Karnataka – 577601</div>
-    <div class="b-lodge-sub">Ph: +91 9482831381</div>
-    <div class="b-gstin-bar">GSTIN: 29AAWFC1962B1Z9 &nbsp;·&nbsp; SAC: 9963 &nbsp;·&nbsp; Karnataka (KA – 29)</div>
-    <div class="b-title">TAX INVOICE</div>
-  </div>
-
-  <!-- ── Bill & Guest Info — HTML table so xhtml2pdf + browser both render identically ── -->
-  <table class="b-info-outer">
-    <tr>
-      <td class="b-info-col">
-        <div class="b-row"><span class="b-lbl">Bill No:</span> ${displayBillNo}</div>
-        <div class="b-row"><span class="b-lbl">Guest Name:</span> ${b.guest_name}</div>
-        <div class="b-row"><span class="b-lbl">Mobile:</span> ${b.guest_mobile || "N/A"}</div>
-        <div class="b-row"><span class="b-lbl">Room No:</span> ${b.room}</div>
-        <div class="b-row"><span class="b-lbl">Guests:</span> ${b.guest_count || 1}</div>
-      </td>
-      <td class="b-info-col b-info-col-r">
-        <div class="b-row"><span class="b-lbl">Check-in:</span> ${fmtBillDT(b.checkin_time)}</div>
-        <div class="b-row"><span class="b-lbl">Check-out:</span> ${fmtBillDT(b.checkout_time)}</div>
-        <div class="b-row"><span class="b-lbl">Days Stayed:</span> ${days}</div>
-        <div class="b-row"><span class="b-lbl">Bill Date:</span> ${billDate}</div>
-        <div class="b-row"><span class="b-lbl">Place of Supply:</span> ${rcptStateName} (${rcptStateCode}) − ${isInterState ? "IGST" : "CGST+SGST"}</div>
-      </td>
-    </tr>
-  </table>
-
-  ${(function() {
-    const it = b.invoice_type || "B2C";
-    const gstin = (b.recipient_gstin || "").trim();
-    const legal = (b.recipient_legal_name || "").trim();
-    const trade = (b.recipient_trade_name || "").trim();
-    const addr  = (b.recipient_address || "").trim();
-    const stN   = b.recipient_state || "Karnataka";
-    const stC   = b.recipient_state_code || "29";
-    if (it === "B2B" && gstin) {
-      return `
-  <table class="b-info-outer" style="margin-top:6px;">
-    <tr><td class="b-info-col" colspan="2" style="background:#f8f9fc;">
-      <div class="b-row" style="font-weight:bold;color:#1a1a1a;">BILL TO (Recipient — Registered)</div>
-      <div class="b-row"><span class="b-lbl">Legal Name:</span> ${legal}</div>
-      ${trade ? `<div class="b-row"><span class="b-lbl">Trade Name:</span> ${trade}</div>` : ""}
-      <div class="b-row"><span class="b-lbl">GSTIN:</span> ${gstin}</div>
-      ${addr  ? `<div class="b-row"><span class="b-lbl">Address:</span> ${addr.replace(/\n/g, ", ")}</div>` : ""}
-      <div class="b-row"><span class="b-lbl">State:</span> ${stN} (${stC})</div>
-      <div class="b-row" style="font-size:8.5pt;color:#666;margin-top:4px;">GST payable on reverse charge: No</div>
-    </td></tr>
-  </table>`;
-    }
-    if (it === "B2CL" && (addr || stN)) {
-      return `
-  <table class="b-info-outer" style="margin-top:6px;">
-    <tr><td class="b-info-col" colspan="2" style="background:#f8f9fc;">
-      <div class="b-row" style="font-weight:bold;color:#1a1a1a;">BILL TO (Recipient — Unregistered, Inter-State)</div>
-      ${addr ? `<div class="b-row"><span class="b-lbl">Address:</span> ${addr.replace(/\n/g, ", ")}</div>` : ""}
-      <div class="b-row"><span class="b-lbl">State:</span> ${stN} (${stC})</div>
-    </td></tr>
-  </table>`;
-    }
-    return "";
-  })()}
-
-  <!-- ── Items Table ── -->
-  <table class="b-tbl">
-    <thead>
-      <tr>
-        <th>Description</th>
-        <th class="b-tr">Qty</th>
-        <th class="b-tr">Rate (₹)</th>
-        <th class="b-tr">Amount (₹)</th>
-      </tr>
-    </thead>
-    <tbody>
-      <tr class="b-sec"><td colspan="4">Accommodation Charges (SAC: 9963)</td></tr>
-      ${roomRentRows}
-      ${accomAddonRows}
-      ${taxableBaseRow}
-      ${gstRows}
-      ${roundOffRow}
-      ${accomSubtotalRowFinal}
-      ${waterSvcSection}
-      ${otherSvcSection}
-      ${discountRow}
-      <tr class="b-grand">
-        <td colspan="3" class="b-tr">GRAND TOTAL</td>
-        <td class="b-tr">₹ ${fix2(grandTotal)}</td>
-      </tr>
-    </tbody>
-  </table>
-
-  <!-- ── Payment Summary ── -->
-  <div class="b-pay-section">
-    <div class="b-pay-title">Payment Details</div>
-    <table class="b-tbl">
-      <tbody>
-        <tr><td>Cash Paid</td><td class="b-tr">₹ ${fix2(cashPaid)}</td></tr>
-        <tr><td>Online / UPI Paid</td><td class="b-tr">₹ ${fix2(onlinePaid)}</td></tr>
-        ${otaPaid > 0 ? `<tr><td>Paid via MMT (OTA)</td><td class="b-tr">₹ ${fix2(otaPaid)}</td></tr>` : ""}
-        <tr class="b-subtotal"><td>Total Paid</td><td class="b-tr">₹ ${fix2(totalPaid)}</td></tr>
-        ${
-          refunds > 0
-            ? (() => {
-                const rc =
-                  refundCash > 0
-                    ? `<tr><td>Refund Given (Cash)</td><td class="b-tr" style="color:#c00;">− ₹ ${fix2(refundCash)}</td></tr>`
-                    : "";
-                const ro =
-                  refundOnline > 0
-                    ? `<tr><td>Refund Given (UPI)</td><td class="b-tr" style="color:#c00;">− ₹ ${fix2(refundOnline)}</td></tr>`
-                    : "";
-                const rf =
-                  !refundCash && !refundOnline
-                    ? `<tr><td>Refund Given</td><td class="b-tr" style="color:#c00;">− ₹ ${fix2(refunds)}</td></tr>`
-                    : "";
-                return (
-                  rc +
-                  ro +
-                  rf +
-                  `<tr class="b-subtotal"><td>Net Collected</td><td class="b-tr">₹ ${fix2(netCollected)}</td></tr>`
-                );
-              })()
-            : ""
-        }
-        ${balance > 0 ? `<tr><td style="font-weight:800;color:#c62828;">Balance Due</td><td class="b-tr" style="font-weight:800;color:#c62828;">₹ ${fix2(balance)}</td></tr>` : ""}
-        ${/* removed PAID IN FULL — balance row already shows ₹0 when settled */ ""}
-      </tbody>
-    </table>
-  </div>
-
-  <!-- ── Signature ── -->
-  <table class="b-sig">
-    <tr>
-      <td><div class="b-sig-line">Guest Signature</div></td>
-      <td style="text-align:right"><div class="b-sig-line">Authorised Signatory</div></td>
-    </tr>
-  </table>
-
-  <!-- ── Footer ── -->
-  <div class="b-footer">
-    <p>Thank you for staying at Cibara Comforts. We look forward to welcoming you again!</p>
-    <p>This is a computer-generated invoice.</p>
-  </div>
-
-</div>`;
-  }
 
   // ── Export — CA-ready 8-sheet GSTR-1 Workbook (Goal 3) ────────────────────
   // Sheet 1: Invoice Register   — line-item detail (incl. invoice_type, GSTIN cols)
@@ -4545,6 +3727,18 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
       accom5:     { taxable: 0, cgst: 0, sgst: 0, igst: 0 },
       accom18:    { taxable: 0, cgst: 0, sgst: 0, igst: 0 },
       accomExmpt: { taxable: 0, cgst: 0, sgst: 0, igst: 0 },
+      // Table 12 accumulators — these span EVERY invoice type (B2C, B2B,
+      // B2CL), unlike the accom5/accom18/accomExmpt buckets above which are
+      // the B2C-only Table 7 summary.
+      hsnAccom:   { taxable: 0, cgst: 0, sgst: 0, value: 0 },
+      hsnServices: {},          // "hsn|rate" -> {hsn, rate, description, ...}
+      hsnServiceQty: 0,
+      accomNights: 0,
+      // Real output tax on B2B / B2CL invoices, accumulated from the server's
+      // rate-wise rows. The GSTR-3B sheet reads these instead of re-deriving
+      // tax from the Table 4 sheet's Rate column.
+      b2bTax:     { taxable: 0, cgst: 0, sgst: 0 },
+      b2clTax:    { taxable: 0, cgst: 0, sgst: 0 },
       water5:     { taxable: 0, cgst: 0, sgst: 0, igst: 0, mrp: 0 },
       // SAC 999794 — cancellation forfeiture / agreement to refrain.
       // Separate bucket so it lands in its own HSN row, not bundled with 9963.
@@ -4628,11 +3822,36 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
         nonWaterSvcTotal = 0;
         accomInclGst = tot;
       } else {
-        ag  = accomTaxFromEntry(e, days);
-        wg  = waterGst(e.services || []);
-        nonWaterSvcTotal = (e.services || [])
-          .filter(s => !s.accommodation_charge && !(s.item || '').toLowerCase().includes('water'))
-          .reduce((sum, s) => sum + parseFloat(s.price || 0), 0);
+        // Authoritative, rate-wise, from the server. `ag` keeps its old shape
+        // for the register sheet; the rate-wise rows drive every summary
+        // sheet below so a mixed-slab stay lands in the correct buckets
+        // instead of being flattened onto one representative rate.
+        const bt = billTax(e);
+        ag = {
+          taxable: bt.accomTaxable,
+          cgst: bt.rows.filter(r => r.category === "accommodation")
+                       .reduce((s, r) => s + r.cgst, 0),
+          sgst: bt.rows.filter(r => r.category === "accommodation")
+                       .reduce((s, r) => s + r.sgst, 0),
+          rows: bt.rows,
+        };
+        // Non-accommodation lines, split into taxed rows (any HSN/SAC the
+        // server recognised) and genuinely exempt value. `wg` is no longer
+        // "water" specifically — it is every taxed service, because laundry
+        // at 18% and cold drinks at 12% belong in the return exactly as much
+        // as water does.
+        const svcRows = bt.rows.filter(r => r.category !== "accommodation");
+        wg = {
+          taxable: svcRows.reduce((s, r) => s + r.taxable, 0),
+          cgst:    svcRows.reduce((s, r) => s + r.cgst, 0),
+          sgst:    svcRows.reduce((s, r) => s + r.sgst, 0),
+          rows:    svcRows,
+          qty:     (e.services || [])
+                     .filter(s => !s.accommodation_charge)
+                     .reduce((n, s) => n + (Number(s.quantity) || 1), 0),
+        };
+        wg.mrp = wg.taxable + wg.cgst + wg.sgst;
+        nonWaterSvcTotal = Math.max(bt.exempt_value - _accomExemptValue(bt), 0);
         // Net of on-invoice discount — taxable + GST (Section 15(3)(a)),
         // consistent with the stored bill and the printed invoice.
         accomInclGst = ag.taxable + ag.cgst + ag.sgst;
@@ -4681,58 +3900,89 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
         "Reverted":                e.superseded_by_revert ? "Yes" : "",
       });
 
-      // B2B rows mirror GSTR-1 Table 4 column order exactly.
-      if (invoiceType === "B2B") {
-        const totalTaxable = r2(ag.taxable + wg.taxable);
-        const cessAmount = 0;
-        // One row per rate slab present on this bill — accommodation only,
-        // since water is HSN 2201 and goes in HSN sheet too. For practical
-        // purposes a hotel B2B bill has a single accommodation rate.
-        const ratePct = ag.cgstRate * 2;
-        b2bRows.push({
-          "GSTIN/UIN of Recipient": recipientGstin,
-          "Receiver Name":          recipientName,
-          "Invoice Number":         e.bill_number || "",
-          "Invoice Date":           (e.checkout_time || "").split(" ")[0],
-          "Invoice Value":          r2(e.total_amount || 0),
-          "Place Of Supply":        "29-Karnataka",
-          "Reverse Charge":         "N",
-          "Applicable % of Tax Rate": "",
-          "Invoice Type":           "Regular B2B",
-          "E-Commerce GSTIN":       "",
-          "Rate":                   ratePct,
-          "Taxable Value":          r2(ag.taxable),
-          "Cess Amount":            cessAmount,
-        });
-      } else if (invoiceType === "B2CL") {
-        b2clRows.push({
-          "Invoice Number":         e.bill_number || "",
-          "Invoice Date":           (e.checkout_time || "").split(" ")[0],
-          "Invoice Value":          r2(e.total_amount || 0),
-          "Place Of Supply":        "29-Karnataka",
-          "Applicable % of Tax Rate": "",
-          "Rate":                   ag.cgstRate * 2,
-          "Taxable Value":          r2(ag.taxable),
-          "Cess Amount":            0,
-          "E-Commerce GSTIN":       "",
-        });
+      // ── B2B (Table 4) / B2CL (Table 5) ───────────────────────────────────
+      // ONE ROW PER RATE, which is what the GSTN offline utility expects and
+      // what a mixed-slab stay actually is. A single row carrying the whole
+      // bill's taxable value against one "representative" rate is a row the
+      // utility recomputes and rejects.
+      //
+      // Taxed services on a B2B invoice are emitted as their own rows at their
+      // own HSN/rate rather than being folded into the accommodation line.
+      if (invoiceType === "B2B" || invoiceType === "B2CL") {
+        const invoiceDate  = (e.checkout_time || "").split(" ")[0];
+        const invoiceValue = r2(e.total_amount || 0);
+        const allRows = [...(ag.rows || []), ...(wg.rows || [])];
+
+        for (const r of allRows) {
+          if (r.taxable <= 0 && r.tax <= 0) continue;
+          // Accumulate the REAL tax for the 3B sheet. It used to be
+          // re-derived there as Taxable x Rate / 200, which restated a
+          // mixed-slab bill by up to 87%.
+          if (invoiceType === "B2B") {
+            b.b2bTax.taxable += r.taxable;
+            b.b2bTax.cgst    += r.cgst;
+            b.b2bTax.sgst    += r.sgst;
+            b2bRows.push({
+              "GSTIN/UIN of Recipient": recipientGstin,
+              "Receiver Name":          recipientName,
+              "Invoice Number":         e.bill_number || "",
+              "Invoice Date":           invoiceDate,
+              "Invoice Value":          invoiceValue,
+              "Place Of Supply":        "29-Karnataka",
+              "Reverse Charge":         "N",
+              "Applicable % of Tax Rate": "",
+              "Invoice Type":           "Regular B2B",
+              "E-Commerce GSTIN":       "",
+              "Rate":                   r.rate,
+              "Taxable Value":          r2(r.taxable),
+              "Cess Amount":            0,
+            });
+          } else {
+            b.b2clTax.taxable += r.taxable;
+            b.b2clTax.cgst    += r.cgst;
+            b.b2clTax.sgst    += r.sgst;
+            b2clRows.push({
+              "Invoice Number":         e.bill_number || "",
+              "Invoice Date":           invoiceDate,
+              "Invoice Value":          invoiceValue,
+              // B2CL is by definition an inter-state supply to an
+              // unregistered person — but place of supply for accommodation
+              // is still the property (Section 12(3)(b)), so a lodge should
+              // not normally produce B2CL rows at all. Reported honestly
+              // rather than silently dropped, so a stray one is visible.
+              "Place Of Supply":        "29-Karnataka",
+              "Applicable % of Tax Rate": "",
+              "Rate":                   r.rate,
+              "Taxable Value":          r2(r.taxable),
+              "Cess Amount":            0,
+              "E-Commerce GSTIN":       "",
+            });
+          }
+        }
       }
 
-      // B2C summary aggregation EXCLUDES B2B (Table 4 covers them),
-      // EXCLUDES B2CL (Table 5 covers them), and EXCLUDES cancellation
-      // charges (separate SAC 999794 bucket below). Only true B2C
-      // accommodation lands here.
+      // ── B2C summary (Table 7) — bucketed PER RATE ────────────────────────
+      // Excludes B2B (Table 4), B2CL (Table 5) and cancellation charges
+      // (separate SAC 999794 bucket below).
+      //
+      // Each accommodation row is filed against ITS OWN rate. This used to
+      // switch on a single representative rate for the whole bill, so a stay
+      // with a 5% night and an exempt night put the exempt night's value into
+      // the 5% bucket — a row where Taxable x Rate did not equal the tax, which
+      // the GSTN utility recomputes and rejects.
       if (invoiceType === "B2C" && !isCancelCharge) {
-        if (ag.cgstRate === 9) {
-          b.accom18.taxable += ag.taxable;
-          b.accom18.cgst    += ag.cgst;
-          b.accom18.sgst    += ag.sgst;
-        } else if (ag.cgstRate === 2.5) {
-          b.accom5.taxable  += ag.taxable;
-          b.accom5.cgst     += ag.cgst;
-          b.accom5.sgst     += ag.sgst;
-        } else {
-          b.accomExmpt.taxable += ag.taxable;
+        for (const r of (ag.rows || [])) {
+          if (r.category !== "accommodation") continue;
+          const bucket = r.rate === 18 ? b.accom18
+                       : r.rate === 5  ? b.accom5
+                       : r.rate === 0  ? b.accomExmpt
+                       : null;
+          if (!bucket) {
+            console.warn("[Bills] unmapped accommodation rate in export:", r.rate);
+            continue;
+          }
+          bucket.taxable += r.taxable;
+          if (r.rate > 0) { bucket.cgst += r.cgst; bucket.sgst += r.sgst; }
         }
       }
       if (isCancelCharge) {
@@ -4741,8 +3991,40 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
         b.cancel18.sgst    += ag.sgst;
         b.cancel18.count   += 1;
       }
-      // Water aggregates regardless of invoice_type — separate HSN sheet
-      // covers it; B2B HSN values are duplicated in Table 12 by design.
+
+      // ── HSN/SAC (Table 12) — EVERY invoice type ──────────────────────────
+      // Table 12 is a rate-wise summary of ALL outward supply; it is not
+      // scoped to B2C. Accommodation on B2B and B2CL invoices was previously
+      // never added here, so a period whose sales were B2B reported its
+      // accommodation in Table 4 and showed zero against SAC 996311 in
+      // Table 12.
+      if (!isCancelCharge) {
+        for (const r of (ag.rows || [])) {
+          if (r.category !== "accommodation") continue;
+          b.hsnAccom.taxable += r.taxable;
+          b.hsnAccom.cgst    += r.cgst;
+          b.hsnAccom.sgst    += r.sgst;
+          b.hsnAccom.value   += r.taxable + r.cgst + r.sgst;
+        }
+      }
+      // Taxed non-accommodation lines, keyed by (HSN/SAC, rate) so laundry at
+      // 18% and cold drinks at 12% get their own Table 12 rows instead of
+      // being silently dropped or lumped in with water.
+      for (const r of (wg.rows || [])) {
+        const key = `${r.hsn}|${r.rate}`;
+        const grp = b.hsnServices[key] || (b.hsnServices[key] = {
+          hsn: r.hsn, rate: r.rate, description: r.description,
+          taxable: 0, cgst: 0, sgst: 0, value: 0, qty: 0,
+        });
+        grp.taxable += r.taxable;
+        grp.cgst    += r.cgst;
+        grp.sgst    += r.sgst;
+        grp.value   += r.taxable + r.cgst + r.sgst;
+      }
+      b.hsnServiceQty += wg.qty || 0;
+      b.accomNights   += Number(e.days_stayed || 0) || 0;
+
+      // Retained for the legacy water columns elsewhere in the workbook.
       b.water5.mrp     += wg.mrp;
       b.water5.taxable += wg.taxable;
       b.water5.cgst    += wg.cgst;
@@ -4859,10 +4141,16 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
     }]);
 
     // Sheet 5: HSN/SAC Summary (Table 12)
-    const water5TotalGst = r2(b.water5.cgst + b.water5.sgst);
-    const accomTotalTax  = r2(b.accom5.taxable + b.accom18.taxable + b.accomExmpt.taxable);
-    const accomTotalCgst = r2(b.accom5.cgst + b.accom18.cgst);
-    const accomTotalSgst = r2(b.accom5.sgst + b.accom18.sgst);
+    //
+    // Table 12 is a rate-wise summary of ALL outward supply, so it is built
+    // from b.hsnAccom / b.hsnServices — accumulators that span B2C, B2B and
+    // B2CL. It used to be built from the B2C-only Table 7 buckets, so a period
+    // whose sales were B2B reported its accommodation in Table 4 and then
+    // showed zero against SAC 996311 here.
+    //
+    // Quantities and values are now accumulated over the SAME population.
+    // Previously the value columns skipped cancelled bills while the quantity
+    // columns counted `state.filteredEntries` including them.
     const hsnRows = [
       ...(b.cancel18.count > 0 ? [{
         "HSN/SAC Code":          "999794",
@@ -4878,37 +4166,37 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
         "Applicable GST Rate":   "18% (inclusive)",
       }] : []),
       {
-        "HSN/SAC Code":          "9963",
+        "HSN/SAC Code":          "996311",
         "Description":           "Accommodation and Hospitality Services",
         "UQC":                   "NOS",
-        "Total Quantity":        state.filteredEntries.length,
-        "Total Value (MRP)":     r2(
-          b.accom5.taxable  + b.accom5.cgst  + b.accom5.sgst  +
-          b.accom18.taxable + b.accom18.cgst + b.accom18.sgst +
-          b.accomExmpt.taxable
-        ),
-        "Taxable Value":         accomTotalTax,
+        "Total Quantity":        b.accomNights,
+        "Total Value (MRP)":     r2(b.hsnAccom.value),
+        "Taxable Value":         r2(b.hsnAccom.taxable),
         "IGST Amount":           0,
-        "CGST Amount":           accomTotalCgst,
-        "SGST Amount":           accomTotalSgst,
-        "Total GST":             r2(parseFloat(accomTotalCgst) + parseFloat(accomTotalSgst)),
+        "CGST Amount":           r2(b.hsnAccom.cgst),
+        "SGST Amount":           r2(b.hsnAccom.sgst),
+        "Total GST":             r2(b.hsnAccom.cgst + b.hsnAccom.sgst),
         "Applicable GST Rate":   "0% / 5% / 18% (slab based)",
       },
-      {
-        "HSN/SAC Code":          "2201",
-        "Description":           "Packaged Drinking Water",
-        "UQC":                   "NOS",
-        "Total Quantity":        state.filteredEntries.reduce(
-          (s, e) => s + waterGst(e.services || []).qty, 0,
-        ),
-        "Total Value (MRP)":     r2(b.water5.mrp || (b.water5.taxable + b.water5.cgst + b.water5.sgst)),
-        "Taxable Value":         r2(b.water5.taxable),
-        "IGST Amount":           0,
-        "CGST Amount":           r2(b.water5.cgst),
-        "SGST Amount":           r2(b.water5.sgst),
-        "Total GST":             water5TotalGst,
-        "Applicable GST Rate":   "5% (MRP inclusive)",
-      },
+      // One row per (HSN/SAC, rate) actually sold. Water, cold drinks,
+      // laundry, tea/coffee and transport each get their own row at their own
+      // rate; this sheet used to carry a single hardcoded water row and drop
+      // everything else.
+      ...Object.values(b.hsnServices)
+        .sort((x, y) => (x.hsn + x.rate).localeCompare(y.hsn + y.rate))
+        .map((g) => ({
+          "HSN/SAC Code":        g.hsn,
+          "Description":         g.description,
+          "UQC":                 "NOS",
+          "Total Quantity":      b.hsnServiceQty,
+          "Total Value (MRP)":   r2(g.value),
+          "Taxable Value":       r2(g.taxable),
+          "IGST Amount":         0,
+          "CGST Amount":         r2(g.cgst),
+          "SGST Amount":         r2(g.sgst),
+          "Total GST":           r2(g.cgst + g.sgst),
+          "Applicable GST Rate": `${g.rate}% (MRP inclusive)`,
+        })),
     ];
     const wsHSN = XLSX.utils.json_to_sheet(hsnRows);
 
@@ -4972,16 +4260,20 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
     // for ITC/RCM with a clear UNCERTAINTY note.
     const totalOutputCgst = r2(allCgst);
     const totalOutputSgst = r2(allSgst);
-    // B2B and B2CL output tax also flows into 3B — combine them.
-    const b2bOutputCgst = r2(b2bRows.reduce((s, r) => s + parseFloat(r["Taxable Value"]||0) * (parseFloat(r["Rate"]||0)/200), 0));
-    const b2bOutputSgst = b2bOutputCgst;
+    // B2B and B2CL output tax, taken from the accumulated per-rate figures.
+    // This used to be re-derived as Taxable x Rate / 200 off the Table 4
+    // sheet, which restated any mixed-slab bill and contradicted its own
+    // source rows. B2CL was omitted entirely, so its output tax appeared in
+    // no summary sheet at all.
+    const b2bOutputCgst = r2(b.b2bTax.cgst + b.b2clTax.cgst);
+    const b2bOutputSgst = r2(b.b2bTax.sgst + b.b2clTax.sgst);
     const totalCnCgst = r2(creditNotes.reduce((s, cn) => s + parseFloat(cn.credit_amount_cgst || 0), 0));
     const totalCnSgst = r2(creditNotes.reduce((s, cn) => s + parseFloat(cn.credit_amount_sgst || 0), 0));
     const gstr3b = [
       { "Item": "Outward taxable supplies (B2C, accommodation+water)",
         "Taxable Value": allTaxbl, "CGST": totalOutputCgst, "SGST": totalOutputSgst, "IGST": 0, "Cess": 0 },
-      { "Item": "Outward taxable supplies (B2B, accommodation)",
-        "Taxable Value": r2(b2bRows.reduce((s, r) => s + parseFloat(r["Taxable Value"]||0), 0)),
+      { "Item": "Outward taxable supplies (B2B + B2CL)",
+        "Taxable Value": r2(b.b2bTax.taxable + b.b2clTax.taxable),
         "CGST": b2bOutputCgst, "SGST": b2bOutputSgst, "IGST": 0, "Cess": 0 },
       { "Item": "(less) Credit Notes issued (CDNR + B2C-CN)",
         "Taxable Value": r2(creditNotes.reduce((s, cn) => s + parseFloat(cn.credit_amount_taxable || 0), 0)),

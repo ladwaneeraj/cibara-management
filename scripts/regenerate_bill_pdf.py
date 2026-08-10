@@ -63,8 +63,11 @@ def main() -> int:
           f"total: {bill.get('total_amount')}   balance: {bill.get('balance')}")
 
     # ── Build + convert the PDF from CURRENT data ──────────────────────────
+    # Consolidated, matching /render_bill_pdf and auto_generate_bill_pdf. Every
+    # path that can write a PDF to Storage pins the same view, so a bill's
+    # invoice does not change shape depending on which one regenerated it.
     try:
-        full_html = _build_pdf_html(_build_bill_html(bill))
+        full_html = _build_pdf_html(_build_bill_html(bill, view="consolidated"))
     except Exception as e:  # noqa: BLE001
         print(f"ERROR: building the bill HTML failed: {e}")
         return 1

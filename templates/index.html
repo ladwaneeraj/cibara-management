@@ -2131,29 +2131,14 @@
           </div>
         </div>
 
-        <!-- Bill Modal -->
-        <div class="bill-modal" id="bill-modal">
-          <div class="bill-content">
-            <div class="bill-header">
-              <h2>Tax Invoice</h2>
-              <button class="bill-close">&times;</button>
-            </div>
-            <div id="bill-print-area" class="bill-print-area">
-              <!-- Bill content will be dynamically generated -->
-            </div>
-            <div class="bill-actions">
-              <button
-                class="action-btn btn-secondary"
-                onclick="closeBillModal()"
-              >
-                Close
-              </button>
-              <button class="action-btn btn-primary" onclick="printBill()">
-                <i class="fas fa-print"></i> Print Bill
-              </button>
-            </div>
-          </div>
-        </div>
+        <!-- The Bill Modal that used to sit here has been removed. It was a
+             third, empty copy of the bill viewer: its Close and Print buttons
+             called closeBillModal() and printBill(), neither of which is
+             defined anywhere in the codebase, so clicking either threw a
+             ReferenceError. Bills are viewed through the Register-tab modal
+             (#reg-bill-overlay) or the Bills-tab modal (#bl-bill-modal), both
+             of which fetch their markup from GET /bill_html. -->
+
         <!-- Laundry Tab Content (moved from a standalone modal so it
              behaves like Rooms/Bills/Register -- a real section switched
              to via the bottom nav, not a popup over whatever tab was
@@ -4526,16 +4511,15 @@
               <label class="form-label" for="expense-category" style="font-size:0.78rem;">Category</label>
               <select class="form-control" id="expense-category" required style="font-size:0.88rem;padding:0.42rem 0.6rem;">
                 <option value="">Select…</option>
-                <option value="salary">Salary</option>
-                <option value="staff_advance">Staff Advance</option>
-                <option value="rent">Rent</option>
-                <option value="utilities">Utilities (Electricity / Water)</option>
-                <option value="petty_cash">Petty Cash (Tea, Small Items)</option>
-                <option value="purchase">Purchase (With Bill)</option>
-                <option value="maintenance">Maintenance</option>
-                <option value="sanitary">Sanitary / Housekeeping</option>
-                <option value="booking_commission">Booking.com Commission</option>
-                <option value="others">Others</option>
+                <option value="salary" data-icon="fa-user-tie">Salary</option>
+                <option value="staff_advance" data-icon="fa-hand-holding-dollar">Staff Advance</option>
+                <option value="utilities" data-icon="fa-bolt">Utilities (Electricity / Water)</option>
+                <option value="petty_cash" data-icon="fa-mug-hot">Petty Cash (Tea, Small Items)</option>
+                <option value="purchase" data-icon="fa-cart-shopping">Purchase (With Bill)</option>
+                <option value="maintenance" data-icon="fa-screwdriver-wrench">Maintenance</option>
+                <option value="sanitary" data-icon="fa-broom">Sanitary / Housekeeping</option>
+                <option value="booking_commission" data-icon="fa-percent">Booking.com Commission</option>
+                <option value="others" data-icon="fa-ellipsis">Others</option>
               </select>
             </div>
           </div>
@@ -4591,7 +4575,7 @@
           </div>
 
           <!-- Amount -->
-          <div class="form-group" style="margin-bottom:0.75rem;">
+          <div class="form-group" id="expense-amount-group" style="margin-bottom:0.75rem;">
             <label class="form-label" for="expense-amount" style="font-size:0.78rem;">Total Amount (₹)</label>
             <input type="number" class="form-control" id="expense-amount"
               placeholder="0" required min="1"
@@ -4793,7 +4777,7 @@
 
           <input type="hidden" id="expense-type" value="transaction" />
 
-          <button type="submit" class="action-btn btn-danger"
+          <button type="submit" class="action-btn btn-danger" id="expense-submit-btn"
             style="width:100%;padding:0.7rem;font-size:0.95rem;border-radius:9px;letter-spacing:0.02em;">
             <i class="fas fa-check"></i> Save Expense
           </button>
@@ -6101,6 +6085,21 @@
     <script defer src="{{ asset_url('script.js') }}"></script>
     <script defer src="/static/shift.js"></script>
     <script defer src="/static/analytics.js"></script>
+    <!-- Android back button closes the open modal instead of exiting the
+         installed PWA. Self-contained and dependency-free; finds overlays by
+         shape rather than by a class list, so it also covers modals added
+         later. Opt an overlay out with data-no-back. -->
+    <script defer src="{{ asset_url('modal-back.js') }}"></script>
+    <!-- Compact dropdown that wraps a native <select>. Loaded before
+         expense.js, which enhances the expense category picker with it.
+         Callers guard on window.CibaraSelect, so a load failure leaves the
+         plain native select working. -->
+    <script defer src="{{ asset_url('nice-select.js') }}"></script>
+    <!-- Bill-photo cropper. Must load before expense.js and
+         transaction-tracking.js, which call window.CibaraDocScan when the
+         operator attaches an invoice photo. Both guard on its presence, so a
+         load failure degrades to uploading the original photo uncropped. -->
+    <script defer src="{{ asset_url('doc-scan.js') }}"></script>
     <script defer src="{{ asset_url('expense.js') }}"></script>
     <script defer src="/static/expense-presets-admin.js"></script>
     <script defer src="{{ asset_url('booking.js') }}"></script>

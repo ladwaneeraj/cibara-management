@@ -82,6 +82,15 @@ function _payIcon(kind, item) {
   return "fa-receipt";
 }
 
+// Escape every HTML-significant character for use inside a double-quoted
+// attribute. Expense descriptions are operator-entered free text and routinely
+// contain &, ", ' and angle brackets.
+function _txnAttrEsc(v) {
+  return String(v == null ? "" : v).replace(/[&<>"']/g, function (c) {
+    return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+  });
+}
+
 class TransactionTracker {
   constructor() {
     this.dailyCounters = this.loadDailyCounters();
@@ -708,21 +717,38 @@ class TransactionLogManager {
     }
 
     let titleContent = "";
+    // Extra data-* attributes for the row wrapper. Only expense rows the
+    // current user may manage get them; that absence is what makes a row
+    // non-actionable, so there is no second permission check on tap.
+    let expenseRowAttrs = "";
     if (logType === "expenses") {
       // description is the user-entered text; for payments-collection entries it
       // gets stored in the `name` field, so fall back to that.
-      const expenseLabel = log.description || log.name || "Expense";
+      // Keep the raw text for data-* attributes (the browser decodes those
+      // back to the original string) and an escaped copy for the innerHTML
+      // interpolation below.
+      //
+      // The escaping is a fix, not decoration: this label was previously
+      // interpolated raw into the row's HTML, so an expense description
+      // containing markup — <img src=y onerror=...> typed into the
+      // description field — executed for every user who opened the
+      // Transactions tab. Pre-existing bug; this line is the injection point.
+      const expenseLabelRaw = log.description || log.name || "Expense";
+      const expenseLabel = _txnAttrEsc(expenseLabelRaw);
       const catDisplay = (log.category || "others")
         .charAt(0).toUpperCase() +
         (log.category || "others").slice(1).replace(/_/g, " ");
 
       // Photo icon or attach button. Categories that never carry an
       // invoice photo get NO "Photo" attach button here. An already-attached
-      // photo is still shown, in case category data changed after the fact.
-      // NOTE: salary & staff_advance ARE allowed to attach a receipt/photo
-      // (operators wanted the option), so they're intentionally NOT listed —
-      // this is a deliberate divergence from expense.js's NO_PHOTO_CATEGORIES.
-      const NO_PHOTO_CATS = ["rent", "petty_cash"];
+      // photo is STILL shown as a view link, whatever the category — hiding it
+      // would strand a file the operator can no longer reach.
+      //
+      // `salary` is excluded because a salary payment has no external invoice
+      // to photograph; the attach button was only adding noise to the row.
+      // `staff_advance` deliberately keeps it — an advance is often issued
+      // against a signed slip that operators do want to record.
+      const NO_PHOTO_CATS = ["rent", "petty_cash", "salary"];
       const _expCat = (log.category || "").toLowerCase();
       let photoHtml = "";
       if (log.invoice_photo_url) {
@@ -745,40 +771,16 @@ class TransactionLogManager {
         ? `<span style="font-size:0.68rem;background:#e8f5e9;color:#2e7d32;border-radius:4px;padding:1px 5px;margin-left:4px;">GST ₹${log.gst_amount || 0}</span>`
         : "";
 
-      // Admin-only inline edit / delete buttons. Visible only when the
-      // log has a _doc_id (so we can target the right Firestore doc)
-      // and the current user has the expense.manage permission. Wired
-      // via event delegation in the DOMContentLoaded block below.
-      let adminActionsHtml = "";
+      // Edit / delete are NOT inline buttons any more. They lived here as two
+      // 20px targets per row, which made every row busy and were awkward to
+      // hit on a phone. Tapping the row now opens an action sheet instead —
+      // see _openExpenseActionSheet below. The row carries the data those
+      // actions need via data-* attributes (stamped onto .log-item further
+      // down), and `_canManage` decides whether the row is actionable at all.
       const _canManage = window.CibaraAuth
         && typeof window.CibaraAuth.userCan === "function"
         && window.CibaraAuth.userCan("expense.manage");
-      if (_canManage && log._doc_id) {
-        // Escape ALL HTML-significant characters in attribute values —
-        // descriptions are operator-entered free text and may contain
-        // any of <, >, &, ", '.
-        const _attrEsc = (v) => String(v == null ? "" : v)
-          .replace(/&/g, "&amp;")
-          .replace(/</g, "&lt;")
-          .replace(/>/g, "&gt;")
-          .replace(/"/g, "&quot;")
-          .replace(/'/g, "&#39;");
-        adminActionsHtml = `
-          <button type="button" class="txn-exp-edit-btn"
-            data-doc-id="${_attrEsc(log._doc_id)}"
-            title="Edit expense"
-            style="margin-left:5px;background:none;border:1px solid #cbd5e0;border-radius:5px;padding:1px 7px;font-size:0.7rem;color:#3182ce;cursor:pointer;line-height:1.6;">
-            <i class="fas fa-pen"></i>
-          </button>
-          <button type="button" class="txn-exp-delete-btn"
-            data-doc-id="${_attrEsc(log._doc_id)}"
-            data-amount="${_attrEsc(log.amount || 0)}"
-            data-description="${_attrEsc(log.description || '')}"
-            title="Delete expense"
-            style="margin-left:3px;background:none;border:1px solid #fecaca;border-radius:5px;padding:1px 7px;font-size:0.7rem;color:#c53030;cursor:pointer;line-height:1.6;">
-            <i class="fas fa-trash"></i>
-          </button>`;
-      }
+      const _rowActionable = !!(_canManage && log._doc_id);
 
       // Print voucher — only for a GST expense that has a receipt photo.
       let printHtml = "";
@@ -794,7 +796,14 @@ class TransactionLogManager {
 
       titleContent = `<strong>${expenseLabel}</strong>
         <span style="font-size:0.7rem;background:#fed7d7;color:#c53030;border-radius:4px;padding:1px 6px;margin-left:4px;font-weight:500;">${catDisplay}</span>
-        ${gstBadge}${photoHtml}${printHtml}${adminActionsHtml}`;
+        ${gstBadge}${photoHtml}${printHtml}`;
+      // Stash what the action sheet needs. Read back off the row on tap.
+      if (_rowActionable) {
+        expenseRowAttrs =
+          ` data-exp-doc-id="${_txnAttrEsc(log._doc_id)}"` +
+          ` data-exp-amount="${_txnAttrEsc(log.amount || 0)}"` +
+          ` data-exp-description="${_txnAttrEsc(expenseLabelRaw)}"`;
+      }
     } else {
       titleContent = `Room ${log.room} - ${log.name}`;
     }
@@ -841,14 +850,21 @@ class TransactionLogManager {
     // Build subtitle: tags first, then time
     const subtitleTime = type ? `${type}${additionalInfo} at ${log.time || "N/A"}` : `at ${log.time || "N/A"}`;
 
-    // Mark expense rows with a stable data attribute so the admin
-    // search filter in transaction-tracking can target them
-    // regardless of whether the edit/delete buttons are present
-    // (older docs without _doc_id, or non-admin view).
-    const rowDataAttrs = (logType === "expenses") ? ' data-expense-row="1"' : "";
+    // Mark expense rows with a stable data attribute so the admin search
+    // filter can target them whether or not they are actionable (older docs
+    // without _doc_id, or a non-admin view).
+    const rowDataAttrs = (logType === "expenses")
+      ? ' data-expense-row="1"' + expenseRowAttrs
+      : "";
+    // Actionable rows advertise themselves: pointer cursor and hover tint via
+    // the class, plus role/tabindex so the sheet is reachable from a keyboard.
+    const rowClass = "log-item" + (expenseRowAttrs ? " txn-row-actionable" : "");
+    const rowA11y  = expenseRowAttrs
+      ? ' role="button" tabindex="0" aria-haspopup="menu"'
+      : "";
 
     return `
-      <div class="log-item"${rowDataAttrs} ${rowBg}>
+      <div class="${rowClass}"${rowDataAttrs}${rowA11y} ${rowBg}>
         <div class="log-details">
           <div class="log-title">
             ${serialHtml}
@@ -1343,6 +1359,83 @@ class TransactionLogManager {
 }
 
 const transactionTrackingStyles = `
+    /* ── Actionable expense row ──────────────────────────────────────────
+       Rows the current user may edit or delete. The whole row is the tap
+       target now that the inline pen/bin buttons are gone. */
+    .log-item.txn-row-actionable { cursor: pointer; }
+    .log-item.txn-row-actionable:hover { filter: brightness(0.97); }
+    .log-item.txn-row-actionable:focus-visible {
+        outline: 2px solid #3182ce; outline-offset: -2px;
+    }
+    /* Controls that still live inside a row (attach photo, view photo,
+       print) must not inherit the row's pointer affordance. */
+    .log-item.txn-row-actionable a,
+    .log-item.txn-row-actionable button { cursor: pointer; }
+
+    /* ── Expense action sheet ────────────────────────────────────────────
+       Bottom sheet on phones, centred card on wide screens. Replaces the
+       per-row buttons; delete confirms inline rather than via a native
+       confirm() dialog, which is easier to hit on mobile and keeps the
+       whole interaction in one surface. */
+    .txn-sheet-backdrop {
+        position: fixed; inset: 0; z-index: 4000;
+        background: rgba(15, 23, 42, 0.45);
+        display: none; align-items: flex-end; justify-content: center;
+    }
+    .txn-sheet-backdrop.open { display: flex; }
+    .txn-sheet {
+        width: 100%; max-width: 460px;
+        background: #fff;
+        border-radius: 16px 16px 0 0;
+        padding: 0 0 max(10px, env(safe-area-inset-bottom));
+        box-shadow: 0 -8px 30px rgba(0,0,0,.22);
+        animation: txn-sheet-up .18s ease-out;
+    }
+    @keyframes txn-sheet-up {
+        from { transform: translateY(14px); opacity: .6; }
+        to   { transform: translateY(0);    opacity: 1; }
+    }
+    .txn-sheet-grip {
+        width: 38px; height: 4px; border-radius: 999px;
+        background: #cbd5e1; margin: 9px auto 4px;
+    }
+    .txn-sheet-head {
+        padding: 6px 18px 12px; border-bottom: 1px solid #f1f5f9;
+    }
+    .txn-sheet-title {
+        font: 700 .95rem 'Inter', system-ui, sans-serif; color: #0f172a;
+        word-break: break-word;
+    }
+    .txn-sheet-sub {
+        font: 500 .78rem 'Inter', system-ui, sans-serif; color: #64748b;
+        margin-top: 2px;
+    }
+    .txn-sheet-actions { padding: 6px 10px 4px; }
+    .txn-sheet-btn {
+        display: flex; align-items: center; gap: 11px;
+        width: 100%; border: none; background: none;
+        padding: 13px 12px; border-radius: 10px;
+        font: 600 .9rem 'Inter', system-ui, sans-serif;
+        color: #1e293b; cursor: pointer; text-align: left;
+    }
+    .txn-sheet-btn:hover  { background: #f1f5f9; }
+    .txn-sheet-btn:active { background: #e2e8f0; }
+    .txn-sheet-btn i { width: 18px; text-align: center; font-size: .95rem; }
+    .txn-sheet-btn.danger  { color: #b91c1c; }
+    .txn-sheet-btn.danger:hover { background: #fef2f2; }
+    .txn-sheet-btn.cancel  { color: #64748b; justify-content: center; }
+    .txn-sheet-btn[disabled] { opacity: .55; cursor: wait; }
+    .txn-sheet-sep { height: 1px; background: #f1f5f9; margin: 4px 12px; }
+    .txn-sheet-confirm {
+        padding: 12px 18px 6px;
+        font: 500 .82rem 'Inter', system-ui, sans-serif; color: #7f1d1d;
+        background: #fef2f2; border-top: 1px solid #fee2e2;
+    }
+    @media (min-width: 640px) {
+        .txn-sheet-backdrop { align-items: center; }
+        .txn-sheet { border-radius: 16px; }
+    }
+
     /* "Added by" chip on each transaction row */
     .txn-added-by {
         display: inline-flex; align-items: center; gap: 3px;
@@ -1734,89 +1827,197 @@ document.addEventListener("DOMContentLoaded", function () {
     return null;
   }
 
-  document.addEventListener("click", function (e) {
-    // Edit
-    const editBtn = e.target.closest(".txn-exp-edit-btn");
-    if (editBtn) {
-      e.preventDefault();
-      e.stopPropagation();
-      const docId = editBtn.getAttribute("data-doc-id");
-      const log = _findLogByDocId(docId);
-      if (!log) {
-        if (typeof showNotification === "function") {
-          showNotification("Could not find expense to edit. Refresh and retry.", "error");
-        }
-        return;
-      }
-      if (typeof window.openExpenseEditModal === "function") {
-        window.openExpenseEditModal(log);
-      } else {
-        console.warn("openExpenseEditModal not loaded yet");
+  // ── Expense action sheet ───────────────────────────────────────────────────
+  // Edit and Delete used to be two small buttons on every expense row. They
+  // made each row busy and were a poor tap target on a phone. The row itself
+  // is now the target and opens this sheet.
+  //
+  // Only rows the user may manage carry the data-exp-* attributes, so the
+  // absence of a doc id is what makes a row inert — there is no separate
+  // permission branch on tap. The server still authorises the DELETE, and the
+  // check below the fold is a belt-and-braces guard, not the control.
+
+  let _sheetEl = null;          // the backdrop; built once, reused
+  let _sheetCtx = null;         // { docId, amount, description }
+
+  function _buildSheet() {
+    if (_sheetEl) return _sheetEl;
+    const el = document.createElement("div");
+    el.className = "txn-sheet-backdrop";
+    el.setAttribute("role", "dialog");
+    el.setAttribute("aria-modal", "true");
+    el.innerHTML = `
+      <div class="txn-sheet" role="menu">
+        <div class="txn-sheet-grip"></div>
+        <div class="txn-sheet-head">
+          <div class="txn-sheet-title" data-sheet-title></div>
+          <div class="txn-sheet-sub" data-sheet-sub></div>
+        </div>
+        <div class="txn-sheet-confirm" data-sheet-confirm style="display:none;">
+          Delete this expense? This cannot be undone.
+        </div>
+        <div class="txn-sheet-actions">
+          <button type="button" class="txn-sheet-btn" data-sheet-edit role="menuitem">
+            <i class="fas fa-pen"></i> Edit expense
+          </button>
+          <button type="button" class="txn-sheet-btn danger" data-sheet-delete role="menuitem">
+            <i class="fas fa-trash"></i> Delete expense
+          </button>
+          <div class="txn-sheet-sep"></div>
+          <button type="button" class="txn-sheet-btn cancel" data-sheet-cancel>Cancel</button>
+        </div>
+      </div>`;
+    document.body.appendChild(el);
+
+    // Backdrop click closes; clicks inside the card must not bubble out to it.
+    el.addEventListener("click", function (ev) {
+      if (ev.target === el) _closeSheet();
+    });
+    el.querySelector("[data-sheet-cancel]").addEventListener("click", _closeSheet);
+    el.querySelector("[data-sheet-edit]").addEventListener("click", _sheetEdit);
+    el.querySelector("[data-sheet-delete]").addEventListener("click", _sheetDelete);
+
+    _sheetEl = el;
+    return el;
+  }
+
+  // Reset the sheet to its default (unconfirmed) state.
+  function _resetSheet(el) {
+    const del = el.querySelector("[data-sheet-delete]");
+    el.querySelector("[data-sheet-confirm]").style.display = "none";
+    del.innerHTML = '<i class="fas fa-trash"></i> Delete expense';
+    del.disabled = false;
+    del.dataset.armed = "";
+    el.querySelector("[data-sheet-edit]").disabled = false;
+  }
+
+  function _openExpenseActionSheet(row) {
+    const docId = row.getAttribute("data-exp-doc-id");
+    if (!docId) return;
+    _sheetCtx = {
+      docId,
+      amount: row.getAttribute("data-exp-amount") || "0",
+      description: row.getAttribute("data-exp-description") || "this expense",
+    };
+    const el = _buildSheet();
+    _resetSheet(el);
+    el.querySelector("[data-sheet-title]").textContent = _sheetCtx.description;
+    el.querySelector("[data-sheet-sub]").textContent = "₹" + _sheetCtx.amount;
+    el.classList.add("open");
+    // Focus the first action so the sheet is operable from a keyboard.
+    setTimeout(() => el.querySelector("[data-sheet-edit]").focus(), 0);
+  }
+
+  function _closeSheet() {
+    if (_sheetEl) {
+      _sheetEl.classList.remove("open");
+      _resetSheet(_sheetEl);
+    }
+    _sheetCtx = null;
+  }
+
+  function _sheetEdit() {
+    if (!_sheetCtx) return;
+    const log = _findLogByDocId(_sheetCtx.docId);
+    _closeSheet();
+    if (!log) {
+      if (typeof showNotification === "function") {
+        showNotification("Could not find expense to edit. Refresh and retry.", "error");
       }
       return;
     }
+    if (typeof window.openExpenseEditModal === "function") {
+      window.openExpenseEditModal(log);
+    } else {
+      console.warn("openExpenseEditModal not loaded yet");
+    }
+  }
 
-    // Print GST expense voucher (with the attached receipt photo)
-    const printBtn = e.target.closest(".txn-exp-print-btn");
-    if (printBtn) {
-      e.preventDefault();
-      e.stopPropagation();
-      const log = _findLogByDocId(printBtn.getAttribute("data-doc-id"));
-      if (log) _printExpensePhoto(log);
+  // Two-tap delete. The first tap arms and shows the warning strip; the second
+  // commits. Kept inside the sheet rather than raising a native confirm() —
+  // a blocking dialog on top of a bottom sheet reads badly on mobile.
+  function _sheetDelete(ev) {
+    if (!_sheetCtx || !_sheetEl) return;
+    const btn = ev.currentTarget;
+
+    if (btn.dataset.armed !== "1") {
+      btn.dataset.armed = "1";
+      btn.innerHTML = '<i class="fas fa-trash"></i> Tap again to confirm';
+      _sheetEl.querySelector("[data-sheet-confirm]").style.display = "block";
       return;
     }
 
-    // Delete
-    const delBtn = e.target.closest(".txn-exp-delete-btn");
-    if (delBtn) {
-      e.preventDefault();
-      e.stopPropagation();
-      const docId = delBtn.getAttribute("data-doc-id");
-      const amt   = delBtn.getAttribute("data-amount") || "?";
-      const desc  = delBtn.getAttribute("data-description") || "this expense";
-      if (!docId) return;
-      if (!confirm(`Delete "${desc}" (₹${amt})?\n\nThis cannot be undone.`)) return;
-
-      // Defensive admin check before firing the request.
-      const canManage = window.CibaraAuth
-        && typeof window.CibaraAuth.userCan === "function"
-        && window.CibaraAuth.userCan("expense.manage");
-      if (!canManage) {
-        if (typeof showNotification === "function") {
-          showNotification("Only admins can delete expenses", "error");
-        }
-        return;
+    const canManage = window.CibaraAuth
+      && typeof window.CibaraAuth.userCan === "function"
+      && window.CibaraAuth.userCan("expense.manage");
+    if (!canManage) {
+      if (typeof showNotification === "function") {
+        showNotification("Only admins can delete expenses", "error");
       }
+      _closeSheet();
+      return;
+    }
 
-      delBtn.disabled = true;
-      apiFetch("/expense/" + encodeURIComponent(docId), { method: "DELETE" })
-        .then((r) => r.json())
-        .then((data) => {
-          if (data && data.success) {
-            if (typeof showNotification === "function") {
-              showNotification("Expense deleted", "success");
-            }
-            // Extended-range aware refresh (Today → cache; past range → re-fetch).
-            if (typeof window.refreshTransactionsView === "function") {
-              window.refreshTransactionsView();
-            } else if (typeof debouncedFetchData === "function") {
-              debouncedFetchData();
-            }
-          } else {
-            if (typeof showNotification === "function") {
-              showNotification((data && data.message) || "Delete failed", "error");
-            }
-            delBtn.disabled = false;
-          }
-        })
-        .catch((err) => {
-          console.error("delete expense error:", err);
+    const docId = _sheetCtx.docId;
+    btn.disabled = true;
+    _sheetEl.querySelector("[data-sheet-edit]").disabled = true;
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Deleting…';
+
+    apiFetch("/expense/" + encodeURIComponent(docId), { method: "DELETE" })
+      .then((r) => r.json())
+      .then((data) => {
+        if (data && data.success) {
+          _closeSheet();
           if (typeof showNotification === "function") {
-            showNotification("Error: " + err.message, "error");
+            showNotification("Expense deleted", "success");
           }
-          delBtn.disabled = false;
-        });
+          // Extended-range aware refresh (Today → cache; past range → re-fetch).
+          if (typeof window.refreshTransactionsView === "function") {
+            window.refreshTransactionsView();
+          } else if (typeof debouncedFetchData === "function") {
+            debouncedFetchData();
+          }
+        } else {
+          if (typeof showNotification === "function") {
+            showNotification((data && data.message) || "Delete failed", "error");
+          }
+          _resetSheet(_sheetEl);
+        }
+      })
+      .catch((err) => {
+        console.error("delete expense error:", err);
+        if (typeof showNotification === "function") {
+          showNotification("Error: " + err.message, "error");
+        }
+        if (_sheetEl) _resetSheet(_sheetEl);
+      });
+  }
+
+  // Row tap → sheet. Ignore taps that landed on a control the row still
+  // hosts (attach photo, view photo, print) so those keep working.
+  document.addEventListener("click", function (e) {
+    if (!e.target || !e.target.closest) return;
+    if (e.target.closest(".txn-sheet-backdrop")) return;   // clicks inside the sheet
+    const row = e.target.closest(".log-item.txn-row-actionable");
+    if (!row) return;
+    if (e.target.closest("a, button, input, label, select")) return;
+    e.preventDefault();
+    _openExpenseActionSheet(row);
+  });
+
+  // Keyboard: Enter/Space opens the sheet on a focused row, Escape closes it.
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "Escape" && _sheetEl && _sheetEl.classList.contains("open")) {
+      _closeSheet();
+      return;
     }
+    if (e.key !== "Enter" && e.key !== " ") return;
+    const row = e.target && e.target.closest
+      ? e.target.closest(".log-item.txn-row-actionable")
+      : null;
+    if (!row) return;
+    e.preventDefault();
+    _openExpenseActionSheet(row);
   });
 
   // ── Admin-only: live search across rendered expense rows ───────────────────
@@ -1907,23 +2108,17 @@ document.addEventListener("DOMContentLoaded", function () {
     const q = (input.value || "").trim().toLowerCase();
     if (clearBtn) clearBtn.style.display = q ? "inline-block" : "none";
 
-    // Only act on rows that look like expense rows. We identify them by
-    // the presence of an edit OR delete button OR by the category badge
-    // — the rendering inserts the .txn-exp-edit-btn or .txn-exp-delete-btn
-    // only for admins. To stay robust for the non-admin case too, we
-    // fall back to looking for an expense-only background ("#fdecea" is
-    // shared with refunds — so we additionally check for the strong tag
-    // pattern which expenses always have).
+    // Only act on rows that look like expense rows. Every expense row carries
+    // data-expense-row="1", which is set regardless of admin rights, so that
+    // single attribute is the whole test. (It used to also sniff for the
+    // inline edit/delete buttons; those no longer exist — the row itself is
+    // the action target now.)
     const rows = document.querySelectorAll("#transaction-log .log-item");
     let visible = 0;
     let totalExpenseRows = 0;
 
     rows.forEach((row) => {
-      const hasExpBtn = row.querySelector(".txn-exp-edit-btn, .txn-exp-delete-btn, .txn-attach-photo-btn");
-      // Identify expense rows: either admin edit/delete buttons present,
-      // OR a "Photo" attach button (only rendered on expenses), OR the
-      // category badge red pill style used solely for expenses.
-      const isExpense = !!hasExpBtn || row.dataset.expenseRow === "1";
+      const isExpense = row.dataset.expenseRow === "1";
       if (!isExpense) return; // non-expense rows untouched
 
       totalExpenseRows++;
@@ -1996,13 +2191,26 @@ document.addEventListener("DOMContentLoaded", function () {
 
   if (txnPhotoFile) {
     txnPhotoFile.addEventListener("change", async function () {
-      const file = this.files[0];
-      if (!file || !_pendingAttachDocId) return;
+      const picked = this.files[0];
       txnPhotoFile.value = "";  // reset for re-use
+      if (!picked || !_pendingAttachDocId) return;
 
-      if (file.size > 5 * 1024 * 1024) {
+      if (picked.size > 5 * 1024 * 1024) {
         if (typeof showNotification === "function") showNotification("File too large. Max 5 MB.", "error");
         return;
+      }
+
+      // Same crop step as the expense form, so a receipt attached later from
+      // the transaction row is stored the same way as one attached at entry.
+      let file = picked;
+      if (window.CibaraDocScan && typeof window.CibaraDocScan.scan === "function") {
+        try {
+          file = await window.CibaraDocScan.scan(picked);
+        } catch (err) {
+          console.error("[Txn] scan failed, using original:", err);
+          file = picked;
+        }
+        if (!file) { _pendingAttachDocId = null; return; }   // cancelled
       }
 
       // 1. Upload file

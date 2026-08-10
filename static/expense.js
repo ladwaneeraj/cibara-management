@@ -174,7 +174,117 @@ async function _renderStaffTiles(category, wrapper, tilesEl, countEl) {
 }
 
 // ─── Initialize ──────────────────────────────────────────────────────────────
+// ── Date pickers ─────────────────────────────────────────────────────────────
+// The expense form's date fields were plain <input type="date">, which renders
+// the browser's own picker — a different, cramped widget on every platform and
+// visibly unlike the calendars everywhere else in the app.
+//
+// flatpickr 4.6.13 is already loaded globally by templates/index.html and is
+// what the Bills, Register and Booking screens use, so this is a consistency
+// fix rather than a new dependency. Config mirrors those call sites: ISO value
+// under the hood, human-readable text on screen.
+//
+// The underlying inputs keep `type="date"`, so `.value` stays a YYYY-MM-DD
+// string and every existing reader (`_collectExpenseForm`, the edit prefill,
+// validation) is untouched.
+const _EXPENSE_DATE_FIELDS = [
+  // [element id, allow future dates?]
+  ["expense-date", false],           // when the money actually moved
+  ["expense-invoice-date", false],   // supplier's invoice date
+  ["commission-invoice-date", false],
+  ["commission-payment-date", true], // a commission may be scheduled forward
+];
+
+const _expenseDatePickers = {};
+
+// flatpickr's altInput is a BRAND NEW element. It inherits the original
+// input's class list but NOT its inline style — and these date fields carry
+// their compact sizing inline (font-size:.88rem; padding:.42rem .6rem). The
+// altInput therefore fell back to plain .form-control (1rem / 0.8rem padding)
+// and rendered 45.6px tall next to a 36px Category control, which is the
+// misalignment visible in the Date/Category row.
+//
+// Styling a class we own is more durable than copying cssText: it survives
+// flatpickr re-initialising the input and keeps the metrics in one place
+// next to the values they have to match (.ns-btn in nice-select.js).
+const _DATE_ALT_CLASS = "exp-date-alt";
+const _DATE_ALT_STYLE_ID = "cibara-expense-date-styles";
+
+function _ensureDateAltStyles() {
+  if (document.getElementById(_DATE_ALT_STYLE_ID)) return;
+  const st = document.createElement("style");
+  st.id = _DATE_ALT_STYLE_ID;
+  st.textContent =
+    "." + _DATE_ALT_CLASS + "{" +
+    "box-sizing:border-box;width:100%;" +
+    "font-size:.88rem;padding:.42rem .6rem;min-height:36px;" +   /* == .ns-btn */
+    "border:1px solid #ddd;border-radius:var(--border-radius,8px);" +
+    "background:#fff;color:#1a202c;line-height:1.35;}" +
+    "." + _DATE_ALT_CLASS + ":hover{border-color:#bfc6cf;}" +
+    "." + _DATE_ALT_CLASS + ":focus{outline:none;border-color:#3182ce;" +
+    "box-shadow:0 0 0 3px rgba(49,130,206,.18);}";
+  document.head.appendChild(st);
+}
+
+function _initExpenseDatePickers() {
+  if (!window.flatpickr) return;     // CDN blocked — native picker still works
+  _ensureDateAltStyles();
+  const today = new Date();
+
+  _EXPENSE_DATE_FIELDS.forEach(function ([id, allowFuture]) {
+    const el = document.getElementById(id);
+    if (!el || _expenseDatePickers[id]) return;
+
+    _expenseDatePickers[id] = window.flatpickr(el, {
+      dateFormat: "Y-m-d",       // the value the form reads — unchanged
+      altInput: true,            // what the operator sees
+      altFormat: "d M Y",        // "08 Aug 2026"
+      maxDate: allowFuture ? null : today,
+      // Back-dating an expense is normal (yesterday's diesel bill entered
+      // this morning); a year of headroom covers it without letting a
+      // mis-typed year land in a closed GST period.
+      minDate: new Date(today.getFullYear() - 1, 0, 1),
+      disableMobile: true,       // use flatpickr on phones, not the OS widget
+      allowInput: false,         // typing free-text here only creates bad dates
+      position: "auto",
+      // The visible element flatpickr creates. Styled by _ensureDateAltStyles
+      // to the same metrics as the Category control beside it.
+      altInputClass: _DATE_ALT_CLASS,
+    });
+  });
+}
+
+// flatpickr replaces the input with an altInput and mirrors writes back, but
+// only when set through its API. Anything that assigns `el.value` directly
+// must call this so the visible text follows.
+function _setExpenseDate(id, ymd) {
+  const picker = _expenseDatePickers[id];
+  if (picker) {
+    picker.setDate(ymd || null, false);   // false = don't fire onChange
+    return;
+  }
+  const el = document.getElementById(id);
+  if (el) el.value = ymd || "";
+}
+
+// The category list is the one control an operator touches on every single
+// expense, and a native <select> hands its option list to the OS — tall rows,
+// system font, no way to style it. CibaraSelect swaps the visible control for
+// compact markup while leaving the real <select> in the form, so `.value`,
+// the `change` listener wired below, and HTML validation all behave exactly
+// as before.
+function _initExpenseSelects() {
+  if (!window.CibaraSelect) return;   // script missing — native select still works
+  window.CibaraSelect.enhance("expense-category", {
+    placeholder: "Select a category…",
+    maxHeight: 264,   // exactly 8 rows — never clips one mid-text
+  });
+}
+
 function initializeExpense() {
+  _initExpenseDatePickers();
+  _initExpenseSelects();
+
   const addExpenseBtn = document.getElementById("add-expense-btn");
   if (addExpenseBtn) addExpenseBtn.addEventListener("click", () => {
     // Admin gets to choose between Daily / From-Account at form-open
@@ -361,12 +471,7 @@ function _renderPresetTiles(category) {
   // Staff Advance / Salary: the quick-pick row shows STAFF NAMES (from the
   // Staff module) instead of admin presets — tap a name to pick the person.
   // For Salary the tap hands over to the payroll flow entirely.
-  const _canQuickSalary = window.CibaraAuth
-    && typeof window.CibaraAuth.userCan === "function"
-    && window.CibaraAuth.userCan("staff.salary.pay")
-    && typeof window.openStaffQuickPay === "function"
-    && !_expenseEditMode;
-  if (category === "staff_advance" || (category === "salary" && _canQuickSalary)) {
+  if (category === "staff_advance" || (category === "salary" && _salaryHandsOverToPayroll())) {
     _renderStaffTiles(category, wrapper, tilesEl, countEl);
     return;
   }
@@ -457,6 +562,82 @@ function _escHtml(s) {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
+}
+
+/**
+ * True when picking Salary should hand the operator over to Staff payroll
+ * rather than record the expense here.
+ *
+ * Salary is not really an ad-hoc expense: the amount is days worked x wage,
+ * minus any outstanding advance, and payroll already computes that and writes
+ * the matching expense row. Keying an amount by hand here would bypass the
+ * advance deduction and leave the ledger disagreeing with the payment.
+ *
+ * Requires the payroll permission — a user who cannot run payroll still gets
+ * the plain manual form, because for them there is nowhere to hand over to.
+ */
+function _salaryHandsOverToPayroll() {
+  return !!(window.CibaraAuth
+    && typeof window.CibaraAuth.userCan === "function"
+    && window.CibaraAuth.userCan("staff.salary.pay")
+    && typeof window.openStaffQuickPay === "function"
+    && !_expenseEditMode);
+}
+
+// Fields that only make sense when this form is actually going to save an
+// expense. In Salary handover mode the form is just a launcher — the real
+// entry happens in payroll — so they are hidden rather than left on screen
+// asking for values that are about to be thrown away.
+//
+// Two lists, because restoring is the subtle half.
+//
+// SHARED fields already have an owner that recomputes them on every category
+// change (_onCategoryChange for notes / Paid To / the photo section,
+// _applyPaymentMethodUI and _updateSplitVisibility for the rest). Handover
+// only ever hides those; putting them back is the owner's job. Restoring them
+// here to their default state re-showed "Paid To" on Purchase, because
+// display:"" is not the same as "whatever the owning rule decided".
+const _HANDOVER_HIDE_ONLY = [
+  "expense-description-container",  // Notes
+  "salary-fields",                  // Paid To — the staff tiles pick the person
+  "invoice-photo-section",
+  "expense-payment-method-group",   // Paid From
+  "expense-split-toggle-wrap",
+  "expense-split-fields",
+];
+
+// OWNED fields have no other rule touching them, so handover both hides and
+// restores them.
+const _HANDOVER_OWNED = [
+  "expense-amount-group",           // Total Amount
+  "expense-submit-btn",
+];
+
+function _applySalaryHandoverUI(on) {
+  _HANDOVER_HIDE_ONLY.forEach(function (id) {
+    const el = document.getElementById(id);
+    if (el && on) el.style.display = "none";
+  });
+
+  _HANDOVER_OWNED.forEach(function (id) {
+    const el = document.getElementById(id);
+    if (el) el.style.display = on ? "none" : "";
+  });
+
+  // The amount is `required`; a hidden required field blocks submit with a
+  // validation bubble pointing at something the operator cannot see.
+  const amt = document.getElementById("expense-amount");
+  if (amt) {
+    if (on) amt.removeAttribute("required");
+    else amt.setAttribute("required", "");
+  }
+
+  // Leaving handover: hand the shared fields back to their owners so they
+  // reflect the newly-selected category rather than the salary state.
+  if (!on) {
+    if (typeof _applyPaymentMethodUI === "function") _applyPaymentMethodUI();
+    if (typeof _updateSplitVisibility === "function") _updateSplitVisibility();
+  }
 }
 
 // ─── Category change ──────────────────────────────────────────────────────────
@@ -569,6 +750,11 @@ function _onCategoryChange() {
 
   // Category change can make the split toggle (in)eligible.
   _updateSplitVisibility();
+
+  // LAST. Salary handover strips the form down to a launcher, and it has to
+  // run after every rule above (including _updateSplitVisibility, which can
+  // re-show the split block) or those rules would put fields back.
+  _applySalaryHandoverUI(category === "salary" && _salaryHandsOverToPayroll());
 }
 
 function _onHasBillChange() {
@@ -631,13 +817,33 @@ function _initInvoiceUpload() {
   if (removeBtn) removeBtn.addEventListener("click", (e) => { e.stopPropagation(); _clearInvoiceUpload(); });
 }
 
-function _onInvoiceFileSelected(e) {
-  const file = e.target.files[0];
-  if (!file) return;
+async function _onInvoiceFileSelected(e) {
+  const picked = e.target.files[0];
+  // Clear the input straight away so re-picking the SAME file after a
+  // cancelled crop still fires a change event.
+  e.target.value = "";
+  if (!picked) return;
 
-  if (file.size > 5 * 1024 * 1024) {
+  if (picked.size > 5 * 1024 * 1024) {
     showNotification("File too large. Max 5 MB.", "error");
     return;
+  }
+
+  // Crop the photo down to just the bill before it goes anywhere. Returns
+  // the original untouched for PDFs, null if the operator cancelled.
+  //
+  // This runs BEFORE the OCR call as well as before upload, so the model
+  // reads a flat, cropped bill instead of one photographed at an angle on a
+  // cluttered desk — which is where most of the mis-reads came from.
+  let file = picked;
+  if (window.CibaraDocScan && typeof window.CibaraDocScan.scan === "function") {
+    try {
+      file = await window.CibaraDocScan.scan(picked);
+    } catch (err) {
+      console.error("[Expense] scan failed, using original:", err);
+      file = picked;             // never block an upload on the cropper
+    }
+    if (!file) return;           // cancelled — leave any prior attachment alone
   }
 
   // Just store the file — actual upload happens on form submit
@@ -652,12 +858,35 @@ function _onInvoiceFileSelected(e) {
     `<i class="fas fa-paperclip" style="color:#3182ce;"></i> ${shortName} <span style="font-size:0.7rem;color:#718096;">(will upload on save)</span>`;
   if (removeBtn) removeBtn.style.display = "inline-block";
 
-  // Fire OCR in the background. Only images (not PDFs) trigger auto-fill
-  // here — Gemini can also read PDFs but the UX is less obvious; admin
-  // can still hit "Re-scan" manually if they want.
-  if (file.type && file.type.startsWith("image/")) {
+  // Fire OCR in the background.
+  //
+  // PDFs auto-fill too. This used to be images-only, which made a supplier's
+  // emailed PDF invoice the one case where nothing was extracted — the
+  // operator had to key every field by hand. Nothing else in the chain
+  // required that: /ocr/expense_invoice already allows application/pdf,
+  // ocr_service passes the mime straight to Gemini (which reads PDFs
+  // natively), the file input already accepts .pdf, and the Re-scan button
+  // never had the restriction. Only this trigger did.
+  if (_isOcrReadable(file)) {
     _runInvoiceOcr(file);
   }
+}
+
+/**
+ * True when the server's OCR endpoint will accept this file.
+ *
+ * Mirrors _ALLOWED_MIME in routes/ocr.py. The extension fallback matters:
+ * some Android file pickers hand back a File with an empty `type`, and gating
+ * purely on mime silently skipped auto-fill for those users.
+ */
+function _isOcrReadable(file) {
+  if (!file) return false;
+  const mime = (file.type || "").toLowerCase();
+  const name = (file.name || "").toLowerCase();
+  if (mime.startsWith("image/")) return true;
+  if (mime === "application/pdf") return true;
+  if (!mime && /\.(pdf|jpe?g|png|webp)$/.test(name)) return true;
+  return false;
 }
 
 // ─── OCR — extract & pre-fill from invoice photo ─────────────────────────────
@@ -877,7 +1106,11 @@ function _applyOcrFields(fields) {
     const el = document.getElementById(id);
     if (!el) return;
     if (el.value && el.value.trim() !== "") return;  // user typed already
-    el.value = value;
+    if (_expenseDatePickers[id]) {
+      _setExpenseDate(id, value);      // keeps the visible altInput in sync
+    } else {
+      el.value = value;
+    }
     el.dispatchEvent(new Event("input", { bubbles: true }));
     _flashField(el);
     filled.push(label);
@@ -1008,6 +1241,9 @@ function openExpenseEditModal(log) {
 
   // ── Populate fields ─────────────────────────────────────────────────────
   const set = (id, val) => {
+    // Date fields are flatpickr-backed: assigning .value alone updates the
+    // hidden input but leaves the visible altInput showing the old date.
+    if (_expenseDatePickers[id]) { _setExpenseDate(id, val || ""); return; }
     const el = document.getElementById(id);
     if (el != null && val != null) el.value = val;
   };
@@ -1109,6 +1345,13 @@ function showExpenseModal(type, options) {
   const modal = document.getElementById("expense-modal");
   if (!modal) return;
 
+  // Idempotent — returns immediately for fields already wired. Repeated here
+  // so the pickers still attach if the flatpickr bundle finished loading after
+  // DOMContentLoaded ran, or if the form markup is ever moved behind a
+  // lazily-rendered container.
+  _initExpenseDatePickers();
+  _initExpenseSelects();
+
   // Reset edit-mode flags on every fresh open. openExpenseEditModal
   // re-sets them AFTER calling this function so the pre-fill path works.
   _expenseEditMode = false;
@@ -1118,6 +1361,11 @@ function showExpenseModal(type, options) {
   _setOcrInlineStatus("hidden");
 
   document.getElementById("expense-form")?.reset();
+
+  // form.reset() clears values, not display state. Without this, opening the
+  // modal after a Salary handover would show an empty category with the
+  // amount, notes and Save button still hidden.
+  _applySalaryHandoverUI(false);
 
   // Load presets in the background — never block opening the modal.
   // If the cache is fresh and a category is selected, _onCategoryChange
@@ -1175,12 +1423,12 @@ function showExpenseModal(type, options) {
   const fileInput = document.getElementById("expense-invoice-file");
   if (fileInput) fileInput.value = "";
 
-  // Default date = today
-  const dateInput = document.getElementById("expense-date");
-  if (dateInput) {
-    const now = new Date();
-    dateInput.value = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
-  }
+  // Default date = today. Routed through the picker so the visible text
+  // resets too — otherwise reopening the form showed the previous entry's
+  // date while the underlying value had already been reset to today.
+  const now = new Date();
+  _setExpenseDate("expense-date",
+    `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`);
 
   // Default payment = cash
   document.querySelectorAll("#expense-form .payment-btn").forEach((b) => b.classList.remove("active"));
@@ -1247,6 +1495,12 @@ function showExpenseModal(type, options) {
         opt.disabled = opt.disabled || !mayAdvance || _expenseEditMode;
       }
     });
+    // The custom dropdown renders its rows from the option list, so it has to
+    // be rebuilt AFTER the hidden/disabled flags above are applied. Without
+    // this, a gated category (Staff Advance without permission, Rent on a
+    // daily expense) stayed visible and selectable in the panel.
+    if (window.CibaraSelect) window.CibaraSelect.refresh(catSelect);
+
     // If a hidden category was previously selected, reset
     if (type === "transaction" && _txnHidden.includes(catSelect.value)) {
       catSelect.value = "";

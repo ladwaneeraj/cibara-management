@@ -376,6 +376,13 @@
     return new Date(_dstr(ym, day) + "T12:00:00").getDay() === 0;
   }
 
+  // Last day of a pay week. Salary here runs Tuesday → Monday, so Monday is
+  // where one week's wages end and the next week's begin; the grid draws a
+  // heavier rule down the right of every Monday to mark the boundary.
+  function _isPayWeekEnd(ym, day) {
+    return new Date(_dstr(ym, day) + "T12:00:00").getDay() === 1;   // Monday
+  }
+
   // ── Audit-trail helpers ─────────────────────────────────────────────────
 
   // Compress a server attendance record into what the chooser popover
@@ -589,7 +596,11 @@
       if (dstr === today) thCls.push("is-today");
       if (dstr > today) thCls.push("is-future");
       var dow = _dowLetter(state.gridMonth, d);
-      html += '<th class="' + thCls.join(" ") + '"' +
+      // data-day marks a DAY column (as opposed to the sticky name column or
+      // the trailing totals column) — the CSS hangs the vertical separators
+      // off it. See .stf-grid-table thead th[data-day] in staff.css.
+      if (_isPayWeekEnd(state.gridMonth, d)) thCls.push("is-week-end");
+      html += '<th data-day="1" class="' + thCls.join(" ") + '"' +
         (_isSunday(state.gridMonth, d) ? ' data-sun="1"' : "") + ">" +
         "<span>" + d + "</span><small>" + dow + "</small></th>";
     }
@@ -662,6 +673,7 @@
         if (st) cls.push(st);
         if (ds === today) cls.push("is-today");
         if (_isSunday(state.gridMonth, d2)) cls.push("is-sun");
+        if (_isPayWeekEnd(state.gridMonth, d2)) cls.push("is-week-end");
         var qp = state.quickPay;
         // _qpRangeMode, not mode === "pay" — Meals picks a range too, and
         // dropping its highlight on every grid re-render made the selection
@@ -688,7 +700,8 @@
     html += '<td class="stf-grid-name stf-grid-foot">On duty</td>';
     for (var d3 = 1; d3 <= r.lastDay; d3++) {
       var fds = _dstr(state.gridMonth, d3);
-      html += '<td class="stf-grid-foot' + (fds === today ? " is-today" : "") + '">' +
+      html += '<td class="stf-grid-foot' + (fds === today ? " is-today" : "") +
+        (_isPayWeekEnd(state.gridMonth, d3) ? " is-week-end" : "") + '">' +
         (dayTotals[d3] ? fmtDays(dayTotals[d3]) : "") + "</td>";
     }
     html += '<td class="stf-grid-foot"></td>' +
@@ -1669,8 +1682,18 @@
         '  <span class="stf-qp-netlbl">Paying now</span>' +
         '  <span class="stf-qp-netval" id="stf-qp-net">₹0</span>' +
         "</div>" +
-        '<div class="stf-qp-field">' +
-        '  <label class="stf-qp-lbl">2 · Paid from</label>' + srcInner +
+        '<div class="stf-qp-fieldrow">' +
+        '  <div class="stf-qp-field">' +
+        '    <label class="stf-qp-lbl">2 · Paid from</label>' + srcInner +
+        "  </div>" +
+        // The day the cash leaves the counter — separate from the period
+        // being settled, because a week's wages are often handed over a day
+        // or two later. This is what dates the linked expense row.
+        '  <div class="stf-qp-field">' +
+        '    <label class="stf-qp-lbl">Paid on</label>' +
+        '    <input type="date" id="stf-qp-paidon" class="stf-qp-input" value="' +
+        esc(qp.paidOn || today) + '" max="' + today + '">' +
+        "  </div>" +
         "</div>" +
         '<button class="stf-btn primary stf-qp-paybtn" id="stf-qp-confirm" disabled>' +
         '<i class="fas fa-check"></i> <span id="stf-qp-paylbl">Pay salary</span></button>';
@@ -1778,6 +1801,7 @@
       qp._rangePicker = rp;
     }
     _modernDate("stf-qp-adv-date", { maxDate: today });
+    _modernDate("stf-qp-paidon", { maxDate: today });
 
     var startInp = document.getElementById("stf-qp-start");
     var endInp = document.getElementById("stf-qp-end");
@@ -1798,6 +1822,11 @@
     if (endInp) endInp.addEventListener("change", onDates);
 
     if (document.getElementById("stf-qp-source")) bindSource("stf-qp-source");
+
+    var paidOnInp = document.getElementById("stf-qp-paidon");
+    if (paidOnInp) paidOnInp.addEventListener("change", function () {
+      if (state.quickPay) state.quickPay.paidOn = paidOnInp.value || "";
+    });
 
     var adjInp = document.getElementById("stf-qp-adj");
     var dedInp = document.getElementById("stf-qp-ded");
@@ -1843,6 +1872,7 @@
       if (!ok) return;
       btn.disabled = true;
       post("/staff/" + encodeURIComponent(qp.staffId) + "/pay_salary", {
+        paid_on: (document.getElementById("stf-qp-paidon")?.value || ""),
         period_start: qp.start,
         period_end: qp.end,
         adjustment: adj,
@@ -2665,7 +2695,13 @@
   // modal on the attendance grid and pop the quick-pay panel for one
   // staff member. The grid loads async, so poll until this month's data
   // (staff list + paid periods) is in memory before opening the panel.
-  window.openStaffQuickPay = function (staffId) {
+  /**
+   * @param {string} staffId
+   * @param {string} [paidOn] "YYYY-MM-DD" chosen in the expense modal before
+   *   the operator tapped this staff name. Carried through so the payout
+   *   lands on the day they were entering for instead of resetting to today.
+   */
+  window.openStaffQuickPay = function (staffId, paidOn) {
     // 1) Actually NAVIGATE to the Staff tab. Triggered from the Transactions
     //    tab's Salary tile, the app is showing a different tab; openModal()
     //    alone only builds content inside the still-hidden #staff-tab, so it
@@ -2688,7 +2724,18 @@
         state.staffLoaded &&
         state._gridLoadedMonth === state.gridMonth &&
         state.staff.some(function (s) { return s.id === staffId; });
-      if (ready) { openQuickPay(staffId, true); return; }
+      if (ready) {
+        openQuickPay(staffId, true);
+        if (paidOn && state.quickPay) {
+          state.quickPay.paidOn = paidOn;
+          var el = document.getElementById("stf-qp-paidon");
+          if (el) {
+            if (el._flatpickr) el._flatpickr.setDate(paidOn, false);
+            else el.value = paidOn;
+          }
+        }
+        return;
+      }
       if (tries++ < 60) setTimeout(waitReady, 100);   // give up after ~6s
     })();
   };

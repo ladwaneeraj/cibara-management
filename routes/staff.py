@@ -338,7 +338,11 @@ def pay_salary(staff_id):
     """
     Body: { period_start, period_end, advance_deduction, adjustment,
             adjustment_note?, payment_method: cash|online,
-            expense_type: transaction|report }
+            expense_type: transaction|report, paid_on? }
+
+    paid_on is the day the cash actually left the counter (defaults to
+    today, never in the future). It is what the linked expense row is dated
+    with — NOT the period being settled.
 
     The server recomputes everything from attendance — the client's
     preview numbers are never trusted.
@@ -356,7 +360,8 @@ def pay_salary(staff_id):
             data.get("adjustment_note", ""),
             data.get("payment_method", "cash"),
             data.get("expense_type", "transaction"),
-            g.current_user)
+            g.current_user,
+            paid_on=str(data.get("paid_on", "")).strip() or None)
         invalidate_rooms_and_totals()
         pay = out["payment"]
         write_log("staff.salary.pay",

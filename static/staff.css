@@ -506,6 +506,35 @@
   transition: background 0.1s;
 }
 .stf-grid-cell.is-sun { background: #fbfcfd; }
+
+/* ── Vertical day separators ─────────────────────────────────────────────────
+   The grid only had horizontal rules, so reading across a month meant
+   counting cells to work out which day a mark belonged to. A hairline
+   between every day column gives the eye something to track against.
+   `border-collapse: separate` on the table means these do NOT double up with
+   the sticky name column's own right border. */
+.stf-grid-table thead th[data-day],
+.stf-grid-cell,
+.stf-grid-foot {
+  border-right: 1px solid var(--stf-line-soft);
+}
+/* Pay-week boundary. Salary runs Tuesday → Monday here, so every Monday is
+   where one week's wages end. A darker, heavier rule down its right edge
+   turns the month into readable week blocks — without it you have to count
+   columns to find where a pay period starts. Set on the Monday column, so
+   the line falls between Monday and Tuesday. */
+.stf-grid-table thead th[data-day].is-week-end,
+.stf-grid-cell.is-week-end,
+.stf-grid-foot.is-week-end {
+  border-right: 2px solid var(--stf-ink-3);
+}
+
+/* No trailing edge on the last column of the month. */
+.stf-grid-table thead th[data-day]:last-child,
+.stf-grid-cell:last-child,
+.stf-grid-foot:last-child {
+  border-right: none;
+}
 .stf-grid-cell:hover:not(.is-future):not(.is-locked) { background: var(--stf-primary-soft); }
 .stf-grid-cell .m {
   display: inline-flex;

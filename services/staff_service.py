@@ -726,7 +726,7 @@ def salary_preview(staff_id: str, period_start: str, period_end: str,
 def pay_salary(staff_id: str, period_start: str, period_end: str,
                advance_deduction, adjustment, adjustment_note: str,
                payment_method: str, expense_type: str,
-               user: Optional[dict]) -> dict:
+               user: Optional[dict], paid_on: Optional[str] = None) -> dict:
     # NOTE: the meal deduction is intentionally NOT a parameter. It is
     # derived from the staff record's meal_rate and the period's attendance
     # — see the `meals` block below.
@@ -770,6 +770,15 @@ def pay_salary(staff_id: str, period_start: str, period_end: str,
                               meal_deduction=meals["meal_total"])
     name = staff.get("name", "")
     today = _ist_today()
+    # The day the money actually left the counter. Distinct from the period
+    # being settled: a week's wages are often handed over a day or two later,
+    # and the expense has to land on the day the drawer was short, not on
+    # whatever day the operator got round to recording it.
+    paid_on = str(paid_on or "").strip() or today
+    if not _valid_date(paid_on):
+        raise ValueError("Payment date must be YYYY-MM-DD.")
+    if paid_on > today:
+        raise ValueError("Payment date cannot be in the future.")
 
     sal_ref = _sal_ref().document()
     sal_doc = {
@@ -796,7 +805,7 @@ def pay_salary(staff_id: str, period_start: str, period_end: str,
         "payment_method": payment_method,
         "expense_type": expense_type,
         "expense_doc_id": None,
-        "paid_on": today,
+        "paid_on": paid_on,
         "paid_at": _now_utc(),
         "paid_by": _user_stamp(user),
     }
@@ -816,7 +825,7 @@ def pay_salary(staff_id: str, period_start: str, period_end: str,
                 final["meal_deducted"], meals["meal_days"],
                 "s" if meals["meal_days"] != 1 else "")
         expense_doc = {
-            "date": today,
+            "date": paid_on,
             "time": _ist_time(),
             "category": "salary",
             "description": desc,

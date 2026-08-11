@@ -236,8 +236,11 @@ async function _renderStaffTiles(category, wrapper, tilesEl, countEl) {
       if (category === "salary") {
         // Hand over to payroll: close this modal, open that staff member's
         // quick-pay panel (period pre-filled, advance deduction included).
+        // Carry the date chosen here into the payroll panel — the handover
+        // used to drop it, so the salary always landed on today.
+        const _payDate = document.getElementById("expense-date")?.value || "";
         document.getElementById("expense-modal")?.classList.remove("show");
-        window.openStaffQuickPay(s.id);
+        window.openStaffQuickPay(s.id, _payDate);
         return;
       }
       // staff_advance: select this person

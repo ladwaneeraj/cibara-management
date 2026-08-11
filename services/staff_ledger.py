@@ -18,6 +18,25 @@ attendance   One record per (staff, date), or per (staff, date, shift) for
              records (so a full-D + full-N day is worth 2.0 worked-day
              units) — see attendance_summary().
 
+meals        Some staff eat at the lodge. That is a real cost to the
+             business AND something the staff member does not get in cash,
+             so it is modelled as a flat per-day rate on the staff record
+             (`meal_rate`, ₹/day; 0 = does not eat here).
+
+             Two separate things happen with it, deliberately kept apart:
+
+               1. At salary time the meal charge for the period is deducted
+                  from the payout, so a ₹350/day staff member on a ₹50/day
+                  meal rate takes home ₹300/day in cash.
+               2. Whenever the operator settles up with the kitchen (in
+                  practice, at the end of the week), the meal cost for a
+                  range of days is logged in one go as its own expense.
+
+             Together the books show the true ₹350/day: ₹300 salary + ₹50
+             meals. Meals are counted per CALENDAR DAY present, not per
+             worked-day unit — a half day still eats, and a dual-shift
+             staff member eats once, not twice.
+
 advance      Money handed to a staff member ahead of salary:
                  {id, staff_id, date, amount (int ₹)}
              Advances accumulate into an outstanding balance.
@@ -177,6 +196,83 @@ def compute_salary(daily_wage, attendance: list, start: str, end: str,
 
 
 # ───────────────────────────────────────────────────────────────────────────
+# Meals
+# ───────────────────────────────────────────────────────────────────────────
+
+def present_dates(attendance: list, start: str, end: str,
+                  exclude=None) -> list:
+    """
+    Sorted distinct calendar dates in [start, end] the staff member was
+    present for at all (full OR half, either shift).
+
+    Deliberately NOT days_worked. Meals are counted per calendar day:
+      * a half day still eats one meal, so it counts as 1, not 0.5;
+      * a dual-shift staff member working D and N eats once that day, so
+        their two records collapse to a single date.
+
+    `exclude` drops those dates entirely — used to skip days an earlier
+    meal log already covered.
+    """
+    exclude = exclude or set()
+    out = set()
+    for rec in attendance or []:
+        d = str((rec or {}).get("date") or "")
+        status = (rec or {}).get("status")
+        if not _valid_date(d) or status not in ATTENDANCE_STATUSES:
+            continue
+        if status == STATUS_ABSENT:
+            continue
+        if start and d < start:
+            continue
+        if end and d > end:
+            continue
+        if d in exclude:
+            continue
+        out.add(d)
+    return sorted(out)
+
+
+def compute_meals(meal_rate, attendance: list, start: str, end: str,
+                  exclude=None) -> dict:
+    """
+    The meal charge for a period.
+
+    Returns {meal_rate, meal_days, meal_dates, meal_total}. A meal_rate of
+    0 (the default — most staff do not eat here) yields a total of 0 while
+    still reporting the days, so a caller can show "0 × 6 days" rather than
+    hiding the row entirely.
+    """
+    rate = _to_int(meal_rate)
+    dates = present_dates(attendance, start, end, exclude=exclude)
+    return {
+        "meal_rate": rate,
+        "meal_days": len(dates),
+        "meal_dates": dates,
+        "meal_total": rate * len(dates),
+    }
+
+
+def logged_meal_dates(start: str, end: str, meal_logs: list) -> set:
+    """
+    Days inside [start, end] that an existing meal log already covers.
+
+    Each log stores the exact dates it charged for (`meal_dates`), so this
+    is an exact set intersection rather than a range guess — a meal log for
+    a week where the staff member was absent on Wednesday does NOT claim
+    Wednesday, and a later log can still pick it up if attendance changes.
+    """
+    if not (_valid_date(start) and _valid_date(end)) or start > end:
+        return set()
+    out = set()
+    for log in meal_logs or []:
+        for d in (log or {}).get("meal_dates") or []:
+            d = str(d)
+            if start <= d <= end:
+                out.add(d)
+    return out
+
+
+# ───────────────────────────────────────────────────────────────────────────
 # Paid-day coverage — the double-pay guard
 #
 # A payment covers every day of [period_start, period_end] EXCEPT the days
@@ -269,7 +365,7 @@ def suggest_period_start(salary_payments: list) -> Optional[str]:
 def validate_payment(period_start: str, period_end: str, computed: dict,
                      advance_deduction, outstanding: int,
                      salary_payments: list, today: str,
-                     covered=None) -> Optional[str]:
+                     covered=None, meal_deduction=0) -> Optional[str]:
     """
     Validate a proposed salary payout end-to-end. Returns an error message
     (str) or None when the payment is sound.
@@ -296,33 +392,65 @@ def validate_payment(period_start: str, period_end: str, computed: dict,
         return ("Advance deduction (₹{}) exceeds the outstanding advance "
                 "(₹{}).").format(deduction, max(0, _to_int(outstanding)))
 
+    meals = _to_int(meal_deduction)
+    if meals < 0:
+        return "Meal deduction cannot be negative."
+
     payable = _to_int(computed.get("payable_before_advance"))
-    if payable <= 0 and deduction <= 0:
+    if payable <= 0 and deduction <= 0 and meals <= 0:
         return ("Nothing to pay for this period — no attendance marked "
                 "and no adjustment given.")
     if deduction > payable:
         return ("Advance deduction (₹{}) cannot exceed the payable amount "
                 "(₹{}). Deduct the rest from a future salary — it carries "
                 "forward automatically.").format(deduction, payable)
+    # Meals come out after the advance. Between them they must not push the
+    # payout negative — that would mean the staff member owes the lodge,
+    # which this module has no way to record.
+    #
+    # Two distinct failures, and the message has to tell them apart: if the
+    # meal charge alone exceeds what was earned, there is nothing on the
+    # payout form the operator could change, so pointing at the advance
+    # deduction would send them looking for a control that cannot help.
+    if meals > payable:
+        return ("Meals ₹{} exceed what was earned in {} – {} (₹{}). Widen "
+                "the period, or correct the meal rate on the staff "
+                "record.").format(meals, period_start, period_end, payable)
+    if deduction + meals > payable:
+        return ("Advance ₹{} + meals ₹{} exceed the payable amount (₹{}). "
+                "Reduce the advance deduction — meals are a fixed per-day "
+                "charge.").format(deduction, meals, payable)
     return None
 
 
-def settlement(computed: dict, advance_deduction, outstanding: int) -> dict:
+def settlement(computed: dict, advance_deduction, outstanding: int,
+               meal_deduction=0) -> dict:
     """
     The final numbers for a validated payout:
 
         net_paid            what actually leaves the till
         advance_deducted    recovered from the outstanding advance
         advance_remaining   carries forward to the next salary
+        meal_deducted       withheld for meals eaten at the lodge
+
+    net_paid = gross + adjustment − advance_deducted − meal_deducted.
+
+    The meal deduction is NOT an expense saving: the lodge still pays for
+    the food, it just pays the kitchen instead of the staff member. The
+    matching cost is recorded separately by the meal log (see compute_meals),
+    so the two rows together add back up to the staff member's true daily
+    rate.
 
     Call validate_payment() first — this function trusts its inputs.
     """
     deduction = _to_int(advance_deduction)
+    meals = _to_int(meal_deduction)
     payable = _to_int(computed.get("payable_before_advance"))
     return {
         "gross": _to_int(computed.get("gross")),
         "adjustment": _to_int(computed.get("adjustment")),
         "advance_deducted": deduction,
-        "net_paid": payable - deduction,
+        "meal_deducted": meals,
+        "net_paid": payable - deduction - meals,
         "advance_remaining": max(0, _to_int(outstanding)) - deduction,
     }

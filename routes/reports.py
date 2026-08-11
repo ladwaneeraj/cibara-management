@@ -869,7 +869,8 @@ def edit_expense(doc_id):
         # Staff-payroll rows are managed from the Staff module only. An
         # inline edit here would desync the linked advance / salary-payment
         # document (and the outstanding-advance arithmetic derived from it).
-        if old.get("staff_advance") or old.get("staff_salary_payment"):
+        if (old.get("staff_advance") or old.get("staff_salary_payment")
+                or old.get("staff_meal_log")):
             return jsonify(
                 success=False,
                 message=("This entry is linked to Staff payroll. Manage it "
@@ -1011,7 +1012,8 @@ def delete_expense_route(doc_id):
         # deleting the expense leg here would orphan the linked advance /
         # salary-payment doc and silently corrupt the outstanding-advance
         # balance. The Staff section deletes both sides atomically.
-        if old.get("staff_advance") or old.get("staff_salary_payment"):
+        if (old.get("staff_advance") or old.get("staff_salary_payment")
+                or old.get("staff_meal_log")):
             return jsonify(
                 success=False,
                 message=("This entry is linked to Staff payroll. Delete it "

@@ -1246,10 +1246,6 @@
         <div class="tab-content hidden" id="transactions-tab">
           <div class="section-title">
             <h2>Transactions</h2>
-            <button id="add-expense-btn"
-              style="display:inline-flex;align-items:center;gap:0.35rem;background:#e53e3e;color:#fff;border:none;border-radius:8px;padding:0.38rem 0.85rem;font-size:0.8rem;font-weight:600;cursor:pointer;box-shadow:0 1px 4px rgba(229,62,62,0.25);letter-spacing:0.01em;">
-              <i class="fas fa-plus" style="font-size:0.75rem;"></i> Expense
-            </button>
           </div>
 
           <!-- Date Range Filter -->
@@ -1311,20 +1307,30 @@
             </div>
           </div>
 
-          <!-- Type Filter -->
+          <!-- Type Filter.
+               The "+ Expense" action lives on this row (not up in the
+               section title) so it sits inside comfortable thumb reach on a
+               phone. .txn-type-chips wraps internally; the button is a
+               separate flex child so it never gets pushed onto its own line
+               ahead of the chips. -->
           <div class="txn-type-filter">
-            <button class="txn-type-btn active" data-type="all">All</button>
-            <button class="txn-type-btn" data-type="cash">
-              <i class="fas fa-money-bill-wave"></i> Cash
-            </button>
-            <button class="txn-type-btn" data-type="online">
-              <i class="fas fa-mobile-alt"></i> Online
-            </button>
-            <button class="txn-type-btn" data-type="refunds">
-              <i class="fas fa-undo"></i> Refund
-            </button>
-            <button class="txn-type-btn" data-type="expenses">
-              <i class="fas fa-arrow-circle-down"></i> Expense
+            <div class="txn-type-chips">
+              <button class="txn-type-btn active" data-type="all">All</button>
+              <button class="txn-type-btn" data-type="cash">
+                <i class="fas fa-money-bill-wave"></i> Cash
+              </button>
+              <button class="txn-type-btn" data-type="online">
+                <i class="fas fa-mobile-alt"></i> Online
+              </button>
+              <button class="txn-type-btn" data-type="refunds">
+                <i class="fas fa-undo"></i> Refund
+              </button>
+              <button class="txn-type-btn" data-type="expenses">
+                <i class="fas fa-arrow-circle-down"></i> Expense
+              </button>
+            </div>
+            <button id="add-expense-btn" class="txn-add-expense-btn" type="button">
+              <i class="fas fa-plus"></i> Expense
             </button>
           </div>
 
@@ -3815,23 +3821,14 @@
         </div>
 
         <div class="guest-details">
+          <!-- Two rows, deliberately:
+                 1. the three figures you scan while deciding — price, which
+                    night they are on, any discount;
+                 2. the check-in time, and beside it the balance it feeds
+                    into — what you actually settle on.
+               The Discount tile is appended to row 1 at runtime by
+               addDiscountToCheckoutModal(), which is why it is last here. -->
           <div class="stat-grid" id="checkout-stat-grid">
-            <div class="stat-tile">
-              <div class="stat-tile-head">
-                <span class="stat-icon stat-icon-blue"><i class="far fa-clock"></i></span>
-                <span class="stat-label">Check-in</span>
-              </div>
-              <div class="stat-value-row">
-                <span class="stat-value" id="checkout-checkin-time"></span>
-                <button id="edit-checkin-time"
-                        class="stat-edit-btn"
-                        type="button"
-                        aria-label="Edit check-in time"
-                        title="Edit check-in time">
-                  <i class="fas fa-edit"></i>
-                </button>
-              </div>
-            </div>
             <div class="stat-tile">
               <div class="stat-tile-head">
                 <span class="stat-icon stat-icon-purple"><i class="fas fa-tag"></i></span>
@@ -3852,12 +3849,30 @@
             <!-- Discount tile inserted here at runtime by addDiscountToCheckoutModal() -->
           </div>
 
-          <div class="balance-hero" id="checkout-balance-hero">
-            <div class="balance-hero-left">
-              <span class="balance-hero-icon"><i class="fas fa-wallet"></i></span>
-              <span class="balance-hero-title">Balance Due</span>
+          <div class="checkout-settle-row">
+            <div class="stat-tile">
+              <div class="stat-tile-head">
+                <span class="stat-icon stat-icon-blue"><i class="far fa-clock"></i></span>
+                <span class="stat-label">Check-in</span>
+              </div>
+              <div class="stat-value-row">
+                <span class="stat-value" id="checkout-checkin-time"></span>
+                <button id="edit-checkin-time"
+                        class="stat-edit-btn"
+                        type="button"
+                        aria-label="Edit check-in time"
+                        title="Edit check-in time">
+                  <i class="fas fa-edit"></i>
+                </button>
+              </div>
             </div>
-            <div class="balance-hero-value" id="checkout-balance">₹0</div>
+            <div class="balance-hero" id="checkout-balance-hero">
+              <div class="balance-hero-left">
+                <span class="balance-hero-icon"><i class="fas fa-wallet"></i></span>
+                <span class="balance-hero-title">Balance Due</span>
+              </div>
+              <div class="balance-hero-value" id="checkout-balance">₹0</div>
+            </div>
           </div>
         </div>
 
@@ -3865,12 +3880,12 @@
         <div class="add-on-section">
           <h3 style="margin-bottom: 0.75rem">Add Services</h3>
           <div class="svc-chips">
-            <button class="svc-chip" data-service="Water 2L" data-price="30"><i class="fas fa-tint"></i> Water 2L<span class="svc-chip-price">₹30</span></button>
-            <button class="svc-chip" data-service="Water 1L" data-price="20"><i class="fas fa-tint"></i> Water 1L<span class="svc-chip-price">₹20</span></button>
-            <button class="svc-chip" data-service="Extra Bed" data-price="" data-accommodation="true"><i class="fas fa-bed"></i> Extra Bed<span class="svc-chip-price">₹ ?</span></button>
-            <button class="svc-chip" id="ac-service-btn" data-service="AC" data-price="" data-accommodation="true" style="display: none"><i class="fas fa-snowflake"></i> Add AC<span class="svc-chip-price">₹ ?</span></button>
-            <button class="svc-chip" data-service="" data-price="" data-custom="true"><i class="fas fa-pen"></i> Custom<span class="svc-chip-price">₹ ?</span></button>
-            <button class="svc-chip hk-chip" id="hk-chip-btn" title="Request housekeeping"><i class="fas fa-broom"></i> Housekeeping</button>
+            <button class="svc-chip" data-service="Water 2L" data-price="30"><i class="fas fa-tint"></i><span class="svc-chip-label">Water 2L</span><span class="svc-chip-price">₹30</span></button>
+            <button class="svc-chip" data-service="Water 1L" data-price="20"><i class="fas fa-tint"></i><span class="svc-chip-label">Water 1L</span><span class="svc-chip-price">₹20</span></button>
+            <button class="svc-chip" data-service="Extra Bed" data-price="" data-accommodation="true"><i class="fas fa-bed"></i><span class="svc-chip-label">Extra Bed</span><span class="svc-chip-price">₹ ?</span></button>
+            <button class="svc-chip" id="ac-service-btn" data-service="AC" data-price="" data-accommodation="true" style="display: none"><i class="fas fa-snowflake"></i><span class="svc-chip-label">Add AC</span><span class="svc-chip-price">₹ ?</span></button>
+            <button class="svc-chip" data-service="" data-price="" data-custom="true"><i class="fas fa-pen"></i><span class="svc-chip-label">Custom</span><span class="svc-chip-price">₹ ?</span></button>
+            <button class="svc-chip hk-chip" id="hk-chip-btn" title="Request housekeeping"><i class="fas fa-broom"></i><span class="svc-chip-label">Housekeeping</span></button>
           </div>
           <div id="service-form" class="hidden">
             <div id="svc-name-row" class="form-row" style="margin-top: 1rem; display: none">
@@ -4504,12 +4519,19 @@
           <!-- Date + Category row -->
           <div style="display:flex;gap:0.75rem;margin-bottom:0.75rem;">
             <div style="flex:1;">
-              <label class="form-label" for="expense-date" style="font-size:0.78rem;">Date</label>
-              <input type="date" class="form-control" id="expense-date" required style="font-size:0.88rem;padding:0.42rem 0.6rem;" />
+              <label class="form-label" for="expense-date" style="font-size:0.78rem;display:flex;align-items:center;gap:0.35rem;">
+                <span>Date</span>
+                <!-- Shown by expense.js while the expense date is pinned to a
+                     back-date. Tap to unpin. -->
+                <button type="button" id="expense-date-lock" class="exp-date-lock">
+                  <i class="fas fa-thumbtack"></i><span id="expense-date-lock-txt"></span>
+                </button>
+              </label>
+              <input type="date" class="form-control" id="expense-date" required style="font-size:0.95rem;padding:0.5rem 0.7rem;min-height:44px;" />
             </div>
             <div style="flex:2;">
               <label class="form-label" for="expense-category" style="font-size:0.78rem;">Category</label>
-              <select class="form-control" id="expense-category" required style="font-size:0.88rem;padding:0.42rem 0.6rem;">
+              <select class="form-control" id="expense-category" required style="font-size:0.95rem;padding:0.5rem 0.7rem;min-height:44px;">
                 <option value="">Select…</option>
                 <option value="salary" data-icon="fa-user-tie">Salary</option>
                 <option value="staff_advance" data-icon="fa-hand-holding-dollar">Staff Advance</option>

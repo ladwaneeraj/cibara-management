@@ -19,17 +19,109 @@ const CATEGORY_TIER = {
   others:             "tier2",
 };
 
+// ─── Expense-date lock ───────────────────────────────────────────────────────
+// Entering a day's expenses is a batch: you sit on 9 Aug and punch in six
+// rows. The form used to reset to today on every open, so rows 2..6 silently
+// landed on the wrong day unless the operator re-picked the date each time.
+//
+// The lock pins the form to whatever date the last expense was saved with and
+// keeps it there. It is released by exactly one thing: moving the Transactions
+// list to a different date (transaction-tracking.js calls
+// window.releaseExpenseDateLock from its date-range setter). A pin chip beside
+// the Date label shows the lock and lets the operator drop it by hand.
+//
+// Only non-today dates are pinned. Pinning today would be a no-op that turns
+// into a bug if the app is left open across midnight.
+let _stickyExpenseDate = null;   // "YYYY-MM-DD" | null
+
+function _todayYmd() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+// A pinned date is only usable while it is still inside the range the picker
+// accepts (not in the future, not older than the picker's minDate of Jan 1
+// last year). Anything else is stale and silently dropped.
+function _stickyDateUsable(ymd) {
+  if (!ymd || !/^\d{4}-\d{2}-\d{2}$/.test(ymd)) return false;
+  const today = _todayYmd();
+  if (ymd > today) return false;
+  return ymd >= `${new Date().getFullYear() - 1}-01-01`;
+}
+
+// The single day the Transactions list is showing, if it is showing exactly
+// one. Null on Today / Last-3-days / any multi-day range, where "the viewed
+// date" is not a single thing and today is the right default.
+function _viewedTransactionsDate() {
+  try {
+    if (typeof window.getTransactionsViewDate === "function") {
+      const d = window.getTransactionsViewDate();
+      return _stickyDateUsable(d) ? d : null;
+    }
+  } catch (e) { /* transactions module not loaded — fall through */ }
+  return null;
+}
+
+// Date the modal should open on: an explicit pin wins, then the day the list
+// is showing, then today.
+function _defaultExpenseDate() {
+  if (_stickyDateUsable(_stickyExpenseDate)) return _stickyExpenseDate;
+  return _viewedTransactionsDate() || _todayYmd();
+}
+
+function _renderExpenseDateLock() {
+  const chip = document.getElementById("expense-date-lock");
+  if (!chip) return;
+  // Editing an existing expense: the row already has a date of its own and
+  // the pin has nothing to say about it. Leaving the chip visible invited a
+  // tap that would silently move the edited expense to a different day.
+  if (_expenseEditMode) { chip.style.display = "none"; return; }
+  const pinned = _stickyDateUsable(_stickyExpenseDate) && _stickyExpenseDate !== _todayYmd();
+  chip.style.display = pinned ? "inline-flex" : "none";
+  if (pinned) {
+    const txt = document.getElementById("expense-date-lock-txt");
+    if (txt) txt.textContent = _fmtDateShort(_stickyExpenseDate);
+    chip.title = "Locked to " + _fmtDateShort(_stickyExpenseDate) +
+      " — new expenses keep this date until you move the list to another day. Tap to unlock.";
+  }
+}
+
+// "2026-08-09" → "09-08-2026". Same DD-MM-YYYY the pickers and the
+// transaction list use.
+function _fmtDateShort(ymd) {
+  if (!ymd) return "";
+  const d = new Date(ymd + "T00:00:00");
+  if (isNaN(d.getTime())) return ymd;
+  return `${String(d.getDate()).padStart(2, "0")}-${String(d.getMonth() + 1).padStart(2, "0")}-${d.getFullYear()}`;
+}
+
+// Called after a successful save. Pins non-today dates, clears the pin when
+// the operator has gone back to today.
+function _pinExpenseDate(ymd) {
+  _stickyExpenseDate =
+    _stickyDateUsable(ymd) && ymd !== _todayYmd() ? ymd : null;
+  _renderExpenseDateLock();
+}
+
+// Public: the Transactions view calls this whenever the shown date changes,
+// and the pin chip calls it on tap.
+window.releaseExpenseDateLock = function () {
+  if (_stickyExpenseDate === null) return;
+  _stickyExpenseDate = null;
+  _renderExpenseDateLock();
+};
+
 // Format any common date input (YYYY-MM-DD, ISO, or Date-parseable string)
-// to DD/MM/YYYY for display. Keeps storage / API formats untouched —
+// to DD-MM-YYYY for display. Keeps storage / API formats untouched —
 // callers should pass the raw value in and use the return value only
 // for rendering. Returns empty string on invalid input so failure
-// produces a blank, not "NaN/NaN/NaN".
+// produces a blank, not "NaN-NaN-NaN".
 function _fmtDateIN(raw) {
   if (!raw) return "";
   // Fast path: server emits "YYYY-MM-DD" — split, reorder, no Date object.
   if (typeof raw === "string" && /^\d{4}-\d{2}-\d{2}/.test(raw)) {
     const ymd = raw.slice(0, 10).split("-");
-    return ymd[2] + "/" + ymd[1] + "/" + ymd[0];
+    return ymd[2] + "-" + ymd[1] + "-" + ymd[0];
   }
   // Fallback: try Date parsing for anything else (ISO, RFC 2822, etc.).
   const d = new Date(raw);
@@ -37,7 +129,7 @@ function _fmtDateIN(raw) {
   const dd = String(d.getDate()).padStart(2, "0");
   const mm = String(d.getMonth() + 1).padStart(2, "0");
   const yy = d.getFullYear();
-  return dd + "/" + mm + "/" + yy;
+  return dd + "-" + mm + "-" + yy;
 }
 
 let expenseType = "transaction";
@@ -217,12 +309,20 @@ function _ensureDateAltStyles() {
   st.textContent =
     "." + _DATE_ALT_CLASS + "{" +
     "box-sizing:border-box;width:100%;" +
-    "font-size:.88rem;padding:.42rem .6rem;min-height:36px;" +   /* == .ns-btn */
+    "font-size:.95rem;padding:.5rem .7rem;min-height:44px;" +   /* == .ns-btn */
     "border:1px solid #ddd;border-radius:var(--border-radius,8px);" +
     "background:#fff;color:#1a202c;line-height:1.35;}" +
     "." + _DATE_ALT_CLASS + ":hover{border-color:#bfc6cf;}" +
     "." + _DATE_ALT_CLASS + ":focus{outline:none;border-color:#3182ce;" +
-    "box-shadow:0 0 0 3px rgba(49,130,206,.18);}";
+    "box-shadow:0 0 0 3px rgba(49,130,206,.18);}" +
+    /* Pin chip beside the Date label — see the expense-date lock block at the
+       top of this file. */
+    ".exp-date-lock{display:none;align-items:center;gap:.25rem;" +
+    "border:1px solid #f6ad55;background:#fffaf0;color:#b7791f;" +
+    "border-radius:999px;padding:1px 7px;font-size:.68rem;font-weight:600;" +
+    "line-height:1.5;cursor:pointer;}" +
+    ".exp-date-lock i{font-size:.6rem;}" +
+    ".exp-date-lock:active{background:#feebc8;}";
   document.head.appendChild(st);
 }
 
@@ -238,7 +338,7 @@ function _initExpenseDatePickers() {
     _expenseDatePickers[id] = window.flatpickr(el, {
       dateFormat: "Y-m-d",       // the value the form reads — unchanged
       altInput: true,            // what the operator sees
-      altFormat: "d M Y",        // "08 Aug 2026"
+      altFormat: "d-m-Y",        // "08-08-2026"
       maxDate: allowFuture ? null : today,
       // Back-dating an expense is normal (yesterday's diesel bill entered
       // this morning); a year of headroom covers it without letting a
@@ -277,7 +377,10 @@ function _initExpenseSelects() {
   if (!window.CibaraSelect) return;   // script missing — native select still works
   window.CibaraSelect.enhance("expense-category", {
     placeholder: "Select a category…",
-    maxHeight: 264,   // exactly 8 rows — never clips one mid-text
+    // 9 rows at the 44px touch-target row height (+ panel padding).
+    // CibaraSelect snaps this down to whole rows and clamps it to the space
+    // actually available, so a short viewport still gets a clean edge.
+    maxHeight: 44 * 9 + 10,
   });
 }
 
@@ -301,6 +404,15 @@ function initializeExpense() {
 
   const expenseForm = document.getElementById("expense-form");
   if (expenseForm) expenseForm.addEventListener("submit", submitExpense);
+
+  // Tap the pin chip to drop the date lock and fall back to today.
+  const dateLockChip = document.getElementById("expense-date-lock");
+  if (dateLockChip) dateLockChip.addEventListener("click", (e) => {
+    e.preventDefault();
+    if (_expenseEditMode) return;      // chip is hidden then, but be explicit
+    window.releaseExpenseDateLock();
+    _setExpenseDate("expense-date", _defaultExpenseDate());
+  });
 
   // Expense type toggle (Daily / From Account)
   document.querySelectorAll("#expense-form .exp-type-btn").forEach((btn) => {
@@ -1232,6 +1344,8 @@ function openExpenseEditModal(log) {
 
   _expenseEditMode = true;
   _expenseEditDocId = log._doc_id;
+  // showExpenseModal rendered the chip before this flag was set.
+  _renderExpenseDateLock();
 
   // Title + submit button reflect edit mode
   const title = document.getElementById("expense-modal-title");
@@ -1423,12 +1537,12 @@ function showExpenseModal(type, options) {
   const fileInput = document.getElementById("expense-invoice-file");
   if (fileInput) fileInput.value = "";
 
-  // Default date = today. Routed through the picker so the visible text
-  // resets too — otherwise reopening the form showed the previous entry's
-  // date while the underlying value had already been reset to today.
-  const now = new Date();
-  _setExpenseDate("expense-date",
-    `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`);
+  // Default date: pinned date → the day the Transactions list is showing →
+  // today. Routed through the picker so the visible text follows — otherwise
+  // reopening the form showed the previous entry's date while the underlying
+  // value had already been reset.
+  _setExpenseDate("expense-date", _defaultExpenseDate());
+  _renderExpenseDateLock();
 
   // Default payment = cash
   document.querySelectorAll("#expense-form .payment-btn").forEach((b) => b.classList.remove("active"));
@@ -1637,20 +1751,27 @@ async function submitExpense(e) {
         return;
       }
       document.getElementById("expense-modal")?.classList.remove("show");
+      _pinExpenseDate(date);
       // Smooth-insert the echoed expense row (same shape as /add_expense).
+      let _advInserted = false;
       if (advResult.expense && advResult.expense._doc_id) {
         try {
           if (typeof logs !== "undefined" && logs && Array.isArray(logs.expenses)) {
             logs.expenses.push(advResult.expense);
           }
-          if (typeof window.renderEnhancedLogs === "function") {
+          if (typeof window.txnInsertExpenseRow === "function") {
+            _advInserted = window.txnInsertExpenseRow(advResult.expense);
+          }
+          if (!_advInserted && typeof window.renderEnhancedLogs === "function") {
             window.renderEnhancedLogs();
           }
         } catch (err) {
           console.warn("Advance smooth-insert skipped:", err);
         }
       }
-      if (typeof window.refreshTransactionsView === "function") {
+      if (_advInserted && typeof window.reconcileTransactionsView === "function") {
+        window.reconcileTransactionsView();
+      } else if (typeof window.refreshTransactionsView === "function") {
         window.refreshTransactionsView();
       } else {
         debouncedFetchData();
@@ -1787,18 +1908,30 @@ async function submitExpense(e) {
       _expenseEditMode = false;
       _expenseEditDocId = null;
 
-      // ── Smooth-insert: show the new expense on its date INSTANTLY ────────
+      // Keep the form on this date for the next entry. Entering a day's
+      // expenses is a batch; see the expense-date lock block at the top.
+      if (!wasEdit) _pinExpenseDate(date);
+
+      // ── Smooth-insert: splice the new row into the list ──────────────────
       // The server echoes the stored row (incl. _doc_id, so the row's
-      // edit/delete buttons work immediately). Patch the in-memory logs
-      // cache and re-render right away; the background refresh below then
-      // reconciles with authoritative server data (the cache is replaced
-      // wholesale, so no duplicate rows are possible).
+      // edit/delete actions work immediately). Patch the in-memory logs cache,
+      // then try the incremental insert: one row grows into place and only the
+      // EXPENSES tile moves. It used to call renderEnhancedLogs(), which
+      // rebuilt every row into innerHTML for the sake of one addition.
+      //
+      // txnInsertExpenseRow returns false when the row belongs to a date group
+      // or filter that is not on screen; that is the signal to do the full
+      // render after all.
+      let _insertedIncrementally = false;
       if (!wasEdit && result.expense && result.expense._doc_id) {
         try {
           if (typeof logs !== "undefined" && logs && Array.isArray(logs.expenses)) {
             logs.expenses.push(result.expense);
           }
-          if (typeof window.renderEnhancedLogs === "function") {
+          if (typeof window.txnInsertExpenseRow === "function") {
+            _insertedIncrementally = window.txnInsertExpenseRow(result.expense);
+          }
+          if (!_insertedIncrementally && typeof window.renderEnhancedLogs === "function") {
             window.renderEnhancedLogs();
           }
         } catch (e) {
@@ -1808,8 +1941,12 @@ async function submitExpense(e) {
 
       // Extended-range aware refresh so an edit/add to a PAST day (Last 3 days /
       // custom range) re-pulls from the server instead of leaving the stale row
-      // on screen. Falls back to debouncedFetchData (Today view / older bundle).
-      if (typeof window.refreshTransactionsView === "function") {
+      // on screen. When the row was spliced in, the refresh is deferred past the
+      // insert animation so the authoritative re-render lands invisibly instead
+      // of stomping the animation halfway through.
+      if (_insertedIncrementally && typeof window.reconcileTransactionsView === "function") {
+        window.reconcileTransactionsView();
+      } else if (typeof window.refreshTransactionsView === "function") {
         window.refreshTransactionsView();
       } else {
         debouncedFetchData();
@@ -2010,6 +2147,9 @@ function updateRenderLogs(originalRenderLogs) {
     if (totalRevenue) totalRevenue.textContent = "₹" + (totals.cash + totals.online - (totals.refunds || 0));
 
     if (allRecentLogs.length === 0) {
+      // Bypasses renderEnhancedLogs' render cache, so invalidate it — a later
+      // identical render would otherwise be skipped and leave this on screen.
+      transactionLog._lastHTML = null;
       transactionLog.innerHTML =
         '<div class="empty-state" style="padding:2rem;"><i class="fas fa-receipt fa-3x"></i><p>No transactions in the past 3 days</p></div>';
       return;
@@ -2076,6 +2216,7 @@ function updateRenderLogs(originalRenderLogs) {
       });
     });
 
+    transactionLog._lastHTML = null;   // bypasses the render cache
     transactionLog.innerHTML = logsHTML;
   };
 }
@@ -2153,7 +2294,8 @@ function renderReportDataWithExpenses(data) {
 
   const startDate = new Date(document.getElementById("start-date").value);
   const endDate   = new Date(document.getElementById("end-date").value);
-  const fmt = (d) => d.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
+  const fmt = (d) => isNaN(d.getTime()) ? ""
+    : `${String(d.getDate()).padStart(2, "0")}-${String(d.getMonth() + 1).padStart(2, "0")}-${d.getFullYear()}`;
   const range = fmt(startDate) === fmt(endDate) ? fmt(startDate) : `${fmt(startDate)} to ${fmt(endDate)}`;
 
   let html = `

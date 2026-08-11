@@ -48,19 +48,19 @@
     /* Trigger — matches .form-control metrics so it lines up with the Date
        field beside it. */
     ".ns-btn{display:flex;align-items:center;gap:.5rem;width:100%;",
-    "  padding:.42rem .6rem;border:1px solid #ddd;",
+    "  padding:.5rem .7rem;border:1px solid #ddd;",
     "  border-radius:var(--border-radius,8px);",
-    "  background:#fff;font:500 .88rem 'Inter',system-ui,sans-serif;color:#1a202c;",
-    "  cursor:pointer;text-align:left;line-height:1.35;min-height:36px;}",
+    "  background:#fff;font:500 .95rem 'Inter',system-ui,sans-serif;color:#1a202c;",
+    "  cursor:pointer;text-align:left;line-height:1.35;min-height:44px;}",
     ".ns-btn:hover{border-color:#bfc6cf;}",
     ".ns-btn:focus-visible{outline:none;border-color:#3182ce;",
     "  box-shadow:0 0 0 3px rgba(49,130,206,.18);}",
     ".ns-wrap.ns-open .ns-btn{border-color:#3182ce;",
     "  box-shadow:0 0 0 3px rgba(49,130,206,.18);}",
     ".ns-btn.ns-empty{color:#a0aec0;}",
-    ".ns-btn-ico{width:15px;text-align:center;color:#718096;font-size:.8rem;flex:0 0 auto;}",
+    ".ns-btn-ico{width:18px;text-align:center;color:#718096;font-size:.9rem;flex:0 0 auto;}",
     ".ns-btn-txt{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}",
-    ".ns-caret{flex:0 0 auto;color:#a0aec0;font-size:.68rem;transition:transform .15s;}",
+    ".ns-caret{flex:0 0 auto;color:#a0aec0;font-size:.75rem;transition:transform .15s;}",
     ".ns-wrap.ns-open .ns-caret{transform:rotate(180deg);}",
 
     /* Panel — position:fixed and parented to <body>.
@@ -69,21 +69,25 @@
        Category row sat low in the scrolled form, and the remaining categories
        could not be reached. Escaping to the body avoids every ancestor clip. */
     ".ns-panel{position:fixed;z-index:6000;",
-    "  background:#fff;border:1px solid #e2e8f0;border-radius:10px;",
-    "  box-shadow:0 10px 28px rgba(15,23,42,.16);padding:4px;",
-    "  max-height:264px;overflow-y:auto;overscroll-behavior:contain;display:none;}",
+    "  background:#fff;border:1px solid #e2e8f0;border-radius:12px;",
+    "  box-shadow:0 10px 28px rgba(15,23,42,.16);padding:5px;",
+    "  max-height:404px;overflow-y:auto;overscroll-behavior:contain;display:none;",
+    "  -webkit-overflow-scrolling:touch;}",
     ".ns-panel.ns-panel-open{display:block;}",
 
-    /* Option rows — deliberately tight: 30px, not the OS's 36-40px. */
-    ".ns-opt{display:flex;align-items:center;gap:.5rem;padding:0 .5rem;",
-    "  border-radius:7px;cursor:pointer;font:500 .84rem 'Inter',system-ui,sans-serif;",
-    "  color:#2d3748;line-height:1.25;height:32px;}",
+    /* Option rows — 44px, the minimum comfortable touch target. This used to
+       be 32px to keep the panel compact; on a phone that read as "very small"
+       and was easy to mis-tap. Density is not worth a wrong category. */
+    ".ns-opt{display:flex;align-items:center;gap:.65rem;padding:0 .65rem;",
+    "  border-radius:9px;cursor:pointer;font:500 .95rem 'Inter',system-ui,sans-serif;",
+    "  color:#2d3748;line-height:1.25;height:44px;}",
     ".ns-opt:hover,.ns-opt.ns-active{background:#edf2f7;}",
+    ".ns-opt:active{background:#e2e8f0;}",
     ".ns-opt.ns-chosen{background:#ebf5ff;color:#2b6cb0;font-weight:600;}",
-    ".ns-opt-ico{width:15px;text-align:center;color:#a0aec0;font-size:.78rem;flex:0 0 auto;}",
+    ".ns-opt-ico{width:20px;text-align:center;color:#a0aec0;font-size:.92rem;flex:0 0 auto;}",
     ".ns-opt.ns-chosen .ns-opt-ico{color:#3182ce;}",
     ".ns-opt-txt{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}",
-    ".ns-opt-tick{flex:0 0 auto;color:#3182ce;font-size:.72rem;visibility:hidden;}",
+    ".ns-opt-tick{flex:0 0 auto;color:#3182ce;font-size:.82rem;visibility:hidden;}",
     ".ns-opt.ns-chosen .ns-opt-tick{visibility:visible;}",
     ".ns-opt.ns-placeholder{color:#a0aec0;}",
     ".ns-sep{height:1px;background:#edf2f7;margin:4px 6px;}"
@@ -98,7 +102,8 @@
   }
 
   // Must match .ns-opt height / .ns-panel padding in CSS above.
-  var ROW_H = 32, PANEL_PAD = 8, DEFAULT_MAX = 8;   // show 8 rows by default
+  var ROW_H = 44, PANEL_PAD = 10, DEFAULT_MAX = 9;  // show 9 rows by default
+  var MIN_PANEL_W = 240;                            // never narrower than this
 
   /**
    * Snap a pixel budget down to a whole number of rows.
@@ -285,8 +290,12 @@
   NiceSelect.prototype.position = function () {
     var r = this.btn.getBoundingClientRect();
     var p = this.panel;
-    p.style.width = r.width + "px";
-    p.style.left = Math.max(4, Math.min(r.left, window.innerWidth - r.width - 4)) + "px";
+    // At least MIN_PANEL_W so a narrow trigger (the Category field is a third
+    // of its row) doesn't ellipsis every option label, but never wider than
+    // the viewport allows.
+    var w = Math.min(Math.max(r.width, MIN_PANEL_W), window.innerWidth - 8);
+    p.style.width = w + "px";
+    p.style.left = Math.max(4, Math.min(r.left, window.innerWidth - w - 4)) + "px";
 
     var need = Math.min(p.scrollHeight + 10, this.maxH);
     var below = window.innerHeight - r.bottom;

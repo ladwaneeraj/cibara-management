@@ -1738,3 +1738,61 @@ td.stf-grid-name.stf-grid-foot {
 }
 @keyframes stfQpFade { from { opacity: 0; } to { opacity: 1; } }
 @keyframes stfQpPop { from { transform: translateY(16px) scale(0.98); } to { transform: none; } }
+
+/* ── Quick-pay date picker: static (in-panel) flatpickr ──────────────────────
+   The pay-period calendar is created with `static: true` so it renders inside
+   .stf-range-lbl instead of being appended to <body>. On phones the quick-pay
+   panel is a position:fixed, internally-scrolling overlay, and a body-appended
+   calendar is placed once at a document coordinate — it then drifts away from
+   its input the moment anything scrolls. These rules give the in-panel
+   calendar somewhere sane to sit. */
+.stf-qp .stf-range-lbl {
+  position: relative;
+}
+.stf-qp .flatpickr-wrapper {
+  position: static;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.stf-qp .flatpickr-calendar.static {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 3700;          /* above #stf-quickpay-slot (3600) */
+}
+/* Flipped upward when there is no room below (flatpickr adds .arrowBottom). */
+.stf-qp .flatpickr-calendar.static.arrowBottom {
+  top: auto;
+  bottom: calc(100% + 6px);
+}
+
+/* ── Meals row in the quick-pay panel ────────────────────────────────────────
+   Sits between the bonus/advance inputs and the "Paying now" card: a fixed,
+   non-editable line, because the meal charge is derived from the staff
+   member's rate and the days they were actually present. Styled quieter than
+   the net card so it reads as a deduction, not a total. */
+.stf-qp-mealrow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin: 0.15rem 0 0.5rem;
+  padding: 0.5rem 0.7rem;
+  border: 1px dashed #f6ad55;
+  border-radius: 8px;
+  background: #fffaf0;
+}
+.stf-qp-meallbl {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: #b7791f;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.stf-qp-mealval {
+  font-size: 0.88rem;
+  font-weight: 700;
+  color: #b7791f;
+  font-variant-numeric: tabular-nums;
+}

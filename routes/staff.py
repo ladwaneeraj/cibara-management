@@ -9,7 +9,7 @@ enforced here via @requires_permission; see services/permissions.py:
     staff.manage           admin             add/edit staff, wages, REVERSALS
     staff.payroll.view     manager + admin   wages, advances, salary figures
     staff.advance.give     manager + admin   record advances
-    staff.salary.pay       manager + admin   pay salaries
+    staff.salary.pay       manager + admin   pay salaries, log staff meals
     staff.pay.account      admin             pay from bank/UPI — managers are
                                              limited to counter cash (enforced
                                              in give_advance / pay_salary)
@@ -368,9 +368,14 @@ def pay_salary(staff_id):
                             "days": pay["days_worked"],
                             "gross": pay["gross"],
                             "advance_deducted": pay["advance_deducted"],
+                            "meal_deducted": pay.get("meal_deducted", 0),
                             "net_paid": pay["net_paid"]})
         msg = "Salary settled for {}: ₹{} paid".format(
             pay["staff_name"], pay["net_paid"])
+        if pay.get("meal_deducted"):
+            msg += " · ₹{} meals withheld ({} day{})".format(
+                pay["meal_deducted"], pay.get("meal_days", 0),
+                "s" if pay.get("meal_days", 0) != 1 else "")
         if out["advance_remaining"] > 0:
             msg += " · ₹{} advance carries forward".format(
                 out["advance_remaining"])
@@ -381,6 +386,103 @@ def pay_salary(staff_id):
         return _fail(ve, 409 if "already paid" in str(ve) else 400)
     except Exception as e:
         logger.exception("staff/pay_salary failed")
+        return _fail(e, 500)
+
+
+# ─── Meals ─────────────────────────────────────────────────────────────────
+# Staff who eat at the lodge are charged a per-day meal rate. pay_salary
+# withholds it from the payout; these routes record the matching kitchen cost
+# as one expense covering a range of days (in practice, once a week).
+# See the meals block in services/staff_service.py.
+
+@staff_bp.route("/<staff_id>/meal_preview", methods=["GET"])
+@requires_permission("staff.payroll.view")
+def meal_preview(staff_id):
+    """Query: start & end (YYYY-MM-DD). Computes what log_meals would
+    charge — days present, days already logged, total — without writing."""
+    try:
+        return jsonify(success=True, **svc.meal_preview(
+            staff_id, (request.args.get("start") or "").strip(),
+            (request.args.get("end") or "").strip()))
+    except ValueError as ve:
+        return _fail(ve)
+    except Exception as e:
+        logger.exception("staff/meal_preview failed")
+        return _fail(e, 500)
+
+
+@staff_bp.route("/<staff_id>/log_meals", methods=["POST"])
+@requires_permission("staff.salary.pay")
+def log_meals(staff_id):
+    """
+    Body: { period_start, period_end, note?, payment_method: cash|online,
+            expense_type: transaction|report }
+
+    The amount is NOT accepted from the client — the server derives it from
+    the staff record's meal_rate and the period's attendance, so it always
+    agrees with what pay_salary withheld.
+    """
+    try:
+        data = request.json or {}
+        if _reject_account_source(data):
+            return _fail(_ACCOUNT_403, 403)
+        out = svc.log_meals(
+            staff_id,
+            str(data.get("period_start", "")).strip(),
+            str(data.get("period_end", "")).strip(),
+            data.get("payment_method", "cash"),
+            data.get("expense_type", "transaction"),
+            data.get("note", ""),
+            g.current_user)
+        invalidate_rooms_and_totals()
+        log = out["meal_log"]
+        write_log("staff.meals.log",
+                  target_collection="staff_meal_logs",
+                  target_id=log["id"],
+                  metadata={"staff": log["staff_name"],
+                            "period": "{}..{}".format(log["period_start"],
+                                                      log["period_end"]),
+                            "days": log["meal_days"],
+                            "rate": log["meal_rate"],
+                            "amount": log["amount"]})
+        msg = "Meals logged for {}: {} day{} × ₹{} = ₹{}".format(
+            log["staff_name"], log["meal_days"],
+            "s" if log["meal_days"] != 1 else "",
+            log["meal_rate"], log["amount"])
+        if log["skipped_dates"]:
+            msg += " · {} already-logged day{} skipped".format(
+                len(log["skipped_dates"]),
+                "s" if len(log["skipped_dates"]) != 1 else "")
+        return jsonify(success=True, message=msg, meal_log=log,
+                       expense=out["expense"])
+    except ValueError as ve:
+        return _fail(ve, 409 if "already logged" in str(ve) else 400)
+    except Exception as e:
+        logger.exception("staff/log_meals failed")
+        return _fail(e, 500)
+
+
+@staff_bp.route("/meals/<log_id>", methods=["DELETE"])
+@requires_permission("staff.manage")   # reversals stay admin-only
+def delete_meal_log(log_id):
+    try:
+        log = svc.delete_meal_log(log_id)
+        invalidate_rooms_and_totals()
+        write_log("staff.meals.delete",
+                  target_collection="staff_meal_logs",
+                  target_id=log_id,
+                  before={"staff": log.get("staff_name"),
+                          "period": "{}..{}".format(log.get("period_start"),
+                                                    log.get("period_end")),
+                          "days": log.get("meal_days"),
+                          "amount": log.get("amount")})
+        return jsonify(success=True,
+                       message="Meal log reversed — those days can be "
+                               "logged again")
+    except ValueError as ve:
+        return _fail(ve, 404)
+    except Exception as e:
+        logger.exception("staff/meals DELETE failed")
         return _fail(e, 500)
 
 

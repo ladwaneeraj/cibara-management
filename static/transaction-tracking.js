@@ -85,6 +85,27 @@ function _payIcon(kind, item) {
 // Escape every HTML-significant character for use inside a double-quoted
 // attribute. Expense descriptions are operator-entered free text and routinely
 // contain &, ", ' and angle brackets.
+// True while renderEnhancedLogs is being run only to compute what the list
+// WOULD look like. It still refreshes the summary tiles (they are absolute
+// values recomputed from the same data, so that is a correction, not a
+// side effect) — what it suppresses is the innerHTML rewrite. Set by
+// txnMarkListSynced().
+let _txnDryRun = false;
+
+/**
+ * "2026-08-11" -> "11-08-2026".
+ *
+ * The app shows dates numerically as DD-MM-YYYY throughout. Pure string
+ * surgery on the YYYY-MM-DD the server stores — no Date object, so no
+ * timezone can shift the day (this deployment runs in IST, where a UTC
+ * round-trip moves any date between 00:00 and 05:30 back by one).
+ */
+function _ddmmyyyy(ymd) {
+  const s = String(ymd || "");
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s);
+  return m ? m[3] + "-" + m[2] + "-" + m[1] : s;
+}
+
 function _txnAttrEsc(v) {
   return String(v == null ? "" : v).replace(/[&<>"']/g, function (c) {
     return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
@@ -438,6 +459,8 @@ class TransactionLogManager {
     if (onlineTotalEl) onlineTotalEl.textContent = "₹" + totals.online;
 
     if (allRecentLogs.length === 0) {
+      if (_txnDryRun) { transactionLog._lastHTML = null; return; }
+      transactionLog._lastHTML = null;
       transactionLog.innerHTML = `<div class="empty-state" style="padding: 2rem; text-align:center;">
         <i class="fas fa-receipt fa-3x" style="opacity:0.4;margin-bottom:1rem;display:block;"></i>
         <p>No transactions in this period</p>
@@ -460,10 +483,13 @@ class TransactionLogManager {
       return _localYMD(d);
     })();
 
+    // Day-group heading. Numeric DD-MM-YYYY, matching every other date in
+    // the app — "11 Aug" left the year to be inferred, which is wrong as
+    // soon as you browse a past range.
     function formatDate(dateStr) {
       const date = new Date(dateStr + "T00:00:00");
-      const options = { weekday: "long", month: "short", day: "numeric" };
-      return date.toLocaleDateString("en-IN", options);
+      const weekday = date.toLocaleDateString("en-IN", { weekday: "long" });
+      return weekday + ", " + _ddmmyyyy(dateStr);
     }
 
     Object.keys(logsByDate)
@@ -551,7 +577,58 @@ class TransactionLogManager {
         logsHTML += '</div>';
       });
 
+    // ── Skip a render that would change nothing ──────────────────────────
+    // fetchData() runs on a 2-second debounce after most actions and always
+    // ended with a full innerHTML rebuild of this list, whether or not any
+    // transaction had changed. That rebuild is what reads as "the whole list
+    // reloaded" a moment after adding an expense.
+    //
+    // The generated HTML is a pure function of the log data, so comparing it
+    // to the last generated string is an exact test: identical string means
+    // the DOM already shows exactly this. _txnDryRun lets the incremental
+    // splice helpers record the string their spliced DOM corresponds to, so
+    // the reconcile that follows them also skips.
+    if (transactionLog._lastHTML === logsHTML && !_txnDryRun) {
+      // The list is already right, but the state layered ON TOP of it is not
+      // necessarily: the expense search bar is created lazily by a
+      // MutationObserver that only fires on a real innerHTML write, and its
+      // active query hides rows with inline display:none. Skipping the write
+      // without this left the bar missing (or its filter stuck on) whenever a
+      // filter change happened to produce identical HTML.
+      _txnAfterSplice();
+      return;
+    }
+    if (_txnDryRun) {
+      transactionLog._lastHTML = logsHTML;
+      return;
+    }
+    transactionLog._lastHTML = logsHTML;
+
+    // Which day groups the operator had collapsed. innerHTML throws the
+    // collapsed class away with the old nodes, so capture it first and put it
+    // back — otherwise every background refresh silently re-expands the list.
+    const _collapsedDates = new Set(
+      Array.from(
+        transactionLog.querySelectorAll(".log-date-header.collapsed"),
+      ).map((h) => h.getAttribute("data-log-date")),
+    );
+
     transactionLog.innerHTML = logsHTML;
+
+    if (_collapsedDates.size) {
+      _collapsedDates.forEach((d) => {
+        if (!d) return;
+        const hdr = transactionLog.querySelector(
+          '.log-date-header[data-log-date="' + d + '"]');
+        const grp = transactionLog.querySelector(
+          '.log-date-group[data-log-group="' + d + '"]');
+        if (!hdr) return;
+        hdr.classList.add("collapsed");
+        const caret = hdr.querySelector(".log-date-caret");
+        if (caret) caret.textContent = "▸";
+        if (grp) grp.style.display = "none";
+      });
+    }
 
     // Collapsible date groups — bind once on the persistent container so the
     // handler survives re-renders (innerHTML swaps children, not the node).
@@ -744,11 +821,14 @@ class TransactionLogManager {
       // photo is STILL shown as a view link, whatever the category — hiding it
       // would strand a file the operator can no longer reach.
       //
-      // `salary` is excluded because a salary payment has no external invoice
-      // to photograph; the attach button was only adding noise to the row.
-      // `staff_advance` deliberately keeps it — an advance is often issued
-      // against a signed slip that operators do want to record.
-      const NO_PHOTO_CATS = ["rent", "petty_cash", "salary"];
+      // Payroll rows carry no external invoice, so the attach button was only
+      // adding noise: a salary payout, a staff advance and a meal log are all
+      // generated by the Staff module against records it already holds.
+      // (staff_advance used to keep the button for signed-slip photos; it was
+      // not being used and cluttered the row.)
+      const NO_PHOTO_CATS = [
+        "rent", "petty_cash", "salary", "staff_advance", "staff_meals",
+      ];
       const _expCat = (log.category || "").toLowerCase();
       let photoHtml = "";
       if (log.invoice_photo_url) {
@@ -862,9 +942,23 @@ class TransactionLogManager {
     const rowA11y  = expenseRowAttrs
       ? ' role="button" tabindex="0" aria-haspopup="menu"'
       : "";
+    // Sort key, carried on the row so a single row can be spliced into an
+    // already-rendered day group at the right position without re-deriving the
+    // whole list. See the incremental-mutation helpers near the bottom of this
+    // file. Rows within a group are ordered by descending time.
+    // data-log-id is stamped on EVERY expense row, actionable or not.
+    // data-exp-doc-id only appears when the viewer has expense.manage, so a
+    // manager's list had no way to tell "this row is already on screen" from
+    // "not yet" — and a Firestore push racing a local splice showed the row
+    // twice until the next reconcile.
+    const rowSort =
+      ` data-log-time="${_txnAttrEsc(log.time || "00:00:00")}"` +
+      ` data-log-type="${_txnAttrEsc(logType || "")}"` +
+      ` data-log-serial="${_txnAttrEsc(log.serial_number || 0)}"` +
+      (log._doc_id ? ` data-log-id="${_txnAttrEsc(log._doc_id)}"` : "");
 
     return `
-      <div class="${rowClass}"${rowDataAttrs}${rowA11y} ${rowBg}>
+      <div class="${rowClass}"${rowDataAttrs}${rowSort}${rowA11y} ${rowBg}>
         <div class="log-details">
           <div class="log-title">
             ${serialHtml}
@@ -1971,12 +2065,35 @@ document.addEventListener("DOMContentLoaded", function () {
           if (typeof showNotification === "function") {
             showNotification("Expense deleted", "success");
           }
-          // Extended-range aware refresh (Today → cache; past range → re-fetch).
-          if (typeof window.refreshTransactionsView === "function") {
-            window.refreshTransactionsView();
-          } else if (typeof debouncedFetchData === "function") {
-            debouncedFetchData();
-          }
+          // Drop the row from the in-memory cache too, so the reconcile
+          // below (and any render triggered by something else in the
+          // meantime) does not put it back.
+          try {
+            if (typeof logs !== "undefined" && logs && Array.isArray(logs.expenses)) {
+              logs.expenses = logs.expenses.filter((l) => l && l._doc_id !== docId);
+            }
+            if (txnExtendedLogs && Array.isArray(txnExtendedLogs.expenses)) {
+              txnExtendedLogs.expenses =
+                txnExtendedLogs.expenses.filter((l) => l && l._doc_id !== docId);
+            }
+          } catch (e) { /* cache shape differs — the reconcile still fixes it */ }
+
+          // Animate the single row out instead of rebuilding the list. Falls
+          // back to the old full refresh when the row is not on screen
+          // (different filter, collapsed range, stale sheet).
+          Promise.resolve(
+            typeof window.txnRemoveExpenseRow === "function"
+              ? window.txnRemoveExpenseRow(docId)
+              : false,
+          ).then((handled) => {
+            if (handled && typeof window.reconcileTransactionsView === "function") {
+              window.reconcileTransactionsView();
+            } else if (typeof window.refreshTransactionsView === "function") {
+              window.refreshTransactionsView();
+            } else if (typeof debouncedFetchData === "function") {
+              debouncedFetchData();
+            }
+          });
         } else {
           if (typeof showNotification === "function") {
             showNotification((data && data.message) || "Delete failed", "error");
@@ -2160,6 +2277,14 @@ document.addEventListener("DOMContentLoaded", function () {
       _reapplyInFlight = false;
     }
   }
+
+  // The MutationObserver below watches DIRECT children of #transaction-log
+  // only. The incremental splice helpers (txnInsertExpenseRow /
+  // txnRemoveExpenseRow) mutate inside a .log-date-group, which is a subtree
+  // change the observer never sees — so they call this explicitly. Widening
+  // the observer to subtree:true instead would fire it on every row-level
+  // attribute change the app makes.
+  window._txnReapplySearch = _ensureSearchBarAndReapply;
 
   const _logContainer = document.getElementById("transaction-log");
   if (_logContainer && typeof MutationObserver !== "undefined") {
@@ -2495,6 +2620,7 @@ class TransactionFilterManager {
         .join("");
     }
 
+    transactionLog._lastHTML = null;   // this path bypasses the render cache
     transactionLog.innerHTML = logsHtml;
   }
 
@@ -2522,6 +2648,37 @@ class TransactionFilterManager {
 
 // ─── Filter state ────────────────────────────────────────────────────────────
 let txnActiveDateRange = { fromDate: null, toDate: null };
+
+// Every write to txnActiveDateRange goes through here.
+//
+// Moving the list to a different day is the one thing that releases the
+// expense-date lock (expense.js keeps new expenses pinned to the day the last
+// one was saved on, so entering a back-dated batch doesn't silently jump back
+// to today halfway through). Routing the writes through a setter means no call
+// site can change the shown date and forget to release the lock.
+function _setActiveDateRange(fromDate, toDate) {
+  const prev = txnActiveDateRange || {};
+  const next = { fromDate: fromDate || null, toDate: toDate || null };
+  const changed =
+    prev.fromDate !== next.fromDate || prev.toDate !== next.toDate;
+  txnActiveDateRange = next;
+  if (changed && typeof window.releaseExpenseDateLock === "function") {
+    window.releaseExpenseDateLock();
+  }
+}
+
+/**
+ * The single day the Transactions list is currently showing, as "YYYY-MM-DD".
+ *
+ * Null when the view spans more than one day (Last 3 days, a custom range) or
+ * is on the rolling default — in those cases there is no one viewed date and
+ * the caller should fall back to today. Read by expense.js to decide what date
+ * a new expense should open on.
+ */
+window.getTransactionsViewDate = function () {
+  const r = txnActiveDateRange || {};
+  return r.fromDate && r.fromDate === r.toDate ? r.fromDate : null;
+};
 let txnActiveType = "all"; // "all" | "cash" | "online" | "refunds" | "expenses"
 // Expense sub-scope for the admin Daily/Report toggle on the Expense
 // view. "daily" = drawer expenses (default — matches the non-admin
@@ -2748,10 +2905,41 @@ function _syncMgrExpenseRangeVisibility() {
   return false;
 }
 
-async function _loadMgrExpenseRange(from, to) {
+/**
+ * A range load failed.
+ *
+ * On a normal load there is nothing on screen worth keeping, so the error
+ * replaces the list. On a QUIET load (a background reconcile behind a list
+ * that is already correct — e.g. right after an expense was spliced in) the
+ * rows on screen are still the best thing available, so the error goes to a
+ * toast instead. Replacing them would throw away good data because a refresh
+ * nobody asked for happened to fail.
+ */
+function _txnLoadFailed(logEl, quiet, serverMsg, fallbackMsg) {
+  const msg = serverMsg || fallbackMsg;
+  if (quiet) {
+    if (typeof showNotification === "function") {
+      showNotification("Could not refresh: " + msg, "error");
+    }
+    return;
+  }
+  if (!logEl) return;
+  logEl._lastHTML = null;   // direct write — invalidate the render cache
+  logEl.innerHTML =
+    '<div class="empty-state" style="padding:2rem;text-align:center;">' +
+    '<i class="fas fa-exclamation-triangle fa-2x" style="color:var(--warning);' +
+    'margin-bottom:0.75rem;display:block;"></i><p>' +
+    String(msg).replace(/[<&>]/g, (c) => ({ "<": "&lt;", "&": "&amp;", ">": "&gt;" }[c])) +
+    "</p></div>";
+}
+
+// `quiet` — see _triggerRender.
+async function _loadMgrExpenseRange(from, to, quiet) {
   const logEl = document.getElementById("transaction-log");
-  if (logEl)
+  if (logEl && !quiet) {
+    logEl._lastHTML = null;   // direct write — invalidate the render cache
     logEl.innerHTML = `<div class="loading-indicator"><span class="loader"></span><p>Loading expenses…</p></div>`;
+  }
   try {
     const res = await apiFetch("/expenses/browse", {
       method: "POST",
@@ -2764,16 +2952,14 @@ async function _loadMgrExpenseRange(from, to) {
         cash: [], online: [], refunds: [], settlements: [],
         expenses: data.expense_logs || [],
       };
-      txnActiveDateRange = { fromDate: from, toDate: to };
+      _setActiveDateRange(from, to);
       txnExtendedLogs = txnMgrExpenseLogs;
       _renderWithLogs(from, to, txnMgrExpenseLogs);
     } else {
-      if (logEl)
-        logEl.innerHTML = `<div class="empty-state" style="padding:2rem;text-align:center;"><p>${data.message || "Failed to load expenses."}</p></div>`;
+      _txnLoadFailed(logEl, quiet, data && data.message, "Failed to load expenses.");
     }
   } catch (e) {
-    if (logEl)
-      logEl.innerHTML = `<div class="empty-state" style="padding:2rem;text-align:center;"><p style="color:var(--danger);">Network error: ${e.message}</p></div>`;
+    _txnLoadFailed(logEl, quiet, null, "Network error: " + e.message);
   }
 }
 
@@ -2792,7 +2978,7 @@ function _wireMgrExpenseRange() {
     mode: "range",
     dateFormat: "Y-m-d",
     altInput: true,
-    altFormat: "d M Y",
+    altFormat: "d-m-Y",
     maxDate: _localYMD(),
     disableMobile: true,
     onChange: function (selectedDates) {
@@ -2808,8 +2994,11 @@ function _wireMgrExpenseRange() {
   });
 }
 
-async function _triggerRender(fromDate, toDate) {
-  txnActiveDateRange = { fromDate, toDate };
+// `quiet` = this is a reconcile behind an already-correct list (an expense was
+// just spliced in or out locally). Leave the current rows on screen while the
+// fetch runs instead of flashing a spinner over content that is already right.
+async function _triggerRender(fromDate, toDate, quiet) {
+  _setActiveDateRange(fromDate, toDate);
   txnExtendedLogs = null;
 
   // If range is within the 3-day cache, use it directly — no extra network call
@@ -2820,8 +3009,10 @@ async function _triggerRender(fromDate, toDate) {
 
   // Extended range — fetch from server
   const logEl = document.getElementById("transaction-log");
-  if (logEl)
+  if (logEl && !quiet) {
+    logEl._lastHTML = null;   // direct write — invalidate the render cache
     logEl.innerHTML = `<div class="loading-indicator"><span class="loader"></span><p>Loading transactions…</p></div>`;
+  }
 
   try {
     const res = await apiFetch("/get_transactions_range", {
@@ -2834,12 +3025,10 @@ async function _triggerRender(fromDate, toDate) {
       txnExtendedLogs = data.logs;
       _renderWithLogs(fromDate, toDate, txnExtendedLogs);
     } else {
-      if (logEl)
-        logEl.innerHTML = `<div class="empty-state" style="padding:2rem;text-align:center;"><i class="fas fa-exclamation-triangle fa-2x" style="color:var(--warning);margin-bottom:0.75rem;display:block;"></i><p>${data.message || "Failed to load data."}</p></div>`;
+      _txnLoadFailed(logEl, quiet, data && data.message, "Failed to load data.");
     }
   } catch (e) {
-    if (logEl)
-      logEl.innerHTML = `<div class="empty-state" style="padding:2rem;text-align:center;"><p style="color:var(--danger);">Network error: ${e.message}</p></div>`;
+    _txnLoadFailed(logEl, quiet, null, "Network error: " + e.message);
   }
 }
 
@@ -2947,7 +3136,7 @@ function initTxnDateFilter() {
       mode: "range",
       dateFormat: "Y-m-d",
       altInput: true,
-      altFormat: "d M Y",
+      altFormat: "d-m-Y",
       defaultDate: [todayStr, todayStr],
       maxDate: todayStr,
       disableMobile: true,
@@ -3055,19 +3244,343 @@ window.renderEnhancedLogs = function () {
 // debouncedFetchData only refreshes today's cache, so the displayed list (read
 // from txnExtendedLogs) would otherwise keep showing the pre-edit data.
 // Exposed globally so expense.js (add/edit) and the delete handler both use it.
-window.refreshTransactionsView = function () {
+// `quiet` = keep the current rows on screen during the fetch (used by
+// reconcileTransactionsView after a local splice, where the list is already
+// showing the right thing and a spinner would be a step backwards).
+window.refreshTransactionsView = function (quiet) {
   const r = txnActiveDateRange || {};
   // A manager's custom expense range must re-pull via /expenses/browse —
   // not /get_transactions_range, which would silently clamp it back to
   // the last 3 days on refresh.
   if (r.fromDate && txnMgrExpenseLogs) {
-    _loadMgrExpenseRange(r.fromDate, r.toDate);
+    _loadMgrExpenseRange(r.fromDate, r.toDate, quiet);
   } else if (r.fromDate && !_isWithinCache(r.fromDate)) {
     txnExtendedLogs = null;            // force a fresh server pull
-    _triggerRender(r.fromDate, r.toDate);
+    _triggerRender(r.fromDate, r.toDate, quiet);
   } else if (typeof debouncedFetchData === "function") {
     debouncedFetchData();              // Today view — refresh the cache
   }
+};
+
+// ─── Incremental list mutation ───────────────────────────────────────────────
+// renderEnhancedLogs() rebuilds the whole list into innerHTML. That is fine for
+// a filter change, but an operator adds and deletes expenses constantly, and
+// for one row it means every other row is destroyed and recreated: a visible
+// flicker, and the eye loses the row it was looking at.
+//
+// These two helpers splice a single row in or out of the already-rendered DOM
+// and patch only the numbers that actually moved. Both are deliberately narrow:
+// they handle expense rows on a day group that is already on screen and bail out
+// (returning false) for anything else, so the caller falls back to the full
+// render it used to do. A narrow fast path that is always correct beats a broad
+// one that is sometimes wrong about totals.
+//
+// What an expense row does and does not affect:
+//   .log-date-total and the per-day Cash/UPI/Fresh/Continue meta EXCLUDE
+//   expenses (see the dayTotal reduce in renderEnhancedLogs), so the day header
+//   never changes. Of the four summary tiles only EXPENSES moves — TOTAL IN is
+//   cash + UPI − refunds and does not net off expenses.
+const TXN_ROW_ANIM_MS = 220;
+
+function _txnStyleOnce() {
+  if (document.getElementById("txn-row-anim-styles")) return;
+  const st = document.createElement("style");
+  st.id = "txn-row-anim-styles";
+  st.textContent = [
+    ".log-item.txn-row-animating{overflow:hidden;}",
+    "@keyframes txnRowFlash{0%{box-shadow:inset 3px 0 0 #f6ad55;}",
+    "100%{box-shadow:inset 3px 0 0 rgba(246,173,85,0);}}",
+    ".log-item.txn-row-flash{animation:txnRowFlash 1.1s ease-out 1;}",
+    "@media (prefers-reduced-motion: reduce){",
+    ".log-item.txn-row-flash{animation:none;}}",
+  ].join("");
+  document.head.appendChild(st);
+}
+
+// Grow a freshly inserted row from zero height to its natural height.
+function _txnAnimateIn(row) {
+  _txnStyleOnce();
+  if (window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    return;
+  }
+  const target = row.scrollHeight;
+  row.classList.add("txn-row-animating");
+  row.style.height = "0px";
+  row.style.opacity = "0";
+  requestAnimationFrame(() => {
+    row.style.transition =
+      "height " + TXN_ROW_ANIM_MS + "ms ease-out, opacity " + TXN_ROW_ANIM_MS + "ms ease-out";
+    row.style.height = target + "px";
+    row.style.opacity = "1";
+  });
+  setTimeout(() => {
+    row.classList.remove("txn-row-animating");
+    row.style.height = "";
+    row.style.opacity = "";
+    row.style.transition = "";
+  }, TXN_ROW_ANIM_MS + 40);
+}
+
+// Collapse a row to zero height, then detach it. Resolves once it is gone.
+function _txnAnimateOut(row) {
+  return new Promise((resolve) => {
+    if (window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      row.remove();
+      resolve();
+      return;
+    }
+    const h = row.offsetHeight;
+    row.classList.add("txn-row-animating");
+    row.style.height = h + "px";
+    void row.offsetHeight;                     // force layout before transition
+    row.style.transition =
+      "height " + TXN_ROW_ANIM_MS + "ms ease-in, opacity " + TXN_ROW_ANIM_MS + "ms ease-in, " +
+      "margin " + TXN_ROW_ANIM_MS + "ms ease-in, padding " + TXN_ROW_ANIM_MS + "ms ease-in";
+    row.style.height = "0px";
+    row.style.opacity = "0";
+    row.style.marginTop = "0px";
+    row.style.marginBottom = "0px";
+    row.style.paddingTop = "0px";
+    row.style.paddingBottom = "0px";
+    setTimeout(() => { row.remove(); resolve(); }, TXN_ROW_ANIM_MS + 20);
+  });
+}
+
+// Re-run the admin expense-search filter (and its "10/40" counter) after a
+// splice. See window._txnReapplySearch for why this is not automatic.
+function _txnAfterSplice() {
+  if (typeof window._txnReapplySearch === "function") {
+    try { window._txnReapplySearch(); } catch (e) { /* filter not active */ }
+  }
+}
+
+// The list is empty now — restore the placeholder renderEnhancedLogs would
+// have drawn, instead of leaving blank space until the reconcile lands.
+function _txnShowEmptyState(listEl) {
+  if (listEl.querySelector(".log-item")) return;
+  if (listEl.querySelector(".empty-state")) return;
+  const el = document.createElement("div");
+  el.className = "empty-state";
+  el.style.cssText = "padding: 2rem; text-align:center;";
+  el.innerHTML =
+    '<i class="fas fa-receipt fa-3x" style="opacity:0.4;margin-bottom:1rem;display:block;"></i>' +
+    "<p>No transactions in this period</p>";
+  listEl.appendChild(el);
+}
+
+// Find a rendered expense row by document id. Compared as a plain string
+// rather than built into a selector: a doc id is opaque and a quote or
+// backslash in one would turn a selector into a syntax error.
+function _txnRowByDocId(listEl, docId) {
+  const want = String(docId);
+  const rows = listEl.querySelectorAll("[data-log-id], [data-exp-doc-id]");
+  for (let i = 0; i < rows.length; i++) {
+    if (rows[i].getAttribute("data-log-id") === want ||
+        rows[i].getAttribute("data-exp-doc-id") === want) {
+      return rows[i];
+    }
+  }
+  return null;
+}
+
+// Add `delta` to the EXPENSES summary tile without recomputing the range.
+function _txnPatchExpenseTile(delta) {
+  const el = document.getElementById("txn-card-expense");
+  if (!el || !delta) return;
+  const current = Number(String(el.textContent || "").replace(/[^0-9.-]/g, "")) || 0;
+  const next = Math.max(0, current + delta);
+  el.textContent = "₹" + next.toLocaleString("en-IN");
+}
+
+// Would the current filter state show this expense at all? Mirrors the
+// filtering inside renderEnhancedLogs. Returns false for anything the fast
+// path should not try to handle.
+function _txnExpenseVisibleNow(log) {
+  if (!log || !log.date) return false;
+  const type = typeof txnActiveType === "string" ? txnActiveType : "all";
+  if (type !== "all" && type !== "expenses") return false;
+  const scope = typeof txnExpenseScope === "string" ? txnExpenseScope : "daily";
+  const isReport = log.expense_type === "report";
+  if (scope === "report" && !isReport) return false;
+  if (scope === "daily" && isReport) return false;
+  if (txnExpenseGstOnly && !_expenseCarriesGst(log)) return false;
+  return true;
+}
+
+/**
+ * Splice a newly-saved expense into the rendered list.
+ *
+ * @returns {boolean} true if the row was inserted incrementally; false if the
+ *   caller should fall back to a full renderEnhancedLogs().
+ */
+window.txnInsertExpenseRow = function (log) {
+  try {
+    const listEl = document.getElementById("transaction-log");
+    if (!listEl || !log || !log.date) return false;
+    // Empty state on screen, or a day group that does not exist yet (the
+    // day's first row): there is no group to splice into.
+    const group = listEl.querySelector(
+      '.log-date-group[data-log-group="' + log.date + '"]');
+    if (!group) return false;
+    if (!_txnExpenseVisibleNow(log)) return false;
+    if (log._doc_id && _txnRowByDocId(listEl, log._doc_id)) {
+      return true;   // already on screen (a sync push beat us to it)
+    }
+
+    // Keep the extended-range cache in step with `logs`. expense.js pushes
+    // into `logs.expenses`, but a past-date range renders from
+    // txnExtendedLogs — without this the very next render (including the
+    // signature pass below) would compute the list WITHOUT the new row and
+    // undo both the splice and the tile patch.
+    if (txnExtendedLogs && Array.isArray(txnExtendedLogs.expenses) &&
+        !txnExtendedLogs.expenses.some((l) => l && l._doc_id === log._doc_id)) {
+      txnExtendedLogs.expenses.push(log);
+    }
+
+    const html = transactionLogManager.renderEnhancedLogItem(log, "expenses", 0);
+    const tmp = document.createElement("div");
+    tmp.innerHTML = html.trim();
+    const row = tmp.firstElementChild;
+    if (!row) return false;
+
+    // Rows inside a group run newest-first by time. Find the first existing
+    // row whose time is earlier and insert above it.
+    // Rows inside a group run newest-first by time, and the full render's
+    // sort is stable, so equal times keep the order the buckets were
+    // concatenated in: cash, online, refunds, expenses, settlements. Expense
+    // times are minute-resolution, so ties are common — insert AFTER any
+    // same-time row from an earlier bucket, or the spliced order would differ
+    // from the rendered order and never get corrected.
+    // Mirror renderEnhancedLogs' comparator exactly: date, then time
+    // descending, then serial_number descending — and, for a full tie, the
+    // stable sort leaves the buckets in concat order (cash, online, refunds,
+    // expenses, settlements).
+    //
+    // This has to match, because txnMarkListSynced records the string the
+    // full render WOULD produce as "what the DOM shows". A splice that puts
+    // the row somewhere the renderer wouldn't is then locked in: the
+    // reconcile regenerates that same string, sees no change, and skips.
+    // Expense times are minute-resolution, so ties are routine.
+    const t = String(log.time || "00:00:00");
+    const mySerial = Number(log.serial_number) || 0;
+    const BUCKET_ORDER = ["cash", "online", "refunds", "expenses", "settlement"];
+    const myRank = BUCKET_ORDER.indexOf("expenses");
+    const siblings = Array.from(group.children).filter(
+      (el) => el.classList && el.classList.contains("log-item"));
+    const before = siblings.find((el) => {
+      const st = String(el.getAttribute("data-log-time") || "00:00:00");
+      if (st !== t) return st < t;
+      const ss = Number(el.getAttribute("data-log-serial")) || 0;
+      if (ss !== mySerial) return ss < mySerial;
+      const rank = BUCKET_ORDER.indexOf(el.getAttribute("data-log-type") || "");
+      return rank > myRank;      // later bucket — the new row goes above it
+    });
+    if (before) group.insertBefore(row, before);
+    else group.appendChild(row);
+
+    _txnAnimateIn(row);
+    _txnStyleOnce();
+    row.classList.add("txn-row-flash");
+    setTimeout(() => row.classList.remove("txn-row-flash"), 1300);
+
+    _txnPatchExpenseTile(Number(log.amount) || 0);
+
+    // If the group was collapsed, open it — otherwise the row the operator
+    // just created animates into something they cannot see.
+    const hdr = listEl.querySelector(
+      '.log-date-header[data-log-date="' + log.date + '"]');
+    if (hdr && hdr.classList.contains("collapsed")) {
+      hdr.classList.remove("collapsed");
+      const caret = hdr.querySelector(".log-date-caret");
+      if (caret) caret.textContent = "▾";
+      group.style.display = "";
+    }
+    _txnAfterSplice();
+    window.txnMarkListSynced();
+    return true;
+  } catch (e) {
+    console.warn("txnInsertExpenseRow fell back to full render:", e);
+    return false;
+  }
+};
+
+/**
+ * Animate an expense row out of the rendered list.
+ *
+ * @returns {Promise<boolean>} resolves true if handled incrementally.
+ */
+window.txnRemoveExpenseRow = function (docId) {
+  try {
+    const listEl = document.getElementById("transaction-log");
+    if (!listEl || !docId) return Promise.resolve(false);
+    const row = _txnRowByDocId(listEl, docId);
+    if (!row) return Promise.resolve(false);
+
+    const amount = Number(row.getAttribute("data-exp-amount")) || 0;
+    const group = row.closest(".log-date-group");
+
+    return _txnAnimateOut(row).then(() => {
+      _txnPatchExpenseTile(-amount);
+      // Last row in the day? Drop the empty group and its header rather than
+      // leaving a heading over nothing.
+      if (group && !group.querySelector(".log-item")) {
+        const date = group.getAttribute("data-log-group");
+        const hdr = date && listEl.querySelector(
+          '.log-date-header[data-log-date="' + date + '"]');
+        if (hdr) hdr.remove();
+        group.remove();
+      }
+      _txnShowEmptyState(listEl);
+      _txnAfterSplice();
+      window.txnMarkListSynced();
+      return true;
+    });
+  } catch (e) {
+    console.warn("txnRemoveExpenseRow fell back to full render:", e);
+    return Promise.resolve(false);
+  }
+};
+
+/**
+ * Tell the renderer that the DOM currently on screen already matches the log
+ * data — used right after an incremental splice.
+ *
+ * Without this, the reconcile that follows a splice regenerates HTML that now
+ * includes the spliced row, sees it differs from the last string it wrote, and
+ * rebuilds the whole list: the flicker the splice existed to avoid.
+ */
+window.txnMarkListSynced = function () {
+  _txnDryRun = true;
+  try {
+    if (typeof window.renderEnhancedLogs === "function") window.renderEnhancedLogs();
+  } catch (e) {
+    // Could not compute a signature — fall back to letting the next render
+    // rebuild. Correct, just not smooth.
+    const el = document.getElementById("transaction-log");
+    if (el) el._lastHTML = null;
+  } finally {
+    _txnDryRun = false;
+  }
+};
+
+/**
+ * Pull authoritative data from the server without stomping an animation that
+ * is still running. The incremental helpers have already put the DOM in the
+ * shape the server is about to confirm, so the refresh is only there to catch
+ * anything the client could not know (server-side rounding, a concurrent edit
+ * from another device). Delaying it past the animation makes the re-render
+ * invisible instead of a flicker.
+ */
+window.reconcileTransactionsView = function (delayMs) {
+  const wait = typeof delayMs === "number" ? delayMs : TXN_ROW_ANIM_MS + 200;
+  clearTimeout(window.reconcileTransactionsView._t);
+  window.reconcileTransactionsView._t = setTimeout(() => {
+    if (typeof window.refreshTransactionsView === "function") {
+      window.refreshTransactionsView(true);   // quiet — no loading spinner
+    } else if (typeof debouncedFetchData === "function") {
+      debouncedFetchData();
+    }
+  }, wait);
 };
 
 // ─── Real-time payment / expense sync ─────────────────────────────────────

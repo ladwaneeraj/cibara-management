@@ -12,6 +12,13 @@ staff                               (one doc per staff member)
     designation    str   ("Housekeeping", "Front desk", …, free text)
     phone          str
     daily_wage     int ₹ per full day (half day pays half)
+    meal_rate      int ₹ per day of food eaten at the lodge (0 = none).
+                   Withheld from the salary payout and billed separately
+                   via a meal log, so a ₹350/day member on a ₹50 meal rate
+                   takes home ₹300/day in cash and the kitchen cost shows
+                   up as its own expense row. Charged per calendar day
+                   PRESENT — a half day still eats, a dual-shift day is
+                   still one meal.
     is_dual_shift  bool  (works a Day AND a Night shift — gets a second
                           attendance record per day; False for everyone
                           else, who is marked once per day as today)
@@ -97,6 +104,7 @@ _staff_ref = lambda: db.collection("staff")
 _att_ref = lambda: db.collection("staff_attendance")
 _adv_ref = lambda: db.collection("staff_advances")
 _sal_ref = lambda: db.collection("staff_salary_payments")
+_meal_ref = lambda: db.collection("staff_meal_logs")
 _expenses_ref = lambda: db.collection("expenses")
 
 VALID_METHODS = ("cash", "online")
@@ -104,6 +112,7 @@ VALID_EXPENSE_TYPES = ("transaction", "report")
 
 MAX_DAILY_WAGE = 100_000          # sanity ceiling, ₹/day
 MAX_ADVANCE = 10_00_000           # sanity ceiling per advance, ₹
+MAX_MEAL_RATE = 5_000             # sanity ceiling, ₹/day of food
 
 
 def _now_utc() -> str:
@@ -112,6 +121,30 @@ def _now_utc() -> str:
 
 def _ist_today() -> str:
     return datetime.now(IST).strftime("%Y-%m-%d")
+
+
+_MONTH_ABBR = ("Jan", "Feb", "Mar", "Apr", "May", "Jun",
+               "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+
+
+def _dmy(ymd) -> str:
+    """"2026-08-02" -> "02 Aug 2026".
+
+    Dates stay ISO in every stored field (they are sorted and compared as
+    strings); this is only for the human-readable description on the expense
+    row, which the Transactions list prints verbatim. A month NAME is used
+    here rather than the numeric DD-MM-YYYY the compact UI uses: these strings
+    are read as prose mid-sentence ("Salary — Menamma (04 Aug 2026 to 10 Aug
+    2026)"), where two adjacent numbers invite a moment of "which one is the
+    month?".
+
+    The month name is looked up from a fixed tuple, not strftime, so the
+    output never depends on the server's locale.
+    """
+    t = str(ymd or "")
+    if not _valid_date(t):
+        return t
+    return "{} {} {}".format(t[8:10], _MONTH_ABBR[int(t[5:7]) - 1], t[0:4])
 
 
 def _ist_time() -> str:
@@ -181,6 +214,17 @@ def _clean_staff_fields(data: dict, *, partial: bool) -> dict:
         if wage > MAX_DAILY_WAGE:
             raise ValueError("Per-day wage looks too large — check the amount.")
         fields["daily_wage"] = wage
+    if "meal_rate" in data:
+        raw = data.get("meal_rate")
+        try:
+            meal = 0 if raw in (None, "") else int(round(float(raw)))
+        except (TypeError, ValueError):
+            raise ValueError("Meal rate must be a number.")
+        if meal < 0:
+            raise ValueError("Meal rate cannot be negative.")
+        if meal > MAX_MEAL_RATE:
+            raise ValueError("Meal rate looks too large — check the amount.")
+        fields["meal_rate"] = meal
     if "designation" in data:
         fields["designation"] = str(data.get("designation", "")).strip()[:40]
     if "phone" in data:
@@ -206,6 +250,7 @@ def create_staff(data: dict, user: Optional[dict]) -> dict:
     fields.setdefault("notes", "")
     fields.setdefault("joined_date", _ist_today())
     fields.setdefault("is_dual_shift", False)
+    fields.setdefault("meal_rate", 0)
     fields["active"] = True
     fields["created_at"] = _now_utc()
     fields["created_by"] = _user_stamp(user)
@@ -648,7 +693,16 @@ def salary_preview(staff_id: str, period_start: str, period_end: str,
     outstanding = max(0, ledger.outstanding_advance(
         advances_for(staff_id), payments))
     payable = computed["payable_before_advance"]
-    suggested_deduction = min(outstanding, max(0, payable))
+    # Meals for the same days the salary covers. Not optional the way the
+    # advance deduction is: if the staff member eats here, the food has
+    # already been consumed by the time payday arrives. The UI shows it as a
+    # fixed line, not an editable one.
+    meals = ledger.compute_meals(staff.get("meal_rate", 0), attendance,
+                                 period_start, period_end, exclude=covered)
+    # Advance recovery has to fit in what is left after meals, otherwise the
+    # payout would go negative.
+    suggested_deduction = min(outstanding,
+                              max(0, payable - meals["meal_total"]))
     excluded_days = sorted(covered)
     all_covered = bool(covered) and all(
         d in covered
@@ -658,9 +712,11 @@ def salary_preview(staff_id: str, period_start: str, period_end: str,
         "period_start": period_start,
         "period_end": period_end,
         "computed": computed,
+        "meals": meals,
+        "meal_deduction": meals["meal_total"],
         "outstanding_advance": outstanding,
         "suggested_deduction": suggested_deduction,
-        "net_if_suggested": payable - suggested_deduction,
+        "net_if_suggested": payable - suggested_deduction - meals["meal_total"],
         "excluded_days": excluded_days,       # already-paid days, skipped
         "all_days_paid": all_covered,
         "suggested_period_start": ledger.suggest_period_start(payments),
@@ -671,6 +727,9 @@ def pay_salary(staff_id: str, period_start: str, period_end: str,
                advance_deduction, adjustment, adjustment_note: str,
                payment_method: str, expense_type: str,
                user: Optional[dict]) -> dict:
+    # NOTE: the meal deduction is intentionally NOT a parameter. It is
+    # derived from the staff record's meal_rate and the period's attendance
+    # — see the `meals` block below.
     """
     Settle one salary period. Validates via the ledger (overlap guard,
     deduction bounds), then ONE atomic batch writes the salary-payment
@@ -694,13 +753,21 @@ def pay_salary(staff_id: str, period_start: str, period_end: str,
     computed = ledger.compute_salary(staff.get("daily_wage", 0), attendance,
                                      period_start, period_end, adjustment,
                                      exclude=covered)
+    # Meals are computed server-side from the staff member's rate and the
+    # same attendance the salary used. The client never sends the amount —
+    # it is not a number an operator should be able to talk down at the
+    # counter, and it has to agree with what the meal log bills.
+    meals = ledger.compute_meals(staff.get("meal_rate", 0), attendance,
+                                 period_start, period_end, exclude=covered)
     err = ledger.validate_payment(period_start, period_end, computed,
                                   advance_deduction, outstanding, payments,
-                                  _ist_today(), covered=covered)
+                                  _ist_today(), covered=covered,
+                                  meal_deduction=meals["meal_total"])
     if err:
         raise ValueError(err)
 
-    final = ledger.settlement(computed, advance_deduction, outstanding)
+    final = ledger.settlement(computed, advance_deduction, outstanding,
+                              meal_deduction=meals["meal_total"])
     name = staff.get("name", "")
     today = _ist_today()
 
@@ -718,6 +785,9 @@ def pay_salary(staff_id: str, period_start: str, period_end: str,
         "adjustment": final["adjustment"],
         "adjustment_note": str(adjustment_note or "").strip()[:120],
         "advance_deducted": final["advance_deducted"],
+        "meal_rate": meals["meal_rate"],
+        "meal_days": meals["meal_days"],
+        "meal_deducted": final["meal_deducted"],
         "net_paid": final["net_paid"],
         # Days inside the period that an EARLIER payment had already
         # covered — this payment skipped them (paid ₹0 for them), so
@@ -735,12 +805,16 @@ def pay_salary(staff_id: str, period_start: str, period_end: str,
     expense_doc = None
     if final["net_paid"] > 0:
         desc = "Salary — {} ({} to {})".format(
-            name, period_start, period_end)
+            name, _dmy(period_start), _dmy(period_end))
         if covered:
             desc += " · {} already-paid day{} skipped".format(
                 len(covered), "s" if len(covered) != 1 else "")
         if final["advance_deducted"]:
             desc += " · advance ₹{} deducted".format(final["advance_deducted"])
+        if final["meal_deducted"]:
+            desc += " · meals ₹{} ({} day{}) withheld".format(
+                final["meal_deducted"], meals["meal_days"],
+                "s" if meals["meal_days"] != 1 else "")
         expense_doc = {
             "date": today,
             "time": _ist_time(),
@@ -769,11 +843,14 @@ def pay_salary(staff_id: str, period_start: str, period_end: str,
     if expense_doc is not None:
         expense_doc["_doc_id"] = sal_doc["expense_doc_id"]
     logger.info(
-        "staff: salary paid %s (%s) %s–%s days=%s gross=₹%s adv−₹%s net=₹%s",
+        "staff: salary paid %s (%s) %s–%s days=%s gross=₹%s adv−₹%s "
+        "meals−₹%s net=₹%s",
         name, staff_id, period_start, period_end, computed["days_worked"],
-        final["gross"], final["advance_deducted"], final["net_paid"])
+        final["gross"], final["advance_deducted"], final["meal_deducted"],
+        final["net_paid"])
     return {"payment": sal_doc, "expense": expense_doc,
-            "advance_remaining": final["advance_remaining"]}
+            "advance_remaining": final["advance_remaining"],
+            "meals": meals}
 
 
 def delete_salary_payment(payment_id: str) -> dict:
@@ -805,6 +882,201 @@ def delete_salary_payment(payment_id: str) -> dict:
     logger.info("staff: salary payment %s deleted (net ₹%s, reversal ₹%s)",
                 payment_id, pay.get("net_paid"), reversal)
     return pay
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Meals — preview / log / delete
+#
+# A staff member who eats at the lodge is charged a flat per-day rate
+# (staff.meal_rate). Two things follow from that, and they are deliberately
+# separate operations:
+#
+#   * pay_salary() withholds the meal charge for the days it pays, so the
+#     cash handed over is the reduced figure (₹300/day, not ₹350/day).
+#   * log_meals() records the matching COST — the food the kitchen actually
+#     supplied — as one expense row covering a range of days. In practice
+#     this is done once a week, after the fact, which is exactly why it is
+#     not welded to the salary payout.
+#
+# Together they add back up to the staff member's true daily rate.
+#
+# Double-logging is prevented the same way double-paying is: each log stores
+# the exact dates it charged for, and a new log skips any date an earlier
+# log already covered. Because the stored set is exact dates (not a range),
+# a day the staff member was absent on stays available — if attendance is
+# corrected later, a subsequent log picks it up.
+# ═══════════════════════════════════════════════════════════════════════════
+
+def meal_logs_for(staff_id: str) -> list:
+    q = _meal_ref().where(filter=FieldFilter("staff_id", "==", staff_id))
+    out = [_doc_with_id(s) for s in q.stream()]
+    out.sort(key=lambda m: (m.get("period_start") or "",
+                            m.get("created_at") or ""))
+    return out
+
+
+def meal_preview(staff_id: str, period_start: str, period_end: str) -> dict:
+    """
+    What log_meals() would charge for this range, computed but NOT written.
+    """
+    staff = get_staff(staff_id)
+    if not staff:
+        raise ValueError("Staff member not found.")
+    if not (_valid_date(period_start) and _valid_date(period_end)):
+        raise ValueError("Period dates must be YYYY-MM-DD.")
+    if period_start > period_end:
+        raise ValueError("Period start must be on or before period end.")
+
+    rate = int(staff.get("meal_rate") or 0)
+    attendance = attendance_range(period_start, period_end, staff_id)
+    already = ledger.logged_meal_dates(period_start, period_end,
+                                       meal_logs_for(staff_id))
+    meals = ledger.compute_meals(rate, attendance, period_start, period_end,
+                                 exclude=already)
+    return {
+        "staff": staff,
+        "period_start": period_start,
+        "period_end": period_end,
+        "meal_rate": rate,
+        "meals": meals,
+        "already_logged_days": sorted(already),
+        "has_meal_rate": rate > 0,
+    }
+
+
+def log_meals(staff_id: str, period_start: str, period_end: str,
+              payment_method: str, expense_type: str, note: str,
+              user: Optional[dict]) -> dict:
+    """
+    Record the meal cost for [period_start, period_end] as ONE expense.
+
+    One atomic batch writes the meal-log doc, the linked expense row and the
+    counter increment — the same shape as an advance or a salary payout, so
+    a meal log can never end up in the books without its expense row (or
+    vice versa).
+
+    The rate comes from the staff record, never from the caller: the amount
+    has to agree with what pay_salary() withheld, and letting the client
+    send a figure is how those two drift apart.
+    """
+    staff = get_staff(staff_id)
+    if not staff:
+        raise ValueError("Staff member not found.")
+    _validate_money_source(payment_method, expense_type)
+    if not (_valid_date(period_start) and _valid_date(period_end)):
+        raise ValueError("Period dates must be YYYY-MM-DD.")
+    if period_start > period_end:
+        raise ValueError("Period start must be on or before period end.")
+    if period_end > _ist_today():
+        raise ValueError("Period cannot extend into the future.")
+
+    rate = int(staff.get("meal_rate") or 0)
+    if rate <= 0:
+        raise ValueError(
+            "{} has no meal rate set. Add a per-day meal rate on their "
+            "staff record first.".format(staff.get("name", "This staff member")))
+
+    attendance = attendance_range(period_start, period_end, staff_id)
+    already = ledger.logged_meal_dates(period_start, period_end,
+                                       meal_logs_for(staff_id))
+    meals = ledger.compute_meals(rate, attendance, period_start, period_end,
+                                 exclude=already)
+    if meals["meal_days"] <= 0:
+        if already:
+            raise ValueError(
+                "Every present day in {} – {} is already logged.".format(
+                    period_start, period_end))
+        raise ValueError(
+            "No days marked present in {} – {} — nothing to charge.".format(
+                period_start, period_end))
+
+    name = staff.get("name", "")
+    today = _ist_today()
+    log_ref = _meal_ref().document()
+    desc = "Staff meals — {} ({} day{} × ₹{}, {} to {})".format(
+        name, meals["meal_days"], "s" if meals["meal_days"] != 1 else "",
+        rate, _dmy(period_start), _dmy(period_end))
+    if already:
+        desc += " · {} already-logged day{} skipped".format(
+            len(already), "s" if len(already) != 1 else "")
+
+    log_doc = {
+        "staff_id": staff_id,
+        "staff_name": name,
+        "period_start": period_start,
+        "period_end": period_end,
+        "meal_rate": rate,
+        "meal_days": meals["meal_days"],
+        # The exact days charged. This is what makes the double-log guard
+        # precise rather than a range overlap test.
+        "meal_dates": meals["meal_dates"],
+        "skipped_dates": sorted(already),
+        "amount": meals["meal_total"],
+        "note": str(note or "").strip()[:120],
+        "payment_method": payment_method,
+        "expense_type": expense_type,
+        "expense_doc_id": None,
+        "logged_on": today,
+        "created_at": _now_utc(),
+        "created_by": _user_stamp(user),
+    }
+
+    expense_doc = {
+        "date": today,
+        "time": _ist_time(),
+        "category": "staff_meals",
+        "description": desc + ((" · " + log_doc["note"]) if log_doc["note"] else ""),
+        "amount": meals["meal_total"],
+        "payment_method": payment_method,
+        "expense_type": expense_type,
+        "paid_to": name,
+        "staff_meal_log": True,          # marker: managed by Staff module
+        "staff_id": staff_id,
+        "staff_name": name,
+        "meal_log_id": log_ref.id,
+        "created_at": _now_utc(),
+        "created_by": _user_stamp(user),
+    }
+
+    batch = db.batch()
+    exp_ref = _expenses_ref().document()
+    log_doc["expense_doc_id"] = exp_ref.id
+    batch.set(exp_ref, expense_doc)
+    batch.set(log_ref, log_doc)
+    if expense_type == "transaction":
+        _counter_increment(batch, meals["meal_total"])
+    batch.commit()
+
+    log_doc["id"] = log_ref.id
+    expense_doc["_doc_id"] = exp_ref.id
+    logger.info("staff: meals logged %s (%s) %s–%s days=%s ₹%s",
+                name, staff_id, period_start, period_end,
+                meals["meal_days"], meals["meal_total"])
+    return {"meal_log": log_doc, "expense": expense_doc}
+
+
+def delete_meal_log(log_id: str) -> dict:
+    """
+    Reverse a meal log: delete the log doc and its linked expense row
+    atomically, reversing the counter. The days it covered become available
+    to log again.
+    """
+    snap = _meal_ref().document(log_id).get()
+    if not snap.exists:
+        raise ValueError("Meal log not found.")
+    log = _doc_with_id(snap)
+
+    batch = db.batch()
+    exp_id = log.get("expense_doc_id")
+    if exp_id:
+        batch.delete(_expenses_ref().document(exp_id))
+        if log.get("expense_type") == "transaction":
+            _counter_increment(batch, -int(log.get("amount") or 0))
+    batch.delete(_meal_ref().document(log_id))
+    batch.commit()
+    logger.info("staff: meal log %s deleted (%s, ₹%s)",
+                log_id, log.get("staff_name"), log.get("amount"))
+    return log
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -871,6 +1143,7 @@ def staff_overview(include_inactive: bool = False,
         if include_payroll:
             s_pay = pay_by_staff.get(sid, [])
             row["daily_wage"] = s.get("daily_wage", 0)
+            row["meal_rate"] = int(s.get("meal_rate") or 0)
             row["notes"] = s.get("notes", "")
             row["outstanding_advance"] = max(0, ledger.outstanding_advance(
                 adv_by_staff.get(sid, []), s_pay))
@@ -892,6 +1165,7 @@ def staff_detail(staff_id: str) -> dict:
         "staff": staff,
         "advances": advances,
         "salary_payments": payments,
+        "meal_logs": meal_logs_for(staff_id),
         "outstanding_advance": max(
             0, ledger.outstanding_advance(advances, payments)),
         "suggested_period_start": ledger.suggest_period_start(payments),

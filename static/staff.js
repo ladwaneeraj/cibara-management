@@ -137,22 +137,22 @@
       String(d.getDate()).padStart(2, "0");
   }
 
+  // Dates are shown numerically as DD-MM-YYYY across the app. Both of these
+  // work on the stored "YYYY-MM-DD" string directly rather than going through
+  // a Date, so no timezone conversion can shift the day.
   function fmtD(dateStr) {
-    if (!dateStr) return "—";
-    try {
-      return new Date(dateStr + "T12:00:00").toLocaleDateString("en-IN", {
-        day: "numeric", month: "short", year: "numeric",
-      });
-    } catch (_) { return dateStr; }
+    if (!dateStr) return "\u2014";
+    var m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(dateStr));
+    return m ? m[3] + "-" + m[2] + "-" + m[1] : String(dateStr);
   }
 
+  // Compact variant for dense lists (skipped-day chips, ledger rows, the
+  // "paid till" line). Keeps a 2-digit year: "07-08" on its own reads
+  // equally as 7 Aug and 8 Jul, and paid_until is often months old.
   function fmtDShort(dateStr) {
-    if (!dateStr) return "—";
-    try {
-      return new Date(dateStr + "T12:00:00").toLocaleDateString("en-IN", {
-        day: "numeric", month: "short",
-      });
-    } catch (_) { return dateStr; }
+    if (!dateStr) return "\u2014";
+    var m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(dateStr));
+    return m ? m[3] + "-" + m[2] + "-" + m[1].slice(2) : String(dateStr);
   }
 
   function rup(n) {
@@ -171,15 +171,26 @@
 
   // ── data loads ──────────────────────────────────────────────────────────
 
+  // In-flight de-duplication. `state.staffLoaded` only guards a COMPLETED
+  // load, so two callers a few ms apart (the Staff nav handler and
+  // openStaffQuickPay both run openModal) each fired their own request.
+  var _staffInflight = null;
+
   function loadStaff(force) {
     if (state.staffLoaded && !force) return Promise.resolve(state.staff);
+    if (_staffInflight && !force) return _staffInflight;
     var url = "/staff/list" + (state.includeInactive ? "?all=1" : "");
-    return api(url).then(function (json) {
+    var p = api(url).then(function (json) {
       state.staff = json.staff || [];
       state.payrollVisible = !!json.payroll_visible;
       state.staffLoaded = true;
       return state.staff;
     });
+    _staffInflight = p;
+    p.catch(function () {}).then(function () {
+      if (_staffInflight === p) _staffInflight = null;
+    });
+    return p;
   }
 
   function activeStaff() {
@@ -393,10 +404,13 @@
     var d = new Date(iso);
     if (isNaN(d.getTime())) return "";
     try {
-      return d.toLocaleString("en-IN", {
-        timeZone: "Asia/Kolkata", day: "numeric", month: "short",
-        hour: "numeric", minute: "2-digit",
+      // DD-MM-YYYY h:mm am/pm, in IST. Numeric date to match the rest of the
+      // app; the time part still goes through Intl for the am/pm.
+      var parts = d.toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
+      var time = d.toLocaleTimeString("en-IN", {
+        timeZone: "Asia/Kolkata", hour: "numeric", minute: "2-digit",
       });
+      return fmtD(parts) + ", " + time;
     } catch (_) { return d.toLocaleString(); }
   }
 
@@ -463,7 +477,29 @@
     _gridSetMeta(sid, date, shift, rec);
   }
 
-  function loadGrid() {
+  // In-flight load, keyed by month. See the dedupe note below.
+  var _gridInflight = null;   // { month, promise } | null
+
+  /**
+   * Load (or refresh) the attendance grid for state.gridMonth.
+   *
+   * @param {boolean} [force] bypass de-duplication. Pass this after a write
+   *   (attendance mark, salary payment, advance) — an already-in-flight request
+   *   was issued before the write committed and would return stale data.
+   *
+   * De-duplication matters beyond saving a request. Two concurrent loads for
+   * the same month both resolve, and the SECOND one calls renderGrid(), which
+   * rewrites the pane's innerHTML. That used to destroy the quick-pay panel and
+   * its flatpickr instance several hundred ms after the panel opened — i.e.
+   * exactly while the operator was picking dates. openStaffQuickPay (the Salary
+   * handover from the expense modal) hit this every time, because both the
+   * bottom-nav handler and openStaffQuickPay call openModal().
+   */
+  function loadGrid(force) {
+    var month = state.gridMonth;
+    if (!force && _gridInflight && _gridInflight.month === month) {
+      return _gridInflight.promise;
+    }
     var pane = document.getElementById("stf-pane-attendance");
     state.gridScroll = null;   // fresh load → auto-scroll to today
     // Stale-while-revalidate: if this month is already in memory, paint it
@@ -471,16 +507,21 @@
     var hasCache = state._gridLoadedMonth === state.gridMonth && state.staffLoaded;
     if (hasCache) renderGrid();
     else pane.innerHTML = skeletonGrid();
-    var month = state.gridMonth;
     var r = _monthRange(month);
-    Promise.all([
-      loadStaff(),
+    var p = Promise.all([
+      loadStaff(force),
       api("/staff/attendance?start=" + r.start + "&end=" + r.end),
     ])
       .then(function (results) {
         if (state.gridMonth !== month) return;   // user moved on
         state.gridData = {};
         state.gridMeta = {};
+        // Authoritative data just replaced everything in the grid, so which
+        // absences this session inferred is no longer knowable — an A that
+        // was inferred here may since have been made deliberate elsewhere.
+        // Dropping the registry costs one confirm tap; keeping it stale would
+        // let a single tap silently overwrite someone's real entry.
+        _autoMarked = {};
         (results[1].attendance || []).forEach(function (a) {
           _setGridRecord(a.staff_id, a.date, a.shift, a.status, a);
         });
@@ -492,6 +533,11 @@
         if (hasCache) notify(e.message, "error");
         else pane.innerHTML = '<div class="stf-empty">' + esc(e.message) + "</div>";
       });
+    _gridInflight = { month: month, promise: p };
+    p.catch(function () {}).then(function () {
+      if (_gridInflight && _gridInflight.promise === p) _gridInflight = null;
+    });
+    return p;
   }
 
   function renderGrid() {
@@ -617,7 +663,10 @@
         if (ds === today) cls.push("is-today");
         if (_isSunday(state.gridMonth, d2)) cls.push("is-sun");
         var qp = state.quickPay;
-        if (qp && qp.mode === "pay" && qp.staffId === s.id &&
+        // _qpRangeMode, not mode === "pay" — Meals picks a range too, and
+        // dropping its highlight on every grid re-render made the selection
+        // look like it had been lost.
+        if (_qpRangeMode(qp) && qp.staffId === s.id &&
             qp.start && qp.end && qp.start <= ds && ds <= qp.end) {
           cls.push("in-range");
         }
@@ -665,9 +714,44 @@
           "</span></div>"
         : "");
 
+    // The quick-pay panel is a live sub-tree: it owns a flatpickr instance and
+    // whatever the operator has half-typed or half-picked. `pane.innerHTML =`
+    // below destroys it. Detach it first and put it back into the new slot,
+    // so a background grid refresh (attendance mark, a late-landing load)
+    // leaves the panel and its open calendar completely untouched.
+    //
+    // renderQuickPay() is only called when there is nothing to preserve —
+    // rebuilding is what used to reset the date picker mid-selection.
+    var _liveQp = null;
+    var _wantKey = _qpKey(state.quickPay);
+    if (_wantKey) {
+      var _oldSlot = pane.querySelector("#stf-quickpay-slot");
+      var _cand = _oldSlot && _oldSlot.firstElementChild;
+      // Only preserve a panel built for THIS staff member, mode and host.
+      // openQuickPay swaps state.quickPay first and re-renders second, so
+      // without this check tapping a second person would keep the first
+      // person's DOM (their name in the header, their picker, their
+      // already-paid shading) while every submit used the new id.
+      if (_cand && _cand.getAttribute("data-qp-key") === _wantKey) {
+        _liveQp = _cand;
+        _oldSlot.removeChild(_cand);
+      }
+    }
+
     pane.innerHTML = html;
     bindGridBar();
-    renderQuickPay();
+    if (_liveQp) {
+      var _newSlot = pane.querySelector("#stf-quickpay-slot");
+      if (_newSlot) {
+        _newSlot.appendChild(_liveQp);
+        _wireQpBackdrop(_newSlot);
+        _qpSync();               // refresh the numbers, keep the structure
+      } else {
+        renderQuickPay();        // no slot in this layout — rebuild
+      }
+    } else {
+      renderQuickPay();
+    }
 
     if (canMark) {
       pane.querySelectorAll(".stf-grid-cell").forEach(function (cell) {
@@ -759,7 +843,7 @@
     // instead of marking attendance. Other rows keep marking normally.
     // (Date-range selection ignores which shift cell was tapped.)
     var qp = state.quickPay;
-    if (qp && qp.mode === "pay" && qp.staffId === sid) {
+    if (_qpRangeMode(qp) && qp.staffId === sid) {
       if (!qp.anchor) {
         qp.start = d; qp.end = d; qp.anchor = true;
       } else {
@@ -786,9 +870,14 @@
 
     var prev = _gridGetStatus(sid, d, shift);
 
-    if (!prev) {
+    if (!prev || (prev === "absent" && _isAutoMarked(sid, d, shift))) {
       // Blank day/shift → one tap marks Present (the fast path for the
       // daily register stays one tap per person, or per shift).
+      //
+      // An Absent this session INFERRED from the other shift counts as blank
+      // here. Marking D present auto-marks N absent; if it then turns out the
+      // person worked both shifts, marking N should still be one tap, not a
+      // tap plus a confirm.
       _commitMark(sid, d, "full", shift);
       return;
     }
@@ -799,9 +888,105 @@
     _openCellPop(cell, sid, d, prev, shift);
   }
 
+  // Shifts this session marked Absent by inference rather than by a tap.
+  // Tracked so the twin keeps the one-tap "mark Present" path: an inferred A
+  // is not a deliberate entry and must not trigger the "are you sure you want
+  // to change this?" chooser. In-memory and dropped on every grid reload —
+  // erring towards one extra confirm tap is the safe direction to fail.
+  var _autoMarked = {};
+  function _autoKey(sid, d, shift) {
+    return sid + "|" + d + "|" + (shift || "");
+  }
+  function _isAutoMarked(sid, d, shift) {
+    return !!_autoMarked[_autoKey(sid, d, shift)];
+  }
+
+  // The other shift of a dual-shift staff member on the same day.
+  function _twinShift(shift) {
+    return shift === "D" ? "N" : (shift === "N" ? "D" : null);
+  }
+
+  /**
+   * A dual-shift staff member has two cells a day and, in practice, works
+   * one of them. Marking the shift they worked used to leave the other cell
+   * blank, which reads identically to "nobody has looked at this day yet" —
+   * so the register was never actually complete and the salary period had to
+   * be eyeballed.
+   *
+   * Marking one shift present therefore marks the OTHER shift absent, but
+   * only when it is genuinely untouched: an existing mark on the twin is
+   * someone's deliberate entry (they really did work both shifts) and is
+   * never overwritten, and a twin inside a paid period is locked.
+   *
+   * Not applied when clearing or when marking absent — neither implies
+   * anything about the other shift.
+   */
+  function _autoAbsentTwin(sid, d, next, shift) {
+    if (!shift) return;                          // single-shift staff
+    if (next !== "full" && next !== "half") return;
+    // This runs on a network round-trip's delay, so the mark it is inferring
+    // from may already have been changed or cleared by a later tap. Inferring
+    // an absence from a mark that no longer exists is worse than not
+    // inferring one at all.
+    if (_gridGetStatus(sid, d, shift) !== next) return;
+    var twin = _twinShift(shift);
+    if (!twin) return;
+    if (_gridGetStatus(sid, d, twin)) return;    // already marked — leave it
+    if (_isPaid(sid, d)) return;                 // locked by a salary payout
+
+    _gridSetStatus(sid, d, twin, "absent");
+    _autoMarked[_autoKey(sid, d, twin)] = true;
+    _renderGridUnlessPopping();
+    post("/staff/attendance/mark", {
+      staff_id: sid, date: d, status: "absent", shift: twin,
+    }).then(function (json) {
+      _gridSetMeta(sid, d, twin, json && json.record);
+    }).catch(function () {
+      // Roll the twin back quietly. The shift the operator actually tapped
+      // is already committed by the time this runs, and failing to record an
+      // INFERRED absence is not worth an error toast.
+      _gridSetStatus(sid, d, twin, "");
+      delete _autoMarked[_autoKey(sid, d, twin)];
+      _renderGridUnlessPopping();
+    });
+  }
+
+  // Retract an absence that was inferred from `shift`'s mark (never one the
+  // operator entered themselves — _autoMarked is what tells them apart).
+  function _retractInferredTwin(sid, d, shift) {
+    var twin = _twinShift(shift);
+    if (!twin || !_isAutoMarked(sid, d, twin)) return;
+    _gridSetStatus(sid, d, twin, "");
+    delete _autoMarked[_autoKey(sid, d, twin)];
+    post("/staff/attendance/mark", {
+      staff_id: sid, date: d, status: "clear", shift: twin,
+    }).catch(function () { /* best effort — see _autoAbsentTwin */ });
+  }
+
+  // renderGrid() rewrites the whole pane and closes the cell chooser on the
+  // way. These twin updates land on a network delay, by which time the
+  // operator may have opened the chooser on an unrelated cell — repainting
+  // would make it vanish under their finger. The twin cell is repainted by
+  // the next render either way.
+  function _renderGridUnlessPopping() {
+    if (document.getElementById("stf-cell-pop")) return;
+    // Hold the horizontal scroll. renderGrid() falls back to auto-scrolling
+    // to today's column when state.gridScroll is empty, so repainting
+    // without this snapped the grid to today mid-way through marking a
+    // back-dated day — the operator lost their place on every tap.
+    var wrap = document.querySelector("#stf-pane-attendance .stf-grid-wrap");
+    if (wrap) state.gridScroll = { left: wrap.scrollLeft, top: wrap.scrollTop };
+    renderGrid();
+  }
+
   function _commitMark(sid, d, next, shift) {
     var prev = _gridGetStatus(sid, d, shift);
     if ((next || "") === prev) return;
+    delete _autoMarked[_autoKey(sid, d, shift)];   // now a deliberate entry
+    // Clearing a mark retracts the absence that mark inferred on the other
+    // shift — otherwise the day keeps a recorded A whose only justification
+    // has just been deleted.
+    if (!next) _retractInferredTwin(sid, d, shift);
 
     function keepScroll() {
       var wrap = document.querySelector("#stf-pane-attendance .stf-grid-wrap");
@@ -819,6 +1004,12 @@
       // Keep the audit info fresh so the popover shows the real marker
       // without a full reload.
       _gridSetMeta(sid, d, shift, json && json.record);
+      // Infer the other shift ONLY once this one is committed. Doing it
+      // alongside the optimistic update wrote an absence to the server that
+      // survived when this request then failed (lost connection, or a salary
+      // payment locking the day from another device) — leaving an A on a
+      // shift nobody touched, with nothing to reconcile it.
+      _autoAbsentTwin(sid, d, next, shift);
     }).catch(function (e) {
       _gridSetStatus(sid, d, shift, prev);
       keepScroll();
@@ -955,7 +1146,7 @@
     var conf = {
       dateFormat: "Y-m-d",
       altInput: true,
-      altFormat: "d M Y",
+      altFormat: "d-m-Y",
       disableMobile: true,
     };
     for (var k in (opts || {})) conf[k] = opts[k];
@@ -998,6 +1189,8 @@
     var mode = opts.mode ||
       (can("staff.salary.pay") ? "pay" : "advance");
     // Never open a mode the user can't perform.
+    if (mode === "meals" &&
+        (!can("staff.salary.pay") || !(Number(s.meal_rate || 0) > 0))) mode = "pay";
     if (mode === "pay" && !can("staff.salary.pay")) mode = "advance";
     if (mode === "advance" && !can("staff.advance.give")) mode = "pay";
     // Open with NO dates pre-selected — the operator picks the range
@@ -1050,7 +1243,7 @@
 
   function fetchQuickPreview() {
     var qp = state.quickPay;
-    if (!qp || qp.mode !== "pay") return;
+    if (!_qpRangeMode(qp)) return;
     if (_qpPreviewTimer) clearTimeout(_qpPreviewTimer);
     // No range chosen yet → nothing to calculate. Clear any old preview and
     // let _qpSync show the "pick a date range" prompt.
@@ -1067,7 +1260,8 @@
       var mine = state.quickPay;
       if (!mine || mine !== qp) return;
       api("/staff/" + encodeURIComponent(qp.staffId) +
-          "/salary_preview?start=" + qp.start + "&end=" + qp.end)
+          (qp.mode === "meals" ? "/meal_preview?start=" : "/salary_preview?start=") +
+          qp.start + "&end=" + qp.end)
         .then(function (json) {
           if (state.quickPay !== qp) return;
           qp.preview = json;
@@ -1085,6 +1279,19 @@
     }, 250);
   }
 
+  // Identity of the panel currently in state: staff + mode + host. Stamped
+  // onto the rendered panel so renderGrid can tell "the same panel, keep it"
+  // from "a different panel, rebuild it".
+  function _qpKey(qp) {
+    return qp ? (qp.staffId + "|" + qp.mode + "|" + qp.host) : null;
+  }
+
+  // Modes that pick a date range off the attendance grid / calendar.
+  // "advance" is a single amount on a single date, so it is not one of them.
+  function _qpRangeMode(qp) {
+    return !!(qp && (qp.mode === "pay" || qp.mode === "meals"));
+  }
+
   // Toggle the calendar-range highlight on the grid IN PLACE — no grid
   // re-render, so the panel, scroll position and focus are untouched.
   function _qpHighlightRange() {
@@ -1093,7 +1300,7 @@
     if (!pane) return;
     pane.querySelectorAll(".stf-grid-cell[data-date]").forEach(function (cell) {
       var tr = cell.closest("tr");
-      var inRange = !!(qp && qp.mode === "pay" && tr &&
+      var inRange = !!(_qpRangeMode(qp) && tr &&
         tr.dataset.sid === qp.staffId &&
         qp.start && qp.end && qp.start <= cell.dataset.date &&
         cell.dataset.date <= qp.end);
@@ -1104,15 +1311,9 @@
     });
   }
 
-  // ── In-place refresh of the panel's dynamic parts. The structure (inputs,
-  // source toggle, buttons) is built ONCE by renderQuickPay and stays put —
-  // changing dates must never collapse the panel into a "Calculating…"
-  // placeholder or steal focus from an input.
-  function _qpSync() {
-    var qp = state.quickPay;
-    if (!qp || qp.mode !== "pay") return;
-    var pv = qp.preview;
-
+  // Push the chosen range into whichever date control is on screen.
+  // Shared by the Salary and Meals modes — both pick a period the same way.
+  function _qpSyncDates(qp) {
     // Date controls follow state (grid taps). With the flatpickr range
     // picker, setDate(..., false) updates in place WITHOUT firing onChange
     // — no loop, no panel rebuild. Native fallback keeps the old rule of
@@ -1122,7 +1323,11 @@
       if (!qp.start || !qp.end) {
         // Range cleared / not yet chosen — empty the calendar.
         if (picker.selectedDates.length) picker.clear();
-      } else {
+      } else if (!picker.isOpen) {
+        // Only while the calendar is CLOSED. setDate() in range mode redraws
+        // the calendar and resets flatpickr's internal selection state, so a
+        // preview response landing between the operator's first and second tap
+        // used to wipe the half-picked range out from under them.
         var selNow = picker.selectedDates.map(_toYMD);
         if (selNow.length !== 2 || selNow[0] !== qp.start || selNow[1] !== qp.end) {
           picker.setDate([_ymdDate(qp.start), _ymdDate(qp.end)], false);
@@ -1138,7 +1343,19 @@
         endInp.value = qp.end;
       }
     }
+  }
 
+  // ── In-place refresh of the panel's dynamic parts. The structure (inputs,
+  // source toggle, buttons) is built ONCE by renderQuickPay and stays put —
+  // changing dates must never collapse the panel into a "Calculating…"
+  // placeholder or steal focus from an input.
+  function _qpSync() {
+    var qp = state.quickPay;
+    if (!_qpRangeMode(qp)) return;
+    var pv = qp.preview;
+    if (qp.mode === "meals") { _qpSyncDates(qp); _mealSync(qp); return; }
+
+    _qpSyncDates(qp);
     // Note area (skipped days / fully-paid warning / error).
     var noteEl = document.getElementById("stf-qp-notearea");
     if (noteEl) {
@@ -1181,12 +1398,18 @@
     // the operator's typed value, only auto-fill while untouched.
     var outstanding = pv ? Number(pv.outstanding_advance || 0) : 0;
     var dedWrap = document.getElementById("stf-qp-ded-wrap");
+    // (the deduct field's max is set below, after meals are known)
     var dedInp = document.getElementById("stf-qp-ded");
     if (dedWrap) dedWrap.style.display = outstanding > 0 ? "" : "none";
     var dedHelp = document.getElementById("stf-qp-ded-help");
     if (dedHelp) dedHelp.textContent = outstanding > 0 ? rup(outstanding) + " due" : "";
     if (dedInp && pv) {
-      dedInp.max = outstanding;
+      // Cap at whatever survives the meal withholding — the ledger rejects a
+      // payout where advance + meals exceed the payable amount, and a field
+      // that lets you type a rejected number is worse than one that doesn't.
+      var _meals = Number((pv.meals && pv.meals.meal_total) || pv.meal_deduction || 0);
+      dedInp.max = Math.max(0, Math.min(
+        outstanding, (pv.computed.gross + (Number(qp.adj) || 0)) - _meals));
       // Default the advance deduction to 0 — the operator opts in to
       // recovering an advance rather than it being pre-filled to the max.
       if (!qp.dedTouched) {
@@ -1197,8 +1420,63 @@
 
     var confirmBtn = document.getElementById("stf-qp-confirm");
     if (confirmBtn && qp.mode === "pay") {
-      confirmBtn.disabled = !!(qp.loading || !pv || pv.all_days_paid);
+      confirmBtn.disabled = !!(qp.loading || !pv || pv.all_days_paid ||
+        (qp._net != null && qp._net < 0));
     }
+  }
+
+  // Meals mode: same shape as the salary sync, far less arithmetic. The
+  // amount is entirely server-derived (rate x days present, minus days an
+  // earlier log already covered), so there is nothing to recompute here —
+  // only to display.
+  function _mealSync(qp) {
+    var pv = qp.preview;
+
+    var noteEl = document.getElementById("stf-qp-notearea");
+    if (noteEl) {
+      var note = "";
+      if (qp.error) {
+        note = '<div class="stf-carry-note" style="background:#fff5f5;border-color:#fecaca;color:#991b1b;">' +
+          esc(qp.error) + "</div>";
+      } else if (pv && !pv.has_meal_rate) {
+        note = '<div class="stf-carry-note" style="background:#fff5f5;border-color:#fecaca;color:#991b1b;">' +
+          "\u26a0 No meal rate set for this person. Edit their staff record and " +
+          "set \u201cMeals per day\u201d first.</div>";
+      } else if (pv && pv.already_logged_days && pv.already_logged_days.length) {
+        note = '<div class="stf-carry-note">' +
+          "\u2139 " + pv.already_logged_days.length + " day" +
+          (pv.already_logged_days.length > 1 ? "s" : "") +
+          " in this range " + (pv.already_logged_days.length > 1 ? "are" : "is") +
+          " already logged and will be skipped.</div>";
+      }
+      if (noteEl.innerHTML !== note) noteEl.innerHTML = note;
+    }
+
+    var days = pv && pv.meals ? pv.meals.meal_days : 0;
+    var total = pv && pv.meals ? pv.meals.meal_total : 0;
+
+    var calcEl = document.getElementById("stf-qp-calc");
+    if (calcEl) {
+      if (!qp.start || !qp.end) {
+        calcEl.textContent = "Select the days to see the meal total.";
+      } else if (pv) {
+        calcEl.innerHTML = "<b>" + days + "</b> day" + (days === 1 ? "" : "s") +
+          " present \u00d7 " + rup(pv.meal_rate) + " = <b>" + rup(total) + "</b>";
+      } else if (qp.loading) {
+        calcEl.textContent = "Calculating\u2026";
+      } else {
+        calcEl.textContent = "\u2014";
+      }
+      calcEl.classList.toggle("updating", !!qp.loading);
+    }
+
+    var netEl = document.getElementById("stf-qp-net");
+    if (netEl) netEl.textContent = rup(total);
+    var lbl = document.getElementById("stf-qp-paylbl");
+    if (lbl) lbl.textContent = total > 0 ? "Log " + rup(total) + " meals" : "Log meals";
+
+    var btn = document.getElementById("stf-qp-confirm");
+    if (btn) btn.disabled = !!(qp.loading || !pv || !pv.has_meal_rate || total <= 0);
   }
 
   function _qpRecalcNet() {
@@ -1215,12 +1493,61 @@
     var outstanding = Number(pv.outstanding_advance || 0);
     var adj = parseInt(document.getElementById("stf-qp-adj")?.value, 10) || 0;
     var payable = pv.computed.gross + adj;
+    // Meals come off the payout before the advance can be recovered — the
+    // food is already eaten, the advance can always wait for next week.
+    // The figure is computed server-side (staff.meal_rate x days present in
+    // this period); the client only displays it.
+    var meals = Number((pv.meals && pv.meals.meal_total) || pv.meal_deduction || 0);
+    var mealRow = document.getElementById("stf-qp-mealrow");
+    if (mealRow) {
+      mealRow.style.display = meals > 0 ? "" : "none";
+      var mealVal = document.getElementById("stf-qp-mealval");
+      if (mealVal) {
+        mealVal.textContent = "\u2212" + rup(meals) +
+          (pv.meals ? "  (" + pv.meals.meal_days + " \u00d7 " +
+            rup(pv.meals.meal_rate) + ")" : "");
+      }
+    }
     var ded = Math.min(parseInt(document.getElementById("stf-qp-ded")?.value, 10) || 0,
-      Math.min(outstanding, Math.max(0, payable)));
-    var net = payable - ded;
+      Math.min(outstanding, Math.max(0, payable - meals)));
+    var net = payable - meals - ded;
     netEl.textContent = rup(net);
     // The button restates the amount so staff see exactly what they'll hand over.
     if (payLbl) payLbl.textContent = "Pay " + rup(net);
+    // A negative payout means the meal charge for this period exceeds what
+    // was earned (a short run of half days against a high meal rate, or a
+    // large fine). The server refuses it, and no input on this form could be
+    // adjusted to make it go through, so say that explicitly rather than
+    // letting the operator press Pay into a dead-end 400.
+    //
+    // Recorded on the state object because _qpSync sets the button's disabled
+    // flag AFTER calling this, and the adjustment/deduction handlers call this
+    // on its own — both paths have to agree.
+    qp._net = net;
+    var negEl = document.getElementById("stf-qp-negnote");
+    if (negEl) {
+      negEl.style.display = net < 0 ? "" : "none";
+      if (net < 0) {
+        negEl.textContent = "\u26a0 Meals " + rup(meals) + " exceed the " +
+          rup(payable) + " earned in this period. Widen the period, or fix " +
+          "the meal rate on the staff record.";
+      }
+    }
+    var negBtn = document.getElementById("stf-qp-confirm");
+    if (negBtn && net < 0) negBtn.disabled = true;
+  }
+
+  // Mobile: the panel is styled as a modal overlay on top of the grid
+  // (see .stf-quickpay-slot CSS). Tapping the dimmed backdrop closes it.
+  // Guarded so a mode-switch re-render doesn't stack duplicate listeners.
+  // Called for the slot the panel actually lives in — renderGrid() replaces the
+  // pane's DOM, so a preserved panel lands in a brand-new (unwired) slot.
+  function _wireQpBackdrop(slot) {
+    if (!slot || slot._bdWired) return;
+    slot._bdWired = true;
+    slot.addEventListener("click", function (e) {
+      if (e.target === slot) closeQuickPay();   // backdrop only, not the card
+    });
   }
 
   function renderQuickPay() {
@@ -1232,12 +1559,18 @@
     if (!s) { slot.innerHTML = ""; return; }
     var today = _todayStr();
 
+    // The Meals tab only appears for staff who actually have a meal rate —
+    // most don't, and an always-visible third tab would be noise.
+    var hasMealRate = Number(s.meal_rate || 0) > 0;
     var switchBtns =
       (can("staff.salary.pay")
         ? '<button data-qpmode="pay" class="' + (qp.mode === "pay" ? "on" : "") + '">Salary</button>'
         : "") +
       (can("staff.advance.give")
         ? '<button data-qpmode="advance" class="' + (qp.mode === "advance" ? "on" : "") + '">Advance</button>'
+        : "") +
+      (can("staff.salary.pay") && hasMealRate
+        ? '<button data-qpmode="meals" class="' + (qp.mode === "meals" ? "on" : "") + '">Meals</button>'
         : "");
 
     var head =
@@ -1258,32 +1591,59 @@
       "</div>";
 
     var body = "";
-    if (qp.mode === "pay") {
+    // Both range modes use the same period picker. Built once here so Salary
+    // and Meals cannot drift apart.
+    var srcInnerShared = sourceHtml("stf-qp-source")
+      .replace('<div class="form-group"><label class="form-label">Paid from</label>', "")
+      .replace(/<\/div>$/, "");
+    var rangeField = _fpLib()
+      ? '<div class="stf-range-lbl"><i class="fas fa-calendar-alt"></i>' +
+        '  <input type="text" id="stf-qp-range" class="stf-range-inp" placeholder="Select the pay period" readonly></div>' +
+        (qp.host === "payroll" ? "" :
+         '  <span class="stf-qp-help stf-qp-taphint">or tap the days on ' + esc(s.name) + "&rsquo;s row</span>")
+      : '<div class="stf-qp-tworow">' +
+        '  <input type="date" id="stf-qp-start" class="stf-qp-input" value="' + esc(qp.start) + '" max="' + today + '">' +
+        '  <span class="stf-qp-dash">to</span>' +
+        '  <input type="date" id="stf-qp-end" class="stf-qp-input" value="' + esc(qp.end) + '" max="' + today + '"></div>' +
+        (qp.host === "payroll" ? "" :
+         '  <span class="stf-qp-help stf-qp-taphint">or tap the days on ' + esc(s.name) + "&rsquo;s row</span>");
+
+    if (qp.mode === "meals") {
+      // One expense covering a week of food, after the fact. The amount is
+      // never entered by hand — it is rate x days present, computed by the
+      // server, so it always matches what the salary payout withheld.
+      body +=
+        '<div class="stf-qp-field">' +
+        '  <label class="stf-qp-lbl">1 \u00b7 Days to charge</label>' + rangeField +
+        "</div>" +
+        '<div id="stf-qp-notearea"></div>' +
+        '<div class="stf-qp-calcbox" id="stf-qp-calc">Select the days to see the meal total.</div>' +
+        '<div class="stf-qp-field">' +
+        '  <label class="stf-qp-lbl">Note (optional)</label>' +
+        '  <input type="text" id="stf-qp-note" class="stf-qp-input" maxlength="120" placeholder="e.g. week 2 mess bill">' +
+        "</div>" +
+        '<div class="stf-qp-netcard">' +
+        '  <span class="stf-qp-netlbl">Meal cost</span>' +
+        '  <span class="stf-qp-netval" id="stf-qp-net">\u20b90</span>' +
+        "</div>" +
+        '<div class="stf-qp-field">' +
+        '  <label class="stf-qp-lbl">2 \u00b7 Paid from</label>' + srcInnerShared +
+        "</div>" +
+        '<button class="stf-btn primary stf-qp-paybtn" id="stf-qp-confirm" disabled>' +
+        '<i class="fas fa-utensils"></i> <span id="stf-qp-paylbl">Log meals</span></button>' +
+        '<div class="stf-qp-help" style="margin-top:0.5rem;">Counts one meal per day present ' +
+        '(a half day still eats). Days already logged are skipped automatically.</div>';
+    } else if (qp.mode === "pay") {
       // The FULL structure is always present; _qpSync() fills the dynamic
       // parts. Nothing here is ever swapped for a loading placeholder.
       // One "Pick date range" input opening the flatpickr calendar — the
       // same modern selector as the Transactions tab. Native two-input
       // fallback if the library didn't load.
       // Strip sourceHtml's own "Paid from" wrapper — we render our own label.
-      var srcInner = sourceHtml("stf-qp-source")
-        .replace('<div class="form-group"><label class="form-label">Paid from</label>', "")
-        .replace(/<\/div>$/, "");
-
-      var dateField = _fpLib()
-        ? '<div class="stf-range-lbl"><i class="fas fa-calendar-alt"></i>' +
-          '  <input type="text" id="stf-qp-range" class="stf-range-inp" placeholder="Select the pay period" readonly></div>' +
-          (qp.host === "payroll" ? "" :
-           '  <span class="stf-qp-help stf-qp-taphint">or tap the days on ' + esc(s.name) + "&rsquo;s row</span>")
-        : '<div class="stf-qp-tworow">' +
-          '  <input type="date" id="stf-qp-start" class="stf-qp-input" value="' + esc(qp.start) + '" max="' + today + '">' +
-          '  <span class="stf-qp-dash">to</span>' +
-          '  <input type="date" id="stf-qp-end" class="stf-qp-input" value="' + esc(qp.end) + '" max="' + today + '"></div>' +
-          (qp.host === "payroll" ? "" :
-           '  <span class="stf-qp-help stf-qp-taphint">or tap the days on ' + esc(s.name) + "&rsquo;s row</span>");
-
+      var srcInner = srcInnerShared;
       body +=
         '<div class="stf-qp-field">' +
-        '  <label class="stf-qp-lbl">1 · Salary period</label>' + dateField +
+        '  <label class="stf-qp-lbl">1 · Salary period</label>' + rangeField +
         "</div>" +
         '<div id="stf-qp-notearea"></div>' +
         '<div class="stf-qp-calcbox" id="stf-qp-calc">Select the pay period to see the salary total.</div>' +
@@ -1299,6 +1659,12 @@
         '    <span class="stf-qp-help" id="stf-qp-ded-help"></span>' +
         "  </div>" +
         "</div>" +
+        '<div class="stf-qp-mealrow" id="stf-qp-mealrow" style="display:none;">' +
+        '  <span class="stf-qp-meallbl"><i class="fas fa-utensils"></i> Meals withheld</span>' +
+        '  <span class="stf-qp-mealval" id="stf-qp-mealval">\u20b90</span>' +
+        "</div>" +
+        '<div class="stf-carry-note stf-qp-negnote" id="stf-qp-negnote" ' +
+        'style="display:none;background:#fff5f5;border-color:#fecaca;color:#991b1b;"></div>' +
         '<div class="stf-qp-netcard">' +
         '  <span class="stf-qp-netlbl">Paying now</span>' +
         '  <span class="stf-qp-netval" id="stf-qp-net">₹0</span>' +
@@ -1309,9 +1675,7 @@
         '<button class="stf-btn primary stf-qp-paybtn" id="stf-qp-confirm" disabled>' +
         '<i class="fas fa-check"></i> <span id="stf-qp-paylbl">Pay salary</span></button>';
     } else {
-      var srcInnerA = sourceHtml("stf-qp-source")
-        .replace('<div class="form-group"><label class="form-label">Paid from</label>', "")
-        .replace(/<\/div>$/, "");
+      var srcInnerA = srcInnerShared;
       body +=
         '<div class="stf-qp-fieldrow">' +
         '  <div class="stf-qp-field">' +
@@ -1335,17 +1699,10 @@
         '<div class="stf-qp-help" style="margin-top:0.5rem;">Deducted automatically from the next salary; the rest carries forward.</div>';
     }
 
-    slot.innerHTML = '<div class="stf-qp">' + head + body + "</div>";
+    slot.innerHTML = '<div class="stf-qp" data-qp-key="' +
+      esc(_qpKey(qp)) + '">' + head + body + "</div>";
 
-    // Mobile: the panel is styled as a modal overlay on top of the grid
-    // (see .stf-quickpay-slot CSS). Tapping the dimmed backdrop closes it.
-    // Guarded so a mode-switch re-render doesn't stack duplicate listeners.
-    if (!slot._bdWired) {
-      slot._bdWired = true;
-      slot.addEventListener("click", function (e) {
-        if (e.target === slot) closeQuickPay();   // backdrop only, not the card
-      });
-    }
+    _wireQpBackdrop(slot);
 
     // ── bindings ──
     document.getElementById("stf-qp-close").addEventListener("click", closeQuickPay);
@@ -1360,7 +1717,7 @@
         state.quickPay.mode = b.dataset.qpmode;
         renderQuickPay();          // structure change — a rebuild is correct
         _qpHighlightRange();       // grid highlight follows the mode, in place
-        if (b.dataset.qpmode === "pay") fetchQuickPreview();
+        if (_qpRangeMode(state.quickPay)) fetchQuickPreview();
       });
     });
 
@@ -1369,13 +1726,20 @@
     if (rangeInp && _fpLib()) {
       var rp = _fpLib()(rangeInp, {
         mode: "range",
-        dateFormat: "d M",
-        // Date OBJECT, not "Y-m-d" string — strings are parsed with
-        // dateFormat ("d M"), which would silently fail here.
+        dateFormat: "d-m-Y",
+        // Date OBJECT, not a "Y-m-d" string — a string would be parsed with
+        // this picker's dateFormat ("d-m-Y") and silently fail.
         maxDate: _ymdDate(today),
         // No pre-selected range — the calendar opens empty.
         defaultDate: (qp.start && qp.end) ? [_ymdDate(qp.start), _ymdDate(qp.end)] : null,
         disableMobile: true,
+        // Render the calendar INSIDE .stf-range-lbl (which is position:
+        // relative) instead of letting flatpickr append it to <body>. On
+        // phones this panel is a position:fixed, internally-scrolling overlay;
+        // a body-appended calendar is positioned once at a document
+        // coordinate and then slides away from its input as soon as anything
+        // scrolls. Static keeps the two glued together.
+        static: true,
         locale: { rangeSeparator: " – " },
         // Color-code each day the same way the attendance grid does for
         // already-paid ("locked") days — a light green fill + small lock
@@ -1451,7 +1815,9 @@
 
     var confirmBtn = document.getElementById("stf-qp-confirm");
     if (confirmBtn) confirmBtn.addEventListener("click", function () {
-      if (state.quickPay && state.quickPay.mode === "advance") return submitQuickAdvance(confirmBtn);
+      var m = state.quickPay && state.quickPay.mode;
+      if (m === "advance") return submitQuickAdvance(confirmBtn);
+      if (m === "meals") return submitMealLog(confirmBtn);
       submitQuickPay(confirmBtn);
     });
 
@@ -1492,7 +1858,44 @@
           state.insights = null;
           state._gridLoadedMonth = null;   // paid-period locks changed
           _refreshMoneyViews();
-          loadGrid();
+          loadGrid(true);       // force — the paid-period locks just changed
+        })
+        .catch(function (e) { btn.disabled = false; notify(e.message, "error"); });
+    });
+  }
+
+  function submitMealLog(btn) {
+    var qp = state.quickPay;
+    var s = _qpStaff();
+    if (!qp || !s || !qp.preview) return;
+    var pv = qp.preview;
+    var total = pv.meals ? pv.meals.meal_total : 0;
+    var days = pv.meals ? pv.meals.meal_days : 0;
+    if (!(total > 0)) return notify("Nothing to log for these days", "error");
+    var src = readSource("stf-qp-source");
+    stfConfirm(
+      "Log " + rup(total) + " of meals for " + s.name + "? (" + days +
+      " day" + (days === 1 ? "" : "s") + " × " + rup(pv.meal_rate) + ")",
+      { okText: "Log meals" }
+    ).then(function (ok) {
+      if (!ok) return;
+      btn.disabled = true;
+      // The amount is NOT sent — the server recomputes it from the staff
+      // member's meal rate and the attendance in this range.
+      post("/staff/" + encodeURIComponent(qp.staffId) + "/log_meals", {
+        period_start: qp.start,
+        period_end: qp.end,
+        note: (document.getElementById("stf-qp-note")?.value || "").trim(),
+        payment_method: src.payment_method,
+        expense_type: src.expense_type,
+      })
+        .then(function (json) {
+          notify(json.message || "Meals logged", "success");
+          state.quickPay = null;
+          state.staffLoaded = false;
+          state.insights = null;
+          _refreshMoneyViews();
+          loadGrid(true);       // force — a new expense row just landed
         })
         .catch(function (e) { btn.disabled = false; notify(e.message, "error"); });
     });
@@ -1520,7 +1923,7 @@
         state.staffLoaded = false;
         state.insights = null;
         _refreshMoneyViews();
-        loadGrid();
+        loadGrid(true);         // force — the advance ledger just changed
       })
       .catch(function (e) { btn.disabled = false; notify(e.message, "error"); });
   }
@@ -1847,6 +2250,10 @@
           (can("staff.salary.pay") && s.active !== false
             ? '<button class="stf-btn primary" data-act="pay" data-sid="' + esc(s.id) + '"><i class="fas fa-money-bill-wave"></i> Pay Salary</button>'
             : "") +
+          // Only for staff who actually eat here — see meal_rate.
+          (can("staff.salary.pay") && s.active !== false && Number(s.meal_rate || 0) > 0
+            ? '<button class="stf-btn ghost" data-act="meals" data-sid="' + esc(s.id) + '"><i class="fas fa-utensils"></i> Meals</button>'
+            : "") +
           '    <button class="stf-btn ghost" data-act="ledger" data-sid="' + esc(s.id) + '"><i class="fas fa-book-open"></i> Ledger</button>' +
           (can("staff.manage")
             ? '<button class="stf-btn ghost iconbtn" data-act="edit" data-sid="' + esc(s.id) + '" title="Edit"><i class="fas fa-pen"></i></button>'
@@ -1877,7 +2284,7 @@
         var act = btn.dataset.act;
         // Pay Salary / Advance open the shared quick panel in this pane.
         // Edit and Ledger are still their own full-screen views.
-        if (act === "pay" || act === "advance") {
+        if (act === "pay" || act === "advance" || act === "meals") {
           openQuickPay(s.id, { mode: act, host: "payroll" });
           return;
         }
@@ -1942,6 +2349,12 @@
       '    <div class="form-group"><label class="form-label">Joined on</label>' +
       '      <input class="form-control" type="date" id="stf-f-joined" value="' + esc(s.joined_date || _todayStr()) + '"></div>' +
       "  </div>" +
+      '  <div class="stf-two-col">' +
+      '    <div class="form-group"><label class="form-label">Meals per day (\u20b9)</label>' +
+      '      <input class="form-control" type="number" min="0" id="stf-f-meal" value="' + (s.meal_rate || 0) + '" placeholder="0"></div>' +
+      '    <div class="form-group" style="display:flex;align-items:flex-end;">' +
+      '      <span style="font-size:0.72rem;color:#718096;line-height:1.35;">Leave 0 if they don&rsquo;t eat here.</span></div>' +
+      "  </div>" +
       '  <div class="form-group"><label class="form-label">Notes</label>' +
       '    <input class="form-control" id="stf-f-notes" maxlength="300" value="' + esc(s.notes || "") + '" placeholder="Optional"></div>' +
       '  <div class="form-group"><label class="stf-inactive-toggle" style="font-size:0.85rem;">' +
@@ -1954,7 +2367,10 @@
         : "") +
       '  <div style="font-size:0.72rem;color:#718096;margin-bottom:0.7rem;">' +
       "    A half day pays half the daily wage. Wage changes apply from the next salary payment. " +
-      "Two-shift staff earn up to two days' wage per day worked (one per shift)." +
+      "Two-shift staff earn up to two days' wage per day worked (one per shift). " +
+      "A meal rate is withheld from the salary payout and billed separately with " +
+      "\u201cLog meals\u201d \u2014 e.g. wage \u20b9350 with meals \u20b950 hands over " +
+      "\u20b9300/day in cash. Meals count one per day present (a half day still eats)." +
       "  </div>" +
       '  <button class="stf-btn primary block" id="stf-f-save">' +
       (isEdit ? "Save Changes" : "Add Staff") + "</button>" +
@@ -1973,6 +2389,7 @@
         joined_date: document.getElementById("stf-f-joined").value,
         notes: document.getElementById("stf-f-notes").value.trim(),
         is_dual_shift: document.getElementById("stf-f-dual").checked,
+        meal_rate: document.getElementById("stf-f-meal").value || 0,
       };
       if (!body.name) return notify("Name is required", "error");
       if (!(Number(body.daily_wage) > 0)) return notify("Enter the per-day wage", "error");
@@ -2257,7 +2674,11 @@
     var navItem = document.querySelector('.nav-item[data-tab="staff"]');
     if (navItem) navItem.click();
     // 2) Build/refresh content and land on the attendance grid. Idempotent —
-    //    safe even if the nav handler already opened the module.
+    //    safe even if the nav handler already opened the module. The two paths
+    //    used to issue two concurrent /staff/attendance loads for the same
+    //    month; loadGrid() now de-duplicates them, so only one response lands
+    //    and only one renderGrid() runs. That double render was what tore the
+    //    date picker down mid-selection on this route.
     openModal();
     // 3) The grid loads async; poll until this month's data (staff list +
     //    paid periods) is in memory, then pop the quick-pay panel.

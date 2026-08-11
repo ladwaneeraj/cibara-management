@@ -2397,25 +2397,19 @@ function populateApplyDayDropdown() {
     // window starts on (checkinDt + (i-1) days). Operators sometimes
     // shift the check-in date after recording a service, which makes a
     // bare "Day 3" label ambiguous; the date next to it removes the
-    // doubt. Format: "Day 3 — 13 May (today)".
+    // doubt. Format: "Day 3 — 13-05 (today)".
     //
     // We compute the date by adding (i-1) full days to the check-in
     // datetime. Using a fresh Date() for each iteration so DST/edge
     // cases don't accumulate (Asia/Kolkata has no DST so this is
     // strictly safety; still good practice).
     const DAY_MS = 24 * 60 * 60 * 1000;
-    const _fmtDate = (d) => {
-      try {
-        return d.toLocaleDateString("en-IN", { day: "2-digit", month: "short" });
-      } catch (_) {
-        // Fallback for engines without Intl support — "YYYY-MM-DD".
-        const yy = d.getFullYear();
-        const mm = String(d.getMonth() + 1).padStart(2, "0");
-        const dd = String(d.getDate()).padStart(2, "0");
-        return `${yy}-${mm}-${dd}`;
-      }
-    };
-
+    // DD-MM, matching the numeric DD-MM-YYYY used everywhere else. Pure
+    // arithmetic on the local Date — no Intl, so the try/catch that guarded
+    // the old toLocaleDateString call is gone with it.
+    const _fmtDate = (d) =>
+      String(d.getDate()).padStart(2, "0") + "-" +
+      String(d.getMonth() + 1).padStart(2, "0");
     let html = "";
     for (let i = 1; i <= currentDay; i++) {
       const dayDate = new Date(checkinDt.getTime() + (i - 1) * DAY_MS);

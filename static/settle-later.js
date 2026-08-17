@@ -132,6 +132,22 @@ function initSettleLater() {
   console.log("Settle Later feature initialized");
 }
 
+// Section 34(2) acknowledgement, carried across the one retry the backend
+// asks for. Reset on success and whenever the modal is opened, so an
+// acknowledgement given for one settlement can never apply to the next.
+let _settleAckS34 = false;
+
+// "credit_note" (a real price reduction, GST comes down) or "financial" (a
+// write-off, invoice and GST unchanged). Defaults to credit_note because that
+// is what a discount at settlement almost always is; the alternative is one
+// click away and spelled out in the modal.
+function _settleDiscountType() {
+  const el = document.querySelector(
+    'input[name="settlement-disc-type"]:checked'
+  );
+  return el && el.value === "financial" ? "financial" : "credit_note";
+}
+
 // Initialize discount features
 function initDiscountFeatures() {
   const discountAmountInput = document.getElementById(
@@ -146,6 +162,29 @@ function initDiscountFeatures() {
   const otherReasonContainer = document.getElementById(
     "settlement-other-reason-container"
   );
+
+  // ── Live breakdown + discount-type reveal ────────────────────────────────
+  // Every input that can move a number re-renders the breakdown, so what the
+  // operator is about to record is on screen before they press Collect.
+  const _typeContainer = document.getElementById(
+    "settlement-discount-type-container"
+  );
+  const _paymentInput = document.getElementById("settlement-payment-amount");
+  [discountAmountInput, _paymentInput].forEach(function (el) {
+    if (el) el.addEventListener("input", _settleSyncBreakdown);
+  });
+  document
+    .querySelectorAll('input[name="settlement-disc-type"]')
+    .forEach(function (r) {
+      r.addEventListener("change", _settleSyncBreakdown);
+    });
+  if (discountAmountInput && _typeContainer) {
+    discountAmountInput.addEventListener("input", function () {
+      // The GST treatment only matters once there IS a discount.
+      _typeContainer.style.display =
+        parseInt(this.value, 10) > 0 ? "block" : "none";
+    });
+  }
 
   if (discountAmountInput && discountReasonContainer) {
     discountAmountInput.addEventListener("input", function () {
@@ -426,6 +465,18 @@ function showCollectSettlementModal(settlementId) {
     discountAmountInput.max = settlement.amount;
   }
 
+  // Reset the per-settlement state every time the modal opens. Without this
+  // a Section 34 acknowledgement, or a "write-off" choice, would carry over
+  // to the next guest's settlement.
+  _settleAckS34 = false;
+  const _dtDefault = document.querySelector(
+    'input[name="settlement-disc-type"][value="credit_note"]'
+  );
+  if (_dtDefault) _dtDefault.checked = true;
+  const _dtBox = document.getElementById("settlement-discount-type-container");
+  if (_dtBox) _dtBox.style.display = "none";
+  setTimeout(_settleSyncBreakdown, 0);
+
   if (discountReasonContainer) {
     discountReasonContainer.style.display = "none";
   }
@@ -559,16 +610,46 @@ async function collectSettlementPayment() {
         payment_date: (document.getElementById("settlement-payment-date") && document.getElementById("settlement-payment-date").value) || "",
         discount_amount: discountAmount,
         discount_reason: discountReason,
+        // Previously never sent, so the backend fell through to "financial"
+        // and every settlement discount became a goodwill write-off with no
+        // GST relief and no credit note. The modal now asks.
+        discount_type: _settleDiscountType(),
+        // Set only after the operator confirms the Section 34(2) warning
+        // below; the first attempt always goes without it.
+        acknowledge_section34_window: !!_settleAckS34,
       }),
     });
 
-    if (!response.ok) {
-      throw new Error(`Server responded with status: ${response.status}`);
+    const result = await response.json().catch(() => ({}));
+
+    // 409 + section34_warning: the invoice is past the 30 November cutoff for
+    // credit notes. The server refuses once, tells us the deadline, and
+    // accepts a retry that carries the acknowledgement. Anything else with a
+    // non-OK status is a real failure.
+    if (response.status === 409 && result && result.section34_warning) {
+      const proceed = confirm(
+        (result.message || "This bill is past the Section 34 credit-note deadline.") +
+          "\n\nIssue the credit note anyway? Your CA may need to explain it."
+      );
+      if (proceed) {
+        _settleAckS34 = true;
+        collectBtn.disabled = false;
+        collectBtn.innerHTML = "Collect Payment";
+        return collectSettlementPayment();
+      }
+      showNotification("Settlement not collected.", "error");
+      return;
     }
 
-    const result = await response.json();
+    if (!response.ok) {
+      throw new Error(
+        (result && result.message) ||
+          `Server responded with status: ${response.status}`
+      );
+    }
 
     if (result.success) {
+      _settleAckS34 = false;
       // Refresh settlements data
       await fetchPendingSettlements();
 
@@ -581,9 +662,15 @@ async function collectSettlementPayment() {
       // Refresh the settlements display
       renderPendingSettlements();
 
-      // Show success message
+      // Confirm what was actually recorded, not just "success". If a credit
+      // note was issued the operator needs its number: it is the document
+      // that makes the invoice and the cash agree.
+      const cn = result.credit_note || {};
+      const cnNo = cn.cn_number || result.credit_note_number || "";
       showNotification(
-        result.message || "Payment collected successfully",
+        cnNo
+          ? `Payment collected. Credit note ${cnNo} issued for the discount.`
+          : result.message || "Payment collected successfully",
         "success"
       );
     } else {
@@ -597,6 +684,79 @@ async function collectSettlementPayment() {
     collectBtn.disabled = false;
     collectBtn.innerHTML = "Collect Payment";
   }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Live breakdown for the collect-settlement modal
+// ─────────────────────────────────────────────────────────────────────────────
+// Four numbers have to agree before money changes hands: what was owed, what
+// is being knocked off, what is being taken now, and what is left. Previously
+// none of them were shown together, so a partial collection or a discount only
+// surfaced later on the printed bill — which is how a bill ends up reading
+// "Grand Total 1800 / Total Paid 1600" with nothing explaining the gap.
+function _settleSyncBreakdown() {
+  const box = document.getElementById("settlement-breakdown");
+  if (!box) return;
+
+  const settlement = pendingSettlements.find((s) => s.id === activeSettlementId);
+  if (!settlement) {
+    box.style.display = "none";
+    return;
+  }
+
+  const _int = function (id) {
+    const el = document.getElementById(id);
+    const v = parseInt((el && el.value) || "0", 10);
+    return isNaN(v) || v < 0 ? 0 : v;
+  };
+  const original = parseInt(settlement.amount, 10) || 0;
+  const discount = Math.min(_int("settlement-discount-amount"), original);
+  const payable = original - discount;
+  const paying = Math.min(_int("settlement-payment-amount"), payable);
+  const remaining = payable - paying;
+
+  const typeEl = document.querySelector(
+    'input[name="settlement-disc-type"]:checked'
+  );
+  const isCn = !typeEl || typeEl.value === "credit_note";
+
+  const rupee = function (n) {
+    return "₹" + Number(n).toLocaleString("en-IN");
+  };
+  const row = function (label, value, opts) {
+    opts = opts || {};
+    return (
+      '<div style="display:flex;justify-content:space-between;gap:1rem;' +
+      (opts.strong ? "font-weight:700;" : "") +
+      (opts.top ? "border-top:1px solid #ddd;margin-top:.3rem;padding-top:.3rem;" : "") +
+      'color:' + (opts.color || "#333") + ';">' +
+      "<span>" + label + "</span><span>" + value + "</span></div>"
+    );
+  };
+
+  let html = row("Originally owed", rupee(original));
+  if (discount > 0) {
+    html += row(
+      isCn ? "Price reduction (credit note)" : "Written off (no GST relief)",
+      "− " + rupee(discount),
+      { color: isCn ? "#2e7d32" : "#b45309" }
+    );
+    html += row("Now payable", rupee(payable), { top: true });
+  }
+  html += row("Collecting now", rupee(paying), { top: discount === 0 });
+  html += row(
+    remaining > 0 ? "Still owed after this" : "Fully settled",
+    remaining > 0 ? rupee(remaining) : "✓",
+    { strong: true, top: true, color: remaining > 0 ? "#b45309" : "#2e7d32" }
+  );
+  if (discount > 0 && isCn) {
+    html +=
+      '<div style="margin-top:.4rem;font-size:.76rem;color:#446;">' +
+      "A credit note will be issued against the original bill, so the invoice " +
+      "and the amount collected reconcile.</div>";
+  }
+  box.innerHTML = html;
+  box.style.display = "block";
 }
 
 // Show confirmation before cancelling a settlement

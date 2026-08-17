@@ -487,6 +487,8 @@ async function lookupAndFillCustomer(mobile) {
       _showCheckinStoredDocs(data.customer);
       _applyFlagAlert(data.customer);
       _applyPendingSettlementAlert(data.customer);
+      _applyWantsBillNote(data.customer);
+      _applyCheckinGstCard(data.customer);
     } else {
       _currentCheckinCustomer = null;
       clearNameMismatch();
@@ -495,6 +497,8 @@ async function lookupAndFillCustomer(mobile) {
       _hideCheckinStoredDocs();
       _hideFlagAlert();
       _hidePendingSettlementAlert();
+      _hideWantsBillNote();
+      _hideCheckinGstCard();
     }
   } catch (err) { console.error('[customer-docs] Mobile lookup error:', err); }
 }
@@ -538,6 +542,127 @@ function _applyFlagAlert(customer) {
     if (dateEl)  dateEl.textContent  = '';
   }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// STICKY GUEST PREFERENCES — check-in surfacing
+// ─────────────────────────────────────────────────────────────────────────────
+// One note here, and only a note: this guest asked for a bill on a previous
+// stay, so this one produces an invoice whatever they pay with. There is
+// nothing to decide, but the operator should not be surprised at checkout.
+//
+// The GST question deliberately does NOT live here. It moved to the checkout
+// modal (see _checkoutGst in script.js), where the amount is final and the
+// bill is actually being made. Asking at check-in meant the answer had to be
+// parked on the room document for the length of the stay, which is both a
+// stale-data hazard and the wrong moment to ask.
+
+function _applyWantsBillNote(customer) {
+  const el   = document.getElementById('checkin-wants-bill-note');
+  const text = document.getElementById('checkin-wants-bill-text');
+  if (!el) return;
+  if (customer && customer.wants_bill) {
+    if (text) text.textContent = 'Bill will be generated for this stay.';
+    el.style.display = 'flex';
+  } else {
+    _hideWantsBillNote();
+  }
+}
+
+function _hideWantsBillNote() {
+  const el = document.getElementById('checkin-wants-bill-note');
+  if (el) el.style.display = 'none';
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// COMPANY BILLING (GST) — check-in offer for a returning B2B guest
+// ─────────────────────────────────────────────────────────────────────────────
+// Shown only when the mobile lookup finds gst_profile saved from a previous
+// B2B invoice. One tap answers "same company again?" — the details are never
+// retyped. The answer rides the /checkin payload (script.js reads it via
+// window.getCheckinGstProfile), is re-validated server-side, and stamps the
+// stay; the checkout modal's Company billing card then opens pre-selected to
+// "Applied" with a final chance to flip to Personal before the invoice is
+// made. Default is PERSONAL — silently inheriting a company GSTIN is the
+// GSTR-1 error this card exists to prevent.
+
+const _checkinGst = {
+  profile: null,   // stored profile from the customer doc, or null
+  applied: false,  // operator picked "Bill to this company"
+};
+
+function _applyCheckinGstCard(customer) {
+  const p = customer && customer.gst_profile;
+  if (!p || !p.gstin) { _hideCheckinGstCard(); return; }
+  // The mobile lookup re-fires on every input event in the mobile field
+  // (debounced), and each re-fire lands here. If this is the SAME company
+  // already on the card, PRESERVE the operator's current answer — blindly
+  // resetting flipped a chosen "Company" back to Personal microseconds
+  // before submit, so the selection never reached the bill. The choice
+  // only resets when the profile genuinely changes (different guest /
+  // GSTIN) or the modal reopens (_hideCheckinGstCard via modal reset).
+  const _same = !!(_checkinGst.profile && _checkinGst.profile.gstin === p.gstin);
+  _checkinGst.profile = p;
+  if (!_same) _checkinGst.applied = false;   // new company → explicit choice
+  _setText('checkin-gst-company', (p.legal_name || p.trade_name || 'Company').trim());
+  _setText('checkin-gst-gstin', p.gstin);
+  _setText('checkin-gst-meta',
+           p.last_used_at ? 'Last billed to this company on ' +
+             _fmtGstCardDate(p.last_used_at) : '');
+  _renderCheckinGstState();
+  const card = document.getElementById('checkin-gst-card');
+  if (card) card.style.display = 'block';
+}
+
+function _hideCheckinGstCard() {
+  _checkinGst.profile = null;
+  _checkinGst.applied = false;
+  const card = document.getElementById('checkin-gst-card');
+  if (card) card.style.display = 'none';
+}
+
+function _renderCheckinGstState() {
+  const status = document.getElementById('checkin-gst-status');
+  if (status) {
+    status.textContent = _checkinGst.applied ? 'Company' : 'Personal';
+    status.style.background = _checkinGst.applied ? '#dcfce7' : '#f3f4f6';
+    status.style.color = _checkinGst.applied ? '#166534' : '#6b7280';
+  }
+  const applyBtn = document.getElementById('checkin-gst-apply');
+  const skipBtn = document.getElementById('checkin-gst-skip');
+  if (applyBtn) {
+    applyBtn.style.background = _checkinGst.applied ? '#111827' : '#fff';
+    applyBtn.style.color = _checkinGst.applied ? '#fff' : '#374151';
+    applyBtn.style.border = _checkinGst.applied ? 'none' : '1px solid #e5e7eb';
+  }
+  if (skipBtn) {
+    skipBtn.style.background = _checkinGst.applied ? '#fff' : '#111827';
+    skipBtn.style.color = _checkinGst.applied ? '#6b7280' : '#fff';
+    skipBtn.style.border = _checkinGst.applied ? '1px solid #e5e7eb' : 'none';
+  }
+}
+
+function _fmtGstCardDate(raw) {
+  try {
+    const d = new Date(raw);
+    if (isNaN(d.getTime())) return '';
+    return String(d.getDate()).padStart(2, '0') + ' ' +
+      d.toLocaleString('en-IN', { month: 'short' }) + ' ' + d.getFullYear();
+  } catch (e) { return ''; }
+}
+
+// The answer, for the /checkin payload. Null means personal stay.
+window.getCheckinGstProfile = function () {
+  return (_checkinGst.applied && _checkinGst.profile &&
+          _checkinGst.profile.gstin) ? _checkinGst.profile : null;
+};
+
+document.addEventListener('click', function (e) {
+  const t = e.target && e.target.closest &&
+            e.target.closest('#checkin-gst-apply, #checkin-gst-skip');
+  if (!t) return;
+  _checkinGst.applied = t.id === 'checkin-gst-apply';
+  _renderCheckinGstState();
+});
 
 function _hideFlagAlert() {
   const alertEl = document.getElementById('checkin-flag-alert');
@@ -781,7 +906,6 @@ function initDocCamera() {
   document.getElementById('doc-type-page')?.addEventListener('click', () => _setDocType('page'));
 
   // Scan button in checkin header — direct WiFi scan, no modal change needed
-  document.getElementById('doc-scan-btn')?.addEventListener('click', _onScanBtnClick);
 
   // Checkout pending-upload strip buttons
   document.getElementById('checkout-pending-upload-btn')?.addEventListener('click', _commitCheckoutPending);
@@ -868,109 +992,6 @@ function closeDocCameraModal() {
   stopDocStream();
   const modal = document.getElementById('doc-camera-modal');
   if (modal) modal.classList.remove('show');
-}
-
-// ── WiFi Scanner (Epson L3250 / eSCL) ─────────────────────────────────────────
-
-async function _onScanBtnClick() {
-  if (_docCapturedBlobs.length >= MAX_DOC_PHOTOS) {
-    _notify(`Maximum ${MAX_DOC_PHOTOS} photos already captured`, 'warning');
-    return;
-  }
-
-  const scanBtn = document.getElementById('doc-scan-btn');
-
-  // ── Step 1: Fetch saved scanner IP from backend ──────────────────────────
-  let scannerIp = '';
-  try {
-    const cfgRes  = await apiFetch('/scanner/config');
-    const cfgData = await cfgRes.json();
-    scannerIp = (cfgData.config?.ip || '').trim();
-  } catch (_) {}
-
-  // ── Step 2: If not set, ask user once and save to backend ────────────────
-  if (!scannerIp) {
-    const entered = (prompt(
-      'Enter your Epson scanner IP or hostname:\n' +
-      '  • IPv4 example:  192.168.1.45\n' +
-      '  • Hostname:       EPSON4F183E.local\n\n' +
-      'This will be saved so all devices on this network can scan.'
-    ) || '').trim();
-    if (!entered) return;
-
-    // Warn on link-local IPv6 before even sending
-    if (entered.toLowerCase().startsWith('fe80')) {
-      alert(
-        'That is a link-local IPv6 address (fe80::…) and won\'t work over WiFi.\n\n' +
-        'Please use:\n' +
-        '  • The IPv4 address (e.g. 192.168.1.45)  — found on the printer network status sheet\n' +
-        '  • Or the hostname: EPSON4F183E.local'
-      );
-      return;
-    }
-
-    // Save to backend
-    const saveRes  = await apiFetch('/scanner/config', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ip: entered, doc_type: _docType }),
-    });
-    const saveData = await saveRes.json();
-    if (!saveData.success) {
-      _notify('Could not save scanner: ' + saveData.message, 'error');
-      return;
-    }
-    scannerIp = entered;
-    _notify('Scanner IP saved — all devices will use this', 'success');
-  }
-
-  // ── Step 3: Scan ──────────────────────────────────────────────────────────
-  if (scanBtn) { scanBtn.disabled = true; scanBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>'; }
-  _notify('Scanning… place document face-down on the glass', 'info');
-
-  try {
-    const res  = await apiFetch('/scan_document', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ scanner_ip: scannerIp, doc_type: _docType }),
-    });
-    const data = await res.json();
-
-    if (!data.success) {
-      // If IP was wrong, clear saved config so user can re-enter
-      if (data.message && data.message.includes('Cannot reach')) {
-        await apiFetch('/scanner/config', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ ip: '', doc_type: _docType }),
-        }).catch(() => {});
-        _notify('Scanner unreachable — IP cleared, tap Scan again to re-enter', 'error');
-      } else {
-        _notify('Scan failed: ' + data.message, 'error');
-      }
-      return;
-    }
-
-    // Convert data-URI → Blob → push to captured list
-    const arr   = data.image.split(',');
-    const mime  = arr[0].match(/:(.*?);/)[1];
-    const bstr  = atob(arr[1]);
-    const u8arr = new Uint8Array(bstr.length);
-    for (let i = 0; i < bstr.length; i++) u8arr[i] = bstr.charCodeAt(i);
-    const blob = new Blob([u8arr], { type: mime });
-    const url  = URL.createObjectURL(blob);
-
-    _docCapturedBlobs.push({ blob, url });
-    renderThumbStrip();
-    _updateAddMoreBtn();
-    _setIndicator('green');
-    _notify('Scan complete ✓', 'success');
-
-  } catch (err) {
-    _notify('Scanner error: ' + err.message, 'error');
-  } finally {
-    if (scanBtn) { scanBtn.disabled = false; scanBtn.innerHTML = '<i class="fas fa-print"></i>'; }
-  }
 }
 
 /** Retake: discard the last captured blob and restart the camera */
@@ -1568,6 +1589,8 @@ function resetCheckinDocState() {
   _hideCheckinStoredDocs();
   _hideFlagAlert();
   _hidePendingSettlementAlert();
+  _hideWantsBillNote();
+  _hideCheckinGstCard();
   _setIndicator('grey');
   hideMobileSuggestions();
   clearNameMismatch();

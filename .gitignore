@@ -77,3 +77,8 @@ static/firebase-config.js
 
 # Session scratch — removed code parked here (safe to delete the folder)
 _to_delete/
+
+# Machine-local files — never commit
+lodge.log
+name_backup_*.csv
+_to_delete/

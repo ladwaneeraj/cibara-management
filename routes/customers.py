@@ -52,6 +52,18 @@ def _format_customer(c: dict) -> dict:
         "pending_settlement_amount": c.get("pending_settlement_amount"),
         "pending_settlement_date":   c.get("pending_settlement_date"),
         "pending_settlement_room":   c.get("pending_settlement_room"),
+        # ── Sticky preferences (services/customer_service.py) ──────────────
+        # wants_bill: this guest asked for a bill before, so the next stay
+        # gets one whatever the payment mode. Surfaced here so the check-in
+        # form can say so before the operator wonders why a cash stay
+        # produced an invoice.
+        "wants_bill":        bool(c.get("wants_bill", False)),
+        "wants_bill_since":  c.get("wants_bill_since", ""),
+        "wants_bill_source": c.get("wants_bill_source", ""),
+        # gst_profile: the GST details this guest was last invoiced under.
+        # None when they have never been billed B2B. The check-in form OFFERS
+        # these; it never applies them on its own.
+        "gst_profile":       c.get("gst_profile") or None,
     }
 
 
@@ -337,6 +349,11 @@ def update_customer_route():
         address  – optional
         id_type  – optional
         id_number – optional
+        wants_bill – optional bool; send False to drop the always-bill
+                     preference a guest picked up by asking for a bill.
+
+    The allow-list lives in customer_service.update_customer, not here, so
+    anything else in the body is ignored rather than written.
     """
     try:
         data   = request.get_json(silent=True) or {}

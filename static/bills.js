@@ -1611,6 +1611,12 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
            placeholder="e.g. wrong tariff entered at checkout"
            style="width:100%; box-sizing:border-box; padding:9px 10px; font-size:14px;
                   border:1px solid #cbd5e1; border-radius:8px; margin-bottom:8px;" />
+    <!-- Per-segment rates. Hidden for an ordinary stay and for a transfer
+         where every night was billed at the same rate (same price category) —
+         those take the single input above. Revealed only when the server
+         reports more than one nightly rate, which is genuinely ambiguous for
+         a single number. -->
+    <div id="bl-rprice-segments" style="display:none; margin-bottom:12px;"></div>
     <div id="bl-rprice-msg" style="font-size:13px; min-height:18px; margin-bottom:8px;"></div>
     <div style="display:flex; gap:10px; justify-content:flex-end;">
       <button id="bl-rprice-cancel" class="action-btn btn-secondary" type="button">Cancel</button>
@@ -1848,6 +1854,17 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
           document.body.classList.remove("bl-printing");
           clone.remove();
         }
+        // Log the print. The Register tab's print button already did this;
+        // this one never did, so a bill printed from the Bills tab showed no
+        // print badge AND — now that /log_bill_activity also stamps the
+        // guest's always-bill preference — would have silently failed to
+        // record that the guest asked for a bill. Same signal, same log.
+        // _openBillId is declared with `let` further down this same IIFE, but
+        // this is a click handler: by the time it runs the whole module body
+        // has executed, so there is no temporal-dead-zone hazard.
+        try {
+          if (_openBillId) _logBillActivity(_openBillId, "print");
+        } catch (_e) { /* never let logging break printing */ }
       });
     if (bm)
       bm.addEventListener("click", (e) => {
@@ -1992,8 +2009,62 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
     const rpCancel   = dom("bl-rprice-cancel");
     const rpContext  = dom("bl-rprice-context");
 
+    const rpSegments = dom("bl-rprice-segments");
+    // Set when the server tells us the stay has more than one nightly rate.
+    // While it is non-null the modal collects one price per segment and the
+    // single price input is hidden.
+    let _rpSegmentMode = null;
+
+    function _rpSingleFields(show) {
+      // The single-price input and its label live as siblings; toggle the
+      // input and walk back to its label so the form does not show a heading
+      // for a field that is not there.
+      if (!rpInput) return;
+      rpInput.style.display = show ? "" : "none";
+      const lbl = rpInput.previousElementSibling;
+      if (lbl && lbl.tagName === "LABEL") lbl.style.display = show ? "" : "none";
+    }
+
     function _closeRprice() {
       if (rpBackdrop) rpBackdrop.style.display = "none";
+      _rpSegmentMode = null;
+      if (rpSegments) { rpSegments.style.display = "none"; rpSegments.innerHTML = ""; }
+      _rpSingleFields(true);
+    }
+
+    // Render one rate input per segment, pre-filled with the current rate.
+    // Reached only from the server's 409, so the shape is exactly what the
+    // backend derived — no guessing at segments client-side.
+    function _rpShowSegments(segments) {
+      if (!rpSegments) return;
+      _rpSegmentMode = segments;
+      _rpSingleFields(false);
+      const esc = (s) => String(s).replace(/[&<>"]/g, (c) =>
+        ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+      let html =
+        '<div style="font-size:13px; font-weight:600; margin-bottom:6px;">' +
+        "Rate per night for each part of the stay</div>";
+      segments.forEach(function (s, i) {
+        html +=
+          '<div style="display:flex; align-items:center; gap:8px; margin-bottom:6px;">' +
+          '<div style="flex:1; font-size:13px; color:#374151;">' +
+          "Room <b>" + esc(s.room) + "</b>" +
+          '<span style="color:#6b7280;"> · ' + s.nights + " night" +
+          (s.nights === 1 ? "" : "s") + "</span>" +
+          (s.is_current_room
+            ? '<span style="color:#9ca3af; font-size:11px;"> (final room)</span>'
+            : "") +
+          "</div>" +
+          '<input class="bl-rprice-seg" data-idx="' + i + '" type="number" min="0" ' +
+          'step="1" inputmode="numeric" value="' + Number(s.rate || 0) + '" ' +
+          'style="width:110px; box-sizing:border-box; padding:8px 9px; font-size:14px; ' +
+          'border:1px solid #cbd5e1; border-radius:8px;" />' +
+          "</div>";
+      });
+      rpSegments.innerHTML = html;
+      rpSegments.style.display = "block";
+      const first = rpSegments.querySelector(".bl-rprice-seg");
+      if (first) { first.focus(); first.select(); }
     }
     function _isAdminNow() {
       const a = window.CibaraAuth;
@@ -2019,6 +2090,12 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
             (days > 0 ? " (" + days + " night" + (days === 1 ? "" : "s") + ")" : "") +
             ". Changing the nightly rate re-derives GST and the balance.";
         }
+        // Always reopen in single-price mode. Segment inputs are only ever
+        // reached via the server's 409, and a breakdown left over from a
+        // previous bill must never be submitted against this one.
+        _rpSegmentMode = null;
+        if (rpSegments) { rpSegments.style.display = "none"; rpSegments.innerHTML = ""; }
+        _rpSingleFields(true);
         if (rpInput)  rpInput.value = perNight === "" ? "" : String(perNight);
         if (rpReason) rpReason.value = "";
         if (rpMsg)    { rpMsg.style.color = "#b91c1c"; rpMsg.textContent = ""; }
@@ -2034,13 +2111,38 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
       if (rpSave) rpSave.addEventListener("click", async function () {
         if (!_openBillId) return;
         if (!_isAdminNow()) { alert("Only admin users can edit the room price."); return; }
-        const raw = ((rpInput && rpInput.value) || "").trim();
-        const n = Number(raw);
-        if (raw === "" || isNaN(n) || n < 0 || !Number.isInteger(n)) {
-          if (rpMsg) { rpMsg.style.color = "#b91c1c"; rpMsg.textContent = "Enter a whole, non-negative rupee amount."; }
-          return;
+        // Two shapes: one price for the whole stay, or one per segment when
+        // the stay was billed at more than one nightly rate.
+        let newPrice = 0;
+        let segmentPrices = null;
+        if (_rpSegmentMode) {
+          segmentPrices = [];
+          const inputs = rpSegments.querySelectorAll(".bl-rprice-seg");
+          for (let i = 0; i < inputs.length; i++) {
+            const v = (inputs[i].value || "").trim();
+            const nv = Number(v);
+            if (v === "" || isNaN(nv) || nv < 0 || !Number.isInteger(nv)) {
+              if (rpMsg) {
+                rpMsg.style.color = "#b91c1c";
+                rpMsg.textContent =
+                  "Every segment needs a whole, non-negative rupee amount.";
+              }
+              inputs[i].focus();
+              return;
+            }
+            segmentPrices.push(parseInt(v, 10));
+          }
+          // Sent for audit continuity; the server prices off segment_prices.
+          newPrice = segmentPrices[segmentPrices.length - 1];
+        } else {
+          const raw = ((rpInput && rpInput.value) || "").trim();
+          const n = Number(raw);
+          if (raw === "" || isNaN(n) || n < 0 || !Number.isInteger(n)) {
+            if (rpMsg) { rpMsg.style.color = "#b91c1c"; rpMsg.textContent = "Enter a whole, non-negative rupee amount."; }
+            return;
+          }
+          newPrice = parseInt(raw, 10);
         }
-        const newPrice = parseInt(raw, 10);
         const _orig = rpSave.innerHTML;
         rpSave.disabled = true; rpSave.innerHTML = "Saving…";
         if (rpMsg) { rpMsg.style.color = "#374151"; rpMsg.textContent = "Recomputing…"; }
@@ -2052,9 +2154,27 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
               bill_id:              _openBillId,
               room_price_per_night: newPrice,
               reason:               ((rpReason && rpReason.value) || "").trim(),
+              // Omitted for a single-rate stay. The server answers 409 with
+              // the segment breakdown when it needs these.
+              ...(segmentPrices ? { segment_prices: segmentPrices } : {}),
             }),
           });
           const data = await res.json().catch(() => ({}));
+
+          // The stay was billed at more than one nightly rate, so one number
+          // is ambiguous. The server hands back the breakdown; expand the
+          // modal into per-segment inputs rather than dead-ending. This is
+          // NOT a refusal any more: a transfer between rooms of the same
+          // price category has a single rate and never reaches here.
+          if (!res.ok && data && data.needs_segment_prices && data.segments) {
+            _rpShowSegments(data.segments);
+            if (rpMsg) {
+              rpMsg.style.color = "#374151";
+              rpMsg.textContent = data.message || "Set the rate for each part of the stay.";
+            }
+            return;
+          }
+
           if (res.ok && data && data.success) {
             _closeRprice();
             alert(

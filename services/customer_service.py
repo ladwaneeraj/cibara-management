@@ -70,13 +70,54 @@ def upsert_customer(guest_data: dict, amount_paid: int = 0, *, sync: bool = Fals
         ).start()
 
 
+def standardize_name(raw) -> str:
+    """
+    One casing standard for guest names: each word starts with a capital.
+
+    Rules, chosen for Indian front-desk reality:
+      * whitespace collapsed ("  kiran   mailrappa " → "Kiran Mailrappa")
+      * short ALL-CAPS tokens (≤3 letters) kept as-is — "GB", "T", "KR"
+        are initials, not words ("GB manujnath" → "GB Manujnath")
+      * everything else capitalized per word, rest lowercased
+        ("SIDDESH" → "Siddesh", "ajjaiah s" → "Ajjaiah S")
+      * dots/hyphens restart a word ("k.r. gowda" → "K.R. Gowda")
+
+    Applied at write time (check-in → _upsert below) so the standard holds
+    going forward; scripts/normalize_guest_names.py backfills history with
+    THIS same function, so old and new records can never disagree.
+    """
+    s = " ".join(str(raw or "").split())
+    if not s:
+        return s
+
+    def _cap_token(tok):
+        out, new_word = [], True
+        for ch in tok:
+            if ch.isalpha():
+                out.append(ch.upper() if new_word else ch.lower())
+                new_word = False
+            else:
+                out.append(ch)
+                new_word = True
+        return "".join(out)
+
+    parts = []
+    for tok in s.split(" "):
+        letters = sum(1 for c in tok if c.isalpha())
+        if tok.isupper() and letters <= 3:
+            parts.append(tok)          # initials: GB, T, K.R
+        else:
+            parts.append(_cap_token(tok))
+    return " ".join(parts)
+
+
 def _upsert(mobile: str, guest_data: dict, amount_paid: int):
     try:
         doc_ref = _customers_ref.document(mobile)
         doc = doc_ref.get()
         now_str = datetime.now(timezone.utc).isoformat()
 
-        name = guest_data.get("name", "")
+        name = standardize_name(guest_data.get("name", ""))
         id_type = guest_data.get("id_type", "")
         id_number = guest_data.get("id_number", "")
         address = guest_data.get("address", "")
@@ -589,10 +630,177 @@ def get_last_stay_summary(mobile: str):
         return None
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# STICKY GUEST PREFERENCES
+# ═══════════════════════════════════════════════════════════════════════════
+# Two things about a returning guest the front desk should not have to
+# remember, and should not have to ask about twice:
+#
+#   wants_bill   The guest asked for a bill on an earlier stay — it was
+#                printed for them, or shared to their WhatsApp. From then on
+#                they get a bill regardless of how they pay. Read back in
+#                config.create_bill_record, where it is OR-ed into
+#                always_generate_bill alongside incognito_mode.
+#
+#   gst_profile  The guest was invoiced B2B before. The GST details are kept
+#                so the next check-in can OFFER them. Deliberately an offer,
+#                never an automatic application: the same person can stay on
+#                company business one week and privately the next, and
+#                silently stamping a company GSTIN on a personal invoice is a
+#                filing error that surfaces months later in GSTR-1.
+#
+# Both follow the is_flagged / has_pending_settlement pattern already in this
+# module: merge-write on a daemon thread, every failure swallowed and logged.
+# Neither is ever allowed to block or break a checkout.
+
+# Every key a gst_profile carries. Written in full on every save, including
+# blanks, because Firestore's set(merge=True) merges INTO a nested map rather
+# than replacing it — a partial write would leave the previous tenant's
+# address or trade name behind under a new GSTIN.
+_GST_PROFILE_KEYS = (
+    "gstin", "legal_name", "trade_name", "address", "state", "state_code",
+    "last_bill_id", "last_used_at",
+)
+
+
+def wants_bill(mobile: str) -> bool:
+    """
+    True when this guest has asked for a bill before, so the next stay must
+    produce one whatever the payment mode.
+
+    ONE document read, on the checkout path, so it is deliberately narrow:
+    no caching (a preference set five minutes ago must apply tonight), and
+    every failure returns False, which is the pre-existing behaviour. A
+    Firestore blip must never block a checkout.
+    """
+    if _customers_ref is None:
+        return False
+    clean = _clean_mobile(mobile)
+    if not clean:
+        return False
+    try:
+        snap = _customers_ref.document(clean).get()
+        return bool((snap.to_dict() or {}).get("wants_bill")) if snap.exists else False
+    except Exception as e:
+        logger.warning(f"CustomerService wants_bill({clean}) failed, "
+                       f"assuming False: {e}")
+        return False
+
+
+def remember_bill_preference(mobile: str, *, source: str = "print",
+                             bill_id: str = "") -> None:
+    """
+    Record that this guest asked for a bill. Fire-and-forget.
+
+    `source` is "print" or "whatsapp" — kept for the audit trail and so the
+    Customer Manager can say WHY the guest is marked, which matters when
+    somebody wants to undo it.
+
+    wants_bill_since is stamped only the first time the preference turns on,
+    mirroring flagged_at in _write_flag.
+    """
+    if _customers_ref is None:
+        return
+    clean = _clean_mobile(mobile)
+    if not clean:
+        return
+    src = str(source or "").strip().lower()
+    if src not in ("print", "whatsapp"):
+        src = "print"
+
+    def _do():
+        try:
+            now_str = datetime.now(timezone.utc).isoformat()
+            doc_ref = _customers_ref.document(clean)
+            patch = {
+                "wants_bill":         True,
+                "wants_bill_source":  src,
+                "wants_bill_last_at": now_str,
+            }
+            snap = doc_ref.get()
+            if not snap.exists or not (snap.to_dict() or {}).get("wants_bill_since"):
+                patch["wants_bill_since"] = now_str
+            doc_ref.set(patch, merge=True)
+            logger.info(f"CustomerService: wants_bill set for {clean} "
+                        f"(source={src}, bill={bill_id or '-'})")
+        except Exception as e:
+            logger.warning(f"CustomerService remember_bill_preference({clean}) "
+                           f"failed: {e}")
+
+    threading.Thread(target=_do, daemon=True).start()
+
+
+def remember_gst_profile(mobile: str, profile: dict, *,
+                         bill_id: str = "") -> None:
+    """
+    Record the GST details this guest was last invoiced under, so the next
+    check-in can offer them. Fire-and-forget.
+
+    Only saves when a GSTIN is present. Validation is the caller's job — this
+    is called from paths that have already validated (routes/billing.py's
+    /update_bill_gst) or from a bill whose invoice_type is already B2B.
+
+    Writes every key in _GST_PROFILE_KEYS so the stored map is a full
+    replacement rather than a merge over stale fields.
+    """
+    if _customers_ref is None:
+        return
+    clean = _clean_mobile(mobile)
+    if not clean:
+        return
+    profile = profile or {}
+    gstin = str(profile.get("gstin") or "").strip().upper()
+    if not gstin:
+        return
+
+    def _do():
+        try:
+            stored = {k: str(profile.get(k) or "").strip()
+                      for k in _GST_PROFILE_KEYS}
+            stored["gstin"] = gstin
+            stored["last_bill_id"] = str(bill_id or "")
+            stored["last_used_at"] = datetime.now(timezone.utc).isoformat()
+            _customers_ref.document(clean).set({"gst_profile": stored},
+                                               merge=True)
+            logger.info(f"CustomerService: gst_profile saved for {clean} "
+                        f"(GSTIN={gstin}, bill={bill_id or '-'})")
+        except Exception as e:
+            logger.warning(f"CustomerService remember_gst_profile({clean}) "
+                           f"failed: {e}")
+
+    threading.Thread(target=_do, daemon=True).start()
+
+
+def forget_gst_profile(mobile: str) -> bool:
+    """
+    Drop the stored GST details. Synchronous and returns a result, because
+    unlike the two above this is an explicit operator action ("this company
+    account is closed") and they need to know whether it worked.
+    """
+    if _customers_ref is None:
+        return False
+    clean = _clean_mobile(mobile)
+    if not clean:
+        return False
+    try:
+        _customers_ref.document(clean).set({"gst_profile": None}, merge=True)
+        logger.info(f"CustomerService: gst_profile cleared for {clean}")
+        return True
+    except Exception as e:
+        logger.error(f"CustomerService forget_gst_profile({clean}) failed: {e}")
+        return False
+
+
 def update_customer(mobile: str, updates: dict) -> bool:
     """
     Update allowed fields on a customer record.
-    Allowed: name, address, id_type, id_number.
+    Allowed: name, address, id_type, id_number, wants_bill.
+
+    wants_bill is on the allow-list so the Customer Manager can turn the
+    always-bill preference back OFF. Nothing else about the sticky
+    preferences is editable here — gst_profile has its own
+    forget_gst_profile() because clearing it is not a field edit.
+
     Mobile (the doc key) cannot be changed.
     Returns True on success, False on failure.
     """
@@ -602,8 +810,10 @@ def update_customer(mobile: str, updates: dict) -> bool:
     if not clean:
         return False
 
-    allowed = {"name", "address", "id_type", "id_number"}
+    allowed = {"name", "address", "id_type", "id_number", "wants_bill"}
     safe = {k: v for k, v in updates.items() if k in allowed}
+    if "wants_bill" in safe:
+        safe["wants_bill"] = bool(safe["wants_bill"])
     if not safe:
         return False
     try:

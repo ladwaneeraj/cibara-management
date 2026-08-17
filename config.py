@@ -488,6 +488,23 @@ _UI_CONFIG_DEFAULTS = {
     #           billing behaviour from a single doc.
     #   False → default.
     "incognito_mode": False,
+    # listener_first (bool, default False):
+    #   True  → the frontend treats the Firestore onSnapshot listeners in
+    #           static/google_sync.js as the source of truth for the dashboard.
+    #           The boot-time /get_data, /get_transaction_metadata and
+    #           /get_upcoming_bookings calls are skipped entirely: the first
+    #           paint comes from the SDK's IndexedDB cache (instant, zero
+    #           billed reads) and the listeners deliver only what changed.
+    #           Cuts Firestore reads roughly in half by removing the
+    #           server-side duplicate of data the listeners already carry.
+    #   False → default; legacy path. The dashboard is painted from /get_data
+    #           and the listeners skip their first snapshot.
+    #
+    #   This is a kill switch. Flipping it to False from any device restores
+    #   the legacy path on the next page load with no redeploy. Individual
+    #   devices can override it for testing via
+    #   localStorage.cibara_listener_first = "1" | "0".
+    "listener_first": False,
 }
 
 
@@ -1074,10 +1091,10 @@ def create_bill_record(room, room_data, checkout_time, batch=None,
         balance = total_amount - payment_cash - payment_online - payment_ota + total_refunds
 
         # ── GST Calculation (SAC 9963 — Accommodation Services) ─────────────────
-        # GST slab is determined by the declared room tariff per night.
-        #   < ₹1,000   → Exempt (0%)
-        #   ₹1,000 – ₹7,500 → 5%
-        #   > ₹7,500   → 18%
+        # GST slab is determined by the value of supply per night.
+        #   up to ₹7,500 → 5%  (no ITC)
+        #   above ₹7,500 → 18%
+        # No exempt band — see _slab_for_value for why.
         #
         # Taxable base = room_charges_total + accommodation add-ons (AC, Extra Bed).
         # Water and miscellaneous services are NOT accommodation charges and are
@@ -1139,11 +1156,16 @@ def create_bill_record(room, room_data, checkout_time, batch=None,
         # the PDF, GSTR-1 export, and frontend currently read. The folio
         # is the source of truth; these aggregates are derived from it.
         if daily_folio:
-            gst_amount             = round(sum(e["day_gst_amount"] for e in daily_folio), 2)
-            accommodation_taxable  = round(sum(e["day_taxable"]    for e in daily_folio), 2)
-            bill_cgst_amount       = round(sum(e["day_cgst"]       for e in daily_folio), 2)
-            bill_sgst_amount       = round(sum(e["day_sgst"]       for e in daily_folio), 2)
-            bill_igst_amount       = round(sum(e["day_igst"]       for e in daily_folio), 2)
+            # Bucketed by slab and computed on each bucket's TOTAL — see
+            # aggregate_folio_tax. Summing the per-night rounded figures (what
+            # this used to do) both drifted from the true tax and produced
+            # CGST != SGST, which is a defect on an intra-state invoice.
+            _agg = aggregate_folio_tax(daily_folio)
+            gst_amount             = _agg["tax"]
+            accommodation_taxable  = _agg["taxable"]
+            bill_cgst_amount       = _agg["cgst"]
+            bill_sgst_amount       = _agg["sgst"]
+            bill_igst_amount       = _agg["igst"]
 
             # gst_rate field on the bill is for display fall-back only — the
             # per-day rate is the source of truth. Use the most common slab
@@ -1221,6 +1243,41 @@ def create_bill_record(room, room_data, checkout_time, batch=None,
                 bk_recipient_state      = booking_doc.get("recipient_state") or _st_name or "Karnataka"
                 bk_recipient_state_code = booking_doc.get("recipient_state_code") or _st_code or "29"
 
+        # ── Stay-level GST profile (set at check-in) ──────────────────────────
+        # When the operator answered "yes, apply this guest's stored GST
+        # details" on the check-in form, /checkin stamped them onto the room
+        # doc. Seed the invoice from them here so a returning corporate guest
+        # comes out B2B WITHOUT anybody opening the GST modal after checkout.
+        #
+        # A booking's own GSTIN wins if it has one. That is more specific:
+        # somebody entered it for THIS reservation, whereas the stay-level
+        # profile is a remembered default. Both are re-validated rather than
+        # trusted, because a stored GSTIN can go stale between visits and a
+        # malformed one must never reach GSTR-1.
+        if not bk_recipient_gstin:
+            try:
+                _stay_gst = room_data.get("gst_profile") or {}
+                _sg = str(_stay_gst.get("gstin") or "").strip().upper()
+                if validate_gstin(_sg):
+                    bk_recipient_gstin      = _sg
+                    bk_recipient_legal_name = (_stay_gst.get("legal_name") or
+                                               _stay_gst.get("trade_name") or "")
+                    bk_recipient_trade_name = (_stay_gst.get("trade_name") or
+                                               _stay_gst.get("legal_name") or "")
+                    bk_recipient_address    = _stay_gst.get("address") or ""
+                    _sn, _sc = derive_state_from_gstin(_sg)
+                    bk_recipient_state      = _stay_gst.get("state") or _sn or "Karnataka"
+                    bk_recipient_state_code = _stay_gst.get("state_code") or _sc or "29"
+                    logger.info(f"create_bill_record: applying stay-level GST "
+                                f"profile (GSTIN={_sg}) from check-in")
+                elif _sg:
+                    logger.warning(f"create_bill_record: stay-level GSTIN "
+                                   f"{_sg!r} failed validation — ignored, "
+                                   f"bill stays B2C")
+            except Exception as _sg_err:
+                logger.warning(f"create_bill_record: stay GST profile read "
+                               f"failed, ignoring: {_sg_err}")
+
         # ── Invoice flag logic ────────────────────────────────────────────────────
         # invoice_generated = True when this bill qualifies as a formal GST tax invoice.
         # bill_number (CC/YYYY/MM/XXXXX) is the single reference — no separate INV/... number.
@@ -1265,6 +1322,25 @@ def create_bill_record(room, room_data, checkout_time, batch=None,
         except Exception as _incog_err:
             logger.warning(f"create_bill_record: ui_config read failed, "
                            f"ignoring incognito: {_incog_err}")
+        # Guest-level sticky preference. If this guest asked for a bill on an
+        # earlier stay — it was printed for them, or WhatsApp'd to them — they
+        # get one again, whatever they pay with. Same OR as incognito above,
+        # deliberately: it is the same kind of switch, just scoped to one
+        # person instead of the whole property.
+        #
+        # Costs ONE document read per checkout, which is the price of the
+        # preference being live: a guest who asks for a bill at 6pm must be
+        # billed at 8pm, so there is no cache here. Any failure leaves
+        # always_generate_bill untouched, i.e. exactly the old behaviour.
+        try:
+            _guest_mobile = str((guest or {}).get("mobile") or "").strip()
+            if _guest_mobile and customer_service.wants_bill(_guest_mobile):
+                always_generate_bill = True
+                logger.info(f"create_bill_record: guest {_guest_mobile} has "
+                            f"wants_bill set — forcing bill generation")
+        except Exception as _pref_err:
+            logger.warning(f"create_bill_record: wants_bill lookup failed, "
+                           f"ignoring preference: {_pref_err}")
         # When the property's own GSTIN is registered on MMT, the hotel issues
         # the room tax invoice itself (see _BILLING_CONFIG_DEFAULTS note).
         # C3 — OTA invoices are MANDATORY. The lodge is GST-registered, so
@@ -2006,13 +2082,32 @@ def classify_invoice_type(recipient_gstin, total_amount, recipient_state_code=""
 
 
 def _slab_for_value(value):
-    """Accommodation slab per CBIC 03/2024-CTR — value of supply per night."""
+    """
+    Accommodation GST slab from the value of supply per unit per day.
+
+        up to  ₹7,500  →  5%   (no ITC)
+        above  ₹7,500  →  18%
+
+    There is NO exempt band. This function used to return 0 below ₹1,000,
+    which was correct only until 17 July 2022: Notification 04/2022-CTR
+    withdrew the sub-₹1,000 accommodation exemption with effect from
+    18 July 2022, and the 56th GST Council (eff. 22 Sep 2025) collapsed the
+    old 12% slab into 5% for everything at or below ₹7,500. A lodge charging
+    ₹900 a night is taxable at 5%, not exempt.
+
+    Keeping the dead 0% band had a second, worse effect here: because the
+    slab is taken on the POST-discount value (see compute_daily_folio), a
+    discounted night could fall under ₹1,000 and silently print "Exempt" on
+    a real tax invoice — under-declaring output tax in GSTR-1.
+
+    A zero-value night (fully discounted) still produces zero tax, because
+    5% of ₹0 is ₹0. That falls out of the arithmetic and needs no special
+    case: the supply stays taxable, its value is simply nil.
+    """
     try:
         v = float(value or 0)
     except (TypeError, ValueError):
         v = 0
-    if v < 1000:
-        return 0
     if v <= 7500:
         return 5
     return 18
@@ -2197,11 +2292,16 @@ def compute_daily_folio(
         # eff. 1 Apr 2025; transaction-value basis since the 2019
         # amendments), and Section 15(3)(a) CGST Act EXCLUDES an on-invoice
         # discount from the value of supply. The slab thresholds
-        # (₹1,000 / ₹7,500 per unit per day) therefore apply to the amount
-        # actually charged for the night AFTER the allocated discount.
-        # e.g. ₹1,200 room − ₹400 on-invoice discount = ₹800 → Exempt,
-        # not 5% on ₹800. A fully discounted night is likewise Exempt
-        # (value of supply ₹0) — that is correct, not a display bug.
+        # (₹7,500 per unit per day) therefore applies to the amount actually
+        # charged for the night AFTER the allocated discount.
+        #
+        # This is now only about which side of ₹7,500 a night lands on. It
+        # used to also decide exempt-vs-taxable, because _slab_for_value
+        # carried a dead 0% band below ₹1,000: a discounted night dropped
+        # under ₹1,000 and printed "Exempt" on a real tax invoice. The band
+        # is gone. A fully discounted night is TAXABLE with a nil value, so
+        # it still shows zero tax — arrived at by 5% of ₹0, not by calling
+        # the supply exempt.
         day_gst_rate = _slab_for_value(day_total)
         if day_gst_rate > 0 and day_total > 0:
             divisor = 100 + day_gst_rate
@@ -2244,6 +2344,90 @@ def compute_daily_folio(
         })
 
     return folio
+
+
+def split_bucket_tax(gross, rate):
+    """
+    Tax on a tax-INCLUSIVE bucket total, split into CGST and SGST.
+
+    Computed on the bucket total, never by summing per-night figures, and each
+    half derived independently at half the rate:
+
+        cgst = sgst = round(gross * (rate/2) / (100 + rate), 2)
+        tax         = cgst + sgst
+        taxable     = gross - tax
+
+    Two properties that the previous approach did not have, and both matter on
+    a tax invoice:
+
+    1. CGST == SGST, always. An intra-state supply is 2.5% + 2.5%; an invoice
+       showing 185.77 against 185.64 is defective on its face. That divergence
+       came from splitting each NIGHT's tax — round(28.57/2) = 14.29 leaves
+       14.28 for SGST, one paise adrift every night, 13 paise over a
+       fortnight.
+
+    2. taxable + cgst + sgst == gross, exactly. No residual paise to explain.
+
+    The remaining error against the theoretical figure is under one paise per
+    half, because the rounding happens once on the total instead of once per
+    night. Summing 13 nights of round(600*5/105) = 28.57 lost 0.02 against the
+    true 371.43 on a single ₹7,800 stay; the longer the stay the worse it got.
+
+    rate 0 (legacy exempt-band folios) returns the gross as taxable with no
+    tax, so historical bills still render as they were issued.
+    """
+    try:
+        g = round(float(gross or 0), 2)
+    except (TypeError, ValueError):
+        g = 0.0
+    try:
+        r = int(rate or 0)
+    except (TypeError, ValueError):
+        r = 0
+    if r <= 0 or g <= 0:
+        return {"taxable": g, "cgst": 0.0, "sgst": 0.0, "igst": 0.0, "tax": 0.0}
+    half = round(g * (r / 2.0) / (100 + r), 2)
+    tax = round(half * 2, 2)
+    return {"taxable": round(g - tax, 2), "cgst": half, "sgst": half,
+            "igst": 0.0, "tax": tax}
+
+
+def aggregate_folio_tax(folio):
+    """
+    Invoice-level tax from a daily folio, bucketed by slab.
+
+    The folio decides WHICH slab each night falls in — that is per-night by
+    law, since the threshold is per unit per day. But the tax itself is
+    computed once per slab on the summed gross, because that is what the
+    invoice's HSN table reports and it is where rounding belongs.
+
+    Returns {by_rate: {rate: {gross, taxable, cgst, sgst, igst, tax}},
+             taxable, cgst, sgst, igst, tax, exempt_value}.
+    """
+    gross_by_rate = {}
+    for e in folio or []:
+        try:
+            r = int((e or {}).get("day_gst_rate") or 0)
+            g = float((e or {}).get("day_total") or 0)
+        except (TypeError, ValueError):
+            continue
+        gross_by_rate[r] = gross_by_rate.get(r, 0.0) + g
+
+    out = {"by_rate": {}, "taxable": 0.0, "cgst": 0.0, "sgst": 0.0,
+           "igst": 0.0, "tax": 0.0, "exempt_value": 0.0}
+    for r, g in gross_by_rate.items():
+        part = split_bucket_tax(g, r)
+        part["gross"] = round(g, 2)
+        out["by_rate"][r] = part
+        if r <= 0:
+            out["exempt_value"] = round(out["exempt_value"] + part["taxable"], 2)
+        else:
+            out["taxable"] = round(out["taxable"] + part["taxable"], 2)
+        out["cgst"] = round(out["cgst"] + part["cgst"], 2)
+        out["sgst"] = round(out["sgst"] + part["sgst"], 2)
+        out["igst"] = round(out["igst"] + part["igst"], 2)
+        out["tax"] = round(out["tax"] + part["tax"], 2)
+    return out
 
 
 def compute_gst_split(gst_amount, recipient_state_code=""):
@@ -2444,10 +2628,17 @@ def bill_tax_breakup(bill):
 
     if folio:
         source = "folio"
-        for e in folio:
-            _bucket(_f(e.get("day_gst_rate")), _f(e.get("day_taxable")),
-                    _f(e.get("day_cgst")), _f(e.get("day_sgst")),
-                    _f(e.get("day_igst")))
+        # Same rule as create_bill_record: the folio picks the slab per night,
+        # but the tax for each slab is computed once on that slab's total.
+        # Bucketing the per-night rounded values (what this used to do) is what
+        # printed CGST 185.77 against SGST 185.64 in the HSN table.
+        _agg = aggregate_folio_tax(folio)
+        for _rate, _part in _agg["by_rate"].items():
+            if _rate <= 0:
+                exempt_value += _part["taxable"]
+                continue
+            _bucket(_rate, _part["taxable"], _part["cgst"], _part["sgst"],
+                    _part["igst"])
     elif _f(bill.get("accommodation_taxable")) > 0 or _f(bill.get("gst_amount")) > 0:
         # Pre-folio bill: use the stored stay-level aggregates. `gst_rate` on
         # these records is a single slab, which is accurate because pre-folio

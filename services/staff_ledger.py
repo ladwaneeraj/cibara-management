@@ -199,6 +199,66 @@ def compute_salary(daily_wage, attendance: list, start: str, end: str,
 # Meals
 # ───────────────────────────────────────────────────────────────────────────
 
+def marked_dates(attendance: list, start: str, end: str) -> set:
+    """
+    Calendar dates in [start, end] that carry at least one usable attendance
+    record — full, half OR absent. "Absent" counts as marked: someone made a
+    decision about that day.
+
+    The predicate here is deliberately IDENTICAL to the one in
+    attendance_summary() (valid date, known status, inside the range). If the
+    two ever disagree, a day could be paid for by one and skipped by the
+    other, which is exactly the class of bug this function exists to prevent.
+    Change them together.
+
+    Date-level, not shift-level, because everything that consumes this —
+    payment_covers, covered_dates, date_in_paid_period — reasons in whole
+    calendar days. A dual-shift staff member with only their D shift marked
+    counts as marked for that date; adding the missing N shift afterwards is
+    an attendance correction, not an unpaid day. That matches the existing
+    locking model rather than inventing a second one.
+    """
+    out = set()
+    for rec in attendance or []:
+        d = str((rec or {}).get("date") or "")
+        status = (rec or {}).get("status")
+        if not _valid_date(d) or status not in ATTENDANCE_STATUSES:
+            continue
+        if start and d < start:
+            continue
+        if end and d > end:
+            continue
+        out.add(d)
+    return out
+
+
+def unmarked_dates(start: str, end: str, attendance: list,
+                   exclude=None) -> set:
+    """
+    Days in [start, end] with NO attendance record at all, minus `exclude`.
+
+    Why this matters: a salary payment records the period it settled, and
+    covered_dates() then treats EVERY day in that period as paid. Pay a week
+    where one day was never marked and that day is silently consumed — it
+    earned ₹0 (no attendance, no wage), attendance edits on it are locked by
+    date_in_paid_period(), and a later payment skips it as already covered.
+    The staff member is never paid for it and nothing surfaces the loss.
+
+    So unmarked days are treated exactly like already-paid days: listed in the
+    payment's excluded_dates, worth ₹0, NOT locked, and still payable once
+    somebody marks them.
+
+    `exclude` is normally the already-covered set, so the two categories stay
+    disjoint and each can be reported to the operator in its own words.
+    """
+    if not (_valid_date(start) and _valid_date(end)) or start > end:
+        return set()
+    exclude = exclude or set()
+    marked = marked_dates(attendance, start, end)
+    return {d for d in _dates_between(start, end)
+            if d not in marked and d not in exclude}
+
+
 def present_dates(attendance: list, start: str, end: str,
                   exclude=None) -> list:
     """

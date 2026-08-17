@@ -44,6 +44,253 @@ let logs = {
   discounts: [], // Added discounts array
 };
 let totals = { cash: 0, online: 0, balance: 0, refunds: 0 };
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CibaraState — the bridge between the Firestore listeners and this file.
+// ═══════════════════════════════════════════════════════════════════════════
+// `rooms`, `logs`, `totals`, `upcomingBookings` and `dailyCounters` above are
+// top-level `let` bindings. static/google_sync.js is an ES MODULE, so it can
+// read and mutate them but must not rebind them (an assignment from module
+// scope is easy to get subtly wrong, and `window.logs = x` provably does not
+// swap a `let` — see the note at transaction-tracking.js:2829). This object is
+// the single, explicit way for the listener layer to hand state to the render
+// layer.
+//
+// It also mirrors each binding onto `window`, which fixes two latent bugs:
+// script.js's cleaning-modal header and maintenance.js's room picker both read
+// `window.rooms`, which was never assigned and so was always undefined.
+//
+// LISTENER-FIRST MODE (settings/ui_config.listener_first):
+//   off → legacy. fetchData() paints from /get_data; listeners skip their
+//         first snapshot because that HTTP call already delivered the data.
+//   on  → the listeners ARE the source of truth. The boot HTTP calls are
+//         skipped, the first paint comes from the SDK's IndexedDB cache
+//         (instant, zero billed reads), and we stop paying twice for the
+//         same documents.
+// A device can override the server flag for testing without affecting anyone
+// else: localStorage.cibara_listener_first = "1" (force on) or "0" (force off).
+window.CibaraState = (function () {
+  function _resolveListenerFirst() {
+    try {
+      const override = localStorage.getItem("cibara_listener_first");
+      if (override === "1") return true;
+      if (override === "0") return false;
+    } catch (_) {
+      /* localStorage may be disabled — fall through to the server flag */
+    }
+    return !!(window.__initialUIConfig && window.__initialUIConfig.listener_first);
+  }
+
+  // Payment `type` values that represent money going OUT. Kept in lockstep
+  // with _refund_types in routes/rooms.py :: get_data().
+  const REFUND_TYPES = [
+    "refund", "checkout_refund", "manual_refund", "booking_cancel_refund",
+  ];
+  // Methods that land in the "cash" column. `pay_later` is a settle-later
+  // check-in (₹0 tendered) and `already_paid` is a fully-prepaid booking
+  // conversion; both are real check-in events staff expect to see.
+  const CASH_METHODS = ["cash", "pay_later", "already_paid"];
+  const HIDDEN_TYPES = ["expense", "discount"];
+
+  function _has(list, v) { return list.indexOf(v) !== -1; }
+
+  // ── Migration-duplicate suppression ───────────────────────────────────
+  // Port of _dedup_payments() in services/payment_service.py, which the
+  // legacy /get_data path runs before bucketing. A one-off data migration
+  // left some transactions present twice under different doc IDs; those
+  // carry migrated === true.
+  //
+  // The rule is deliberately narrow: only collapse a fingerprint collision
+  // when at least one side is a migration artifact. Two LIVE payments that
+  // share a fingerprint are both kept, because two genuine UPI payments can
+  // land in the same HH:MM minute and the minute-grained fingerprint cannot
+  // tell them apart from a retry. Collapsing those would hide real money.
+  function dedupPayments(payments) {
+    const firstIdxByFp = Object.create(null);
+    const out = [];
+    for (let i = 0; i < payments.length; i++) {
+      const p = payments[i];
+      const fp = [
+        String(p.room ?? ""), String(p.name ?? ""), String(p.amount ?? ""),
+        String(p.date ?? ""), String(p.time ?? ""), String(p.type ?? ""),
+      ].join("\u0000");
+
+      if (!(fp in firstIdxByFp)) {
+        firstIdxByFp[fp] = out.length;
+        out.push(p);
+        continue;
+      }
+      const existingIdx = firstIdxByFp[fp];
+      const existingIsMigrated = out[existingIdx].migrated === true;
+      const newIsMigrated = p.migrated === true;
+
+      if (existingIsMigrated && !newIsMigrated) out[existingIdx] = p; // live wins
+      else if (!existingIsMigrated && newIsMigrated) continue;        // drop migrated
+      else if (existingIsMigrated && newIsMigrated) continue;         // keep the first
+      else out.push(p);                                              // live vs live
+    }
+    return out;
+  }
+
+  // ── Today's transaction log ───────────────────────────────────────────
+  // Faithful port of the bucketing in routes/rooms.py :: get_data(). The two
+  // MUST stay in step: legacy mode uses the Python version, listener-first
+  // uses this one. If you change one, change the other.
+  //
+  // The listeners feed us the full current set of today's payments and
+  // expenses on every snapshot, so this rebuilds `logs` wholesale rather than
+  // patching incrementally. A full rebuild of one day's rows is cheap and it
+  // removes an entire class of drift bugs.
+  function buildLogs(payments, expenses) {
+    // Dedup FIRST, exactly like the server does, so every bucket below sees
+    // the same list the legacy path would have bucketed.
+    payments = dedupPayments(payments || []);
+    const renewals = [];
+    for (let i = 0; i < payments.length; i++) {
+      const p = payments[i];
+      if ((p.type || "") !== "renewal") continue;
+      const note = p.note || "";
+      renewals.push({
+        room: p.room || "",
+        name: p.name || "",
+        amount: p.amount || 0,
+        date: p.date || "",
+        time: p.time || "",
+        day: note.indexOf("Day ") !== -1
+          ? note.split("Day ").pop().split(" ")[0]
+          : "",
+        note: note,
+        transaction_type: "rent_renewal",
+      });
+    }
+    const visible = function (p) {
+      return !_has(REFUND_TYPES, p.type) && !_has(HIDDEN_TYPES, p.type);
+    };
+    return {
+      cash:      payments.filter((p) => _has(CASH_METHODS, p.method) && visible(p)),
+      online:    payments.filter((p) => p.method === "online" && visible(p)),
+      balance:   [],
+      add_ons:   [],
+      refunds:   payments.filter((p) => _has(REFUND_TYPES, p.type)),
+      settlements: payments.filter((p) => (p.type || "") === "settlement"),
+      renewals:  renewals,
+      booking_payments: [],
+      discounts: [],
+      expenses:  expenses || [],
+      room_shifts: [],
+    };
+  }
+
+  // ── Upcoming-arrival dots ─────────────────────────────────────────────
+  // Faithful port of routes/bookings.py :: get_upcoming_bookings(). Same
+  // lockstep rule as buildLogs above.
+  //
+  // Timezone: the Python side localises to IST explicitly. Here we rely on the
+  // browser's local timezone being IST, which is the same assumption
+  // _localYMD() in google_sync.js already makes for every date-scoped
+  // listener. Staff devices are on IST; a device on another timezone would
+  // shift the dots, not the money.
+  const UPCOMING_WINDOW_HOURS = 24;
+  function buildUpcoming(bookingDocs, now) {
+    const upcoming = {};
+    now = now || new Date();
+    for (let i = 0; i < bookingDocs.length; i++) {
+      const b = bookingDocs[i].data || {};
+      const status = String(b.status || "").toLowerCase();
+      if (status === "cancelled" || status === "checked_out") continue;
+
+      const room = String(b.room || "");
+      if (!room) continue;
+
+      const cd = String(b.check_in_date || "").trim();
+      if (!cd) continue;
+      let ct = String(b.check_in_time || "").trim();
+      // Time is optional in the schema; default to noon so "today" is not
+      // treated as midnight. Accept "HH:MM" and "HH:MM:SS".
+      if (!ct) ct = "12:00";
+      if (ct.length === 5) ct += ":00";
+      const ci = new Date(cd + "T" + ct);
+      if (isNaN(ci.getTime())) continue;   // malformed — no dot beats a wrong dot
+
+      const hoursUntil = (ci.getTime() - now.getTime()) / 3600000;
+      // Allow modestly negative values so a missed arrival still shows,
+      // but drop anything older than a day as abandoned.
+      if (hoursUntil > UPCOMING_WINDOW_HOURS || hoursUntil < -UPCOMING_WINDOW_HOURS) {
+        continue;
+      }
+
+      const row = {
+        booking_id:     bookingDocs[i].id,
+        guest_name:     b.guest_name || "",
+        name:           b.guest_name || "",
+        check_in_date:  cd,
+        check_in_time:  String(b.check_in_time || "").trim(),
+        check_out_date: b.check_out_date || "",
+        status:         status,
+        paid_amount:    b.paid_amount || 0,
+        total_amount:   b.total_amount || 0,
+        hours_until:    Math.round(hoursUntil * 100) / 100,
+      };
+
+      // Closest booking per room wins, measured on ABSOLUTE hours, so an
+      // overdue arrival outranks a future one.
+      const existing = upcoming[room];
+      if (!existing || Math.abs(row.hours_until) < Math.abs(existing.hours_until)) {
+        upcoming[room] = row;
+      }
+    }
+    return upcoming;
+  }
+
+  // ── Repaint ───────────────────────────────────────────────────────────
+  // Coalesced: several listeners can land in the same tick at boot, and there
+  // is no point rendering the grid three times.
+  let _paintTimer = null;
+  const _pending = { rooms: false, stats: false, txns: false };
+  function paint(what) {
+    if (what.rooms) _pending.rooms = true;
+    if (what.stats) _pending.stats = true;
+    if (what.txns)  _pending.txns  = true;
+    if (_paintTimer) return;
+    _paintTimer = setTimeout(function () {
+      _paintTimer = null;
+      const p = { rooms: _pending.rooms, stats: _pending.stats, txns: _pending.txns };
+      _pending.rooms = _pending.stats = _pending.txns = false;
+      try {
+        // renderRooms() calls updateStats() itself, so avoid doing it twice.
+        if (p.rooms && typeof renderRooms === "function") renderRooms();
+        else if (p.stats && typeof updateStats === "function") updateStats();
+        if (p.txns && typeof renderEnhancedLogs === "function") renderEnhancedLogs();
+      } catch (e) {
+        console.error("CibaraState.paint failed:", e);
+      }
+    }, 0);
+  }
+
+  return {
+    listenerFirst: _resolveListenerFirst(),
+    buildLogs: buildLogs,
+    dedupPayments: dedupPayments,
+    buildUpcoming: buildUpcoming,
+    paint: paint,
+
+    setRooms: function (next) { rooms = next || {}; window.rooms = rooms; },
+    patchRoom: function (id, data) {
+      rooms[id] = Object.assign({}, rooms[id], data);
+      window.rooms = rooms;
+    },
+    removeRoom: function (id) { delete rooms[id]; window.rooms = rooms; },
+    setTotals: function (next) { totals = next || {}; window.totals = totals; },
+    mergeTotals: function (next) { Object.assign(totals, next || {}); },
+    setLogs: function (next) { logs = next || {}; window.logs = logs; },
+    setDailyCounters: function (next) { dailyCounters = next || {}; },
+    setUpcoming: function (next) {
+      upcomingBookings = next || {};
+      window.upcomingBookings = upcomingBookings;
+    },
+  };
+})();
+
 let activePaymentMethod = "cash";
 let currentFilter = "all";
 let searchTerm = "";
@@ -1202,16 +1449,18 @@ async function fetchData() {
     const data = await response.json();
     debugLog("Data fetched successfully");
 
-    rooms = data.rooms;
-    logs = data.logs;
-    totals = data.totals;
+    // Routed through CibaraState so the window mirrors stay consistent
+    // whichever mode we are in.
+    CibaraState.setRooms(data.rooms);
+    CibaraState.setLogs(data.logs);
+    CibaraState.setTotals(data.totals);
 
     // Load today's daily counter (single-doc read — serial number for today)
     try {
       if (metadataResponse && metadataResponse.ok) {
         const metadataData = await metadataResponse.json();
         if (metadataData.success) {
-          dailyCounters = metadataData.daily_counters || {};
+          CibaraState.setDailyCounters(metadataData.daily_counters || {});
         }
       }
     } catch (error) {
@@ -1223,7 +1472,7 @@ async function fetchData() {
       if (upcomingResponse && upcomingResponse.ok) {
         const upcomingData = await upcomingResponse.json();
         if (upcomingData.success) {
-          upcomingBookings = upcomingData.upcoming || {};
+          CibaraState.setUpcoming(upcomingData.upcoming || {});
         }
       }
     } catch (error) {
@@ -2061,6 +2310,153 @@ function updateCheckoutModal(roomNumber) {
 }
 
 // Show checkout modal with detailed info
+// ═══════════════════════════════════════════════════════════════════════════
+// Company billing (GST) at checkout
+// ═══════════════════════════════════════════════════════════════════════════
+// Offers the GST details this guest was last invoiced under, if any. Answered
+// here rather than at check-in because this is where the bill is made: the
+// amount is final, and the answer travels straight into the /checkout request
+// instead of sitting on the room document for the length of the stay.
+//
+// Always a question. The same person stays on company business one week and
+// privately the next, and a company GSTIN on a personal invoice is a GSTR-1
+// error that surfaces months later.
+//
+// Cost: one customer document read per checkout modal open, and only for
+// rooms that have a guest mobile. Checkouts are a handful a day.
+const _checkoutGst = {
+  room: null,      // which room the answer belongs to
+  profile: null,   // the stored profile, or null
+  applied: false,  // operator said "bill to this company"
+  touched: false,  // operator actually tapped one of the two buttons
+};
+
+function _resetCheckoutGst() {
+  _checkoutGst.room = null;
+  _checkoutGst.profile = null;
+  _checkoutGst.applied = false;
+  _checkoutGst.touched = false;
+  const card = document.getElementById("checkout-gst-card");
+  if (card) card.style.display = "none";
+}
+
+// The answer for the /checkout payload — a TRI-STATE the server relies on:
+//   profile object → bill to this company
+//   "personal"     → operator explicitly declined at checkout (clears any
+//                    check-in stamp server-side)
+//   null           → no explicit answer here; the server falls back to the
+//                    profile /checkin stamped on the room doc. This is what
+//                    makes the flow survive lost card state in the browser.
+// Scoped to the room it was given for, so an answer for room 201 can never
+// ride along with a checkout of 202.
+function _checkoutGstPayload(roomNumber) {
+  if (String(_checkoutGst.room) !== String(roomNumber)) return null;
+  if (_checkoutGst.applied && _checkoutGst.profile) return _checkoutGst.profile;
+  if (_checkoutGst.touched && _checkoutGst.profile) return "personal";
+  return null;
+}
+
+function _renderCheckoutGstCard() {
+  const card = document.getElementById("checkout-gst-card");
+  if (!card) return;
+  const p = _checkoutGst.profile;
+  if (!p || !p.gstin) { card.style.display = "none"; return; }
+
+  const set = (id, txt) => {
+    const el = document.getElementById(id);
+    if (el) el.textContent = txt;
+  };
+  set("checkout-gst-company", (p.legal_name || p.trade_name || "Company").trim());
+  set("checkout-gst-gstin", p.gstin);
+  set(
+    "checkout-gst-meta",
+    p.last_used_at ? "Last billed to this company on " + _fmtGstDate(p.last_used_at) : "",
+  );
+
+  const status = document.getElementById("checkout-gst-status");
+  const applyBtn = document.getElementById("checkout-gst-apply");
+  const skipBtn = document.getElementById("checkout-gst-skip");
+  if (status) {
+    if (_checkoutGst.applied) {
+      status.textContent = "Applied";
+      status.style.background = "#dcfce7";
+      status.style.color = "#166534";
+    } else {
+      status.textContent = "Not applied";
+      status.style.background = "#f3f4f6";
+      status.style.color = "#6b7280";
+    }
+  }
+  // Selected state on the two buttons, so the current answer is obvious at a
+  // glance rather than being spelled out in the body text.
+  if (applyBtn) {
+    applyBtn.style.background = _checkoutGst.applied ? "#111827" : "#fff";
+    applyBtn.style.color = _checkoutGst.applied ? "#fff" : "#374151";
+    applyBtn.style.border = _checkoutGst.applied ? "none" : "1px solid #e5e7eb";
+  }
+  if (skipBtn) {
+    skipBtn.style.background = _checkoutGst.applied ? "#fff" : "#111827";
+    skipBtn.style.color = _checkoutGst.applied ? "#6b7280" : "#fff";
+    skipBtn.style.border = _checkoutGst.applied ? "1px solid #e5e7eb" : "none";
+  }
+  card.style.display = "block";
+}
+
+function _fmtGstDate(raw) {
+  try {
+    const d = new Date(raw);
+    if (isNaN(d.getTime())) return "";
+    return (
+      String(d.getDate()).padStart(2, "0") + " " +
+      d.toLocaleString("en-IN", { month: "short" }) + " " + d.getFullYear()
+    );
+  } catch (e) { return ""; }
+}
+
+async function _loadCheckoutGst(roomNumber) {
+  _resetCheckoutGst();
+  const _info = rooms[roomNumber] || {};
+  const mobile = (_info.guest || {}).mobile || "";
+  _checkoutGst.room = roomNumber;
+
+  // Stay-level profile stamped at CHECK-IN wins: the operator already
+  // answered "bill to this company" for THIS stay on the check-in form.
+  // Pre-select Applied so the answer carries through to the invoice —
+  // the card still offers the flip to Personal right up to checkout.
+  // (Without this, an absent gst_profile in the /checkout payload would
+  // silently CLEAR the check-in answer server-side.)
+  const _stayP = _info.gst_profile;
+  if (_stayP && _stayP.gstin) {
+    _checkoutGst.profile = _stayP;
+    _checkoutGst.applied = true;
+    _renderCheckoutGstCard();
+    return;
+  }
+
+  if (!mobile) return;
+  try {
+    const res = await apiFetch(`/get_customer/${mobile}`);
+    if (!res.ok) return;
+    const data = await res.json();
+    const p = data && data.success && data.customer && data.customer.gst_profile;
+    if (!p || !p.gstin) return;
+    // The modal may have moved to another room while this was in flight.
+    if (String(_checkoutGst.room) !== String(roomNumber)) return;
+    _checkoutGst.profile = p;
+    _renderCheckoutGstCard();
+  } catch (e) {
+    console.warn("[checkout] GST profile lookup failed:", e);
+  }
+}
+
+document.addEventListener("click", function (e) {
+  const t = e.target && e.target.closest && e.target.closest("#checkout-gst-apply, #checkout-gst-skip");
+  if (!t) return;
+  _checkoutGst.applied = t.id === "checkout-gst-apply";
+  _checkoutGst.touched = true;   // an explicit choice — see _checkoutGstPayload
+  _renderCheckoutGstCard();
+});
+
 function showCheckoutModal(roomNumber) {
   if (!checkoutModal) {
     debugLog("Checkout modal not found");
@@ -2068,6 +2464,7 @@ function showCheckoutModal(roomNumber) {
   }
 
   updateCheckoutModal(roomNumber);
+  _loadCheckoutGst(roomNumber);
   checkoutModal.classList.add("show");
 
   // NOTE: the proceed-checkout click handler lives in
@@ -5607,6 +6004,10 @@ function setupCheckoutConfirmation() {
           room: roomNumber,
           final_checkout: true,
           room_data: prevRoomState, // pass to server so it can skip a Firestore read
+          // Company-billing answer from the checkout modal. null unless the
+          // operator chose "Bill to this company" for THIS room. The server
+          // re-validates the GSTIN before it reaches the invoice.
+          gst_profile: _checkoutGstPayload(roomNumber),
         }),
       });
       (window.cibaraWrites && typeof window.cibaraWrites.enqueue === "function"
@@ -5733,8 +6134,24 @@ document.addEventListener("DOMContentLoaded", function () {
   // Initialize service buttons
   initServiceButtons();
 
-  // Fetch initial data
-  fetchData();
+  // Fetch initial data.
+  //
+  // In listener-first mode we deliberately do NOT call fetchData() here. The
+  // onSnapshot listeners in google_sync.js paint the grid, the stats bar and
+  // today's transactions themselves — from the SDK's IndexedDB cache first
+  // (instant, zero billed reads), then from the server delta. Calling
+  // fetchData() as well would re-download over HTTP exactly the documents the
+  // listeners are already paying for, which is the duplication this mode
+  // exists to remove.
+  //
+  // fetchData() itself is untouched and still used by: the manual refresh
+  // button, debouncedFetchData() after local mutations, and the remote
+  // expense/revision handlers in transaction-tracking.js.
+  if (!CibaraState.listenerFirst) {
+    fetchData();
+  } else {
+    debugLog("listener-first mode: skipping boot fetchData()");
+  }
 
   // Room grid and totals are kept in sync by Firestore onSnapshot listeners
   // in google_sync.js — no polling interval needed here.
@@ -5851,136 +6268,19 @@ document.addEventListener("DOMContentLoaded", function () {
     });
   }
 
-  // Refresh button — refreshes ALL app data from the DB while preserving the
-  // current view/scroll/open modals. Always re-fetches the shared
-  // rooms/dashboard payload (rooms, logs, totals, upcoming bookings) with the
-  // cache bypassed, eagerly re-fetches the currently-visible tab, and
-  // invalidates the in-memory cache of every other data tab so the next time
-  // it is opened it re-fetches fresh from the server.
+  // Refresh button — behaves exactly like the browser's own refresh (F5):
+  // full page reload. This re-fetches index.html, every script (asset_url's
+  // mtime-versioned URLs pull newly deployed code immediately) and every
+  // data payload from scratch. The old in-place refresh kept the view but
+  // could not pick up code changes and left tab caches to invalidate by
+  // hand; a real reload is the behaviour operators expect from the icon.
   if (refreshBtn) {
-    refreshBtn.addEventListener("click", async () => {
-      // Guard against double-clicks while a refresh is in flight.
+    refreshBtn.addEventListener("click", () => {
       if (refreshBtn.dataset.busy === "1") return;
       refreshBtn.dataset.busy = "1";
-      const originalHTML = '<i class="fas fa-sync-alt"></i>';
       refreshBtn.innerHTML =
         '<span class="loader" style="width: 20px; height: 20px;"></span>';
-
-      // Determine the active tab. Prefer the footer nav, fall back to
-      // whichever .tab-content is visible (covers the Reports tab, which
-      // has no nav-item).
-      let activeTab =
-        document.querySelector(".nav-item.active")?.dataset?.tab || null;
-      if (!activeTab) {
-        const visible = document.querySelector(
-          ".tab-content:not(.hidden)",
-        );
-        if (visible && visible.id && visible.id.endsWith("-tab")) {
-          activeTab = visible.id.replace(/-tab$/, "");
-        }
-      }
-
-      // Turn on the cache-bypass flag for the duration of the refresh.
-      // apiFetch reads this and adds `cache: 'no-store'` + a `_t=` query
-      // param to GET/HEAD requests.
-      window.__forceFresh = true;
-
-      // Track tab-loader work that we cannot directly await (in-tab
-      // refresh buttons run async handlers without exposing a promise).
-      // We hold the spinner for at least minHoldMs so the click feels
-      // responsive even when delegating to those handlers.
-      let minHoldMs = 0;
-
-      const tasks = [];
-      // Always refresh the shared dashboard payload (the Rooms cards AND the
-      // Transactions log both render from this).
-      tasks.push(fetchData());
-
-      try {
-        // 1) Eagerly refresh the CURRENTLY-VISIBLE tab so the user sees fresh
-        //    data immediately without switching away and back.
-        switch (activeTab) {
-          case "bookings":
-            // booking.js re-fetches on every tab open; force it now so a
-            // refresh while already on the Bookings tab updates the list.
-            if (typeof window.fetchBookings === "function") {
-              tasks.push(Promise.resolve(window.fetchBookings()));
-            }
-            break;
-          case "bills": {
-            const bl = document.getElementById("bl-refresh-btn");
-            if (bl) {
-              bl.click();
-              minHoldMs = 1200;
-            }
-            break;
-          }
-          case "register": {
-            // register.js renders its own toolbar with #reg-refresh-btn.
-            // The static #refresh-register-btn in index.html is legacy
-            // markup and has no listener — skip it.
-            const reg = document.getElementById("reg-refresh-btn");
-            if (reg) {
-              reg.click();
-              minHoldMs = 1200;
-            }
-            break;
-          }
-          case "reports":
-            // The analytics report is not part of the /get_data payload, so
-            // force a regenerate when Reports is the active view.
-            if (typeof generateEnhancedReport === "function") {
-              tasks.push(Promise.resolve(generateEnhancedReport()));
-            }
-            break;
-          case "transactions":
-          case "rooms":
-          default:
-            // fetchData() already refreshes the data these views render.
-            break;
-        }
-
-        // 2) Invalidate the in-memory cache of every OTHER data tab so the
-        //    next time it is opened it re-fetches from the DB. Register and
-        //    Bills each cache their loaded date-range; their own watchTab()
-        //    MutationObserver calls loadData(false) on tab-show, so clearing
-        //    the range marker turns that into a real server re-fetch. Bookings
-        //    re-fetches on every open and Reports regenerates on open, so
-        //    neither needs explicit invalidation here.
-        try {
-          if (activeTab !== "register" &&
-              window.CibaraRegister &&
-              typeof window.CibaraRegister.invalidate === "function") {
-            window.CibaraRegister.invalidate();
-          }
-          if (activeTab !== "bills" &&
-              window.CibaraBills &&
-              typeof window.CibaraBills.invalidate === "function") {
-            window.CibaraBills.invalidate();
-          }
-        } catch (invErr) {
-          console.warn("[refresh-btn] cache invalidation failed:", invErr);
-        }
-
-        const startedAt = Date.now();
-        await Promise.allSettled(tasks);
-        const elapsed = Date.now() - startedAt;
-        if (elapsed < minHoldMs) {
-          await new Promise((r) => setTimeout(r, minHoldMs - elapsed));
-        }
-      } catch (err) {
-        // Should not reach here — allSettled never rejects — but be
-        // defensive so the spinner is always cleared.
-        console.warn("[refresh-btn] unexpected error:", err);
-      } finally {
-        window.__forceFresh = false;
-        // Brief tail so the spinner doesn't flash off instantly on a
-        // very fast refresh.
-        setTimeout(() => {
-          refreshBtn.innerHTML = originalHTML;
-          refreshBtn.dataset.busy = "0";
-        }, 250);
-      }
+      window.location.reload();
     });
   }
 
@@ -6195,6 +6495,11 @@ document.addEventListener("DOMContentLoaded", function () {
         amountPaid: amountPaid, photoPath: uploadedPhotoUrl, isAC: isAC,
         // Optional override; server falls back to now() if absent/invalid.
         checkin_time: checkinTimeOverride,
+        // Company billing answer from the check-in GST card (customer-docs.js).
+        // Null = personal stay. Captured HERE, before the modal closes and the
+        // card resets. The server re-validates the GSTIN before stamping.
+        gst_profile: (typeof window.getCheckinGstProfile === "function")
+          ? window.getCheckinGstProfile() : null,
       };
 
       // Surface ID-doc upload failures without ever blocking the check-in UX.
@@ -6232,6 +6537,10 @@ document.addEventListener("DOMContentLoaded", function () {
             checkin_time: checkinTimeOverride || _nowStr,
             add_ons: [],
             renewal_count: 0,
+            // Carry the check-in GST answer into local state so a checkout
+            // opened before the next server hydrate still pre-selects the
+            // company on the checkout card.
+            gst_profile: _checkinBody.gst_profile || null,
           };
           if (typeof renderRooms === "function") renderRooms();
           if (typeof updateStats === "function") updateStats();
@@ -6626,12 +6935,17 @@ document.addEventListener("DOMContentLoaded", function () {
   // Show a notification AND refresh the upcoming-bookings map so the
   // indicator dot updates without a manual page refresh.
   async function _refreshUpcomingAndRender() {
+    // Listener-first: the bookings onSnapshot in google_sync.js already
+    // rebuilt `upcomingBookings` from the documents it holds and repainted.
+    // An HTTP round trip here would re-read the same bookings server-side for
+    // no new information.
+    if (CibaraState.listenerFirst) return;
     try {
       const res = await apiFetch("/get_upcoming_bookings");
       if (res && res.ok) {
         const data = await res.json();
         if (data && data.success) {
-          upcomingBookings = data.upcoming || {};
+          CibaraState.setUpcoming(data.upcoming || {});
         }
       }
     } catch (err) {

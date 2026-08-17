@@ -1,6 +1,7 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/9.15.0/firebase-app.js";
 import {
   getFirestore,
+  enableMultiTabIndexedDbPersistence,
   collection,
   doc,
   query,
@@ -27,6 +28,73 @@ const firebaseConfig = (typeof window !== "undefined" && window.FIREBASE_CONFIG)
 const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);
 
+// ─── Offline persistence (READ-COST CRITICAL) ──────────────────────────────
+// Without this, the Firestore SDK keeps its cache in memory only. Every page
+// load / PWA resume therefore starts cold: each onSnapshot below re-downloads
+// its ENTIRE result set and every one of those documents is a billed read.
+// With ~175 documents across the listeners in this file, a device that
+// reloads the app 50 times a day burns ~9 000 reads/day on its own — and we
+// have several devices.
+//
+// With IndexedDB persistence the SDK stores the previous query results plus a
+// resume token. On re-attach it replays the token and the backend sends only
+// what changed since, so a reload costs a handful of reads instead of ~175.
+//
+// enableMultiTabIndexedDbPersistence (rather than the single-tab variant)
+// also makes several open tabs on the same device share ONE backend
+// connection instead of one listener set each.
+//
+// Constraints, deliberately handled:
+//   • Must be called before any other Firestore operation. It is — the
+//     onSnapshot calls below run later in this module.
+//   • Returns a promise that rejects on 'failed-precondition' (another tab
+//     already owns a *single*-tab lease) or 'unimplemented' (Safari private
+//     mode, IndexedDB disabled). Both are non-fatal: the SDK silently falls
+//     back to the in-memory cache and every listener still works exactly as
+//     before. We swallow the rejection so it never surfaces as an unhandled
+//     promise error in the console.
+//   • Resume tokens are not infinitely valid server-side. A device that has
+//     been closed for a long stretch still pays a full re-read on its first
+//     attach. The saving is on the many reloads WITHIN a working session,
+//     which is where the volume actually is.
+//
+// Migration note: this API is deprecated in favour of
+//   initializeFirestore(app, { localCache: persistentLocalCache({
+//     tabManager: persistentMultipleTabManager() }) })
+// which needs Firebase JS SDK >= 9.22. We are pinned to 9.15 above, so the
+// deprecated call is used here to keep this change to a single file with no
+// SDK version bump. Switch when the pin moves.
+enableMultiTabIndexedDbPersistence(db).catch((err) => {
+  const code = (err && err.code) || "unknown";
+  console.warn(
+    "Cibara: Firestore offline persistence unavailable (" + code + "). " +
+      "Live sync still works; read costs will be higher on this device.",
+  );
+});
+
+// ─── Listener-first mode ───────────────────────────────────────────────────
+// Resolved by script.js from settings/ui_config.listener_first, with a
+// per-device localStorage override. See the CibaraState block in script.js.
+//
+//   OFF (legacy): script.js calls /get_data at boot and paints from it. Every
+//     listener below therefore SKIPS its first snapshot, because that HTTP
+//     call already delivered the same documents. Net effect: the app pays for
+//     rooms / totals / today's payments TWICE on every open, once server-side
+//     and once client-side.
+//
+//   ON: the boot HTTP calls are skipped entirely and these listeners are the
+//     source of truth. The first snapshot is used to SEED state and paint —
+//     served from IndexedDB, so the screen is populated before the network
+//     even answers, at zero billed reads. Everything after that is a delta.
+//
+// The legacy path below is left exactly as it was so the flag is a true kill
+// switch, not a rewrite you cannot back out of.
+const S = () => window.CibaraState;
+const LISTENER_FIRST = !!(window.CibaraState && window.CibaraState.listenerFirst);
+console.info(
+  "Cibara sync: " + (LISTENER_FIRST ? "listener-first" : "legacy /get_data") + " mode",
+);
+
 // Format a Date using LOCAL (IST) calendar components. The backend stores each
 // document's `date` as the IST calendar day, so the date-filtered listener
 // queries below must compare against the IST day too. `.toISOString()` would
@@ -49,6 +117,60 @@ const _tomorrowDate = new Date();
 _tomorrowDate.setDate(_tomorrowDate.getDate() + 1);
 const _tomorrowStr = _localYMD(_tomorrowDate);
 
+// Upper bound for the bookings listener. Without it the query is open-ended
+// into the future, so the initial snapshot grows for the life of the
+// business and every attach costs one read per far-future reservation.
+// 180 days is well past any realistic lodge reservation; anything beyond it
+// still loads normally via /get_bookings when the Bookings tab is opened, it
+// just does not push live cross-device updates.
+const BOOKINGS_HORIZON_DAYS = 180;
+const _horizonDate = new Date();
+_horizonDate.setDate(_horizonDate.getDate() + BOOKINGS_HORIZON_DAYS);
+const _horizonStr = _localYMD(_horizonDate);
+
+// ─── Day rollover ──────────────────────────────────────────────────────────
+// _todayStr is frozen at page load, and four listeners below are scoped to it.
+// A device left open across midnight (night shift) therefore keeps watching
+// YESTERDAY: new payments, bills and expenses made on other devices stop
+// appearing. Re-subscribing in place would mean restructuring the listener
+// block; a reload achieves the same thing and also refreshes the rest of the
+// page state.
+//
+// Two guards on the reload, both deliberate:
+//   • Tab must be HIDDEN — so it can never interrupt someone mid-check-in.
+//   • Device must be ONLINE — the service worker serves navigations
+//     network-first with an offline-page fallback, so reloading while offline
+//     would strand the user on offline.html.
+// If either guard fails we simply wait; the app is then no more stale than it
+// is today, which is the current behaviour, not a regression.
+(function scheduleDayRollover() {
+  const now = new Date();
+  const nextMidnight = new Date(
+    now.getFullYear(), now.getMonth(), now.getDate() + 1, 0, 0, 30, 0,
+  );
+  const msUntil = nextMidnight.getTime() - now.getTime();
+  // Guard against a negative or absurd delay from a mis-set device clock.
+  if (!(msUntil > 0) || msUntil > 26 * 60 * 60 * 1000) return;
+
+  setTimeout(function onRollover() {
+    function ready() {
+      return document.visibilityState === "hidden" && navigator.onLine !== false;
+    }
+    function attempt() {
+      if (!ready()) return;
+      document.removeEventListener("visibilitychange", attempt);
+      window.removeEventListener("online", attempt);
+      window.location.reload();
+    }
+    if (ready()) {
+      window.location.reload();
+      return;
+    }
+    document.addEventListener("visibilitychange", attempt);
+    window.addEventListener("online", attempt);
+  }, msUntil);
+})();
+
 // ─── Rooms listener ────────────────────────────────────────────────────────
 // Skip the first snapshot (page already loaded via fetchData on startup).
 // For subsequent snapshots, patch only the changed docs into the global
@@ -58,6 +180,19 @@ let roomsInitialLoad = true;
 onSnapshot(collection(db, "rooms"), (snapshot) => {
   if (roomsInitialLoad) {
     roomsInitialLoad = false;
+    if (!LISTENER_FIRST) return;
+    // Seed the grid from this snapshot. With persistence on, this normally
+    // arrives from IndexedDB within a few ms of page load (fromCache === true)
+    // and costs nothing; a second callback follows with the server delta only
+    // if something actually changed while we were away.
+    const map = {};
+    snapshot.forEach((d) => { map[d.id] = d.data(); });
+    S().setRooms(map);
+    S().paint({ rooms: true, stats: true });
+    console.log(
+      "⚡ Rooms seeded from listener (" + snapshot.size + " docs, " +
+        (snapshot.metadata.fromCache ? "cache" : "server") + ")",
+    );
     return;
   }
 
@@ -106,6 +241,18 @@ let totalsInitialLoad = true;
 onSnapshot(doc(db, "totals", "current_totals"), (snap) => {
   if (totalsInitialLoad) {
     totalsInitialLoad = false;
+    if (!LISTENER_FIRST) return;
+    if (snap.exists()) {
+      // /get_data fills in any missing keys with 0; do the same so the stats
+      // bar never renders "undefined".
+      const t = Object.assign(
+        { cash: 0, online: 0, balance: 0, refunds: 0,
+          advance_bookings: 0, expenses: 0 },
+        snap.data() || {},
+      );
+      S().setTotals(t);
+      S().paint({ stats: true });
+    }
     return;
   }
 
@@ -152,9 +299,52 @@ onSnapshot(doc(db, "settings", "ui_config"), (snap) => {
 // the one record that was added — no array diffing needed.
 let paymentsInitialLoad = true;
 
+// ── Today's logs, listener-first ──────────────────────────────────────────
+// `logs` needs BOTH today's payments and today's expenses, and they arrive as
+// two independent snapshots. Hold the latest full set of each and rebuild
+// whenever either lands. A snapshot always carries the complete current result
+// set (not just the changes), so rebuilding wholesale is both correct and
+// cheap — one day is a few dozen rows — and it sidesteps the incremental
+// patching that the legacy path needs.
+let _todayPayments = [];
+let _todayExpenses = [];
+function _rebuildLogs() {
+  S().setLogs(S().buildLogs(_todayPayments, _todayExpenses));
+  S().paint({ txns: true });
+}
+
 onSnapshot(
   query(collection(db, "payments"), where("date", "==", _todayStr)),
   (snapshot) => {
+    if (LISTENER_FIRST) {
+      _todayPayments = snapshot.docs.map((d) => d.data());
+      _rebuildLogs();
+      const wasFirst = paymentsInitialLoad;
+      paymentsInitialLoad = false;
+      // The seed snapshot is not "news" — it is the page loading. Skip the
+      // per-change events and toasts for it, and for cache replays, so the
+      // user does not get a burst of "payment added" toasts on every open.
+      if (wasFirst || snapshot.metadata.fromCache) return;
+      snapshot.docChanges().forEach((change) => {
+        const p = change.doc.data();
+        if (!p || !p.date) return;
+        if (change.type === "modified" || change.type === "removed") {
+          window.dispatchEvent(
+            new CustomEvent("cibaraTransactionRevised", { detail: { date: p.date } }),
+          );
+          showSyncToast("✏️ Transaction Updated");
+          return;
+        }
+        if (change.type !== "added") return;
+        // No _patchLocalLogs / _smoothInsertPaymentRow here: _rebuildLogs()
+        // above already rebuilt state from the authoritative snapshot and
+        // repainted the list. Doing both would double-insert the row.
+        window.dispatchEvent(new CustomEvent("cibaraPaymentAdded", { detail: p }));
+        showSyncToast();
+      });
+      return;
+    }
+
     if (paymentsInitialLoad) {
       paymentsInitialLoad = false;
       return;
@@ -236,18 +426,55 @@ onSnapshot(
   }
 );
 
-// ─── Bookings listener (all future bookings) ──────────────────────────────
-// Watches all bookings with check_in_date >= today so that any new booking —
-// regardless of how far in the future — or any status change (e.g. cancellation)
-// is immediately reflected on all devices without a manual refresh.
+// ─── Bookings listener (today .. +BOOKINGS_HORIZON_DAYS) ──────────────────
+// Watches bookings checking in between today and the horizon so that any new
+// booking, or any status change (e.g. cancellation), is immediately reflected
+// on all devices without a manual refresh.
+//
+// The upper bound was added to stop the initial snapshot growing without limit
+// as far-future reservations accumulate — every document in the result set is
+// a billed read on each attach. Two range filters on the SAME field need no
+// composite index, so this is a query-shape change only.
 let bookingsInitialLoad = true;
 
 onSnapshot(
   query(
     collection(db, "bookings"),
-    where("check_in_date", ">=", _todayStr)
+    where("check_in_date", ">=", _todayStr),
+    where("check_in_date", "<=", _horizonStr)
   ),
   (snapshot) => {
+    if (LISTENER_FIRST) {
+      // Rebuild the arrival-indicator map from the documents this listener
+      // already holds. In legacy mode this map came from a separate
+      // /get_upcoming_bookings HTTP call that re-read the very same bookings
+      // server-side.
+      S().setUpcoming(
+        S().buildUpcoming(snapshot.docs.map((d) => ({ id: d.id, data: d.data() }))),
+      );
+      S().paint({ rooms: true });
+      const wasFirst = bookingsInitialLoad;
+      bookingsInitialLoad = false;
+      if (wasFirst || snapshot.metadata.fromCache) return;
+      // booking.js still drives its own list off these events.
+      snapshot.docChanges().forEach((change) => {
+        const booking = change.doc.data();
+        if (change.type === "added") {
+          window.dispatchEvent(new CustomEvent("cibaraBookingAdded", { detail: booking }));
+          showSyncToast("📋 New Booking — " + (booking.guest_name || "Guest"));
+        } else if (change.type === "modified") {
+          window.dispatchEvent(new CustomEvent("cibaraBookingModified", { detail: booking }));
+          showSyncToast("📋 Booking Updated");
+        } else if (change.type === "removed") {
+          window.dispatchEvent(new CustomEvent("cibaraBookingModified", {
+            detail: { ...booking, _removed: true },
+          }));
+          showSyncToast("📋 Booking Updated");
+        }
+      });
+      return;
+    }
+
     if (bookingsInitialLoad) {
       bookingsInitialLoad = false;
       return;
@@ -286,6 +513,36 @@ let expensesInitialLoad = true;
 onSnapshot(
   query(collection(db, "expenses"), where("date", "==", _todayStr)),
   (snapshot) => {
+    if (LISTENER_FIRST) {
+      // `_doc_id` is NOT optional. The server adds it in
+      // expense_service.query_expenses_by_date_range, and the Transactions
+      // tab keys the edit / delete / attach-photo / GST-invoice actions off
+      // it (transaction-tracking.js:840-976, expense.js:1311). Omit it and
+      // expense rows silently render without their action buttons.
+      _todayExpenses = snapshot.docs.map((d) =>
+        Object.assign({}, d.data(), { _doc_id: d.id }),
+      );
+      _rebuildLogs();
+      const wasFirst = expensesInitialLoad;
+      expensesInitialLoad = false;
+      if (wasFirst || snapshot.metadata.fromCache) return;
+      snapshot.docChanges().forEach((change) => {
+        const exp = change.doc.data();
+        if (!exp) return;
+        if (change.type === "modified" || change.type === "removed") {
+          window.dispatchEvent(
+            new CustomEvent("cibaraTransactionRevised", { detail: { date: exp.date } }),
+          );
+          showSyncToast("✏️ Expense Updated");
+          return;
+        }
+        if (change.type !== "added") return;
+        window.dispatchEvent(new CustomEvent("cibaraExpenseAdded", { detail: exp }));
+        showSyncToast("🧾 Expense Added");
+      });
+      return;
+    }
+
     if (expensesInitialLoad) { expensesInitialLoad = false; return; }
     if (snapshot.metadata.hasPendingWrites || snapshot.metadata.fromCache) return;
 
@@ -309,6 +566,21 @@ onSnapshot(
     });
   }
 );
+
+// ─── Daily serial counter (listener-first only) ───────────────────────────
+// Replaces the /get_transaction_metadata call that lived inside fetchData().
+// That endpoint did a single-doc read of daily_counters/<today> and returned
+// { [today]: count }, which is exactly what this listener delivers — except it
+// also stays live, so the next check-in serial is correct on every device
+// without a refresh. One document: the cheapest listener in this file.
+if (LISTENER_FIRST) {
+  onSnapshot(doc(db, "daily_counters", _todayStr), (snap) => {
+    const count = snap.exists() ? ((snap.data() || {}).count || 0) : 0;
+    const map = {};
+    map[_todayStr] = count;
+    S().setDailyCounters(map);
+  });
+}
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
 

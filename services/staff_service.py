@@ -83,6 +83,11 @@ Invariants
 * No day is ever paid twice: a new payment that overlaps earlier ones
   records those days in `excluded_dates` and pays ₹0 for them (a mid-week
   one-day payout no longer blocks settling the rest of the week).
+* No day is paid without attendance: a day with no attendance record is
+  recorded in `excluded_dates` too (and listed in `unmarked_dates`). It
+  earns ₹0, stays UNLOCKED so attendance can still be marked, and is still
+  payable in a later period. Without this a forgotten day would be consumed
+  by the payout — locked, worth nothing, and skipped forever after.
 * Attendance on a day a payment actually covered is locked.
 * outstanding_advance (Σ advances − Σ deductions) never goes negative:
   deleting an advance that was already recovered is refused.
@@ -687,9 +692,15 @@ def salary_preview(staff_id: str, period_start: str, period_end: str,
     # Days an earlier payment already covered are simply SKIPPED — they
     # earn nothing here and never block the rest of the period.
     covered = ledger.covered_dates(period_start, period_end, payments)
+    # Days nobody has marked attendance for. They earn nothing, and crucially
+    # they must NOT be consumed by this payout — see ledger.unmarked_dates.
+    # Kept disjoint from `covered` so the payout screen can name each group.
+    unmarked = ledger.unmarked_dates(period_start, period_end, attendance,
+                                     exclude=covered)
+    skipped = covered | unmarked
     computed = ledger.compute_salary(staff.get("daily_wage", 0), attendance,
                                      period_start, period_end, adjustment,
-                                     exclude=covered)
+                                     exclude=skipped)
     outstanding = max(0, ledger.outstanding_advance(
         advances_for(staff_id), payments))
     payable = computed["payable_before_advance"]
@@ -698,12 +709,13 @@ def salary_preview(staff_id: str, period_start: str, period_end: str,
     # already been consumed by the time payday arrives. The UI shows it as a
     # fixed line, not an editable one.
     meals = ledger.compute_meals(staff.get("meal_rate", 0), attendance,
-                                 period_start, period_end, exclude=covered)
+                                 period_start, period_end, exclude=skipped)
     # Advance recovery has to fit in what is left after meals, otherwise the
     # payout would go negative.
     suggested_deduction = min(outstanding,
                               max(0, payable - meals["meal_total"]))
     excluded_days = sorted(covered)
+    unmarked_days = sorted(unmarked)
     all_covered = bool(covered) and all(
         d in covered
         for d in ledger._dates_between(period_start, period_end))
@@ -718,6 +730,13 @@ def salary_preview(staff_id: str, period_start: str, period_end: str,
         "suggested_deduction": suggested_deduction,
         "net_if_suggested": payable - suggested_deduction - meals["meal_total"],
         "excluded_days": excluded_days,       # already-paid days, skipped
+        # Days with no attendance record. Skipped and worth ₹0, but unlike
+        # excluded_days they are NOT settled — they stay unlocked and remain
+        # payable once someone marks them. Surfaced so the payout screen can
+        # warn before the operator hands over a short period.
+        "unmarked_days": unmarked_days,
+        "all_days_unmarked": bool(unmarked_days) and not excluded_days
+                             and computed["marked_days"] == 0,
         "all_days_paid": all_covered,
         "suggested_period_start": ledger.suggest_period_start(payments),
     }
@@ -750,15 +769,23 @@ def pay_salary(staff_id: str, period_start: str, period_end: str,
         advances_for(staff_id), payments))
     covered = ledger.covered_dates(period_start, period_end, payments) \
         if valid_range else set()
+    # Days with no attendance record. A payout must not consume them: they
+    # earn ₹0, and if this payment claimed to cover them they would be locked
+    # against later marking AND skipped as "already paid" by the next payout,
+    # so the staff member would never be paid for the day at all. Treated the
+    # same way as already-covered days — skipped here, still open afterwards.
+    unmarked = ledger.unmarked_dates(period_start, period_end, attendance,
+                                     exclude=covered) if valid_range else set()
+    skipped = covered | unmarked
     computed = ledger.compute_salary(staff.get("daily_wage", 0), attendance,
                                      period_start, period_end, adjustment,
-                                     exclude=covered)
+                                     exclude=skipped)
     # Meals are computed server-side from the staff member's rate and the
     # same attendance the salary used. The client never sends the amount —
     # it is not a number an operator should be able to talk down at the
     # counter, and it has to agree with what the meal log bills.
     meals = ledger.compute_meals(staff.get("meal_rate", 0), attendance,
-                                 period_start, period_end, exclude=covered)
+                                 period_start, period_end, exclude=skipped)
     err = ledger.validate_payment(period_start, period_end, computed,
                                   advance_deduction, outstanding, payments,
                                   _ist_today(), covered=covered,
@@ -798,10 +825,17 @@ def pay_salary(staff_id: str, period_start: str, period_end: str,
         "meal_days": meals["meal_days"],
         "meal_deducted": final["meal_deducted"],
         "net_paid": final["net_paid"],
-        # Days inside the period that an EARLIER payment had already
-        # covered — this payment skipped them (paid ₹0 for them), so
-        # locks and future coverage checks know exactly who paid what.
-        "excluded_dates": sorted(covered),
+        # Days inside the period this payment did NOT pay for, so locks and
+        # future coverage checks know exactly who paid what. Two reasons a
+        # day lands here, and both must be excluded or the day is silently
+        # lost:
+        #   * an EARLIER payment already covered it;
+        #   * nobody marked attendance for it, so there was nothing to pay.
+        # Stored as one field because payment_covers/covered_dates only care
+        # THAT the day is unpaid. The reason is kept separately below for the
+        # ledger UI and for anyone auditing a payout after the fact.
+        "excluded_dates": sorted(skipped),
+        "unmarked_dates": sorted(unmarked),
         "payment_method": payment_method,
         "expense_type": expense_type,
         "expense_doc_id": None,
@@ -818,6 +852,9 @@ def pay_salary(staff_id: str, period_start: str, period_end: str,
         if covered:
             desc += " · {} already-paid day{} skipped".format(
                 len(covered), "s" if len(covered) != 1 else "")
+        if unmarked:
+            desc += " · {} unmarked day{} skipped".format(
+                len(unmarked), "s" if len(unmarked) != 1 else "")
         if final["advance_deducted"]:
             desc += " · advance ₹{} deducted".format(final["advance_deducted"])
         if final["meal_deducted"]:

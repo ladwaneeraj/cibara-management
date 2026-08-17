@@ -25,7 +25,7 @@ from config import (
     create_credit_note, compute_credit_components, CN_REASONS,
     bill_tax_breakup, PLACE_OF_SUPPLY_STATE, PLACE_OF_SUPPLY_CODE,
 )
-from services import payment_service, pdf_service, expense_service
+from services import payment_service, pdf_service, expense_service, customer_service
 from services import system_alerts
 from services import gst_lock_service
 from services.auth_service import requires_permission
@@ -1145,6 +1145,11 @@ def update_ui_config_endpoint():
             update["hide_register_tab"] = bool(data["hide_register_tab"])
         if "incognito_mode" in data:
             update["incognito_mode"] = bool(data["incognito_mode"])
+        # Kill switch for the listener-first dashboard. See _UI_CONFIG_DEFAULTS
+        # in config.py for what it changes. Flipping it False here restores the
+        # legacy /get_data path on every device at their next page load.
+        if "listener_first" in data:
+            update["listener_first"] = bool(data["listener_first"])
 
         if not update:
             return jsonify(success=False,
@@ -1877,35 +1882,131 @@ def edit_bill_room_price():
         old_price          = int(bill.get("room_price_per_night") or 0)
         room_charges_total_existing = int(bill.get("room_charges_total") or 0)
 
-        # ── Mid-stay transfer / multi-rate detection ──────────────────────────
-        # A transferred stay carries multiple (room, rate) segments in its
-        # daily_folio; repricing only the current tariff here would silently
-        # mis-bill the earlier segments and break per-night GST. Refuse and
-        # route to the credit-note path, consistent with the rest of the app.
-        folio = bill.get("daily_folio") or []
-        distinct_rooms = {str(e.get("room")) for e in folio if e.get("room") is not None}
-        if (bill.get("lastShiftedFrom")
-                or bill.get("pre_transfer_charges")
-                or len(distinct_rooms) > 1):
+        # ── Rate segments ─────────────────────────────────────────────────────
+        # A mid-stay room transfer splits the stay into (room, nights, rate)
+        # segments. This endpoint used to refuse ANY transferred stay outright,
+        # which was too blunt: a transfer between two rooms of the SAME price
+        # category leaves every night at one rate, and repricing that is
+        # completely unambiguous.
+        #
+        # What actually matters is whether the stay has one nightly rate or
+        # several — not how many room numbers it touched. So rebuild the
+        # segments the same way compute_daily_folio does (transfer segments
+        # first, remaining nights at the current room's rate) and branch on the
+        # distinct RATES:
+        #
+        #   one rate   → a single new price applies to the whole stay.
+        #   many rates → a single number is meaningless; the caller must send
+        #                one price per segment. We answer 409 with the segment
+        #                breakdown so the UI can ask for exactly that.
+        #
+        # Either way the per-night tax is re-derived properly, because the
+        # rebuilt segments are fed back through compute_daily_folio.
+        segments = []
+        consumed = 0
+        for _seg in (bill.get("pre_transfer_charges") or []):
+            try:
+                _d = int(_seg.get("days") or 0)
+                _r = int(_seg.get("price") or 0)
+            except (TypeError, ValueError):
+                continue
+            if _d <= 0:
+                continue
+            segments.append({
+                "index":  len(segments),
+                "room":   str(_seg.get("from_room") or bill.get("room") or ""),
+                "nights": _d,
+                "rate":   _r,
+                "is_current_room": False,
+            })
+            consumed += _d
+        _remaining = days_stayed - consumed
+        if _remaining > 0:
+            segments.append({
+                "index":  len(segments),
+                "room":   str(bill.get("room") or ""),
+                "nights": _remaining,
+                "rate":   old_price,
+                "is_current_room": True,
+            })
+
+        if not segments:
             return jsonify(
                 success=False,
-                message=("This stay had a mid-stay room transfer (multiple "
-                         "nightly rates), so its per-night tax can't be "
-                         "re-derived here. Issue a credit note (Section 34) "
-                         "and a fresh invoice instead."),
+                message=("This bill has no usable room segments to reprice. "
+                         "Issue a credit note + fresh invoice instead."),
             ), 409
-        # Secondary safety net: room charges that don't equal a single flat
-        # nightly rate × nights (legacy/imported data) — refuse rather than
-        # guess. Same remedy: credit note + fresh invoice.
-        if room_charges_total_existing != old_price * days_stayed:
+        if consumed > days_stayed:
+            # Stale/oversized transfer segments — the arithmetic below would be
+            # wrong and we will not guess at money.
             return jsonify(
                 success=False,
-                message=("This bill's room charges don't match a single flat "
-                         f"nightly rate (₹{room_charges_total_existing} is not "
-                         f"₹{old_price} × {days_stayed} nights), so it can't be "
-                         "repriced safely here. Issue a credit note + fresh "
-                         "invoice instead."),
+                message=(f"This bill's transfer segments cover {consumed} nights "
+                         f"but the stay is {days_stayed} nights. The data is "
+                         "inconsistent, so it can't be repriced safely here. "
+                         "Issue a credit note + fresh invoice instead."),
             ), 409
+
+        # Safety net, now segment-aware: the stored room charges must equal the
+        # sum of the segments. Legacy or imported rows that don't reconcile are
+        # refused rather than guessed at.
+        _segment_sum = sum(s["rate"] * s["nights"] for s in segments)
+        if room_charges_total_existing != _segment_sum:
+            return jsonify(
+                success=False,
+                message=("This bill's room charges don't reconcile with its "
+                         f"nightly segments (₹{room_charges_total_existing} vs "
+                         f"₹{_segment_sum}), so it can't be repriced safely "
+                         "here. Issue a credit note + fresh invoice instead."),
+            ), 409
+
+        distinct_rates = {s["rate"] for s in segments}
+
+        # Per-segment prices, when supplied. One whole-rupee value per segment,
+        # in the same order as `segments`.
+        _seg_prices_in = data.get("segment_prices")
+        seg_prices = None
+        if _seg_prices_in is not None:
+            if (not isinstance(_seg_prices_in, list)
+                    or len(_seg_prices_in) != len(segments)):
+                return jsonify(
+                    success=False,
+                    message=(f"segment_prices must be a list of {len(segments)} "
+                             "values, one per nightly segment."),
+                ), 400
+            seg_prices = []
+            for _v in _seg_prices_in:
+                try:
+                    _iv = int(_v)
+                except (TypeError, ValueError):
+                    return jsonify(success=False,
+                                   message="Each segment price must be a whole "
+                                           "rupee amount."), 400
+                if _iv < 0:
+                    return jsonify(success=False,
+                                   message="Segment prices cannot be negative."), 400
+                seg_prices.append(_iv)
+
+        if seg_prices is None:
+            if len(distinct_rates) > 1:
+                # Ambiguous: which of the several rates does `new_price` mean?
+                # Hand back the breakdown so the caller can ask per segment.
+                return jsonify(
+                    success=False,
+                    needs_segment_prices=True,
+                    days_stayed=days_stayed,
+                    segments=segments,
+                    message=("This stay was billed at more than one nightly "
+                             "rate (a mid-stay transfer between different room "
+                             "categories), so a single price is ambiguous. "
+                             "Set the rate for each part of the stay."),
+                ), 409
+            # One rate across the stay — a transfer within the same category
+            # lands here. The single new price applies to every segment.
+            seg_prices = [new_price] * len(segments)
+
+        for _s, _p in zip(segments, seg_prices):
+            _s["new_rate"] = _p
 
         # ── Recompute, mirroring config.create_bill_record exactly ────────────
         # Local import: these are module-level in config.py but not in the
@@ -1917,8 +2018,26 @@ def edit_bill_room_price():
         services_total  = sum(int(s.get("price", 0) or 0) for s in services)
         total_discounts = int(bill.get("discounts", 0) or 0)
 
-        room_charges_total = new_price * days_stayed
+        # Room charges come from the segments, so a transferred stay is priced
+        # correctly whether it had one rate or several.
+        room_charges_total = sum(s["new_rate"] * s["nights"] for s in segments)
         total_amount       = room_charges_total + services_total - total_discounts
+
+        # Rewrite the transfer segments at their new rates, and take the
+        # CURRENT room's new rate as the bill's headline room_price_per_night.
+        # compute_daily_folio consumes these in the same order it always has.
+        new_pre_transfer = []
+        for _s in segments:
+            if _s["is_current_room"]:
+                continue
+            new_pre_transfer.append({
+                "from_room": _s["room"],
+                "days":      _s["nights"],
+                "price":     _s["new_rate"],
+            })
+        _current_seg = next((s for s in segments if s["is_current_room"]), None)
+        effective_price_per_night = (_current_seg["new_rate"] if _current_seg
+                                     else segments[-1]["new_rate"])
 
         # Accommodation vs non-accommodation discount allocation (same split
         # create_bill_record uses to feed the folio).
@@ -1935,8 +2054,9 @@ def edit_bill_room_price():
                 total_discounts * (accommodation_total_pre_discount / gross_pre_discount), 2
             )
 
-        # Rebuild the per-night folio with the new tariff. Transfers were
-        # refused above, so pre_transfer_charges is empty (single-room path).
+        # Rebuild the per-night folio with the new tariff, feeding the rewritten
+        # transfer segments back in so each night is attributed to the room it
+        # was actually spent in and taxed at that night's own rate.
         try:
             checkin_dt = datetime.strptime(bill.get("checkin_time", ""), "%Y-%m-%d %H:%M")
         except (ValueError, TypeError):
@@ -1947,20 +2067,25 @@ def edit_bill_room_price():
             new_folio = compute_daily_folio(
                 checkin_dt=checkin_dt,
                 days_stayed=days_stayed,
-                room_price_per_night=new_price,
+                room_price_per_night=effective_price_per_night,
                 current_room_no=str(bill.get("room") or ""),
                 accommodation_services=services,
-                pre_transfer_charges=[],
+                pre_transfer_charges=new_pre_transfer,
                 discount_on_accom=accommodation_discount_share,
                 recipient_state_code=str(bill.get("recipient_state_code") or "29"),
             )
 
         if new_folio:
-            gst_amount            = round(sum(e["day_gst_amount"] for e in new_folio), 2)
-            accommodation_taxable = round(sum(e["day_taxable"]    for e in new_folio), 2)
-            cgst_amount           = round(sum(e["day_cgst"]       for e in new_folio), 2)
-            sgst_amount           = round(sum(e["day_sgst"]       for e in new_folio), 2)
-            igst_amount           = round(sum(e["day_igst"]       for e in new_folio), 2)
+            # Same aggregation as create_bill_record: slab chosen per night,
+            # tax computed once per slab on that slab's total. Summing the
+            # per-night rounded values drifts and breaks CGST == SGST.
+            from config import aggregate_folio_tax
+            _agg = aggregate_folio_tax(new_folio)
+            gst_amount            = _agg["tax"]
+            accommodation_taxable = _agg["taxable"]
+            cgst_amount           = _agg["cgst"]
+            sgst_amount           = _agg["sgst"]
+            igst_amount           = _agg["igst"]
             _rate_counts = {}
             for _e in new_folio:
                 _rate_counts[_e["day_gst_rate"]] = _rate_counts.get(_e["day_gst_rate"], 0) + 1
@@ -1996,6 +2121,7 @@ def edit_bill_room_price():
         # ── Audit snapshots (changed fields only — write_log wants partials) ──
         before_snap = {
             "room_price_per_night": old_price,
+            "segment_rates":        [s["rate"] for s in segments],
             "room_charges_total":   bill.get("room_charges_total"),
             "total_amount":         bill.get("total_amount"),
             "gst_rate":             bill.get("gst_rate"),
@@ -2004,7 +2130,8 @@ def edit_bill_room_price():
             "status":               bill.get("status"),
         }
         after_snap = {
-            "room_price_per_night": new_price,
+            "room_price_per_night": effective_price_per_night,
+            "segment_rates":        [s["new_rate"] for s in segments],
             "room_charges_total":   room_charges_total,
             "total_amount":         total_amount,
             "gst_rate":             gst_rate,
@@ -2013,9 +2140,32 @@ def edit_bill_room_price():
             "status":               new_status,
         }
 
+        # Rebuild room_segments at the new rates. This is NOT cosmetic: the
+        # server-side invoice renderer prints the room-rent block from
+        # room_segments (see _is_multi_room / room_segments below in this
+        # file), so leaving it stale would print the old nightly rates above a
+        # new total. Same shape create_bill_record writes:
+        # {room, date_from, date_to, nights, rate, total}.
+        new_room_segments = []
+        if checkin_dt is not None:
+            _cursor = checkin_dt.date()
+            for _s in segments:
+                _to = _cursor + timedelta(days=_s["nights"])
+                new_room_segments.append({
+                    "room":      _s["room"],
+                    "date_from": _cursor.strftime("%Y-%m-%d"),
+                    "date_to":   _to.strftime("%Y-%m-%d"),
+                    "nights":    _s["nights"],
+                    "rate":      _s["new_rate"],
+                    "total":     _s["new_rate"] * _s["nights"],
+                })
+                _cursor = _to
+
         _attr  = attribution_update()
         update = {
-            "room_price_per_night":  new_price,
+            # The bill's headline nightly rate is the CURRENT room's new rate.
+            # For a single-rate stay this equals the price the admin typed.
+            "room_price_per_night":  effective_price_per_night,
             "room_charges_total":    room_charges_total,
             "total_amount":          total_amount,
             "gst_rate":              gst_rate,
@@ -2032,6 +2182,12 @@ def edit_bill_room_price():
         }
         if new_folio:
             update["daily_folio"] = new_folio
+        if new_room_segments:
+            update["room_segments"] = new_room_segments
+        # Only touch the transfer segments when the bill actually had them, so
+        # a plain single-room stay's document shape is left exactly as it was.
+        if bill.get("pre_transfer_charges"):
+            update["pre_transfer_charges"] = new_pre_transfer
         # Invalidate the cached invoice PDF. The bill already carries a pdf_url
         # from checkout, and auto_generate_bill_pdf SKIPS when one exists; the
         # WhatsApp "Save & Share" flow also reuses the stored pdf_url. Clearing
@@ -3509,6 +3665,36 @@ def update_bill_gst():
                 f"GSTIN={gstin} state={state_name} "
                 f"split=(cgst={cgst_v} sgst={sgst_v} igst={igst_v})"
             )
+
+            # ── Sticky preference: remember these GST details ──────────────
+            # The guest has now been invoiced B2B, so the next check-in can
+            # offer the same details instead of making the operator re-key a
+            # 15-character GSTIN from a business card.
+            #
+            # Only the B2B branch stamps this. The clear branch above
+            # deliberately does NOT wipe the profile: clearing GST off one
+            # bill is usually a correction to that bill, not a statement that
+            # the company relationship ended. Use the Customer Manager to
+            # drop the profile outright.
+            try:
+                _guest_mobile = (bill.get("guest_mobile") or "").strip()
+                if _guest_mobile:
+                    customer_service.remember_gst_profile(
+                        _guest_mobile,
+                        {
+                            "gstin":       gstin,
+                            "legal_name":  legal_name,
+                            "trade_name":  trade_name,
+                            "address":     address,
+                            "state":       state_name or "Karnataka",
+                            "state_code":  state_code or "29",
+                        },
+                        bill_id=str(bill_id),
+                    )
+            except Exception as _pref_err:
+                logger.warning(f"update_bill_gst: could not save gst_profile "
+                               f"for bill {bill_id}: {_pref_err}")
+
             _trigger_bill_pdf_refresh(bill_id, bill, update)
 
             return jsonify(
@@ -3764,6 +3950,27 @@ def log_bill_activity():
             target_id=str(bill_id),
             metadata=meta,
         )
+
+        # ── Sticky preference: this guest asked for a bill ─────────────────
+        # Printing it or sending it to their WhatsApp is the guest ASKING,
+        # which is exactly the signal we want. It is not the same as the
+        # automatic PDF render at checkout (auto_generate_bill_pdf), which
+        # runs for every stay and would mark everybody.
+        #
+        # Recorded against the mobile on the bill, not the one typed into the
+        # WhatsApp box: staff sometimes send a copy to their own phone or to
+        # a driver, and that must not attach a preference to a stranger.
+        #
+        # Fire-and-forget inside its own try — a preference is a convenience,
+        # and it must never turn a successful print into a failed request.
+        try:
+            _guest_mobile = (bill.get("guest_mobile") or "").strip()
+            if _guest_mobile:
+                customer_service.remember_bill_preference(
+                    _guest_mobile, source=kind, bill_id=str(bill_id))
+        except Exception as _pref_err:
+            logger.warning(f"log_bill_activity: could not record bill "
+                           f"preference for bill {bill_id}: {_pref_err}")
 
         return jsonify(success=True)
     except Exception as e:

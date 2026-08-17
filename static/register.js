@@ -118,6 +118,30 @@
   margin-left: auto; padding: 0 0.3rem;
 }
 
+/* ── Located-stay highlight (Transactions → Register deep-link) ─────────
+   Applied to the target row by _revealStayEntry(): pulses twice to catch
+   the eye mid-scroll, then holds a steady tint. td backgrounds are set
+   explicitly because zebra-striping on the cells would otherwise win. */
+@keyframes reg-row-located-pulse {
+  0%   { background-color: #ffe066; }
+  50%  { background-color: #fff8dc; }
+  100% { background-color: #fff3bf; }
+}
+tr.reg-row-located,
+tr.reg-row-located > td {
+  background-color: #fff3bf !important;
+}
+tr.reg-row-located {
+  animation: reg-row-located-pulse 0.7s ease-in-out 2;
+  box-shadow: inset 0 0 0 2px #f59f00;
+}
+tr.reg-row-located.reg-row-located-fade,
+tr.reg-row-located.reg-row-located-fade > td {
+  transition: background-color 1.3s ease, box-shadow 1.3s ease;
+  background-color: transparent !important;
+  box-shadow: none;
+}
+
 .register-table-container {
   background: #fff; border-radius: 8px;
   box-shadow: 0 1px 4px rgba(0,0,0,.07);
@@ -4000,6 +4024,189 @@
     bootWhenReady();
   }
 
+  // ── Deep-link: reveal a specific stay (Transactions tab → Register) ───────
+  // A payment row in the Transactions tab carries the stay's identifiers;
+  // tapping it switches to this tab and calls showStay(ref) with
+  //   ref = { stayId, room, guest, date }   (date = payment date, YYYY-MM-DD)
+  // stayId is the canonical key (payment.stay_id == entry.stay_id == the bill
+  // doc id). room+guest+date is the fallback for legacy payments written
+  // before the stay_id migration.
+  //
+  // Lookup strategy, cheapest first:
+  //   1. Already in the loaded entries → reveal, zero fetches.
+  //   2. Resolve the stay's check-in date from its bill doc
+  //      (/generate_bill/<stay_id> — a single document read) and load
+  //      EXACTLY that day into the register. No wide range scans.
+  //   3. Legacy payments without a stay_id: a stay's check-in is always on
+  //      or before its payments, so scan a bounded window ending at the
+  //      payment date.
+
+  function _shiftYMD(ymd, days) {
+    const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(ymd || ""));
+    if (!m) return ymd;
+    const d = new Date(+m[1], +m[2] - 1, +m[3]);
+    d.setDate(d.getDate() + days);
+    return dateToYMD(d);
+  }
+
+  function _findStayEntry(ref) {
+    const entries = state.allEntries || [];
+    const sid = ref.stayId || "";
+    if (sid) {
+      const hit = entries.find(
+        (e) => (e.stay_id && e.stay_id === sid) || e.id === sid,
+      );
+      if (hit) return hit;
+    }
+    // Fallback — room + guest name, preferring the stay whose window
+    // (check-in .. check-out, or still active) contains the payment date.
+    const room  = String(ref.room || "");
+    const guest = String(ref.guest || "").trim().toLowerCase();
+    if (!room || !guest) return null;
+    const cands = entries
+      .filter(
+        (e) =>
+          String(e.room || "") === room &&
+          String(e.guest_name || "").trim().toLowerCase() === guest,
+      )
+      // Latest stay first, so repeat guests resolve to the most recent visit
+      // when no date narrows it down.
+      .sort((a, b) =>
+        String(b.checkin_time || "").localeCompare(String(a.checkin_time || "")));
+    if (!cands.length) return null;
+    const d = String(ref.date || "").slice(0, 10);
+    if (d) {
+      const inWindow = cands.find((e) => {
+        const ci = (e.checkin_time || "").slice(0, 10);
+        const co = (e.checkout_time || "").slice(0, 10);
+        return (!ci || ci <= d) && (!co || d <= co);
+      });
+      if (inWindow) return inWindow;
+    }
+    return cands[0];
+  }
+
+  function _revealStayEntry(entry) {
+    // Clear client-side filters so the target row can't be filtered out,
+    // and sync the filter UI so what's shown matches the controls.
+    state.filters = { search: "", payment: "all", status: "all" };
+    const sr = dom("reg-search");         if (sr) sr.value = "";
+    const sf = dom("reg-status-filter");  if (sf) sf.value = "all";
+    const pf = dom("reg-payment-filter"); if (pf) pf.value = "all";
+    applyFilters(); // renders first page
+
+    // Paged rendering may have cut the row off — extend the cap to cover
+    // everything, then re-render. Row counts here are modest (a date range
+    // of register entries), so a full render is fine as a one-off.
+    if ((state.filteredEntries || []).length > state.visibleCount) {
+      state.visibleCount = state.filteredEntries.length;
+      renderTable();
+    }
+
+    const tbody = dom("reg-table-body");
+    if (!tbody || !entry.id) return false;
+    let tr = null;
+    tbody.querySelectorAll("tr.date-group-row[data-entry-id]").forEach((r) => {
+      if (!tr && r.getAttribute("data-entry-id") === String(entry.id)) tr = r;
+    });
+    if (!tr) return false;
+
+    try { tr.scrollIntoView({ behavior: "smooth", block: "center" }); }
+    catch (_) { tr.scrollIntoView(); }
+    // Highlight the found row: a pulse to draw the eye while the page is
+    // still scrolling, then a steady hold, then a slow fade. The class also
+    // survives one in-place row replacement (loadDataSilent's _diffAndPatch
+    // swaps <tr> nodes) because we re-query by entry id before each phase.
+    const _rowNow = () => {
+      let cur = null;
+      const tb = dom("reg-table-body");
+      if (!tb) return null;
+      tb.querySelectorAll("tr.date-group-row[data-entry-id]").forEach((r) => {
+        if (!cur && r.getAttribute("data-entry-id") === String(entry.id)) cur = r;
+      });
+      return cur;
+    };
+    tr.classList.add("reg-row-located");
+    setTimeout(() => {
+      const cur = _rowNow();
+      if (!cur) return;
+      cur.classList.add("reg-row-located"); // no-op if same node
+      cur.classList.add("reg-row-located-fade");
+      setTimeout(() => {
+        const last = _rowNow();
+        if (!last) return;
+        last.classList.remove("reg-row-located", "reg-row-located-fade");
+      }, 1400);
+    }, 5000);
+    return true;
+  }
+
+  // One document read: the stay's bill doc → its check-in DATE (YYYY-MM-DD).
+  // Returns null on any failure so the caller can fall back.
+  async function _stayCheckinDate(stayId) {
+    try {
+      const res = await apiFetch(`/generate_bill/${encodeURIComponent(stayId)}`);
+      const data = await res.json();
+      const ci = data && data.success && data.bill && data.bill.checkin_time;
+      return ci ? String(ci).slice(0, 10) : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  // Point the register at [start, end] and force-load it, keeping the
+  // date-picker / quick-chip UI in sync with the programmatic range.
+  async function _loadStayRange(start, end) {
+    state.dateRange.start = start;
+    state.dateRange.end   = end;
+    if (state._datePicker) {
+      try { state._datePicker.setDate([start, end], false); } catch (_) {}
+    }
+    document.querySelectorAll(".reg-quick-btn")
+      .forEach((b) => b.classList.remove("rq-active"));
+    state.loading = false;   // our forced load supersedes any in-flight one
+    await loadData(true);
+  }
+
+  async function showStayFromLink(ref) {
+    ref = ref || {};
+    // Let the tab-switch loader run first (watchTab's MutationObserver fires
+    // loadData(false) right after the tab becomes visible), then invalidate
+    // whatever it started. Without this, its re-render lands AFTER our
+    // reveal, resets pagination back to page 1 and wipes the highlight —
+    // the row then hides behind "Show more".
+    await new Promise((r) => setTimeout(r, 0));
+    state._reqId++;          // any in-flight fetch response is now discarded
+    state.loading = false;
+
+    // 1) Already in the loaded range → reveal, zero fetches.
+    let entry = _findStayEntry(ref);
+    if (entry) return _revealStayEntry(entry);
+
+    // 2) Targeted load: one bill-doc read for the check-in date, then just
+    //    that single day of register data.
+    if (ref.stayId) {
+      const ciDate = await _stayCheckinDate(ref.stayId);
+      if (ciDate) {
+        await _loadStayRange(ciDate, ciDate);
+        entry = _findStayEntry(ref);
+        return entry ? _revealStayEntry(entry) : false;
+      }
+    }
+
+    // 3) Legacy fallback (no stay_id, or the bill doc is unreachable):
+    //    bounded window ending at the payment date. Non-admin users are
+    //    clamped to the last 3 days server-side; if the stay is older, this
+    //    misses and the caller reports "not found" rather than showing
+    //    wrong data.
+    const today = todayStr();
+    let base = String(ref.date || "").slice(0, 10) || today;
+    if (base > today) base = today;
+    await _loadStayRange(_shiftYMD(base, -30), base);
+    entry = _findStayEntry(ref);
+    return entry ? _revealStayEntry(entry) : false;
+  }
+
   // ── Public refresh contract ───────────────────────────────────────────────
   // Consumed by the global header Refresh button (static/script.js).
   //   invalidate() clears the loaded-range marker so the NEXT time the tab is
@@ -4009,9 +4216,18 @@
   //     to clicking the in-tab refresh button). Used when this is the active
   //     tab.
   //   isLoaded() reports whether a range has ever been fetched this session.
+  //   showStay(ref) reveals a stay row from a transaction deep-link — see
+  //     showStayFromLink above. Resolves true when the row was found and
+  //     highlighted, false when it isn't in the (possibly clamped) range.
   window.CibaraRegister = Object.freeze({
     invalidate: function () { state.lastLoadedRange = null; },
     refresh:    function () { return loadData(true); },
     isLoaded:   function () { return state.lastLoadedRange !== null; },
+    showStay:   function (ref) {
+      return showStayFromLink(ref).catch((err) => {
+        console.warn("[Register] showStay failed:", err);
+        return false;
+      });
+    },
   });
 })();

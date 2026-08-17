@@ -1,0 +1,16 @@
+{
+  "//": "Composite indexes required by queries the app actually runs. Deploy with: firebase deploy --only firestore:indexes",
+  "indexes": [
+    {
+      "//": "routes/users.py :: latest_audit_for_doc + audit_for_doc_all. Without this the query throws and both endpoints fail OPEN, so the 'last action by ...' footer and the per-document activity timeline are permanently blank. Confirmed missing in lodge.log.",
+      "collectionGroup": "audit_logs",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "targetCollection", "order": "ASCENDING" },
+        { "fieldPath": "targetId", "order": "ASCENDING" },
+        { "fieldPath": "server_ts", "order": "DESCENDING" }
+      ]
+    }
+  ],
+  "fieldOverrides": []
+}

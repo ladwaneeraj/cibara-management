@@ -936,12 +936,30 @@ class TransactionLogManager {
     const rowDataAttrs = (logType === "expenses")
       ? ' data-expense-row="1"' + expenseRowAttrs
       : "";
+    // ── Stay link (payment rows → Register) ────────────────────────────
+    // Every non-expense row belongs to a stay ("Room X - Name"). Stamp the
+    // identifiers the Register tab needs to locate that stay so a tap on
+    // the row can jump straight to it. stay_id is the canonical foreign
+    // key every payment carries (Phase 2+); room/guest/date are the
+    // fallback for legacy rows written before the stay_id migration.
+    let stayNavAttrs = "";
+    if (logType !== "expenses" && log.room != null && log.room !== "" && log.name) {
+      stayNavAttrs =
+        ` data-stay-id="${_txnAttrEsc(log.stay_id || "")}"` +
+        ` data-stay-room="${_txnAttrEsc(log.room)}"` +
+        ` data-stay-guest="${_txnAttrEsc(log.name)}"` +
+        ` data-stay-date="${_txnAttrEsc((log.date || "").slice(0, 10))}"`;
+    }
     // Actionable rows advertise themselves: pointer cursor and hover tint via
     // the class, plus role/tabindex so the sheet is reachable from a keyboard.
-    const rowClass = "log-item" + (expenseRowAttrs ? " txn-row-actionable" : "");
+    const rowClass = "log-item"
+      + (expenseRowAttrs ? " txn-row-actionable" : "")
+      + (stayNavAttrs ? " txn-row-staylink" : "");
     const rowA11y  = expenseRowAttrs
       ? ' role="button" tabindex="0" aria-haspopup="menu"'
-      : "";
+      : (stayNavAttrs
+          ? ' role="button" tabindex="0" title="Open this stay in the Register"'
+          : "");
     // Sort key, carried on the row so a single row can be spliced into an
     // already-rendered day group at the right position without re-deriving the
     // whole list. See the incremental-mutation helpers near the bottom of this
@@ -958,7 +976,7 @@ class TransactionLogManager {
       (log._doc_id ? ` data-log-id="${_txnAttrEsc(log._doc_id)}"` : "");
 
     return `
-      <div class="${rowClass}"${rowDataAttrs}${rowSort}${rowA11y} ${rowBg}>
+      <div class="${rowClass}"${rowDataAttrs}${stayNavAttrs}${rowSort}${rowA11y} ${rowBg}>
         <div class="log-details">
           <div class="log-title">
             ${serialHtml}
@@ -1465,6 +1483,17 @@ const transactionTrackingStyles = `
        print) must not inherit the row's pointer affordance. */
     .log-item.txn-row-actionable a,
     .log-item.txn-row-actionable button { cursor: pointer; }
+
+    /* ── Stay-link payment row ───────────────────────────────────────────
+       Non-expense rows link to their stay in the Register. Same affordance
+       language as the actionable expense rows. */
+    .log-item.txn-row-staylink { cursor: pointer; }
+    .log-item.txn-row-staylink:hover { filter: brightness(0.97); }
+    .log-item.txn-row-staylink:focus-visible {
+        outline: 2px solid #3182ce; outline-offset: -2px;
+    }
+    .log-item.txn-row-staylink a,
+    .log-item.txn-row-staylink button { cursor: pointer; }
 
     /* ── Expense action sheet ────────────────────────────────────────────
        Bottom sheet on phones, centred card on wide screens. Replaces the
@@ -2135,6 +2164,75 @@ document.addEventListener("DOMContentLoaded", function () {
     if (!row) return;
     e.preventDefault();
     _openExpenseActionSheet(row);
+  });
+
+  // ── Payment row tap → jump to the stay in the Register ─────────────────────
+  // Non-expense rows carry data-stay-* attributes (stamped by
+  // renderEnhancedLogItem). Tapping one switches to the Register tab and asks
+  // register.js to locate, scroll to and highlight that stay. Controls inside
+  // the row (links, buttons) keep their own behaviour, exactly like the
+  // expense action-sheet handler above.
+  function _txnGoToRegisterStay(row) {
+    const ref = {
+      stayId: row.getAttribute("data-stay-id") || "",
+      room:   row.getAttribute("data-stay-room") || "",
+      guest:  row.getAttribute("data-stay-guest") || "",
+      date:   row.getAttribute("data-stay-date") || "",
+    };
+    if (!ref.stayId && !(ref.room && ref.guest)) return;
+
+    const _notify = (msg, kind) => {
+      if (typeof showNotification === "function") showNotification(msg, kind || "warning");
+    };
+
+    // The Register tab can be hidden (hide_register_tab / Incognito) or
+    // role-gated. If its nav entry isn't visible, don't navigate into a
+    // hidden view — say so instead.
+    const regNav = document.querySelector('.nav-item[data-tab="register"]');
+    const navVisible =
+      regNav && window.getComputedStyle(regNav).display !== "none";
+    if (!navVisible) {
+      _notify("The Register tab isn't available right now.");
+      return;
+    }
+    if (!window.CibaraRegister ||
+        typeof window.CibaraRegister.showStay !== "function") {
+      _notify("Register isn't ready yet — please try again in a moment.");
+      return;
+    }
+
+    regNav.click(); // normal tab switch (active classes, watchTab loader)
+    window.CibaraRegister.showStay(ref).then((found) => {
+      if (!found) {
+        _notify(
+          "Couldn't find that stay in the Register" +
+          (ref.guest ? ` (${ref.guest}, Room ${ref.room})` : "") + ".",
+        );
+      }
+    }).catch((err) => {
+      console.warn("[txn→register] showStay failed:", err);
+    });
+  }
+
+  document.addEventListener("click", function (e) {
+    if (!e.target || !e.target.closest) return;
+    const row = e.target.closest(".log-item.txn-row-staylink");
+    if (!row) return;
+    // Expense rows never carry .txn-row-staylink, but keep the same
+    // control guard so photo links / print buttons inside a row still work.
+    if (e.target.closest("a, button, input, label, select")) return;
+    e.preventDefault();
+    _txnGoToRegisterStay(row);
+  });
+
+  document.addEventListener("keydown", function (e) {
+    if (e.key !== "Enter" && e.key !== " ") return;
+    const row = e.target && e.target.closest
+      ? e.target.closest(".log-item.txn-row-staylink")
+      : null;
+    if (!row) return;
+    e.preventDefault();
+    _txnGoToRegisterStay(row);
   });
 
   // ── Admin-only: live search across rendered expense rows ───────────────────
@@ -3259,6 +3357,47 @@ window.refreshTransactionsView = function (quiet) {
     _triggerRender(r.fromDate, r.toDate, quiet);
   } else if (typeof debouncedFetchData === "function") {
     debouncedFetchData();              // Today view — refresh the cache
+  }
+};
+
+// Jump the Transactions view so a specific date's rows are on screen. Used by
+// the Staff payroll flow after a salary is recorded with a back-dated
+// "paid on": the expense row lands on THAT day (staff_service dates it to
+// paid_on), and staying on today's list made the payment look like it
+// vanished. The range is [date, today] rather than the single day, so
+// today's drawer context never disappears — the new row is visible AND the
+// operator is still looking at now.
+window.goToTransactionDate = function (dateStr) {
+  try {
+    const today = _localYMD();
+    let d = String(dateStr || "").slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(d) || d > today) d = today;
+
+    // Non-admins have no date picker and the server clamps extended ranges
+    // for them — a jump they can't express falls back to a plain refresh.
+    const _auth = window.CibaraAuth;
+    const _isAdmin = !!(_auth && _auth.isAdmin && _auth.isAdmin());
+    if (!_isAdmin && !_isWithinCache(d)) {
+      if (typeof window.refreshTransactionsView === "function") {
+        window.refreshTransactionsView();
+      }
+      return;
+    }
+
+    // Same steps a manual picker change performs (see the onChange handler):
+    // drop any manager custom range, clear quick-button state, sync the
+    // picker, and force a fresh pull so the just-written row is included.
+    if (txnMgrExpenseLogs) _resetMgrExpenseRange(false);
+    document.querySelectorAll(".txn-quick-btn")
+      .forEach((b) => b.classList.remove("active"));
+    if (window._txnPicker) window._txnPicker.setDate([d, today]);
+    txnExtendedLogs = null;
+    _triggerRender(d, today);
+  } catch (e) {
+    console.warn("[txn] goToTransactionDate failed:", e);
+    if (typeof window.refreshTransactionsView === "function") {
+      window.refreshTransactionsView();
+    }
   }
 };
 

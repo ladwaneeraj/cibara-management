@@ -3100,7 +3100,8 @@
             </select>
           </h2>
           <div style="display: flex; align-items: center; gap: 0.4rem">
-            <!-- Camera + Scan buttons -->
+            <!-- ID camera. (The Epson WiFi-scanner button that sat beside it
+                 was removed along with its /scan_document backend.) -->
             <button
               id="doc-camera-btn"
               type="button"
@@ -3109,16 +3110,6 @@
               aria-label="Capture ID document"
             >
               <i class="fas fa-camera"></i>
-            </button>
-            <button
-              id="doc-scan-btn"
-              type="button"
-              class="doc-cam-btn"
-              title="Scan via Epson WiFi printer"
-              aria-label="Scan ID document"
-              style="background: #e8f0fe; color: #1565c0; border-color: #bbdefb"
-            >
-              <i class="fas fa-print"></i>
             </button>
             <button class="close-btn" aria-label="Close">&times;</button>
           </div>
@@ -3247,6 +3238,63 @@
                   </div>
                   <div id="checkin-pending-settlement-details" style="font-size: 0.83rem; color: #78350f; margin-bottom: 0.15rem;"></div>
                   <div id="checkin-pending-settlement-date" style="font-size: 0.78rem; color: #92400e; opacity: 0.8;"></div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Always-bill note. Informational only: nothing to decide
+                 here, but the operator should not be surprised at checkout
+                 when a cash stay produces an invoice. The GST question moved
+                 to the checkout modal, where the amount is known and the bill
+                 is actually being made. -->
+            <div
+              id="checkin-wants-bill-note"
+              style="
+                display: none;
+                margin-top: 0.6rem;
+                background: #f8fafc;
+                border: 1px solid #e2e8f0;
+                border-left: 3px solid #0ea5e9;
+                border-radius: 6px;
+                padding: 0.5rem 0.65rem;
+                display: none;
+                align-items: center;
+                gap: 0.5rem;
+              "
+            >
+              <i
+                class="fas fa-file-invoice"
+                style="color: #0ea5e9; font-size: 0.85rem; flex-shrink: 0"
+              ></i>
+              <span
+                id="checkin-wants-bill-text"
+                style="font-size: 0.8rem; color: #334155; line-height: 1.35"
+              ></span>
+            </div>
+
+            <!-- ── Company billing (GST) — returning B2B guest ──────────────
+                 Shown only when the mobile lookup finds saved GST details
+                 from a previous B2B invoice (customer-docs.js). One tap
+                 stamps them on the stay; the checkout modal's Company
+                 billing card then opens pre-selected to "Applied" and offers
+                 a final flip to Personal. Never automatic — a company GSTIN
+                 on a personal stay is a GSTR-1 filing error. -->
+            <div id="checkin-gst-card" style="display: none; margin-top: 0.6rem;">
+              <div style="display: flex; align-items: center; gap: 0.6rem; border: 1px solid #e5e7eb; border-radius: 10px; background: #fafafa; padding: 0.5rem 0.7rem;">
+                <i class="fas fa-building" style="color: #9ca3af; font-size: 0.85rem; flex-shrink: 0;"></i>
+                <div style="flex: 1; min-width: 0;">
+                  <div style="display: flex; align-items: center; gap: 0.4rem; min-width: 0;">
+                    <span id="checkin-gst-company" style="font-size: 0.83rem; font-weight: 600; color: #111827; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;"></span>
+                    <span id="checkin-gst-status" style="flex-shrink: 0; font-size: 0.62rem; font-weight: 700; padding: 0.1rem 0.45rem; border-radius: 20px; text-transform: uppercase; letter-spacing: 0.03em;"></span>
+                  </div>
+                  <div style="display: flex; gap: 0.45rem; margin-top: 0.1rem; min-width: 0;">
+                    <span id="checkin-gst-gstin" style="font-size: 0.7rem; color: #6b7280; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: 0.02em; white-space: nowrap;"></span>
+                    <span id="checkin-gst-meta" style="font-size: 0.68rem; color: #9ca3af; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;"></span>
+                  </div>
+                </div>
+                <div style="display: flex; gap: 0.3rem; flex-shrink: 0;">
+                  <button type="button" id="checkin-gst-apply" style="padding: 0.35rem 0.7rem; border: 1px solid #e5e7eb; border-radius: 20px; background: #fff; color: #374151; font-size: 0.74rem; font-weight: 600; cursor: pointer; white-space: nowrap;">Company</button>
+                  <button type="button" id="checkin-gst-skip" style="padding: 0.35rem 0.7rem; border: none; border-radius: 20px; background: #111827; color: #fff; font-size: 0.74rem; font-weight: 600; cursor: pointer; white-space: nowrap;">Personal</button>
                 </div>
               </div>
             </div>
@@ -3876,6 +3924,34 @@
           </div>
         </div>
 
+        <!-- ── Company billing (GST) — slim strip ────────────────────────────
+             Shown only when this guest has GST details from a previous B2B
+             invoice. One line, sitting with the stay's billing figures rather
+             than above the guest's identity. Element ids are unchanged —
+             script.js (_renderCheckoutGstCard) drives text, the status pill
+             and the selected state of the two toggle buttons. Always a
+             question, never automatic: a company GSTIN on a personal invoice
+             is a GSTR-1 filing error. -->
+        <div id="checkout-gst-card" style="display: none; padding: 0 1rem; margin: 0.15rem 0 0.6rem;">
+          <div style="display: flex; align-items: center; gap: 0.6rem; border: 1px solid #e5e7eb; border-radius: 10px; background: #fafafa; padding: 0.5rem 0.7rem;">
+            <i class="fas fa-building" style="color: #9ca3af; font-size: 0.85rem; flex-shrink: 0;"></i>
+            <div style="flex: 1; min-width: 0;">
+              <div style="display: flex; align-items: center; gap: 0.4rem; min-width: 0;">
+                <span id="checkout-gst-company" style="font-size: 0.83rem; font-weight: 600; color: #111827; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;"></span>
+                <span id="checkout-gst-status" style="flex-shrink: 0; font-size: 0.62rem; font-weight: 700; padding: 0.1rem 0.45rem; border-radius: 20px; text-transform: uppercase; letter-spacing: 0.03em;"></span>
+              </div>
+              <div style="display: flex; gap: 0.45rem; margin-top: 0.1rem; min-width: 0;">
+                <span id="checkout-gst-gstin" style="font-size: 0.7rem; color: #6b7280; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: 0.02em; white-space: nowrap;"></span>
+                <span id="checkout-gst-meta" style="font-size: 0.68rem; color: #9ca3af; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;"></span>
+              </div>
+            </div>
+            <div style="display: flex; gap: 0.3rem; flex-shrink: 0;">
+              <button type="button" id="checkout-gst-apply" style="padding: 0.35rem 0.7rem; border: 1px solid #e5e7eb; border-radius: 20px; background: #fff; color: #374151; font-size: 0.74rem; font-weight: 600; cursor: pointer; white-space: nowrap;">Company</button>
+              <button type="button" id="checkout-gst-skip" style="padding: 0.35rem 0.7rem; border: none; border-radius: 20px; background: #111827; color: #fff; font-size: 0.74rem; font-weight: 600; cursor: pointer; white-space: nowrap;">Personal</button>
+            </div>
+          </div>
+        </div>
+
         <!-- Add-on Services -->
         <div class="add-on-section">
           <h3 style="margin-bottom: 0.75rem">Add Services</h3>
@@ -4304,6 +4380,84 @@
           />
         </div>
 
+        <!-- ── Discount treatment — decides the GST outcome ──────────────────
+             This used to be silent: the frontend never sent discount_type, so
+             /collect_settlement defaulted to "financial" and every settlement
+             discount became a write-off. The lodge still owed output tax on
+             the full invoice, and the bill showed a total the guest never
+             paid, with nothing explaining the gap.
+
+             Price reduction  -> Section 34 credit note against the original
+                                 invoice. Taxable value and output tax both
+                                 come down. Bill + CN reconcile to what was
+                                 actually collected.
+             Write-off        -> goodwill. Invoice unchanged, no GST relief.
+        -->
+        <div
+          class="form-group"
+          id="settlement-discount-type-container"
+          style="display: none"
+        >
+          <label class="form-label">What is this discount?</label>
+          <label
+            style="
+              display: flex;
+              gap: 0.5rem;
+              align-items: flex-start;
+              padding: 0.5rem 0.6rem;
+              border: 1.5px solid #a5d6a7;
+              border-radius: 8px;
+              background: #f1f8f2;
+              cursor: pointer;
+              margin-bottom: 0.4rem;
+            "
+          >
+            <input
+              type="radio"
+              name="settlement-disc-type"
+              value="credit_note"
+              checked
+              style="margin-top: 0.2rem"
+            />
+            <span>
+              <b style="font-size: 0.86rem">Price reduction</b>
+              <span
+                style="display: block; font-size: 0.78rem; color: #446; margin-top: 0.1rem"
+              >
+                The stay genuinely cost less. Issues a credit note, so your GST
+                comes down too.
+              </span>
+            </span>
+          </label>
+          <label
+            style="
+              display: flex;
+              gap: 0.5rem;
+              align-items: flex-start;
+              padding: 0.5rem 0.6rem;
+              border: 1.5px solid #e0e0e0;
+              border-radius: 8px;
+              cursor: pointer;
+            "
+          >
+            <input
+              type="radio"
+              name="settlement-disc-type"
+              value="financial"
+              style="margin-top: 0.2rem"
+            />
+            <span>
+              <b style="font-size: 0.86rem">Write-off</b>
+              <span
+                style="display: block; font-size: 0.78rem; color: #446; margin-top: 0.1rem"
+              >
+                You let it go. The invoice stays as issued and you still pay
+                GST on the full amount.
+              </span>
+            </span>
+          </label>
+        </div>
+
         <!-- Discount Reason -->
         <div
           class="form-group"
@@ -4354,6 +4508,24 @@
           </div>
           <input type="hidden" id="settlement-payment-method" value="cash" />
         </div>
+
+        <!-- Live breakdown. Populated by _settleSyncBreakdown() in
+             static/settle-later.js on every input change, so the operator can
+             see original, discount, collecting and still-owed reconcile
+             BEFORE they take the money, rather than discovering a mismatch on
+             the printed bill afterwards. -->
+        <div
+          id="settlement-breakdown"
+          style="
+            display: none;
+            margin: 0.6rem 0 0.2rem;
+            border: 1px solid #e0e0e0;
+            border-radius: 8px;
+            padding: 0.55rem 0.7rem;
+            background: #fafafa;
+            font-size: 0.85rem;
+          "
+        ></div>
 
         <div class="action-row">
           <button class="action-btn btn-secondary" id="cancel-settlement-btn">

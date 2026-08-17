@@ -428,6 +428,29 @@
     return n && n !== "system" ? "by " + n : "";
   }
 
+  // Ledger caption for the days a salary payment did NOT pay for. Two
+  // reasons, and they read very differently to whoever is auditing the row:
+  // an already-paid day is fine, an unmarked day is money still owed once
+  // somebody fixes the register. `excluded_dates` is the union; subtracting
+  // `unmarked_dates` gives the already-paid count. Older payment docs have no
+  // unmarked_dates, so they degrade to the original single caption.
+  function _skippedChips(p) {
+    var excluded = (p && p.excluded_dates) || [];
+    var unmarked = (p && p.unmarked_dates) || [];
+    if (!excluded.length) return "";
+    var alreadyPaid = Math.max(0, excluded.length - unmarked.length);
+    var out = "";
+    if (alreadyPaid) {
+      out += '<span class="muted">' + alreadyPaid + " already-paid day" +
+        (alreadyPaid > 1 ? "s" : "") + " skipped</span>";
+    }
+    if (unmarked.length) {
+      out += '<span class="muted">' + unmarked.length + " unmarked day" +
+        (unmarked.length > 1 ? "s" : "") + " skipped</span>";
+    }
+    return out;
+  }
+
   function _isPaid(sid, d) {
     return (state.gridPaid[sid] || []).some(function (p) {
       return p.start && p.end && p.start <= d && d <= p.end &&
@@ -1379,12 +1402,43 @@
       } else if (pv && pv.all_days_paid) {
         note = '<div class="stf-carry-note" style="background:#fff5f5;border-color:#fecaca;color:#991b1b;">' +
           "⚠ Every day in this range is already paid — nothing left to settle. Adjust the dates.</div>";
-      } else if (pv && pv.excluded_days && pv.excluded_days.length) {
-        note = '<div class="stf-carry-note">' +
-          "ℹ " + pv.excluded_days.length + " already-paid day" +
-          (pv.excluded_days.length > 1 ? "s" : "") + " (" +
-          esc(pv.excluded_days.map(fmtDShort).join(", ")) +
-          ") will be skipped — the salary below covers only the unpaid days.</div>";
+      } else {
+        // Not mutually exclusive: a range can contain both days an earlier
+        // payout already settled AND days nobody has marked yet. Show each.
+        if (pv && pv.excluded_days && pv.excluded_days.length) {
+          note += '<div class="stf-carry-note">' +
+            "ℹ " + pv.excluded_days.length + " already-paid day" +
+            (pv.excluded_days.length > 1 ? "s" : "") + " (" +
+            esc(pv.excluded_days.map(fmtDShort).join(", ")) +
+            ") will be skipped — the salary below covers only the unpaid days.</div>";
+        }
+        // Unmarked days are the ones worth interrupting for. They are NOT an
+        // error: the payout still goes through for the days that are marked,
+        // and these stay open. But the operator should know they are about to
+        // hand over less than a full period, and why.
+        if (pv && pv.unmarked_days && pv.unmarked_days.length) {
+          var n = pv.unmarked_days.length;
+          var plural = n > 1;
+          // Red when the WHOLE range is unmarked (there is no wage to pay at
+          // all), amber when only some days are missing. The button stays
+          // enabled either way: a bonus-only or advance-recovery payout over
+          // an unmarked range is legitimate, and the server gives the precise
+          // refusal if there is genuinely nothing to settle.
+          var severe = !!pv.all_days_unmarked;
+          note += '<div class="stf-carry-note" style="' +
+            (severe
+              ? "background:#fff5f5;border-color:#fecaca;color:#991b1b;"
+              : "background:#fffbeb;border-color:#fcd34d;color:#92400e;") +
+            '">⚠ ' +
+            (severe
+              ? "No attendance is marked anywhere in this range"
+              : n + " day" + (plural ? "s" : "") + " in this range " +
+                (plural ? "have" : "has") + " no attendance marked") +
+            " (" + esc(pv.unmarked_days.map(fmtDShort).join(", ")) + "). " +
+            (plural ? "They" : "It") + " will be skipped and stay unpaid. " +
+            "Mark attendance and " + (plural ? "they" : "it") +
+            " can be paid in a later period.</div>";
+        }
       }
       if (noteEl.innerHTML !== note) noteEl.innerHTML = note;
     }
@@ -1883,11 +1937,26 @@
       })
         .then(function (json) {
           notify(json.message || "Salary paid", "success");
+          // Read paid_on BEFORE the panel state resets and re-renders.
+          var _paidOn = document.getElementById("stf-qp-paidon")?.value || "";
           state.quickPay = null;
           state.staffLoaded = false;       // outstanding / paid-until changed
           state.insights = null;
           state._gridLoadedMonth = null;   // paid-period locks changed
-          _refreshMoneyViews();
+          // Back-dated payment → the expense row landed on paid_on, not
+          // today. Jump the Transactions view there so the payment is
+          // visible instead of silently living on a day nobody is looking
+          // at. Same-day payments keep the plain refresh (no view change).
+          var _p2 = function (n) { return (n < 10 ? "0" : "") + n; };
+          var _n = new Date();
+          var _todayStr = _n.getFullYear() + "-" + _p2(_n.getMonth() + 1) +
+            "-" + _p2(_n.getDate());
+          if (_paidOn && _paidOn !== _todayStr &&
+              typeof window.goToTransactionDate === "function") {
+            window.goToTransactionDate(_paidOn);
+          } else {
+            _refreshMoneyViews();
+          }
           loadGrid(true);       // force — the paid-period locks just changed
         })
         .catch(function (e) { btn.disabled = false; notify(e.message, "error"); });
@@ -2583,11 +2652,11 @@
                   ? '<span class="chip cut">− ' + rup(p.advance_deducted) +
                     " advance cut</span>"
                   : "") +
-                (p.excluded_dates && p.excluded_dates.length
-                  ? '<span class="muted">' + p.excluded_dates.length +
-                    " already-paid day" +
-                    (p.excluded_dates.length > 1 ? "s" : "") + " skipped</span>"
-                  : "") +
+                // excluded_dates holds BOTH already-paid days and days with no
+                // attendance. unmarked_dates is the second group; payments
+                // written before that field existed simply report zero of them
+                // and render exactly as they always did.
+                _skippedChips(p) +
                 (_byLine(p.paid_by)
                   ? '<span class="muted">paid ' + esc(_byLine(p.paid_by)) + "</span>"
                   : "");

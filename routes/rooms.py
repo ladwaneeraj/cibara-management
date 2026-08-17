@@ -22,7 +22,8 @@ from config import (
     store_transaction_metadata, create_bill_record, BillCreationError,
     allocate_and_finalize_bill,
     find_serial_number_for_checkin, _build_active_entry_fast, _find_serial_fast,
-    _batch_fill_serials, room_category, room_base_price, AC_SURCHARGE
+    _batch_fill_serials, room_category, room_base_price, AC_SURCHARGE,
+    validate_gstin, derive_state_from_gstin
 )
 from services import payment_service, customer_service, expense_service, bills_service
 from services import system_alerts
@@ -48,7 +49,11 @@ def checkin():
             return jsonify(success=False, message="Cannot use 'Pay Later' with an amount paid. Please select Cash or Online.")
 
         guest = {
-            "name": data_json["name"],
+            # One casing standard at the source: the room doc, the draft
+            # stay, the bill, and the customer record all inherit this name,
+            # so normalizing here keeps every surface consistent (the
+            # customer upsert applies the same function independently).
+            "name": customer_service.standardize_name(data_json["name"]),
             "mobile": data_json["mobile"],
             "price": price,
             "guests": int(data_json["guests"]),
@@ -96,6 +101,53 @@ def checkin():
                     f"value={_override_raw!r} — using now() instead"
                 )
 
+        # ── Company billing (GST) chosen on the CHECK-IN form ────────────────
+        # A returning B2B guest's saved GST details are OFFERED at check-in
+        # (customer-docs.js shows the card only when a stored profile exists).
+        # The operator's explicit "bill to this company" answer arrives here
+        # and is stamped on the room doc; create_bill_record already reads
+        # `gst_profile` from the room, and the checkout modal's Company
+        # billing card pre-selects "Applied" from this stamp — the operator
+        # confirms (or flips to Personal) at checkout, so the check-in answer
+        # is a default, never a silent commitment.
+        #
+        # Re-validated rather than trusted, exactly like the /checkout path:
+        # this is client input destined for a tax invoice. Absent or invalid
+        # → None, which preserves the original poisoning guard (a profile
+        # left behind by an earlier occupant must never survive a check-in).
+        _gst_in = data_json.get("gst_profile")
+        _stay_gst = None
+        if isinstance(_gst_in, dict):
+            try:
+                _g = str(_gst_in.get("gstin") or "").strip().upper()
+                if validate_gstin(_g):
+                    _sn_gst, _sc_gst = derive_state_from_gstin(_g)
+                    _stay_gst = {
+                        "gstin":      _g,
+                        "legal_name": str(_gst_in.get("legal_name") or "").strip(),
+                        "trade_name": str(_gst_in.get("trade_name") or "").strip(),
+                        "address":    str(_gst_in.get("address") or "").strip(),
+                        "state":      str(_gst_in.get("state") or "").strip() or _sn_gst,
+                        "state_code": str(_gst_in.get("state_code") or "").strip() or _sc_gst,
+                        "source":     "checkin",
+                    }
+                else:
+                    logger.warning(
+                        f"/checkin room {room}: gst_profile GSTIN {_g!r} "
+                        f"failed validation — stay stays B2C"
+                    )
+            except Exception as _ge:
+                logger.warning(f"/checkin room {room}: gst_profile parse "
+                               f"failed, ignoring: {_ge}")
+        if _stay_gst:
+            # Explicit trail: pairs with create_bill_record's "applying
+            # stay-level GST profile" line at checkout. If THIS line is
+            # missing after a check-in that selected Company, the answer
+            # never left the browser; if this prints but checkout's line
+            # doesn't, the stamp was lost in between.
+            logger.info(f"/checkin room {room}: company billing stamped on "
+                        f"stay (GSTIN={_stay_gst['gstin']})")
+
         serial_number = get_next_serial_number(current_date)
 
         # ── Stay document — Phase 2/4 of stay_id migration ───────────────────
@@ -141,6 +193,14 @@ def checkin():
                 # check-in is never mislabelled as MMT.
                 "booking_source": "normal",
                 "payment_source": "hotel",
+                # Company billing: the operator's answer from the check-in
+                # form's GST card (validated above), or None. ALWAYS written,
+                # deliberately: the room document outlives the stay, and a
+                # profile left behind by an earlier occupant would otherwise
+                # be picked up by create_bill_record and put somebody else's
+                # GSTIN on this guest's invoice. The checkout modal offers a
+                # final confirm/flip before the invoice is actually made.
+                "gst_profile": _stay_gst,
                 # Pointer to the draft stay doc so /checkout can finalize
                 # the existing record instead of creating a new bill.
                 "active_bill_id": stay_id,
@@ -308,6 +368,79 @@ def checkout():
             if not room_doc.exists:
                 return jsonify(success=False, message="Room not found")
             room_data = room_doc.to_dict()
+
+        # ── Company billing (GST) chosen in the checkout modal ────────────────
+        # The operator answers "bill to this company?" at checkout, and the
+        # answer arrives here. Written onto the in-memory room_data because
+        # create_bill_record already reads `gst_profile` from there — the same
+        # slot a booking-seeded GSTIN would use — so nothing downstream needs
+        # to know where the answer came from.
+        #
+        # Re-validated rather than trusted. This is client input and it ends
+        # up on a tax invoice; a malformed GSTIN in GSTR-1 is a filing error.
+        # Note the room_data above may be client-supplied too, which is why an
+        # ABSENT gst_profile here explicitly clears the field instead of
+        # leaving whatever the client sent.
+        # The answer is a TRI-STATE, and the server is authoritative:
+        #   * dict        → operator chose "Bill to this company" at checkout
+        #                   (or the card was pre-applied from check-in) —
+        #                   validate and use it.
+        #   * "personal"  → operator EXPLICITLY tapped Personal at checkout —
+        #                   clear any check-in stamp.
+        #   * null/absent → the browser has no explicit answer (older client,
+        #                   or its card state was lost between modal-open and
+        #                   POST). Fall back to the profile /checkin stamped
+        #                   on the LIVE room doc — never the client's copy.
+        #                   This is safe against the previous-occupant
+        #                   poisoning hazard because /checkin ALWAYS writes
+        #                   the field (a fresh validated profile or None).
+        _gst_in = data_json.get("gst_profile")
+        _stay_gst = None
+        if isinstance(_gst_in, dict):
+            try:
+                _g = str(_gst_in.get("gstin") or "").strip().upper()
+                if validate_gstin(_g):
+                    _sn, _sc = derive_state_from_gstin(_g)
+                    _stay_gst = {
+                        "gstin":      _g,
+                        "legal_name": str(_gst_in.get("legal_name") or "").strip(),
+                        "trade_name": str(_gst_in.get("trade_name") or "").strip(),
+                        "address":    str(_gst_in.get("address") or "").strip(),
+                        "state":      str(_gst_in.get("state") or "").strip() or _sn or "Karnataka",
+                        "state_code": str(_gst_in.get("state_code") or "").strip() or _sc or "29",
+                    }
+                elif _g:
+                    logger.warning(f"checkout: GSTIN {_g!r} for room {room} failed "
+                                   f"validation — bill stays B2C")
+            except Exception as _gst_err:
+                logger.warning(f"checkout: gst_profile parse failed for room "
+                               f"{room}, ignoring: {_gst_err}")
+        elif _gst_in == "personal":
+            logger.info(f"checkout room {room}: operator chose Personal — "
+                        f"any check-in company stamp is cleared")
+        else:
+            # No explicit answer — read the check-in stamp from the LIVE doc.
+            try:
+                _live = rooms_ref.document(room).get()
+                _stamp = ((_live.to_dict() or {}).get("gst_profile")
+                          if _live.exists else None) or {}
+                _g = str(_stamp.get("gstin") or "").strip().upper()
+                if validate_gstin(_g):
+                    _stay_gst = {
+                        "gstin":      _g,
+                        "legal_name": str(_stamp.get("legal_name") or "").strip(),
+                        "trade_name": str(_stamp.get("trade_name") or "").strip(),
+                        "address":    str(_stamp.get("address") or "").strip(),
+                        "state":      str(_stamp.get("state") or "").strip() or "Karnataka",
+                        "state_code": str(_stamp.get("state_code") or "").strip() or "29",
+                    }
+                    logger.info(f"checkout room {room}: no explicit answer from "
+                                f"client — using the company profile stamped at "
+                                f"check-in (GSTIN={_g})")
+            except Exception as _stamp_err:
+                logger.warning(f"checkout: stamped gst_profile read failed for "
+                               f"room {room}, bill stays B2C: {_stamp_err}")
+        room_data["gst_profile"] = _stay_gst
 
         # Stay-id linkage (Phase 2/4 of stay_doc migration).
         # `active_bill_id` is set on the room at /checkin and points at the
@@ -803,6 +936,11 @@ def checkout():
                     "last_renewal_date":       room_data.get("last_renewal_date"),
                     "checkin_time_edit_count": room_data.get("checkin_time_edit_count", 0),
                     "active_bill_id":          active_bill_id,
+                    # Without this, reverting a checkout would silently drop
+                    # the stay's B2B details and the re-issued bill would come
+                    # out B2C. Bills snapshotted before this field existed
+                    # restore as None, which is the old behaviour.
+                    "gst_profile":             room_data.get("gst_profile"),
                     # IST wall-clock when this snapshot was taken (for debugging)
                     "snapshot_at":             datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S"),
                 }
@@ -1376,6 +1514,10 @@ def revert_checkout():
             # superseded with a credit note linked). Future payments and
             # the next checkout flow will write against this new ID.
             "active_bill_id":          new_stay_id,
+            # Restore the stay's GST details so the re-issued bill is B2B
+            # again. Always written (None when absent) so the room can never
+            # inherit a profile from a different stay.
+            "gst_profile":             snapshot.get("gst_profile"),
             # Cancel cleaning state.
             "cleaning_status":         None,
             "cleaning_start_time":     None,

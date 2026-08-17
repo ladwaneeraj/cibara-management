@@ -1033,6 +1033,13 @@ def convert_booking_to_checkin():
             # completed bill). Defaults keep walk-ins as "normal"/"hotel".
             "booking_source": booking.get("booking_source", "normal"),
             "payment_source": booking.get("payment_source", "hotel"),
+            # Same room-reuse hazard as booking_source. A stay-level GST
+            # profile left on this room by the PREVIOUS occupant would be
+            # picked up by create_bill_record and stamp their company GSTIN
+            # on this guest's invoice. Cleared unconditionally: a booking
+            # carries its own recipient_gstin, and create_bill_record reads
+            # that in preference to anything on the room.
+            "gst_profile": None,
             # Walk-in pattern: start on Day 1; operator renews each
             # subsequent day manually. Booked nights N>1 are NOT
             # pre-charged. See the long comment above the `guest` dict

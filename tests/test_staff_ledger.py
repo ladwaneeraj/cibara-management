@@ -204,3 +204,70 @@ def test_an_all_unmarked_period_still_fails_validation_with_no_adjustment():
                                   covered=set(), meal_deduction=0)
     assert err is not None
     assert "no attendance marked" in err
+
+
+# ── period_breakdown — the calendar-day census behind the ledger chips ─────
+#
+# Every day of the period must land in exactly one bucket. The chips are read
+# at a glance, so a day double-counted (or quietly dropped) is worse than no
+# chip at all: it looks authoritative and is wrong.
+
+def _census(recs, start, end, covered=None):
+    covered = covered or set()
+    return ledger.period_breakdown(
+        recs, start, end, covered=covered,
+        unmarked=ledger.unmarked_dates(start, end, recs, exclude=covered))
+
+
+def test_census_matches_a_real_ledger_row():
+    # 7-day period, 3 days settled by an earlier payment, 2 worked, 2 absent.
+    recs = [att("2026-08-11"), att("2026-08-12"), att("2026-08-13"),
+            att("2026-08-14", "absent"), att("2026-08-15"),
+            att("2026-08-16", "absent"), att("2026-08-17")]
+    covered = {"2026-08-11", "2026-08-13", "2026-08-15"}
+    assert _census(recs, "2026-08-11", "2026-08-17", covered) == {
+        "days": 7, "present": 2, "absent": 2, "carried": 3, "unmarked": 0}
+
+
+def test_census_counts_a_half_day_as_one_present_day():
+    """Calendar days, not worked-day units. days_worked carries the halves."""
+    recs = [att("2026-08-01", "half"), att("2026-08-02")]
+    assert _census(recs, "2026-08-01", "2026-08-03") == {
+        "days": 3, "present": 2, "absent": 0, "carried": 0, "unmarked": 1}
+
+
+def test_census_collapses_both_shifts_of_a_dual_shift_day():
+    recs = [att("2026-08-01", "full", "D"), att("2026-08-01", "full", "N")]
+    assert _census(recs, "2026-08-01", "2026-08-02")["present"] == 1
+
+
+def test_census_counts_an_already_settled_day_as_carried_not_absent():
+    """Otherwise the same day is reported on two ledger rows at once."""
+    recs = [att("2026-08-01", "absent")]
+    assert _census(recs, "2026-08-01", "2026-08-01", {"2026-08-01"}) == {
+        "days": 1, "present": 0, "absent": 0, "carried": 1, "unmarked": 0}
+
+
+@pytest.mark.parametrize("start,end", [
+    ("", ""), ("2026-08-05", "2026-08-01"), (None, None), ("nonsense", "x"),
+])
+def test_census_of_a_degenerate_range_is_empty_not_an_exception(start, end):
+    assert ledger.period_breakdown([], start, end)["days"] == 0
+
+
+def test_census_buckets_always_sum_to_the_length_of_the_period():
+    """The invariant the chips depend on, over the whole shape of the input."""
+    import random
+    rnd = random.Random(7)
+    for _ in range(300):
+        n = rnd.randint(1, 20)
+        dates = ["2026-08-%02d" % (i + 1) for i in range(n)]
+        recs, covered = [], set()
+        for d in dates:
+            if rnd.random() < 0.6:
+                recs.append(att(d, rnd.choice(["full", "half", "absent"])))
+            if rnd.random() < 0.3:
+                covered.add(d)
+        c = _census(recs, dates[0], dates[-1], covered)
+        assert c["days"] == n
+        assert c["present"] + c["absent"] + c["carried"] + c["unmarked"] == n

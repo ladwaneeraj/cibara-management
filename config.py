@@ -1094,7 +1094,8 @@ def create_bill_record(room, room_data, checkout_time, batch=None,
         # GST slab is determined by the value of supply per night.
         #   up to ₹7,500 → 5%  (no ITC)
         #   above ₹7,500 → 18%
-        # No exempt band — see _slab_for_value for why.
+        # A sub-₹1,000 exempt band is in force by business decision
+        # (19 Aug 2026, on CA advice) — see _slab_for_value.
         #
         # Taxable base = room_charges_total + accommodation add-ons (AC, Extra Bed).
         # Water and miscellaneous services are NOT accommodation charges and are
@@ -2085,32 +2086,125 @@ def _slab_for_value(value):
     """
     Accommodation GST slab from the value of supply per unit per day.
 
-        up to  ₹7,500  →  5%   (no ITC)
+        under  ₹1,000  →   0%   (exempt — see the note below)
+        up to  ₹7,500  →   5%   (no ITC)
         above  ₹7,500  →  18%
 
-    There is NO exempt band. This function used to return 0 below ₹1,000,
-    which was correct only until 17 July 2022: Notification 04/2022-CTR
-    withdrew the sub-₹1,000 accommodation exemption with effect from
-    18 July 2022, and the 56th GST Council (eff. 22 Sep 2025) collapsed the
-    old 12% slab into 5% for everything at or below ₹7,500. A lodge charging
-    ₹900 a night is taxable at 5%, not exempt.
+    THE SUB-₹1,000 BAND IS A DELIBERATE BUSINESS DECISION, NOT THE DEFAULT
+    READING OF THE STATUTE. It was reinstated on 19 August 2026 on the advice
+    of the business's chartered accountant, relayed by the proprietor, and
+    applies from that date forward. Do not "tidy it away" as a bug.
 
-    Keeping the dead 0% band had a second, worse effect here: because the
-    slab is taken on the POST-discount value (see compute_daily_folio), a
-    discounted night could fall under ₹1,000 and silently print "Exempt" on
-    a real tax invoice — under-declaring output tax in GSTR-1.
+    The contrary position is recorded here so that whoever reads this next
+    gets the whole picture rather than half of it. Entry 14 of Notification
+    12/2017-CTR exempted accommodation valued up to ₹1,000 per unit per day.
+    Notification 04/2022-CTR ("serial number 14 and the entries relating
+    thereto shall be omitted") withdrew it with effect from 18 July 2022.
+    Neither 15/2025-CTR (service rates) nor 16/2025-CTR (service exemptions)
+    reinstated it when the 56th Council collapsed the old 12% slab into 5% on
+    22 September 2025. On that reading a ₹700 night is taxable at 5%.
 
-    A zero-value night (fully discounted) still produces zero tax, because
-    5% of ₹0 is ₹0. That falls out of the arithmetic and needs no special
-    case: the supply stays taxable, its value is simply nil.
+    The CA carries the professional judgement on which reading governs this
+    business, and signs the returns. If that advice is ever revisited, change
+    the band HERE — this function is the single definition of the ladder, so
+    the bill, the folio, the GSTR-1 workbook and the advance report all move
+    together — and run scripts/audit_exempt_bills.py to size the invoices
+    issued either side of the change.
+
+    Two second-order effects of an exempt band, both deliberate and both
+    worth knowing before anyone is surprised by an invoice:
+
+      * the slab follows the POST-discount value (Section 15(3)(a) excludes
+        an on-invoice discount from the value of supply), so a ₹1,800 night
+        carrying a ₹900 allocated discount lands under ₹1,000 and prints as
+        exempt;
+      * a fully discounted night (value ₹0) is likewise exempt rather than
+        taxable at a nil value.
     """
     try:
         v = float(value or 0)
     except (TypeError, ValueError):
         v = 0
+    if v < 1000:
+        return 0
     if v <= 7500:
         return 5
     return 18
+
+
+# ── ₹999 snap ───────────────────────────────────────────────────────────────
+# The value at which a night still sits inside the exempt band, and the first
+# value outside it. Derived from _slab_for_value rather than duplicated: if the
+# band ever moves, move it there and these follow.
+EXEMPT_BAND_TARGET = 999
+
+
+def snap_to_exempt_band(night_value_so_far, addon_price, quantity=1):
+    """
+    Trim an accommodation add-on by a rupee or two so the night lands on ₹999
+    instead of just over ₹1,000 — but ONLY when that leaves more money on the
+    counter than paying the tax would.
+
+    The case this exists for: a ₹700 room plus a ₹300 extra bed is a ₹1,000
+    night. Room and extra bed are one composite supply, so the whole ₹1,000 is
+    the value of supply and the night is taxable. Charge ₹299 for the bed
+    instead and the night is ₹999, inside the band, and the lodge keeps ₹999
+    rather than ₹952.38. Giving up ₹1 to keep ₹46.62 is worth doing.
+
+    This is a genuine price reduction, not a tax device. The guest is charged
+    less and the invoice says so. Nothing is split, relabelled or hidden: the
+    add-on's price really is ₹299.
+
+    WHEN IT DOES NOT FIRE, and why each guard matters:
+
+      * No exempt band in force. The whole benefit comes from landing under
+        ₹1,000. If _slab_for_value stops returning 0 there — the CA's advice is
+        revisited, or the law is applied differently — this goes inert on its
+        own instead of quietly shaving rupees for a benefit that no longer
+        exists. Nobody has to remember to delete it.
+
+      * The shave costs more than the tax. Snapping ₹1,100 down to ₹999 gives
+        up ₹101 to save ₹52. The break-even is computed from the live slab, not
+        hard-coded: worth it while 999 > projected x 100/(100+rate), which at 5%
+        makes ₹1,048 the last value worth snapping.
+
+      * The night is already inside the band, or the room alone is already past
+        ₹999. Neither can be fixed by trimming an add-on.
+
+      * quantity > 1. `price` must stay equal to unit_price x quantity or the
+        invoice contradicts itself. An extra bed is billed one at a time, so
+        the constraint costs nothing real.
+
+    Returns (adjusted_price, rupees_given_up). The second value is 0 whenever
+    the price is unchanged, so callers can test it to decide whether to record
+    anything.
+    """
+    try:
+        base = int(night_value_so_far or 0)
+        add = int(addon_price or 0)
+        qty = int(quantity or 1)
+    except (TypeError, ValueError):
+        return addon_price, 0
+
+    if add <= 0 or qty != 1:
+        return addon_price, 0
+    if _slab_for_value(EXEMPT_BAND_TARGET) != 0:
+        return addon_price, 0
+
+    projected = base + add
+    if projected <= EXEMPT_BAND_TARGET or base >= EXEMPT_BAND_TARGET:
+        return addon_price, 0
+
+    target_add = EXEMPT_BAND_TARGET - base
+    if target_add <= 0:
+        return addon_price, 0
+
+    rate = _slab_for_value(projected)
+    net_if_taxed = projected * 100.0 / (100 + rate) if rate > 0 else float(projected)
+    if EXEMPT_BAND_TARGET <= net_if_taxed:
+        return addon_price, 0
+
+    return target_add, add - target_add
 
 
 def compute_daily_folio(
@@ -2295,13 +2389,12 @@ def compute_daily_folio(
         # (₹7,500 per unit per day) therefore applies to the amount actually
         # charged for the night AFTER the allocated discount.
         #
-        # This is now only about which side of ₹7,500 a night lands on. It
-        # used to also decide exempt-vs-taxable, because _slab_for_value
-        # carried a dead 0% band below ₹1,000: a discounted night dropped
-        # under ₹1,000 and printed "Exempt" on a real tax invoice. The band
-        # is gone. A fully discounted night is TAXABLE with a nil value, so
-        # it still shows zero tax — arrived at by 5% of ₹0, not by calling
-        # the supply exempt.
+        # Two boundaries apply here: the ₹1,000 exempt band (in force by
+        # business decision from 19 Aug 2026, on CA advice) and the ₹7,500
+        # 5%/18% boundary. Both are read off the POST-discount day_total, so
+        # a discounted night can fall into the exempt band and print
+        # "Exempt" on the invoice. That is the documented consequence of the
+        # band, not a defect — see _slab_for_value before changing it.
         day_gst_rate = _slab_for_value(day_total)
         if day_gst_rate > 0 and day_total > 0:
             divisor = 100 + day_gst_rate
@@ -2428,6 +2521,139 @@ def aggregate_folio_tax(folio):
         out["igst"] = round(out["igst"] + part["igst"], 2)
         out["tax"] = round(out["tax"] + part["tax"], 2)
     return out
+
+
+def recompute_bill_gst(bill):
+    """
+    Rebuild a bill's GST fields from its CURRENT services and discounts, by
+    regenerating the daily folio and re-aggregating over it.
+
+    Returns the GST fields to write: daily_folio, gst_rate, gst_amount,
+    accommodation_taxable, cgst_amount, sgst_amount, igst_amount. Totals and
+    balances are deliberately NOT returned — those belong to the caller, which
+    knows whether it is adding a discount, editing a service, or something
+    else, and owns the receipt arithmetic.
+
+    Why this exists. Two post-checkout paths used to scale the stored flat
+    `gst_rate` instead of rebuilding:
+
+        if _gst_rate > 0 and _effective_accom > 0:
+            gst_amount = _effective_accom * _gst_rate / (100 + _gst_rate)
+
+    That is wrong in three ways, and the exempt band makes all three bite.
+
+      1. `gst_rate` is the MODAL night rate, so on a mixed stay the whole bill
+         was re-taxed at whichever slab happened to be most common.
+      2. The guard `if _gst_rate > 0` skips the recompute entirely when the
+         modal rate is 0. Raise an extra bed from ₹200 to ₹400 on a ₹900 night
+         and the night's value of supply becomes ₹1,300 — taxable — but the
+         bill kept ₹0 tax against ₹1,300 of accommodation.
+      3. Neither path touched `daily_folio`, and bill_tax_breakup is folio-
+         first. So the stored aggregates and the printed invoice disagreed:
+         the folio still said 5% on the old figure while gst_amount had moved.
+
+    Rebuilding the folio fixes all three at once, because the folio is the
+    thing every downstream surface reads.
+    """
+    bill = bill or {}
+
+    def _int(v, default=0):
+        """
+        Money fields are not reliably integers on every document.
+
+        `discounts` and `refunds` are written as LISTS on drafts
+        (services/bills_service.create_draft) and as ints on finalised bills,
+        `total_amount` is None on a draft, and legacy rows can carry strings.
+        This runs from /add_bill_payment and /update_bill_service, so a bad
+        shape here is a 500 on a live counter operation rather than a bad
+        number. Coerce, never raise.
+        """
+        if isinstance(v, (list, tuple, dict)):
+            # A draft's empty [] means "no discounts yet". A populated list is
+            # the pre-finalisation payment-row shape; sum what looks like money.
+            try:
+                return int(sum(int((x or {}).get("amount", 0) or 0) for x in v))
+            except (TypeError, ValueError, AttributeError):
+                return default
+        try:
+            return int(float(v or 0))
+        except (TypeError, ValueError):
+            return default
+
+    services = bill.get("services") or []
+    if not isinstance(services, (list, tuple)):
+        services = []
+    services_total = sum(_int((s or {}).get("price")) for s in services)
+    total_discounts = _int(bill.get("discounts"))
+    room_charges_total = _int(bill.get("room_charges_total"))
+    days_stayed = max(_int(bill.get("days_stayed"), 1) or 1, 1)
+
+    accommodation_addons_total = sum(
+        _int((s or {}).get("price")) for s in services
+        if (s or {}).get("accommodation_charge")
+    )
+    non_accommodation_total = services_total - accommodation_addons_total
+    accom_pre_discount = room_charges_total + accommodation_addons_total
+    gross_pre_discount = accom_pre_discount + non_accommodation_total
+
+    # Same accommodation/non-accommodation discount split create_bill_record
+    # feeds the folio. Allocating the whole discount to accommodation would
+    # move nights across the slab boundary that should not have moved.
+    accom_discount_share = 0.0
+    if total_discounts > 0 and gross_pre_discount > 0:
+        accom_discount_share = round(
+            total_discounts * (accom_pre_discount / gross_pre_discount), 2
+        )
+
+    try:
+        checkin_dt = datetime.strptime(
+            str(bill.get("checkin_time") or ""), "%Y-%m-%d %H:%M")
+    except (ValueError, TypeError):
+        checkin_dt = None
+
+    folio = []
+    if checkin_dt is not None:
+        folio = compute_daily_folio(
+            checkin_dt=checkin_dt,
+            days_stayed=days_stayed,
+            room_price_per_night=_int(bill.get("room_price_per_night")),
+            current_room_no=str(bill.get("room") or ""),
+            accommodation_services=services,
+            pre_transfer_charges=bill.get("pre_transfer_charges") or [],
+            discount_on_accom=accom_discount_share,
+            recipient_state_code=str(bill.get("recipient_state_code") or "29"),
+        )
+
+    if folio:
+        agg = aggregate_folio_tax(folio)
+        counts = {}
+        for e in folio:
+            counts[e["day_gst_rate"]] = counts.get(e["day_gst_rate"], 0) + 1
+        return {
+            "daily_folio":           folio,
+            # Display fallback only, and ties go to the higher slab. Nothing
+            # should compute tax from this — see compute_credit_components.
+            "gst_rate":              max(counts, key=lambda r: (counts[r], r)),
+            "gst_amount":            agg["tax"],
+            "accommodation_taxable": agg["taxable"],
+            "cgst_amount":           agg["cgst"],
+            "sgst_amount":           agg["sgst"],
+            "igst_amount":           agg["igst"],
+        }
+
+    # Malformed checkin_time — mirror create_bill_record's own fallback.
+    effective = accom_pre_discount - min(total_discounts, accom_pre_discount)
+    rate = _slab_for_value(effective / days_stayed)
+    gst = round(effective * rate / (100 + rate), 2) if rate else 0.0
+    cgst, sgst, igst = compute_gst_split(gst, recipient_state_code="29")
+    return {
+        "gst_rate":              rate,
+        "gst_amount":            gst,
+        "accommodation_taxable": round(effective - gst, 2),
+        "cgst_amount":           cgst,
+        "sgst_amount":           sgst,
+        "igst_amount":           igst,
+    }
 
 
 def compute_gst_split(gst_amount, recipient_state_code=""):
@@ -2634,9 +2860,18 @@ def bill_tax_breakup(bill):
         # printed CGST 185.77 against SGST 185.64 in the HSN table.
         _agg = aggregate_folio_tax(folio)
         for _rate, _part in _agg["by_rate"].items():
-            if _rate <= 0:
-                exempt_value += _part["taxable"]
-                continue
+            # Exempt nights are bucketed like any other rate, NOT short-
+            # circuited into exempt_value here. The rate-0 case is handled
+            # once, in the row loop below, which both counts the value into
+            # exempt_value AND emits a row carrying that value in the Taxable
+            # column with nil tax against it.
+            #
+            # Skipping the bucket (what this used to do) meant an exempt
+            # folio bill produced NO accommodation row at all: the tax
+            # summary showed a taxable base of 0 against a grand total of
+            # 900, so the invoice did not foot and the supply's value never
+            # reached GSTR-1 Table 12. Harmless while there was no exempt
+            # band; wrong the moment one exists.
             _bucket(_rate, _part["taxable"], _part["cgst"], _part["sgst"],
                     _part["igst"])
     elif _f(bill.get("accommodation_taxable")) > 0 or _f(bill.get("gst_amount")) > 0:
@@ -3228,16 +3463,77 @@ def section_34_window_status(invoice_date, today=None):
 
 
 def compute_credit_components(bill_data, credit_total):
-    """Split a CN total into taxable, cgst, sgst per GST-inclusive math."""
+    """
+    Split a credit-note total into (taxable, cgst, sgst), GST-inclusive.
+
+    A CN must reverse output tax in the SAME PROPORTION the invoice charged
+    it, so the rate comes from what the bill actually taxed — bill_tax_breakup
+    over the folio — not from the flat `gst_rate` field.
+
+    That field is the MODAL night rate (config.create_bill_record: the most
+    common slab across the nights, ties going to the higher). It is a display
+    fallback and was never a tax figure. Reading it here was harmless only
+    while every night was 5% or 18%. With an exempt band in force it breaks
+    outright:
+
+        3 nights — two at ₹900 (exempt), one at ₹5,000 (5%).
+        Modal rate = 0. Invoice charges ~₹238 of GST.
+        The old code returned (total, 0.0, 0.0): the guest is credited in
+        full and NOT ONE RUPEE of that ₹238 is reversed in GSTR-1.
+
+    It fails the other way too. Two nights at ₹5,000 and three at ₹900 elects
+    rate 0 while real tax was charged; invert the counts and a mostly-taxable
+    bill reverses tax on its exempt nights as well.
+
+    The blended fraction is right for both a full cancellation (the whole
+    invoice is credited, so the whole tax reverses) and a partial credit
+    (a post-supply discount reverses tax pro rata, which is what Section
+    15(3)(b) contemplates). A wholly exempt bill has a fraction of zero and
+    correctly reverses no tax.
+
+    cgst is halved and sgst takes the remainder, so the two always sum to the
+    tax exactly rather than drifting a paise apart on an odd number. Inter-
+    state bills are re-routed into IGST by create_credit_note, which relies on
+    this returning the even half-split.
+    """
     try:
-        rate = int(bill_data.get("gst_rate", 0) or 0)
         total = float(credit_total or 0)
-        if rate <= 0 or total <= 0:
+        if total <= 0:
+            return (0.0, 0.0, 0.0)
+
+        bt = bill_tax_breakup(bill_data or {})
+        # Gross the invoice actually carried. bt["taxable"] includes exempt
+        # rows at their full value (see bill_tax_breakup), so this is the
+        # whole supply, not just the taxed part.
+        gross = round(float(bt.get("taxable") or 0) + float(bt.get("tax") or 0), 2)
+        tax_charged = float(bt.get("tax") or 0)
+
+        if gross <= 0:
+            # The breakup found NOTHING to work from: no folio, no stored
+            # aggregates, no line items. Distinct from an exempt bill, which
+            # has a gross and simply no tax. Fall back to the stored flat rate
+            # rather than crediting untaxed — under-reversing real output tax
+            # is the worse error, and this is the only path that can still
+            # recover it.
+            rate = int((bill_data or {}).get("gst_rate", 0) or 0)
+            if rate <= 0:
+                return (round(total, 2), 0.0, 0.0)
+            gst = round(total * rate / (100 + rate), 2)
+            cgst = round(gst / 2, 2)
+            return (round(total - gst, 2), cgst, round(gst - cgst, 2))
+
+        if tax_charged <= 0:
+            # A wholly exempt stay. It has a value but no tax to reverse.
             return (round(total, 2), 0.0, 0.0)
-        gst = round(total * rate / (100 + rate), 2)
+
+        gst = round(total * (tax_charged / gross), 2)
+        if gst > total:
+            gst = round(total, 2)
         taxable = round(total - gst, 2)
-        return (taxable, round(gst / 2, 2), round(gst / 2, 2))
+        cgst = round(gst / 2, 2)
+        return (taxable, cgst, round(gst - cgst, 2))
     except Exception:
+        logger.exception("compute_credit_components failed; crediting untaxed")
         return (round(float(credit_total or 0), 2), 0.0, 0.0)
 
 

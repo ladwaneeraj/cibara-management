@@ -491,8 +491,11 @@ def cancel(stay_id, reason="", *, actor=None, batch=None):
                 compute_credit_components as _ccc,
                 IST as _IST,
             )
-            tax, cgst, sgst = _ccc({"gst_rate": existing.get("gst_rate", 0)},
-                                   cn_amount)
+            # Pass the WHOLE bill, not a synthetic {"gst_rate": ...} stub.
+            # compute_credit_components blends the reversal off the invoice's
+            # real tax breakup (the folio), and a stub carries no folio — so
+            # the stub reversed zero tax on every cancellation.
+            tax, cgst, sgst = _ccc(existing, cn_amount)
             _idem = f"cancel:{stay_id}"
             cn_doc = _ccn(
                 bill_id=stay_id,

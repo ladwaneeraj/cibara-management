@@ -1402,6 +1402,29 @@ td.stf-grid-name.stf-grid-foot {
 }
 .stf-ledger-item .what .l2 .chip.cut { background: #fef2f2; color: #b91c1c; border: 1px solid #fecaca; }
 .stf-ledger-item .what .l2 .chip.bonus { background: #eef1fd; color: #3651d4; border: 1px solid #c7d2f8; }
+
+/* Period census chips on a salary row. Quieter than the money chips above:
+   these are counts the eye skims past, not amounts it should stop on, so
+   they sit a weight and a shade below .cut / .bonus. Each carries its own
+   noun, so nothing here depends on colour or on a hover to be readable. */
+.stf-ledger-item .what .l2 .chip.day {
+  font-weight: 400;
+  font-size: 0.655rem;
+  background: #f4f5f7;
+  color: var(--stf-ink-2);
+  border: 1px solid #e6e8ec;
+  padding: 0.12rem 0.44rem;
+}
+.stf-ledger-item .what .l2 .chip.day b {
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.stf-ledger-item .what .l2 .chip.day.d-absent   { color: #b91c1c; border-color: #f3d2d2; background: #fdf5f5; }
+.stf-ledger-item .what .l2 .chip.day.d-unmarked { color: #a16207; border-color: #f0e0b8; background: #fdfaf0; }
+.stf-ledger-item .what .l2 .chip.day.d-ok       { color: #15803d; border-color: #cdead8; background: #f2fbf5; }
+/* .d-carried keeps the neutral base: a day settled last week is bookkeeping,
+   not something to draw the eye. */
+
 .stf-ledger-item .del-btn {
   background: transparent;
   border: none;

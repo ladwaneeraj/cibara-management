@@ -170,6 +170,11 @@ class TestClassifyInvoiceType(unittest.TestCase):
         )
 
 
+# These pass a bare {"gst_rate": N} stub, which carries no folio, no stored
+# aggregates and no line items. That exercises compute_credit_components'
+# LAST-RESORT branch: with nothing to blend off, it falls back to the stored
+# flat rate rather than crediting untaxed. Ordinary bills take the blended
+# path instead — see TestCreditNoteReversesRealTax in test_bill_scenarios.py.
 class TestComputeCreditComponents(unittest.TestCase):
     def test_at_0_percent(self):
         t, c, s = config.compute_credit_components({"gst_rate": 0}, 1000)

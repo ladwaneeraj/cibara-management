@@ -730,6 +730,11 @@ def salary_preview(staff_id: str, period_start: str, period_end: str,
         "suggested_deduction": suggested_deduction,
         "net_if_suggested": payable - suggested_deduction - meals["meal_total"],
         "excluded_days": excluded_days,       # already-paid days, skipped
+        # Same census the payment doc will carry, so the payout screen and
+        # the ledger row cannot disagree about the period.
+        "period_breakdown": ledger.period_breakdown(
+            attendance, period_start, period_end,
+            covered=covered, unmarked=unmarked),
         # Days with no attendance record. Skipped and worth ₹0, but unlike
         # excluded_days they are NOT settled — they stay unlocked and remain
         # payable once someone marks them. Surfaced so the payout screen can
@@ -836,6 +841,17 @@ def pay_salary(staff_id: str, period_start: str, period_end: str,
         # ledger UI and for anyone auditing a payout after the fact.
         "excluded_dates": sorted(skipped),
         "unmarked_dates": sorted(unmarked),
+        # Calendar-day census of the period: present / absent / carried /
+        # unmarked, summing to the length of the period. Written here, at pay
+        # time, because this is the only moment the attendance for the period
+        # is already in hand. Deriving it later would mean re-reading
+        # attendance once per ledger row, which is exactly the read pattern
+        # the Staff screen is trying to avoid. Payments written before this
+        # field existed simply lack it and the ledger reconstructs an
+        # approximation from full_days/half_days.
+        "period_breakdown": ledger.period_breakdown(
+            attendance, period_start, period_end,
+            covered=covered, unmarked=unmarked),
         "payment_method": payment_method,
         "expense_type": expense_type,
         "expense_doc_id": None,

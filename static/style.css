@@ -3547,53 +3547,89 @@ input:checked + .toggle-slider:before {
 .txn-pwd-submit-btn:hover    { background: #0a5daa; }
 .txn-pwd-submit-btn:disabled { opacity: 0.6; cursor: not-allowed; }
 
-/* ── Analytics Cards ─────────────────────────────────────────────────────── */
+/* ── Analytics summary strip ──────────────────────────────────────────────
+   One line, always. This was a 4-up grid of bordered cards that collapsed to
+   a 2x2 block on a phone, which cost four rows of vertical space above the
+   log for four short numbers. It is now a single strip: the cards give up
+   their own borders and boxes and become cells divided by hairlines, so the
+   whole summary reads as one object rather than four competing tiles.
+
+   The icons lost their 38px tinted squares and are now bare glyphs. That is
+   what buys the width to stay on one line at phone sizes while keeping the
+   colour coding, which is the part that actually helps you tell Cash from
+   UPI at a glance.
+
+   overflow-x is the last resort, not the plan: at 360px the strip fits. It
+   is there so an unusually long figure scrolls sideways instead of wrapping
+   the layout into two rows again. */
 .txn-analytics-cards {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 0.75rem;
-  margin-bottom: 1.25rem;
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: stretch;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  margin-bottom: 1rem;
+  overflow-x: auto;
+  scrollbar-width: none;
 }
+.txn-analytics-cards::-webkit-scrollbar { display: none; }
 
 .txn-card {
   display: flex;
   align-items: center;
-  gap: 0.75rem;
-  padding: 0.85rem 1rem;
-  border-radius: 10px;
-  border: 1px solid var(--border);
-  background: var(--surface);
+  gap: 0.4rem;
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 0.5rem 0.7rem;
+  border-right: 1px solid var(--border);
+  white-space: nowrap;
 }
+.txn-card:last-child { border-right: none; }
 
 .txn-card-icon {
-  width: 38px;
-  height: 38px;
-  border-radius: 10px;
+  width: auto;
+  height: auto;
+  border-radius: 0;
+  background: none !important;
+  font-size: 0.8rem;
+  flex-shrink: 0;
   display: flex;
   align-items: center;
-  justify-content: center;
-  font-size: 1rem;
-  flex-shrink: 0;
 }
 
-.txn-card-cash   .txn-card-icon { background: rgba(40,167,69,0.12);  color: #28a745; }
-.txn-card-upi    .txn-card-icon { background: rgba(12,111,205,0.12); color: #0c6fcd; }
-.txn-card-total  .txn-card-icon { background: rgba(111,66,193,0.12); color: #6f42c1; }
-.txn-card-expense .txn-card-icon { background: rgba(220,53,69,0.12);  color: #dc3545; }
+/* Colour now rides on the glyph itself, so it survives at every width
+   instead of living in a tinted box that has to be dropped to fit. */
+.txn-card-cash    .txn-card-icon { color: #28a745; }
+.txn-card-upi     .txn-card-icon { color: #0c6fcd; }
+.txn-card-total   .txn-card-icon { color: #6f42c1; }
+.txn-card-expense .txn-card-icon { color: #dc3545; }
+
+/* Label and value sit on one baseline rather than stacked, which is what
+   makes the strip one text line high. */
+.txn-card-body {
+  display: flex;
+  align-items: baseline;
+  gap: 0.32rem;
+  min-width: 0;
+}
 
 .txn-card-label {
-  font-size: 0.72rem;
+  font-size: 0.62rem;
   color: var(--text-secondary);
-  font-weight: 500;
+  font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  margin-bottom: 0.15rem;
+  margin-bottom: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .txn-card-value {
-  font-size: 1.1rem;
+  font-size: 0.86rem;
   font-weight: 700;
   color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
 }
 
 /* Day total in log header — override the inline style from transaction-tracking.js */
@@ -3613,9 +3649,8 @@ input:checked + .toggle-slider:before {
 }
 
 @media (max-width: 768px) {
-  .txn-analytics-cards {
-    grid-template-columns: repeat(2, 1fr);
-  }
+  /* The summary strip no longer breaks to a 2x2 grid here. It stays one
+     line at every width — that was the point of rebuilding it. */
   /* .txn-custom-range keeps margin-left:auto here on purpose — the filter
      row is nowrap now, so resetting it would only left-align the picker
      against the quick buttons, not give it a line of its own. */
@@ -3625,17 +3660,17 @@ input:checked + .toggle-slider:before {
 }
 
 @media (max-width: 480px) {
-  .txn-analytics-cards {
-    grid-template-columns: repeat(2, 1fr);
-    gap: 0.5rem;
-  }
+  /* Tighten the strip rather than break it. Below this width the four cells
+     are close to the available space, so the padding and the gaps give way
+     first and the figures stay legible. */
   .txn-card {
-    padding: 0.7rem 0.75rem;
-    gap: 0.5rem;
+    padding: 0.45rem 0.45rem;
+    gap: 0.28rem;
   }
-  .txn-card-value {
-    font-size: 0.95rem;
-  }
+  .txn-card-body { gap: 0.25rem; }
+  .txn-card-label { font-size: 0.58rem; letter-spacing: 0.02em; }
+  .txn-card-value { font-size: 0.8rem; }
+  .txn-card-icon { font-size: 0.72rem; }
   /* The filter row deliberately does NOT stack any more — it stays
      horizontal and scrolls sideways if it runs out of width, which keeps
      the whole control to one line on a phone. (This block used to set

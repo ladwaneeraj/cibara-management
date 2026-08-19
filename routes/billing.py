@@ -24,6 +24,7 @@ from config import (
     compute_gst_split, _STATE_CODE_TO_NAME, _slab_for_value,
     create_credit_note, compute_credit_components, CN_REASONS,
     bill_tax_breakup, PLACE_OF_SUPPLY_STATE, PLACE_OF_SUPPLY_CODE,
+    recompute_bill_gst,
 )
 from services import payment_service, pdf_service, expense_service, customer_service
 from services import system_alerts
@@ -1201,6 +1202,7 @@ def debug_bills():
 # ══════════════════════════════════════════════════════════════════════════════
 
 @billing_bp.route("/add_bill_payment", methods=["POST"])
+@requires_permission("payment.edit")
 def add_bill_payment():
     """
     Record a payment against a bill that has an outstanding balance.
@@ -1314,25 +1316,19 @@ def add_bill_payment():
             new_total_discounts = bill_data.get("discounts", 0) + discount
             bill_update["discounts"] = new_total_discounts
 
-            # ── Recalculate gst_amount on post-discount base (Sec 15(3)(a)) ────
-            # This keeps the stored gst_amount in sync with what the invoice shows.
-            _gst_rate   = bill_data.get("gst_rate", 0)
-            _room_chrg  = bill_data.get("room_charges_total", 0) or 0
-            _services   = bill_data.get("services") or []
-            _accom_addons_total = sum(
-                s.get("price", 0) for s in _services
-                if s.get("accommodation_charge")
-                and "water" not in (s.get("item") or "").lower()
-            )
-            _accom_total        = _room_chrg + _accom_addons_total
-            _discount_on_accom  = min(new_total_discounts, _accom_total)
-            _effective_accom    = _accom_total - _discount_on_accom
-            if _gst_rate > 0 and _effective_accom > 0:
-                bill_update["gst_amount"] = round(
-                    _effective_accom * _gst_rate / (100 + _gst_rate), 2
-                )
-            elif _gst_rate > 0:
-                bill_update["gst_amount"] = 0.0
+            # ── Re-slab on the post-discount base (Sec 15(3)(a)) ───────────
+            # Rebuild the folio rather than scaling the stored modal
+            # `gst_rate`. The discount changes each night's value of supply,
+            # so it can move a night ACROSS a slab boundary in either
+            # direction — into the exempt band, or out of 18% into 5%. Only a
+            # rebuild sees that; scaling a single stored rate cannot.
+            #
+            # This used to guard on `if _gst_rate > 0`, which meant a discount
+            # on a bill whose modal rate was 0 silently left every GST field
+            # untouched, and never rewrote daily_folio at all.
+            _rebuilt = dict(bill_data)
+            _rebuilt["discounts"] = new_total_discounts
+            bill_update.update(recompute_bill_gst(_rebuilt))
 
         new_balance = current_balance - amount - discount
         bill_update["balance"] = new_balance
@@ -1725,26 +1721,23 @@ def update_bill_service():
         total_refunds  = bill_data.get("refunds", 0)
         new_balance    = total_amount - payment_cash - payment_online + total_refunds
 
-        # ── Recalculate gst_amount if an accommodation add-on was edited ─────
-        # Accommodation add-ons (extra bed, AC) affect the GST base under SAC 9963.
-        # Recalculate on the new effective accommodation total (post-discount).
-        _svc_gst_rate      = bill_data.get("gst_rate", 0)
-        _accom_addons_total = sum(
-            s.get("price", 0) for s in services
-            if s.get("accommodation_charge")
-            and "water" not in (s.get("item") or "").lower()
-        )
-        _accom_total        = room_charges_total + _accom_addons_total
-        _discount_on_accom  = min(total_discounts, _accom_total)
-        _effective_accom    = _accom_total - _discount_on_accom
-        if _svc_gst_rate > 0 and _effective_accom > 0:
-            new_gst_amount = round(
-                _effective_accom * _svc_gst_rate / (100 + _svc_gst_rate), 2
-            )
-        elif _svc_gst_rate > 0:
-            new_gst_amount = 0.0
-        else:
-            new_gst_amount = bill_data.get("gst_amount", 0)  # unchanged if exempt
+        # ── Re-slab after a service edit ──────────────────────────────────
+        # Accommodation add-ons (extra bed, AC) are part of the night's value
+        # of supply under SAC 9963, so editing one can move that night across
+        # a slab boundary. Rebuild the folio and re-aggregate.
+        #
+        # This used to scale the stored modal `gst_rate` behind an
+        # `if _svc_gst_rate > 0` guard, with an else branch that kept the OLD
+        # gst_amount "unchanged if exempt". Raising an extra bed from ₹200 to
+        # ₹400 on a ₹900 night therefore stored ₹1,300 of accommodation
+        # against ₹0 of tax. It also wrote gst_amount alone, leaving
+        # accommodation_taxable, cgst_amount, sgst_amount and daily_folio
+        # stale — and bill_tax_breakup reads the folio first, so the invoice
+        # and the stored aggregates disagreed.
+        _rebuilt = dict(bill_data)
+        _rebuilt["services"] = services
+        _gst_fields = recompute_bill_gst(_rebuilt)
+        new_gst_amount = _gst_fields["gst_amount"]
 
         _ub_attr = attribution_update()
         bills_ref.document(bill_id).update({
@@ -1752,7 +1745,10 @@ def update_bill_service():
             "services_total": services_total,
             "total_amount":   total_amount,
             "balance":        new_balance,
-            "gst_amount":     new_gst_amount,
+            # Every GST field, not just gst_amount. Writing one of them and
+            # leaving the folio and the CGST/SGST split behind is what made
+            # the invoice and the stored aggregates diverge.
+            **_gst_fields,
             "lastEditedBy":   _ub_attr.get("lastModifiedBy"),
             "lastEditedAt":   _ub_attr.get("lastModifiedAt"),
             **_ub_attr,
@@ -2248,6 +2244,7 @@ def edit_bill_room_price():
 # ══════════════════════════════════════════════════════════════════════════════
 
 @billing_bp.route("/save_bill_pdf", methods=["POST"])
+@requires_permission("payment.edit")
 def save_bill_pdf():
     """
     Accept a base64-encoded PDF from the browser, upload it to Firebase Storage
@@ -4129,12 +4126,21 @@ def list_advances():
                         pass
             except (TypeError, ValueError):
                 rate_per_night = 0
-            if rate_per_night >= 7501:
-                rate_pct = 18
-            elif rate_per_night >= 1000:
-                rate_pct = 5
-            else:
-                rate_pct = 0
+            # Slab comes from _slab_for_value, the single definition of the
+            # ladder. Never re-derive it here.
+            #
+            # This block used to carry its own copy: `>= 7501 -> 18, >= 1000
+            # -> 5, else 0`. That kept the sub-₹1,000 accommodation
+            # exemption alive long after Notification 04/2022-CTR withdrew it
+            # (Entry 14 of Notif. 12/2017-CTR, omitted w.e.f. 18 Jul 2022), so
+            # every advance against a budget room was reported at 0% and the
+            # output tax on it never reached GSTR-1.
+            #
+            # A missing/unparseable rate now falls to 5% rather than 0%. That
+            # is the safe direction: an advance for accommodation is taxable,
+            # and 5% is the floor for any night at or below ₹7,500. The CA
+            # can still override at filing time.
+            rate_pct = _slab_for_value(rate_per_night)
 
             amt = float(p.get("amount") or 0)
             gst_amt   = round(amt * rate_pct / (100 + rate_pct), 2) if rate_pct > 0 else 0.0

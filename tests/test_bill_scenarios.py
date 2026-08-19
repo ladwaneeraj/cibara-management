@@ -276,10 +276,15 @@ class BillAssertions(unittest.TestCase):
 class TestWalkIn(BillAssertions):
 
     def test_walk_in_cash_one_night_exempt(self):
+        """A Rs-900 night carries no tax under the sub-Rs-1,000 band that is
+        in force by business decision (19 Aug 2026, on CA advice). The value
+        of the supply is still reported — as exempt, not as a taxable base."""
         b = make_bill(nights=1, rate=900, cash=900)
         self.check(b, "walk-in exempt")
         self.assertEqual(b["balance"], 0)
-        self.assertEqual(config.bill_tax_breakup(b)["tax"], 0.0)
+        bt = config.bill_tax_breakup(b)
+        self.assertEqual(bt["tax"], 0.0)
+        self.assertAlmostEqual(bt["exempt_value"], 900.0, delta=0.02)
 
     def test_walk_in_cash_one_night_taxable(self):
         b = make_bill(nights=1, rate=2000, cash=2000)
@@ -405,8 +410,13 @@ class TestSlabBoundaries(BillAssertions):
     def test_exactly_1000_is_taxable(self):
         self.assertEqual(config._slab_for_value(1000), 5)
 
-    def test_just_below_1000_is_exempt(self):
+    def test_the_exempt_band_boundary(self):
+        """Exact edges of the band. 999 is exempt, 1000 is not."""
+        self.assertEqual(config._slab_for_value(999), 0)
         self.assertEqual(config._slab_for_value(999.99), 0)
+        self.assertEqual(config._slab_for_value(0), 0)
+        self.assertEqual(config._slab_for_value(1000), 5)
+        self.assertEqual(config._slab_for_value(1000.01), 5)
 
     def test_exactly_7500_is_five_percent(self):
         self.assertEqual(config._slab_for_value(7500), 5)
@@ -416,21 +426,26 @@ class TestSlabBoundaries(BillAssertions):
 
     def test_stay_crossing_a_slab_produces_two_rows(self):
         """The defect that made GSTR-1 rows fail Taxable x Rate: an add-on
-        pushes Day 1 over the threshold while Day 2 stays exempt."""
-        b = make_bill(nights=2, rate=950, cash=2100,
+        pushes Day 1 over Rs 7,500 into 18% while Day 2 stays at 5%.
+
+        Rs 7,500 is the only live boundary now, so the crossing is exercised
+        there rather than at the withdrawn Rs 1,000 exemption."""
+        b = make_bill(nights=2, rate=7400, cash=15100,
                       services=[{"item": "AC Charge", "quantity": 1,
-                                 "unit_price": 200, "price": 200,
+                                 "unit_price": 300, "price": 300,
                                  "accommodation_charge": True,
                                  "applied_on_day": 1}])
         self.check(b, "slab-crossing stay")
         bt = config.bill_tax_breakup(b)
         rates = sorted(r["rate"] for r in bt["rows"]
                        if r["category"] == "accommodation")
-        self.assertEqual(rates, [0, 5],
-                         "exempt night must not be filed at 5%")
-        five = next(r for r in bt["rows"] if r["rate"] == 5)
-        self.assertAlmostEqual(five["taxable"] * 0.05,
-                               five["cgst"] + five["sgst"], delta=0.05)
+        self.assertEqual(rates, [5, 18],
+                         "the 7,700 night and the 7,400 night must file apart")
+        for row in bt["rows"]:
+            if row["category"] != "accommodation":
+                continue
+            self.assertAlmostEqual(row["taxable"] * row["rate"] / 100.0,
+                                   row["cgst"] + row["sgst"], delta=0.05)
 
     def test_addon_pushes_exempt_night_into_tax(self):
         """900 room + 300 extra bed = 1,200 value of supply -> 5%,
@@ -457,7 +472,13 @@ class TestDiscounts(BillAssertions):
                         config.bill_tax_breakup(full)["tax"])
 
     def test_discount_across_the_threshold_makes_it_exempt(self):
-        """1,200 room less a 400 discount = 800 value of supply -> exempt."""
+        """1,200 room less a 400 discount = 800 value of supply -> exempt.
+
+        Section 15(3)(a) takes the on-invoice discount out of the value of
+        supply, so the slab follows the post-discount 800 and the night falls
+        into the band. A tariff above 1,000 can therefore still bill exempt.
+        That is a documented consequence of the band, asserted here so it can
+        never happen silently."""
         b = make_bill(nights=1, rate=1200, discount=400, cash=800)
         self.check(b, "discount to exempt")
         self.assertEqual(config.bill_tax_breakup(b)["tax"], 0.0)
@@ -792,11 +813,89 @@ class TestCreditNote(BillAssertions):
 class TestSingleSlabDefinition(unittest.TestCase):
     """The slab table was written out seven times across three files."""
 
-    def test_billing_uses_the_config_definition(self):
-        src = open(os.path.join(_REPO, "routes", "billing.py"),
-                   encoding="utf8").read()
-        self.assertNotIn("if price < 1000:", src,
-                         "routes/billing.py re-implements the slab table")
+    # Only config.py may name a slab boundary. Everything else calls
+    # _slab_for_value. A duplicated ladder is not a style problem: the copy in
+    # routes/billing.py kept the sub-Rs-1,000 exempt band alive for four years
+    # after Notification 04/2022-CTR omitted it (w.e.f. 18 Jul 2022), and every
+    # advance on a budget room was reported at 0%.
+    _SLAB_OWNER = os.path.join(_REPO, "config.py")
+    _SLAB_LITERAL = re.compile(r"\b(?:7500|7501)\b")
+
+    def _app_sources(self):
+        for pkg in ("routes", "services"):
+            root = os.path.join(_REPO, pkg)
+            for dirpath, dirnames, filenames in os.walk(root):
+                dirnames[:] = [d for d in dirnames if d != "__pycache__"]
+                for fn in filenames:
+                    if fn.endswith(".py"):
+                        yield os.path.join(dirpath, fn)
+
+    def test_no_slab_boundary_outside_config(self):
+        for path in self._app_sources():
+            with open(path, encoding="utf8") as fh:
+                for lineno, line in enumerate(fh, 1):
+                    code = line.split("#", 1)[0]
+                    if self._SLAB_LITERAL.search(code):
+                        rel = os.path.relpath(path, _REPO)
+                        self.fail(
+                            f"{rel}:{lineno} names a slab boundary in code: "
+                            f"{line.strip()!r}. Call config._slab_for_value "
+                            f"instead of re-deriving the ladder."
+                        )
+
+    def test_the_slab_ladder_end_to_end(self):
+        """The whole ladder in one place, including the exempt band."""
+        for value, expected in ((0, 0), (1, 0), (99, 0), (700, 0), (999, 0),
+                                (1000, 5), (1001, 5), (7499, 5), (7500, 5),
+                                (7500.01, 18), (7501, 18), (25000, 18)):
+            self.assertEqual(config._slab_for_value(value), expected,
+                             f"value {value} took the wrong slab")
+
+    def test_a_999_rupee_night_is_exempt(self):
+        """700 room + 299 extra bed = 999. Room and extra bed are ONE
+        composite supply, so the band is applied to the combined per-night
+        value, never to the room line alone. 999 is inside the band; the same
+        pair at 700 + 300 would be 1,000 and taxable at 5%."""
+        folio = config.compute_daily_folio(
+            checkin_dt=datetime(2026, 4, 1, 12, 0),
+            days_stayed=1,
+            room_price_per_night=700,
+            current_room_no="101",
+            accommodation_services=[
+                {"accommodation_charge": True, "price": 299,
+                 "name": "Extra bed", "applied_on_day": 1},
+            ],
+            pre_transfer_charges=[],
+            discount_on_accom=0,
+            recipient_state_code="29",
+        )
+        self.assertEqual(len(folio), 1)
+        day = folio[0]
+        # Room and extra bed are one composite supply: the slab is taken on
+        # the combined per-night value, not on the room line alone.
+        self.assertEqual(day["day_total"], 999)
+        self.assertEqual(day["day_gst_rate"], 0)
+        self.assertEqual(day["day_gst_amount"], 0.0)
+
+        # One rupee more and the same stay is taxable. Pinning both sides
+        # stops a future edit sliding the boundary without a test failing.
+        taxable = config.compute_daily_folio(
+            checkin_dt=datetime(2026, 4, 1, 12, 0),
+            days_stayed=1,
+            room_price_per_night=700,
+            current_room_no="101",
+            accommodation_services=[
+                {"accommodation_charge": True, "price": 300,
+                 "name": "Extra bed", "applied_on_day": 1},
+            ],
+            pre_transfer_charges=[],
+            discount_on_accom=0,
+            recipient_state_code="29",
+        )[0]
+        self.assertEqual(taxable["day_total"], 1000)
+        self.assertEqual(taxable["day_gst_rate"], 5)
+        self.assertAlmostEqual(taxable["day_gst_amount"],
+                               round(1000 * 5 / 105, 2), places=2)
 
     def test_javascript_no_longer_computes_tax(self):
         src = open(os.path.join(_REPO, "static", "bills.js"),
@@ -807,13 +906,9 @@ class TestSingleSlabDefinition(unittest.TestCase):
                              f"bills.js still defines {banned}")
 
     def test_config_has_exactly_one_slab_definition(self):
-        src = open(os.path.join(_REPO, "config.py"), encoding="utf8").read()
+        src = open(self._SLAB_OWNER, encoding="utf8").read()
         self.assertEqual(src.count("if v <= 7500:"), 1)
         self.assertEqual(src.count("elif price <= 7500:"), 0)
-
-
-if __name__ == "__main__":
-    unittest.main(verbosity=2)
 
 
 class TestCancelledBills(BillAssertions):
@@ -930,3 +1025,213 @@ class TestPdfUsesConsolidated(BillAssertions):
         detailed = billing._build_bill_html(bill, view="detailed")
         self.assertNotIn("8 nights", detailed)
         self.assertEqual(detailed.count("b-day-header"), 8)
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)
+
+
+class TestNineNineNineSnap(unittest.TestCase):
+    """
+    The Rs-999 snap: trim an accommodation add-on so the night lands inside
+    the exempt band, but only while that leaves more money on the counter.
+
+    The rule is a PRICE decision, so these tests are about rupees kept, not
+    about tax owed. The tax follows from the price, never the other way round.
+    """
+
+    def test_the_case_it_was_built_for(self):
+        """700 room + 300 extra bed -> the bed is billed at 299."""
+        price, given_up = config.snap_to_exempt_band(700, 300)
+        self.assertEqual((price, given_up), (299, 1))
+
+    def test_the_snap_actually_leaves_more_money(self):
+        """Giving up Rs 1 to keep Rs 46.62 is the whole point."""
+        taxed = 1000 * 100 / (100 + config._slab_for_value(1000))
+        self.assertAlmostEqual(taxed, 952.38, places=2)
+        self.assertGreater(config.EXEMPT_BAND_TARGET, taxed)
+
+    def test_it_refuses_when_the_shave_costs_more_than_the_tax(self):
+        """1,100 would mean giving up 101 to save 52. Not worth it."""
+        self.assertEqual(config.snap_to_exempt_band(700, 400), (400, 0))
+
+    def test_the_break_even_edge(self):
+        """At 5% the last value worth snapping is 1,048. 1,049 is not."""
+        self.assertEqual(config.snap_to_exempt_band(700, 348), (299, 49))
+        self.assertEqual(config.snap_to_exempt_band(700, 349), (349, 0))
+
+    def test_a_night_already_inside_the_band_is_left_alone(self):
+        self.assertEqual(config.snap_to_exempt_band(700, 200), (200, 0))
+        self.assertEqual(config.snap_to_exempt_band(700, 299), (299, 0))
+
+    def test_a_room_already_past_the_band_is_left_alone(self):
+        """No amount of trimming an add-on rescues a 1,200 room."""
+        self.assertEqual(config.snap_to_exempt_band(1200, 300), (300, 0))
+        self.assertEqual(config.snap_to_exempt_band(999, 300), (300, 0))
+
+    def test_quantity_above_one_is_left_alone(self):
+        """price must stay equal to unit_price x quantity on the invoice."""
+        self.assertEqual(config.snap_to_exempt_band(700, 300, quantity=2), (300, 0))
+
+    def test_degenerate_input_is_returned_unchanged(self):
+        for base, add in ((None, None), ("x", "y"), (700, 0), (700, -50)):
+            self.assertEqual(config.snap_to_exempt_band(base, add)[1], 0)
+
+    def test_it_goes_inert_if_the_exempt_band_is_ever_removed(self):
+        """
+        The guard that matters most for the long run. If the CA's advice is
+        revisited and _slab_for_value stops returning 0 below Rs 1,000, this
+        must stop shaving rupees for a benefit that no longer exists — without
+        anyone remembering to come back and delete it.
+        """
+        original = config._slab_for_value
+        try:
+            config._slab_for_value = lambda v: 5 if float(v or 0) <= 7500 else 18
+            self.assertEqual(config.snap_to_exempt_band(700, 300), (300, 0))
+        finally:
+            config._slab_for_value = original
+        # ...and it works again once the band is back.
+        self.assertEqual(config.snap_to_exempt_band(700, 300), (299, 1))
+
+    def test_the_snapped_night_really_is_exempt_end_to_end(self):
+        """Drive the snapped price through the folio, not just the helper."""
+        price, _ = config.snap_to_exempt_band(700, 300)
+        day = config.compute_daily_folio(
+            checkin_dt=datetime(2026, 8, 18, 20, 23),
+            days_stayed=1, room_price_per_night=700, current_room_no="220",
+            accommodation_services=[{"accommodation_charge": True,
+                                     "price": price, "item": "Extra Bed",
+                                     "applied_on_day": 1}],
+            pre_transfer_charges=[], discount_on_accom=0,
+            recipient_state_code="29")[0]
+        self.assertEqual(day["day_total"], 999)
+        self.assertEqual(day["day_gst_rate"], 0)
+        self.assertEqual(day["day_gst_amount"], 0.0)
+
+
+class TestCreditNoteReversesRealTax(BillAssertions):
+    """
+    A credit note must reverse output tax in the same proportion the invoice
+    charged it. The bill-level `gst_rate` is the MODAL night rate, so reading
+    it here under-reverses (or over-reverses) on any mixed-slab stay.
+    """
+
+    def _mixed(self):
+        """2 exempt nights + 1 taxable night. Modal rate is 0; tax is not."""
+        b = make_bill(nights=3, rate=900, cash=7100, services=[
+            {"item": "Room upgrade", "quantity": 1, "unit_price": 4100,
+             "price": 4100, "accommodation_charge": True, "applied_on_day": 3}])
+        return b
+
+    def test_the_modal_rate_really_is_zero_on_this_bill(self):
+        """Guards the premise. If this stops being 0 the test below is vacuous."""
+        b = self._mixed()
+        rates = [d["day_gst_rate"] for d in b["daily_folio"]]
+        self.assertEqual(rates.count(0), 2)
+        self.assertGreater(config.bill_tax_breakup(b)["tax"], 0)
+
+    def test_a_full_credit_note_reverses_the_whole_tax(self):
+        b = self._mixed()
+        charged = config.bill_tax_breakup(b)["tax"]
+        taxable, cgst, sgst = config.compute_credit_components(
+            b, b["total_amount"])
+        self.assertAlmostEqual(cgst + sgst, charged, delta=0.02,
+                               msg="CN did not reverse the tax the invoice charged")
+        self.assertAlmostEqual(taxable + cgst + sgst, b["total_amount"], delta=0.02)
+
+    def test_a_partial_credit_note_reverses_pro_rata(self):
+        b = self._mixed()
+        charged = config.bill_tax_breakup(b)["tax"]
+        half = round(b["total_amount"] / 2)
+        _, cgst, sgst = config.compute_credit_components(b, half)
+        self.assertAlmostEqual(cgst + sgst,
+                               charged * half / b["total_amount"], delta=0.05)
+
+    def test_cgst_and_sgst_always_sum_to_the_tax_exactly(self):
+        """The old code rounded each half independently and could drift a paise."""
+        b = self._mixed()
+        for amount in (1, 7, 99, 333, 1001, b["total_amount"]):
+            taxable, cgst, sgst = config.compute_credit_components(b, amount)
+            self.assertAlmostEqual(taxable + cgst + sgst, amount, delta=0.01,
+                                   msg=f"CN of {amount} does not foot")
+
+    def test_a_wholly_exempt_bill_reverses_no_tax(self):
+        b = make_bill(nights=2, rate=900, cash=1800)
+        self.assertEqual(config.bill_tax_breakup(b)["tax"], 0.0)
+        taxable, cgst, sgst = config.compute_credit_components(b, 1800)
+        self.assertEqual((taxable, cgst, sgst), (1800.0, 0.0, 0.0))
+
+    def test_degenerate_input_never_raises(self):
+        for bill, amt in ((None, 100), ({}, 100), ({"gst_rate": 5}, 0),
+                          ({"services": "nonsense"}, 50)):
+            taxable, cgst, sgst = config.compute_credit_components(bill, amt)
+            self.assertAlmostEqual(taxable + cgst + sgst, max(amt, 0), delta=0.01)
+
+
+class TestPostCheckoutEditsReslab(BillAssertions):
+    """
+    Editing a service or adding a discount after checkout changes the night's
+    value of supply, so it can move that night across a slab boundary. Both
+    paths must rebuild the folio, not scale the stored modal rate.
+    """
+
+    def test_raising_an_addon_pushes_an_exempt_night_into_tax(self):
+        """The concrete regression. 700 room + 200 bed = 900, exempt. The
+        operator corrects the bed to 400: the night is now 1,100 and taxable,
+        and the bill must stop reporting it as exempt."""
+        b = make_bill(nights=1, rate=700, cash=900, services=[
+            {"item": "Extra Bed", "quantity": 1, "unit_price": 200,
+             "price": 200, "accommodation_charge": True, "applied_on_day": 1}])
+        self.assertEqual(config.bill_tax_breakup(b)["tax"], 0.0)
+
+        edited = dict(b)
+        edited["services"] = [dict(b["services"][0], price=400, unit_price=400)]
+        fields = config.recompute_bill_gst(edited)
+        self.assertEqual(fields["daily_folio"][0]["day_total"], 1100)
+        self.assertEqual(fields["gst_rate"], 5)
+        self.assertAlmostEqual(fields["gst_amount"], round(1100 * 5 / 105, 2),
+                               delta=0.02)
+        # ...and the reverse direction: corrected back down, it is exempt again.
+        back = dict(b)
+        back["services"] = [dict(b["services"][0], price=150, unit_price=150)]
+        self.assertEqual(config.recompute_bill_gst(back)["gst_amount"], 0.0)
+
+    def test_a_discount_can_move_a_taxed_night_into_the_band(self):
+        b = make_bill(nights=1, rate=1200, cash=1200)
+        self.assertGreater(config.bill_tax_breakup(b)["tax"], 0)
+        discounted = dict(b)
+        discounted["discounts"] = 400
+        fields = config.recompute_bill_gst(discounted)
+        self.assertEqual(fields["gst_rate"], 0)
+        self.assertEqual(fields["gst_amount"], 0.0)
+
+    def test_it_rewrites_the_folio_not_just_gst_amount(self):
+        """bill_tax_breakup reads the folio first, so a stale folio wins."""
+        b = make_bill(nights=1, rate=1200, cash=1200)
+        discounted = dict(b)
+        discounted["discounts"] = 400
+        fields = config.recompute_bill_gst(discounted)
+        self.assertIn("daily_folio", fields)
+        self.assertEqual(fields["daily_folio"][0]["day_total"], 800)
+        for key in ("accommodation_taxable", "cgst_amount", "sgst_amount",
+                    "igst_amount", "gst_rate", "gst_amount"):
+            self.assertIn(key, fields)
+
+    def test_the_rebuilt_fields_agree_with_bill_tax_breakup(self):
+        """Stored aggregates and the printed invoice must not diverge."""
+        b = make_bill(nights=3, rate=1500, cash=4500)
+        edited = dict(b)
+        edited["discounts"] = 900
+        fields = config.recompute_bill_gst(edited)
+        edited.update(fields)
+        bt = config.bill_tax_breakup(edited)
+        self.assertAlmostEqual(bt["tax"], fields["gst_amount"], delta=0.02)
+        self.assertAlmostEqual(bt["cgst"], fields["cgst_amount"], delta=0.02)
+
+    def test_a_malformed_checkin_time_still_returns_usable_fields(self):
+        b = make_bill(nights=1, rate=1200, cash=1200)
+        broken = dict(b, checkin_time="not a date")
+        fields = config.recompute_bill_gst(broken)
+        self.assertEqual(fields["gst_rate"], 5)
+        self.assertGreater(fields["gst_amount"], 0)
+        self.assertNotIn("daily_folio", fields)

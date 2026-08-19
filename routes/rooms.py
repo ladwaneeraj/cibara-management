@@ -23,7 +23,8 @@ from config import (
     allocate_and_finalize_bill,
     find_serial_number_for_checkin, _build_active_entry_fast, _find_serial_fast,
     _batch_fill_serials, room_category, room_base_price, AC_SURCHARGE,
-    validate_gstin, derive_state_from_gstin
+    validate_gstin, derive_state_from_gstin,
+    snap_to_exempt_band, EXEMPT_BAND_TARGET,
 )
 from services import payment_service, customer_service, expense_service, bills_service
 from services import system_alerts
@@ -1718,6 +1719,52 @@ def add_on():
             except (ValueError, TypeError):
                 applied_on_date = None
 
+        # ── ₹999 snap ─────────────────────────────────────────────────────
+        # An accommodation add-on that would tip this night just past ₹1,000
+        # is trimmed so the night lands on ₹999 instead: a ₹700 room plus a
+        # ₹300 extra bed is billed as ₹700 + ₹299.
+        #
+        # Applied HERE, on the server, not in the browser. The price that
+        # reaches Firestore is the price that gets billed, and a client can be
+        # stale, offline-queued or simply bypassed. snap_to_exempt_band decides
+        # whether it fires; every guard lives there.
+        #
+        # The night's value is the room rate plus the accommodation add-ons
+        # ALREADY on this same night. Matching prefers applied_on_date and
+        # falls back to applied_on_day for rows written before the absolute
+        # date was stamped — the same precedence compute_daily_folio uses. The
+        # two must agree, or the snap would be computed against a different
+        # night than the one the folio actually bills.
+        snap_given_up = 0
+        if accommodation_charge:
+            try:
+                _night_value = int((room_data.get("guest") or {}).get("price") or 0)
+                for _prev in (room_data.get("add_ons") or []):
+                    if not _prev.get("accommodation_charge"):
+                        continue
+                    if applied_on_date and _prev.get("applied_on_date"):
+                        if _prev.get("applied_on_date") != applied_on_date:
+                            continue
+                    elif int(_prev.get("applied_on_day") or 1) != applied_on_day:
+                        continue
+                    _night_value += int(_prev.get("price") or 0)
+
+                _snapped, snap_given_up = snap_to_exempt_band(
+                    _night_value, price, quantity)
+                if snap_given_up:
+                    _asked = price
+                    price = _snapped
+                    unit_price = _snapped        # quantity is 1 or we would not be here
+                    logger.info(
+                        "add_on: 999-snap on room %s - %s Rs%s -> Rs%s "
+                        "(night %s + %s would be %s, trimmed to %s)",
+                        room, item, _asked, price, _night_value, _asked,
+                        _night_value + _asked, EXEMPT_BAND_TARGET)
+            except (TypeError, ValueError, AttributeError) as _snap_e:
+                # Never block an add-on over a pricing convenience.
+                logger.warning("add_on: 999-snap skipped: %s", _snap_e)
+                snap_given_up = 0
+
         add_on_entry = {
             "room": room,
             "item": item,
@@ -1738,6 +1785,10 @@ def add_on():
             # the charge to a different night.
             "applied_on_day":  applied_on_day,
             "applied_on_date": applied_on_date,
+            # Set only when the 999-snap trimmed this line. Keeps the asked
+            # price on the record so the reduction stays visible instead of
+            # the add-on merely appearing to cost an odd number.
+            "price_snapped_from": (price + snap_given_up) if snap_given_up else None,
         }
 
         # ── Tax classification (Rule 46) ──────────────────────────────────────

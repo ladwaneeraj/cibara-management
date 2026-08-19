@@ -3998,7 +3998,20 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
         "Days":                    days,
         "Room Rate/Night":         e.room_rent || 0,
         "Accom Taxable (excl GST)": r2(ag.taxable),
-        "Accom GST Rate %":        ag.cgstRate * 2,
+        // Rate label for the register. `cgstRate` is set only on the
+        // cancellation-charge branch, so this used to be `undefined * 2` =
+        // NaN on every ordinary bill, and SheetJS writes <v>NaN</v> which
+        // Excel refuses to parse. Derive it from the rows actually charged:
+        // one number when the stay sat in a single slab, a "0/5" style label
+        // when it crossed one, and 0 when there is no accommodation at all.
+        "Accom GST Rate %":        (() => {
+          if (typeof ag.cgstRate === "number") return ag.cgstRate * 2;
+          const rates = [...new Set((ag.rows || [])
+            .filter(r => r.category === "accommodation")
+            .map(r => Number(r.rate) || 0))].sort((a, b) => a - b);
+          if (!rates.length) return 0;
+          return rates.length === 1 ? rates[0] : rates.join("/");
+        })(),
         "Accom CGST":              r2(ag.cgst),
         "Accom SGST":              r2(ag.sgst),
         "Accom Total (incl GST)":  r2(accomInclGst),

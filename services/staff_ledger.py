@@ -292,6 +292,59 @@ def present_dates(attendance: list, start: str, end: str,
     return sorted(out)
 
 
+def period_breakdown(attendance: list, start: str, end: str,
+                     covered=None, unmarked=None) -> dict:
+    """
+    Calendar-day census of [start, end] for the ledger caption.
+
+    Every day in the period lands in exactly one bucket and the four counts
+    always sum to `days`:
+
+        present   marked full or half on at least one shift
+        absent    marked, and absent on every shift
+        carried   already settled by an EARLIER payment, so not this row's
+        unmarked  nobody marked attendance at all
+
+    Counts are CALENDAR DAYS, never worked-day units. A half day is one
+    present day, not half of one, and a dual-shift member who worked both D
+    and N was present once. That is deliberate: this answers "how many days
+    was he here", which is not the wage base. `days_worked` stays the wage
+    number and is reported separately.
+
+    `carried` is tested first, so a day that is both marked and already paid
+    counts once, on the row that actually paid it. Without that precedence
+    the same day would appear as present on two ledger rows.
+
+    Returns {days, present, absent, carried, unmarked}.
+    """
+    empty = {"days": 0, "present": 0, "absent": 0, "carried": 0, "unmarked": 0}
+    if not (_valid_date(start) and _valid_date(end)) or start > end:
+        return empty
+
+    covered = set(covered or ())
+    present = set(present_dates(attendance, start, end))
+    marked = marked_dates(attendance, start, end)
+    # `unmarked` is normally passed in already disjoint from `covered`, but
+    # deriving it from `marked` gives the same answer and keeps the census
+    # correct when the caller has nothing to pass.
+    unmarked = set(unmarked or ()) | {
+        d for d in _dates_between(start, end) if d not in marked
+    }
+
+    out = dict(empty)
+    for d in _dates_between(start, end):
+        out["days"] += 1
+        if d in covered:
+            out["carried"] += 1
+        elif d in unmarked:
+            out["unmarked"] += 1
+        elif d in present:
+            out["present"] += 1
+        else:
+            out["absent"] += 1
+    return out
+
+
 def compute_meals(meal_rate, attendance: list, start: str, end: str,
                   exclude=None) -> dict:
     """

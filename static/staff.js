@@ -428,27 +428,96 @@
     return n && n !== "system" ? "by " + n : "";
   }
 
-  // Ledger caption for the days a salary payment did NOT pay for. Two
-  // reasons, and they read very differently to whoever is auditing the row:
-  // an already-paid day is fine, an unmarked day is money still owed once
-  // somebody fixes the register. `excluded_dates` is the union; subtracting
-  // `unmarked_dates` gives the already-paid count. Older payment docs have no
-  // unmarked_dates, so they degrade to the original single caption.
-  function _skippedChips(p) {
-    var excluded = (p && p.excluded_dates) || [];
-    var unmarked = (p && p.unmarked_dates) || [];
-    if (!excluded.length) return "";
-    var alreadyPaid = Math.max(0, excluded.length - unmarked.length);
-    var out = "";
-    if (alreadyPaid) {
-      out += '<span class="muted">' + alreadyPaid + " already-paid day" +
-        (alreadyPaid > 1 ? "s" : "") + " skipped</span>";
+  // Inclusive day count between two "YYYY-MM-DD" strings. Parsed as UTC so
+  // the local timezone can never shift a boundary by a day.
+  function _daysInclusive(start, end) {
+    var s = Date.parse(String(start || "") + "T00:00:00Z");
+    var e = Date.parse(String(end || "") + "T00:00:00Z");
+    if (isNaN(s) || isNaN(e) || e < s) return 0;
+    return Math.round((e - s) / 86400000) + 1;
+  }
+
+  // Calendar-day census of the period a salary row settled.
+  //
+  // Server-computed (ledger.period_breakdown, stored on the payment at pay
+  // time) whenever the field is present — that is the authority, and it is
+  // the same object the payout screen was shown. Payments written before the
+  // field existed are reconstructed from what they do carry.
+  //
+  // The reconstruction is an approximation and says so via `approx`: for
+  // dual-shift staff full_days/half_days count SHIFTS rather than calendar
+  // days, so present is capped at the days actually available and absent is
+  // whatever is left. Every bucket is clamped at zero, so a legacy row can
+  // under-report but can never show a negative or a total over the period.
+  function _periodCensus(p) {
+    var stored = p && p.period_breakdown;
+    if (stored && typeof stored === "object" && Number(stored.days) > 0) {
+      return stored;
     }
-    if (unmarked.length) {
-      out += '<span class="muted">' + unmarked.length + " unmarked day" +
-        (unmarked.length > 1 ? "s" : "") + " skipped</span>";
+    var days = _daysInclusive(p && p.period_start, p && p.period_end);
+    if (!days) return null;
+    var unmarked = ((p && p.unmarked_dates) || []).length;
+    var carried = Math.max(0, ((p && p.excluded_dates) || []).length - unmarked);
+    var available = Math.max(0, days - carried - unmarked);
+    var present = Math.min(
+      available,
+      Math.max(0, Number(p.full_days || 0) + Number(p.half_days || 0))
+    );
+    return {
+      days: days,
+      present: present,
+      absent: Math.max(0, available - present),
+      carried: carried,
+      unmarked: unmarked,
+      approx: true,
+    };
+  }
+
+  // The census as chips on a salary row.
+  //
+  // Only EXCEPTIONS get a chip. The row already reads "2 days x Rs 300", so
+  // repeating the days-paid count beside it says the same thing twice and
+  // buys nothing. What the row does not otherwise say is where the rest of
+  // the period went: days absent, days an earlier payment already settled,
+  // days nobody marked. Those are the ones worth a pill.
+  //
+  // Every chip carries its own noun. A bare count needs a hover to decode
+  // and there is no hover on a phone, which is the whole reason this is
+  // "3 paid earlier" and not a glyph with a 3 next to it.
+  //
+  // A period with nothing to flag says so in two words rather than going
+  // silent, so a clean row and a row whose census failed to compute do not
+  // look identical.
+  function _periodChips(p) {
+    var c = _periodCensus(p);
+    var paidOn = (p && p.paid_on)
+      ? '<span class="muted">paid ' + esc(fmtDShort(p.paid_on)) + "</span>"
+      : "";
+    if (!c) return paidOn;
+
+    var approx = c.approx ? " (estimated from an older payment record)" : "";
+
+    function chip(cls, n, noun, title) {
+      if (!n) return "";
+      return '<span class="chip day ' + cls + '" title="' + title + approx +
+        '"><b>' + n + "</b> " + noun + "</span>";
     }
-    return out;
+
+    var flags =
+      chip("d-absent", c.absent, "absent",
+           "Days in this period the staff member was marked absent") +
+      chip("d-carried", c.carried, "paid earlier",
+           "Days already settled by an earlier payment, so not paid again here") +
+      chip("d-unmarked", c.unmarked, "unmarked",
+           "Days nobody marked attendance for. Unpaid and still open");
+
+    if (!flags) {
+      flags = '<span class="chip day d-ok" title="Every one of the ' +
+        c.days + " day" + (c.days === 1 ? "" : "s") +
+        ' in this period was worked and paid here' + approx +
+        '">full period</span>';
+    }
+    return flags + paidOn;
   }
 
   function _isPaid(sid, d) {
@@ -2652,13 +2721,11 @@
                   ? '<span class="chip cut">− ' + rup(p.advance_deducted) +
                     " advance cut</span>"
                   : "") +
-                // excluded_dates holds BOTH already-paid days and days with no
-                // attendance. unmarked_dates is the second group; payments
-                // written before that field existed simply report zero of them
-                // and render exactly as they always did.
-                _skippedChips(p) +
+                // Period census as chips: present / paid / absent / already
+                // paid / unmarked, plus the date the cash left the counter.
+                _periodChips(p) +
                 (_byLine(p.paid_by)
-                  ? '<span class="muted">paid ' + esc(_byLine(p.paid_by)) + "</span>"
+                  ? '<span class="muted">' + esc(_byLine(p.paid_by)) + "</span>"
                   : "");
               amtHtml = '<div class="amt sal-amt">' + rup(p.net_paid) + "</div>" +
                 '<div class="amt-lbl">' +

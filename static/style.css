@@ -17,6 +17,29 @@
   --border-radius: 8px;
   --border-radius-lg: 12px;
   --transition: all 0.3s ease;
+
+  /* ── Surface / text tokens ───────────────────────────────────────────
+     These were referenced by the Transactions chrome and by the CSS
+     transaction-tracking.js injects at runtime, but never declared
+     anywhere. An unresolvable var() makes the whole declaration compute
+     to its initial value, so `background: var(--surface)` was rendering
+     transparent and `border: 1px solid var(--border)` was drawing in
+     currentColor. Declaring them here is what those rules always meant. */
+  --surface: #ffffff;
+  --card-bg: #ffffff;
+  --bg: #f5f7fb;
+  --border: #e2e8f0;
+  --border-color: #e2e8f0;
+  --text-primary: #1f2937;
+  --text-secondary: #64748b;
+
+  /* ── Layout gutters ──────────────────────────────────────────────────
+     One source of truth for horizontal spacing. --dash-gutter is what
+     .dashboard pads by; a module that wants to run edge to edge cancels
+     exactly this much and re-applies --mod-gutter to its own chrome.
+     Two tokens instead of a magic number repeated per module. */
+  --dash-gutter: 1rem;
+  --mod-gutter: 12px;
 }
 
 * {
@@ -239,7 +262,7 @@ body {
 
 /* Dashboard Styles */
 .dashboard {
-  padding: 1rem;
+  padding: var(--dash-gutter);
   margin-bottom: 60px;
 }
 
@@ -1722,7 +1745,7 @@ body {
   }
 
   .dashboard {
-    padding: 0.8rem;
+    padding: var(--dash-gutter);
   }
 
   .stat-card {
@@ -6114,4 +6137,301 @@ select.filter-select:disabled, .rpt-gst-toggle.rpt-disabled { opacity: 0.45; poi
   .mb-grid { grid-template-columns: 1fr 1fr; }
   .mb-payrow { grid-template-columns: 1fr 1fr auto; }
   .mb-payrow .mb-pay-method { grid-column: span 1; }
+}
+
+/* Layout for the Expense Daily/Report/All sub-filter. Lived in an inline
+   style on both the template and the JS-built copy until now; an inline
+   margin shorthand zeroes margin-left/right and no stylesheet can override
+   it, which broke the shared mobile gutter. */
+.txn-expense-scope {
+  gap: 0.4rem;
+  margin: 0 0 0.6rem;
+  flex-wrap: wrap;
+}
+
+/* Tally-card sub-notes ("incl. advances *", the GST accom/water split).
+   These carried inline font sizes, which no stylesheet can override, so
+   they could not be compacted along with the cards they sit in. */
+.bl-note { font-size: 0.66rem; color: #aaa; margin-top: 2px; line-height: 1.3; }
+.bl-note-gst { color: #888; }
+
+/* ═══════════════════════════════════════════════════════════════════════
+   EDGE-TO-EDGE MOBILE MODULES — Transactions · Bills · Register
+   ───────────────────────────────────────────────────────────────────────
+   Problem this solves: on a phone each of these three tabs paid for its
+   gutter twice. .dashboard padded by 0.8rem and then .bills-container /
+   .register-container padded again by 0.4–1rem, so ~21px of a 360px screen
+   went to empty margin on each side before any content was drawn. The
+   register's 15-column table then had to scroll sideways inside what was
+   left, which parks the money and the action buttons off-screen.
+
+   The fix is one gutter, owned by one token:
+     · the three tabs cancel .dashboard's padding entirely (negative margin
+       of exactly --dash-gutter, so the two can never drift apart);
+     · module chrome — titles, filter bars, KPI strips — re-applies
+       --mod-gutter, so text still never touches the bezel;
+     · the list itself gets the full width and each row carries its own
+       inner padding, which is what makes rows read as one column instead
+       of a stack of floating tiles.
+
+   Everything here is scoped under an id (#transactions-tab, #bills-tab,
+   #register-tab). That matters: register.js, bills.js and
+   transaction-tracking.js all inject their CSS into <head> at runtime,
+   which lands after this file in the cascade. The id wins on specificity
+   regardless of order, so none of these rules depend on load timing.
+
+   Nothing below touches markup, row classes, data-* attributes or event
+   wiring. Desktop (>768px) is byte-for-byte unchanged.
+   ═══════════════════════════════════════════════════════════════════════ */
+
+@media (max-width: 576px) {
+  :root { --dash-gutter: 0.8rem; }
+}
+@media (max-width: 380px) {
+  :root { --mod-gutter: 10px; }
+}
+
+/* Cancel the dashboard gutter for the three full-bleed tabs. */
+@media (max-width: 768px) {
+  #transactions-tab,
+  #bills-tab,
+  #register-tab {
+    margin-left: calc(var(--dash-gutter) * -1);
+    margin-right: calc(var(--dash-gutter) * -1);
+  }
+}
+
+/* ───────────────────────────────────────────────────────────────────────
+   TRANSACTIONS
+   ─────────────────────────────────────────────────────────────────────── */
+@media (max-width: 768px) {
+  /* Gutter applied once, on the children, rather than on each control.
+     A filter row added later lines up with no further CSS. Excluded:
+     the password modal (position:fixed — a margin would shift its inset
+     box) and the hidden file input. */
+  #transactions-tab > *:not(.modal-backdrop):not(input) {
+    margin-left: var(--mod-gutter);
+    margin-right: var(--mod-gutter);
+  }
+
+  /* The list is the content, so it gets the width. */
+  #transactions-tab > .logs-container {
+    margin-left: 0;
+    margin-right: 0;
+    padding: 0;
+    background: transparent;
+    border-radius: 0;
+    box-shadow: none;
+  }
+
+  /* Rows become full-width bands. Dropping the per-row 8px radius and the
+     0.25rem gap is what turns forty payments into one scannable column
+     rather than forty separate cards. */
+  #transactions-tab .logs-container .log-item {
+    margin-bottom: 0;
+    border-radius: 0;
+    padding: 0.7rem var(--mod-gutter);
+    background: var(--card-bg);
+    border-bottom: 1px solid #eef1f6;
+  }
+  #transactions-tab .logs-container .log-date-group > .log-item:last-child {
+    border-bottom: none;
+  }
+
+  /* Day divider reads as a band across the full width, which is the cue
+     that the rows below belong to it. */
+  #transactions-tab .log-date-header {
+    margin: 0;
+    padding: 0.45rem var(--mod-gutter);
+    background: #eef2f7;
+    border-top: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
+    font-size: 0.78rem;
+  }
+  #transactions-tab .log-date-group { margin-bottom: 0; }
+
+  /* Breathing room above the bottom nav so the last row is reachable. */
+  #transactions-tab > .logs-container { margin-bottom: 5rem; }
+}
+
+/* ───────────────────────────────────────────────────────────────────────
+   REGISTER + BILLS — the table stays a table
+   ───────────────────────────────────────────────────────────────────────
+   These two are ledgers. Column alignment is the whole point: you read
+   down a column to compare, not across a card to reconstruct one row.
+   So the phone treatment keeps the grid and fixes what actually made it
+   hard to use, in priority order:
+
+     1. The identity column sticks. Swipe right for the money and the
+        guest name stays pinned at the left edge, so you never lose whose
+        row you are on. This is the single biggest fix — before it, three
+        columns in you were reading anonymous numbers.
+     2. Density. 0.73rem text at 0.35rem padding was a desktop table
+        shrunk to fit, not a phone table. Bigger type, taller rows,
+        real touch targets on the action buttons.
+     3. Zebra rows, so the eye tracks horizontally across a wide row
+        without drifting a line.
+     4. Tabular figures in the money columns, so digits line up in a
+        column instead of jittering by glyph width.
+     5. Edge to edge, so the scroll window is the full screen rather than
+        the screen minus two gutters.
+
+   No column is hidden and no data is dropped. Desktop is untouched.
+   ─────────────────────────────────────────────────────────────────────── */
+@media (max-width: 768px) {
+  /* Chrome keeps the gutter; the ledger gets the full width. */
+  #register-tab .register-container { padding: 0 var(--mod-gutter); }
+  #bills-tab   .bills-container     { padding: 0 var(--mod-gutter); }
+
+  #register-tab .register-table-container,
+  #bills-tab .bills-table-container {
+    margin-left: calc(var(--mod-gutter) * -1);
+    margin-right: calc(var(--mod-gutter) * -1);
+    margin-bottom: 5rem;
+    border-radius: 0;
+    box-shadow: none;
+    border-top: 1px solid var(--border);
+    /* A visible thin bar is a better scroll affordance than an overlay
+       scrollbar that only appears mid-gesture. */
+    scrollbar-width: thin;
+  }
+  #register-tab .register-table-container::-webkit-scrollbar,
+  #bills-tab .bills-table-container::-webkit-scrollbar { height: 6px; }
+  #register-tab .register-table-container::-webkit-scrollbar-thumb,
+  #bills-tab .bills-table-container::-webkit-scrollbar-thumb {
+    background: #cbd5e1; border-radius: 3px;
+  }
+
+  /* ── 2. Density ── */
+  #register-tab .register-table,
+  #bills-tab .bills-table { font-size: 0.78rem; }
+  #register-tab .register-table th,
+  #bills-tab .bills-table th { padding: 0.55rem 0.5rem; }
+  #register-tab .register-table td,
+  #bills-tab .bills-table td { padding: 0.6rem 0.5rem; }
+  #register-tab .register-table tr.date-group-header > td,
+  #bills-tab .bills-table tr.bl-date-header > td {
+    padding: 0.5rem var(--mod-gutter);
+  }
+
+  /* ── 3. Zebra ──
+     Painted on the row AND on the pinned cell: a sticky cell needs an
+     opaque background of its own or the columns sliding beneath show
+     through it. */
+  #register-tab .register-table tbody tr.date-group-row:nth-child(even),
+  #register-tab .register-table tbody tr.date-group-row:nth-child(even) > td:nth-child(3),
+  #bills-tab .bills-table tbody tr.bl-date-row:nth-child(even),
+  #bills-tab .bills-table tbody tr.bl-date-row:nth-child(even) > td:nth-child(3) {
+    background: #f8fafc;
+  }
+  /* Pending settlements keep their amber tint, on the pinned cell too. */
+  #bills-tab .bills-table tbody tr.bl-date-row.bl-row-pending,
+  #bills-tab .bills-table tbody tr.bl-date-row.bl-row-pending > td:nth-child(3) {
+    background: #fffbf0;
+  }
+
+  /* ── 1. Pinned identity column ──
+     Sticky only engages once the cell would scroll past the left edge, so
+     at rest the table looks completely normal; start swiping and the
+     guest name parks itself against the edge while Sr No / Bill No slide
+     underneath it. */
+  #register-tab .register-table thead th:nth-child(3),
+  #register-tab .register-table tbody tr.date-group-row > td:nth-child(3),
+  #bills-tab .bills-table thead th:nth-child(3),
+  #bills-tab .bills-table tbody tr.bl-date-row > td:nth-child(3) {
+    position: sticky;
+    left: 0;
+    z-index: 6;
+    background: #fff;
+    box-shadow: 8px 0 8px -6px rgba(15, 23, 42, 0.22);
+    min-width: 106px;
+    max-width: 150px;
+    white-space: normal;
+  }
+
+  /* Note on the day band: its label scrolls out of view on a sideways
+     swipe. position:sticky cannot fix that — the cell already spans the
+     full table width, and a sticky box can never shift outside its own
+     containing block, so it has nowhere to slide to. Pinning the label
+     alone would need a wrapper element around the text in register.js /
+     bills.js. The band stays tappable at any scroll offset either way,
+     since the whole row is the toggle. */
+  /* The header cell has to clear both the sticky thead (z-index 10) and
+     the pinned body cells. */
+  #register-tab .register-table thead th:nth-child(3),
+  #bills-tab .bills-table thead th:nth-child(3) {
+    background: var(--primary, #3f51b5);
+    z-index: 14;
+  }
+  #register-tab .register-table tbody tr.date-group-row:hover,
+  #register-tab .register-table tbody tr.date-group-row:hover > td:nth-child(3),
+  #bills-tab .bills-table tbody tr.bl-date-row:hover,
+  #bills-tab .bills-table tbody tr.bl-date-row:hover > td:nth-child(3) {
+    background: #eef4ff;
+  }
+
+  /* ── 4. Money reads as a column of figures, not of words ── */
+  #register-tab .register-table tbody tr.date-group-row > td:nth-child(5),
+  #register-tab .register-table tbody tr.date-group-row > td:nth-child(9),
+  #register-tab .register-table tbody tr.date-group-row > td:nth-child(10),
+  #register-tab .register-table tbody tr.date-group-row > td:nth-child(11),
+  #register-tab .register-table tbody tr.date-group-row > td:nth-child(12),
+  #bills-tab .bills-table tbody tr.bl-date-row > td:nth-child(4),
+  #bills-tab .bills-table tbody tr.bl-date-row > td:nth-child(8),
+  #bills-tab .bills-table tbody tr.bl-date-row > td:nth-child(9),
+  #bills-tab .bills-table tbody tr.bl-date-row > td:nth-child(10) {
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  /* Right-align the two totals so the rupee figures stack on their last
+     digit — the only alignment that lets you compare them by eye. */
+  #register-tab .register-table thead th:nth-child(12),
+  #register-tab .register-table tbody tr.date-group-row > td:nth-child(12),
+  #bills-tab .bills-table thead th:nth-child(9),
+  #bills-tab .bills-table tbody tr.bl-date-row > td:nth-child(9) {
+    text-align: right;
+  }
+
+  /* ── Touch targets ──
+     28px squares are a mouse size. These are the buttons that open a
+     bill and collect a payment, so they get the full 34px. */
+  #register-tab .reg-pay-btn,
+  #register-tab .reg-history-btn,
+  #register-tab .reg-doc-btn,
+  #bills-tab .bl-bill-btn,
+  #bills-tab .bl-collect-btn {
+    min-width: 34px;
+    min-height: 34px;
+  }
+  #register-tab .reg-row-actions { gap: 0.35rem; }
+  /* .reg-doc-slot is the invisible stand-in on rows with no mobile number.
+     It has to track the button size or the icons stop lining up between
+     rows. */
+  #register-tab .reg-doc-slot { width: 34px; height: 34px; }
+}
+
+/* Tally strip: six cards, three to a row, two rows. Compacted so that
+   holds at 360px — at ~107px per card the default 0.67rem label and
+   1rem figure wrapped the labels to three lines and made the strip taller
+   than the filter bar under it. Everything shrinks together: padding,
+   label, figure, sub-note. */
+@media (max-width: 768px) {
+  #bills-tab .bills-tally {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0.4rem;
+    margin-bottom: 0.6rem;
+  }
+  #bills-tab .bl-card { padding: 0.4rem 0.45rem; border-radius: 8px; }
+  #bills-tab .bl-card .bl-label {
+    font-size: 0.55rem;
+    letter-spacing: 0.02em;
+    line-height: 1.25;
+    margin-bottom: 1px;
+  }
+  #bills-tab .bl-card .bl-value {
+    font-size: 0.84rem;
+    line-height: 1.2;
+    font-variant-numeric: tabular-nums;
+  }
+  #bills-tab .bl-note { font-size: 0.55rem; line-height: 1.25; }
 }

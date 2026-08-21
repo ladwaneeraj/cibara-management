@@ -3023,8 +3023,11 @@ function _ensureExpenseScopeEl() {
     el = document.createElement("div");
     el.id = "txn-expense-scope";
     el.className = "txn-expense-scope";
-    el.style.cssText =
-      "display:none; gap:0.4rem; margin:0 0 0.6rem; flex-wrap:wrap;";
+    // Layout lives in .txn-expense-scope (style.css). Keeping it out of the
+    // inline style is what lets the mobile gutter rule reach this row —
+    // an inline margin shorthand zeroes margin-left/right and cannot be
+    // overridden from a stylesheet.
+    el.style.cssText = "display:none;";
     el.innerHTML = [
       ["daily", "Daily"],
       ["report", "Report"],

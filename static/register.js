@@ -1127,16 +1127,30 @@ tr.rp-svc-voided .rp-actions-cell { opacity:.9; }
 }
 .reg-attr-badge i { font-size: .65rem; opacity: .8; }
 
+/* Default / "has documents" state. Solid border, filled tint, slate icon.
+   Deliberately more present than it used to be (#94a3b8 on plain white),
+   because its whole job is to look different at a glance from the amber
+   dashed "no ID on file" state two rows down. */
 .reg-doc-btn {
   display: inline-grid; place-items: center;
   width: 26px; height: 26px;
-  padding: 0; border: 1px solid #e2e8f0;
-  background: #fff; color: #94a3b8; border-radius: 6px;
+  padding: 0; border: 1px solid #cbd5e1;
+  background: #f1f5f9; color: #475569; border-radius: 6px;
   cursor: pointer; font-size: .78rem; font-weight: 600;
   transition: background .12s, border-color .12s, color .12s;
   white-space: nowrap; vertical-align: middle;
 }
-.reg-doc-btn:hover { background: #f1f5f9; color: #475569; border-color: #cbd5e1; }
+.reg-doc-btn:hover { background: #e2e8f0; color: #1e293b; border-color: #94a3b8; }
+
+/* Third state: the check has not come back (or failed). Pale and dotted,
+   so it never passes for either answer. It still opens the viewer, which
+   carries its own add-photo tile. */
+.reg-doc-btn.unknown {
+  border: 1px dotted #e2e8f0;
+  background: #fcfdfe;
+  color: #d7dee7;
+}
+.reg-doc-btn.unknown:hover { background: #f8fafc; color: #94a3b8; border-color: #cbd5e1; }
 
 /* Guest has NO ID on file — amber dashed button that uploads from the row.
    Visually distinct from the plain grey "view docs" state. */
@@ -1209,6 +1223,44 @@ tr.rp-svc-voided .rp-actions-cell { opacity:.9; }
 }
 .rdoc-img-wrap img:hover { opacity: .88; }
 .rdoc-empty { text-align: center; color: #999; padding: 1.5rem; font-size: .82rem; }
+
+/* Add-photo tile — sits as the last cell of the document grid so "there is
+   room for one more" is shown by the layout instead of said in a sentence.
+   Amber dashed, matching the .reg-doc-btn.missing state on the row, so the
+   two entry points into the same action look like the same action. */
+.rdoc-add {
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: .3rem;
+  aspect-ratio: 4/3; padding: .5rem;
+  border: 1px dashed #f59e0b; border-radius: 6px;
+  background: #fffbeb; color: #b45309;
+  font: 600 .8rem 'Inter', sans-serif;
+  cursor: pointer; text-align: center;
+  transition: background .12s, border-color .12s;
+}
+.rdoc-add:hover { background: #fef3c7; border-color: #d97706; }
+.rdoc-add i { font-size: 1.15rem; }
+.rdoc-add small { font-weight: 500; font-size: .66rem; opacity: .75; }
+.rdoc-add.busy, .rdoc-add:disabled { opacity: .75; cursor: default; }
+/* In the empty state there is no grid to sit in, so it becomes a button. */
+.rdoc-empty .rdoc-add {
+  aspect-ratio: auto; max-width: 220px;
+  margin: .9rem auto 0; padding: .75rem 1rem;
+}
+.rdoc-cap-note {
+  margin-top: .7rem; text-align: center;
+  font-size: .72rem; color: #94a3b8;
+}
+
+/* The grid's minmax(180px, 1fr) collapses to a single column on a phone,
+   which made every tile a ~250px-tall slab and pushed the add tile below
+   the fold. Two up keeps a 3-photo set on one screen; tapping a tile still
+   opens the full-size image. */
+@media (max-width: 600px) {
+  .rdoc-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .6rem; }
+  .rdoc-add { max-height: 150px; }
+  .rdoc-add span { font-size: .74rem; }
+}
 .rdoc-spinner { text-align: center; padding: 1.5rem; color: #888; font-size: .82rem; }
 `;
 
@@ -2014,7 +2066,7 @@ tr.rp-svc-voided .rp-actions-cell { opacity:.9; }
         if (docBtn) {
           e.stopPropagation();
           if (docBtn.dataset.mode === "upload") {
-            _openDocUploadPicker(docBtn);
+            _openDocUploadPicker(docBtn, DOC_MAX);
           } else {
             _openDocsModal(
               docBtn.dataset.mobile,
@@ -2031,6 +2083,16 @@ tr.rp-svc-voided .rp-actions-cell { opacity:.9; }
     const rdocOverlay = dom("rdoc-overlay");
     if (rdocOverlay) rdocOverlay.addEventListener("click", (e) => {
       if (e.target === rdocOverlay) _closeDocsModal();
+    });
+
+    // Add-photo tile inside the viewer. Delegated, because the tile is
+    // re-rendered on every open and after every upload.
+    const rdocContent = dom("rdoc-content");
+    if (rdocContent) rdocContent.addEventListener("click", (e) => {
+      const add = e.target.closest(".rdoc-add");
+      if (!add || add.disabled) return;
+      e.stopPropagation();
+      _openDocUploadPicker(null, parseInt(add.dataset.remaining || "0", 10));
     });
 
     // Password modal buttons
@@ -2476,8 +2538,7 @@ tr.rp-svc-voided .rp-actions-cell { opacity:.9; }
 
     state.filteredEntries = f;
     state.visibleCount = PAGE_SIZE; // new filter/search -> back to first page
-    renderTable();
-    _checkAndShowDocButtons();
+    renderTable();   // renderTable runs the doc check itself
   }
 
   // ── Render ────────────────────────────────────────────────────────────────────
@@ -2978,6 +3039,10 @@ tr.rp-svc-voided .rp-actions-cell { opacity:.9; }
     }
     html += loadMoreRowHTML(state.filteredEntries.length - rendered);
     tbody.innerHTML = html;
+    // Single hook for every render path — first load, filter change, sort,
+    // and "Show more", which previously re-rendered without one and left
+    // its rows permanently unmarked.
+    _checkAndShowDocButtons();
   }
 
   function loadMoreRowHTML(remaining) {
@@ -3079,8 +3144,7 @@ tr.rp-svc-voided .rp-actions-cell { opacity:.9; }
             ? `<button class="reg-doc-btn"
                   data-mobile="${e.guest_mobile}"
                   data-guest="${encodeURIComponent(e.guest_name || '')}"
-                  title="View ID documents"
-                  style="visibility:hidden;"><i class="fas fa-id-card"></i></button>`
+                  title="View ID documents"><i class="fas fa-id-card"></i></button>`
             : `<span class="reg-doc-slot" aria-hidden="true"></span>`}
         </div>
       </td>
@@ -3195,13 +3259,68 @@ tr.rp-svc-voided .rp-actions-cell { opacity:.9; }
   // ID DOCUMENTS MODAL — view customer docs, no password required
   // ══════════════════════════════════════════════════════════════════════════════
 
-  async function _checkAndShowDocButtons() {
-    // Collect unique mobile numbers from current filtered entries
+  // Hard cap, mirroring services/customer_service.upload_document, which
+  // trims anything past 3 server-side. Enforced here too so the picker can
+  // say why up front instead of letting photos upload and vanish.
+  const DOC_MAX = 3;
+
+  // Which guest the viewer is currently showing, so the add tile inside it
+  // knows where to upload without a button to read it off.
+  const _rdocCtx = { mobile: "", guest: "", count: 0 };
+
+  // Cache of what we know about each mobile: true = has at least one ID
+  // document, false = confirmed none. A mobile ABSENT from the map means
+  // "not checked yet", which is a third state and must not be drawn as
+  // either of the other two.
+  const _docStatus = new Map();
+
+  // Three visually distinct states, because "we have not checked" reading
+  // as "has documents" is the failure that hid missing IDs from view:
+  //   view     solid slate ID card   — documents on file, opens the viewer
+  //   missing  amber dashed with +   — nothing on file, opens the picker
+  //   unknown  pale dotted, faded    — check pending or failed
+  function _setDocBtnState(btn, stateName) {
+    btn.style.visibility = "visible";
+    btn.classList.toggle("missing", stateName === "missing");
+    btn.classList.toggle("unknown", stateName === "unknown");
+    // An unknown button opens the viewer, which carries its own "Add ID
+    // photo" tile — so even a failed check still leads somewhere useful.
+    btn.dataset.mode = stateName === "missing" ? "upload" : "view";
+    if (stateName === "missing") {
+      btn.title = "No ID on file — tap to upload";
+      btn.innerHTML = '<i class="fas fa-id-card"></i><span class="reg-doc-plus">+</span>';
+    } else {
+      btn.title = stateName === "unknown"
+        ? "Checking ID documents…"
+        : "View ID documents";
+      btn.innerHTML = '<i class="fas fa-id-card"></i>';
+    }
+  }
+
+  function _paintDocButtons(root) {
+    (root || document).querySelectorAll(".reg-doc-btn").forEach((btn) => {
+      const m = btn.dataset.mobile;
+      _setDocBtnState(
+        btn,
+        !_docStatus.has(m) ? "unknown" : (_docStatus.get(m) ? "view" : "missing")
+      );
+    });
+  }
+
+  // Called at the end of every render. Paints from cache first so rows are
+  // never left blank, then asks the server only about mobiles it has not
+  // seen before. That last part matters twice over: it fixes "Show more"
+  // rows, which re-rendered without any check at all and stayed unmarked,
+  // and it stops a filter change from re-reading every customer document
+  // in the period.
+  async function _checkAndShowDocButtons(force) {
+    _paintDocButtons();
+
     const mobiles = [...new Set(
       state.filteredEntries
         .map(e => e.guest_mobile)
         .filter(m => m && m.trim())
-    )];
+    )].filter(m => force || !_docStatus.has(m));
     if (!mobiles.length) return;
 
     try {
@@ -3211,26 +3330,15 @@ tr.rp-svc-voided .rp-actions-cell { opacity:.9; }
         body:    JSON.stringify({ mobiles }),
       });
       const data = await res.json();
-      if (!data.success) return;
+      if (!data.success) throw new Error(data.message || "check failed");
 
       const withDocs = new Set(data.mobiles_with_docs || []);
-      // Every row with a mobile gets a visible button in one of two modes:
-      //   view   (grey, solid)  — docs exist, click opens the viewer
-      //   upload (amber, dashed, corner +) — NO ID on file, click uploads
-      document.querySelectorAll(".reg-doc-btn").forEach(btn => {
-        const has = withDocs.has(btn.dataset.mobile);
-        btn.style.visibility = "visible";
-        btn.dataset.mode = has ? "view" : "upload";
-        btn.classList.toggle("missing", !has);
-        btn.title = has
-          ? "View ID documents"
-          : "No ID on file — tap to upload";
-        btn.innerHTML = has
-          ? '<i class="fas fa-id-card"></i>'
-          : '<i class="fas fa-id-card"></i><span class="reg-doc-plus">+</span>';
-      });
+      mobiles.forEach(m => _docStatus.set(m, withDocs.has(m)));
+      _paintDocButtons();
     } catch (_) {
-      // Silent fail — buttons stay hidden, not a blocking issue
+      // Nothing enters the cache on failure, so these mobiles stay in the
+      // "unknown" state and are retried on the next render rather than
+      // being silently written off as "has documents".
     }
   }
 
@@ -3240,62 +3348,170 @@ tr.rp-svc-voided .rp-actions-cell { opacity:.9; }
   // 5 MB phone photo shrinks to a few hundred KB before upload.
   let _regDocInput = null;
   let _regDocTargetBtn = null;
+  let _regDocRemaining = DOC_MAX;
 
-  function _openDocUploadPicker(btn) {
-    _regDocTargetBtn = btn;
+  // `remaining` is how many more photos this guest may have. From a row
+  // button we do not know the current count, so we pass DOC_MAX and let the
+  // server's own cap be the backstop; from the viewer modal we have the real
+  // urls array and pass the exact number of free slots.
+  function _openDocUploadPicker(btn, remaining) {
+    const toast = window.showNotification || _notify;
+    _regDocTargetBtn = btn || null;
+    _regDocRemaining = Math.max(
+      0,
+      Math.min(DOC_MAX, remaining == null ? DOC_MAX : remaining)
+    );
+    if (_regDocRemaining === 0) {
+      toast(`This guest already has ${DOC_MAX} ID photos, which is the limit.`, "error");
+      return;
+    }
     if (!_regDocInput) {
       _regDocInput = document.createElement("input");
       _regDocInput.type = "file";
       _regDocInput.accept = "image/*";
+      _regDocInput.multiple = true;          // pick front + back in one go
       _regDocInput.style.display = "none";
       document.body.appendChild(_regDocInput);
       _regDocInput.addEventListener("change", () => {
-        const file = _regDocInput.files && _regDocInput.files[0];
-        _regDocInput.value = "";           // allow re-picking the same file
-        if (file && _regDocTargetBtn) _uploadRegisterDoc(_regDocTargetBtn, file);
+        const picked = Array.from(_regDocInput.files || []);
+        _regDocInput.value = "";             // allow re-picking the same file
+        if (!picked.length) return;
+        const files = picked.slice(0, _regDocRemaining);
+        // Trim rather than reject the whole selection: uploading two of the
+        // three they picked is more useful than uploading none, as long as
+        // we say plainly what was left out.
+        if (picked.length > files.length) {
+          toast(
+            `Only ${files.length} of ${picked.length} photos will be added — ` +
+            `${DOC_MAX} per guest is the limit.`,
+            "error"
+          );
+        }
+        _uploadRegisterDocs(_regDocTargetBtn, files);
       });
     }
     _regDocInput.click();
   }
 
-  async function _uploadRegisterDoc(btn, file) {
-    const mobile = btn.dataset.mobile;
-    const guest = decodeURIComponent(btn.dataset.guest || "");
-    const toast = window.showNotification || _notify;
-    btn.disabled = true;
-    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
-    try {
-      let blob = file;
-      if (typeof _compressImage === "function") {
-        try { blob = await _compressImage(file); } catch (_) { blob = file; }
+  async function _uploadRegisterDocs(btn, files) {
+    const toast  = window.showNotification || _notify;
+    const mobile = btn ? btn.dataset.mobile : _rdocCtx.mobile;
+    const guest  = btn
+      ? decodeURIComponent(btn.dataset.guest || "")
+      : _rdocCtx.guest;
+    if (!mobile || !files || !files.length) return;
+
+    const origHTML = btn ? btn.innerHTML : "";
+    if (btn) {
+      btn.disabled = true;
+      btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+    }
+    _rdocAddBusy(0, files.length);
+
+    let done = 0;
+    const errors = [];
+    // Sequential on purpose. These are phone photos over lodge wifi, and the
+    // server appends each URL with its own ArrayUnion write. One at a time
+    // keeps the progress counter honest and stops three multi-hundred-KB
+    // bodies fighting for the same uplink.
+    for (let i = 0; i < files.length; i++) {
+      try {
+        let blob = files[i];
+        if (typeof _compressImage === "function") {
+          try { blob = await _compressImage(files[i]); } catch (_) { blob = files[i]; }
+        }
+        const form = new FormData();
+        form.append("mobile", mobile);
+        form.append("document", blob, `register_doc_${Date.now()}_${i}.jpg`);
+        const res  = await apiFetch("/upload_customer_document", {
+          method: "POST", body: form,
+        });
+        const data = await res.json();
+        if (!data.success) throw new Error(data.message || "Upload failed");
+        done++;
+        if (btn && files.length > 1) {
+          btn.innerHTML =
+            `<span style="font-size:.6rem;font-weight:700;">${done}/${files.length}</span>`;
+        }
+        _rdocAddBusy(done, files.length);
+      } catch (err) {
+        errors.push(err.message || "Upload failed");
       }
-      const form = new FormData();
-      form.append("mobile", mobile);
-      form.append("document", blob, `register_doc_${Date.now()}.jpg`);
-      const res = await apiFetch("/upload_customer_document", {
-        method: "POST", body: form,
-      });
-      const data = await res.json();
-      if (!data.success) throw new Error(data.message || "Upload failed");
-      // Flip every row for this guest to the "has docs" state.
-      document.querySelectorAll(
-        `.reg-doc-btn[data-mobile="${mobile}"]`
-      ).forEach(b => {
-        b.disabled = false;
-        b.dataset.mode = "view";
-        b.classList.remove("missing");
-        b.title = "View ID documents";
-        b.innerHTML = '<i class="fas fa-id-card"></i>';
-      });
-      toast(`ID uploaded for ${guest || mobile}`, "success");
-    } catch (err) {
-      btn.disabled = false;
-      btn.innerHTML = '<i class="fas fa-id-card"></i><span class="reg-doc-plus">+</span>';
-      toast(err.message || "Upload failed", "error");
+    }
+
+    if (btn) btn.disabled = false;
+    if (done > 0) {
+      // Every row for this guest flips to the "has docs" state, not just the
+      // one that was tapped — the same mobile can appear on several stays.
+      _markRowsHaveDocs(mobile);
+    } else if (btn) {
+      btn.innerHTML =
+        origHTML || '<i class="fas fa-id-card"></i><span class="reg-doc-plus">+</span>';
+    }
+
+    if (done) {
+      toast(
+        `${done} ID photo${done === 1 ? "" : "s"} uploaded for ${guest || mobile}`,
+        "success"
+      );
+    }
+    if (errors.length) {
+      toast(
+        `${errors.length} upload${errors.length === 1 ? "" : "s"} failed: ${errors[0]}`,
+        "error"
+      );
+    }
+
+    // Refresh the viewer if it is open, so the new photos show immediately
+    // and the add tile recalculates how many slots are left.
+    const overlay = dom("rdoc-overlay");
+    if (overlay && overlay.classList.contains("show")) {
+      _openDocsModal(mobile, guest);
+    } else {
+      _rdocAddBusy(null);
     }
   }
 
+  function _markRowsHaveDocs(mobile) {
+    // Through the cache, so a later re-render keeps the new state instead
+    // of dropping the row back to "unknown" until the next server check.
+    _docStatus.set(mobile, true);
+    document
+      .querySelectorAll(`.reg-doc-btn[data-mobile="${mobile}"]`)
+      .forEach((b) => { b.disabled = false; _setDocBtnState(b, "view"); });
+  }
+
+  // Swap the add tile into a progress state while an upload runs.
+  // _rdocAddBusy(null) restores it.
+  function _rdocAddBusy(done, total) {
+    const tile = document.querySelector(".rdoc-add");
+    if (!tile) return;
+    if (done === null) {
+      tile.classList.remove("busy");
+      tile.disabled = false;
+      tile.innerHTML = tile.dataset.idleHtml || tile.innerHTML;
+      return;
+    }
+    if (!tile.dataset.idleHtml) tile.dataset.idleHtml = tile.innerHTML;
+    tile.classList.add("busy");
+    tile.disabled = true;
+    tile.innerHTML =
+      `<i class="fas fa-spinner fa-spin"></i><span>${done} / ${total}</span>`;
+  }
+
+  function _rdocAddTileHTML(remaining) {
+    if (remaining <= 0) return "";
+    return `<button type="button" class="rdoc-add" data-remaining="${remaining}"
+              title="Add ID photo${remaining > 1 ? "s" : ""} for this guest">
+              <i class="fas fa-camera"></i>
+              <span>Add ID photo</span>
+              <small>${remaining} of ${DOC_MAX} slot${remaining === 1 ? "" : "s"} free</small>
+            </button>`;
+  }
+
   async function _openDocsModal(mobile, guestName) {
+    _rdocCtx.mobile = mobile || "";
+    _rdocCtx.guest  = guestName || "";
     const overlay = dom("rdoc-overlay");
     const meta    = dom("rdoc-meta");
     const content = dom("rdoc-content");
@@ -3316,8 +3532,19 @@ tr.rp-svc-voided .rp-actions-cell { opacity:.9; }
       }
 
       const urls = data.customer.id_doc_urls || [];
+      _rdocCtx.count = urls.length;
+
       if (!urls.length) {
-        if (content) content.innerHTML = `<div class="rdoc-empty"><i class="fas fa-folder-open" style="font-size:1.5rem;opacity:.3;display:block;margin-bottom:.5rem;"></i>No ID documents on file for this guest.</div>`;
+        // Empty state is where the add action matters most: this is the
+        // guest with no ID on file. It is reachable here even when the
+        // batch doc-check failed and the row button never learned it should
+        // be in upload mode.
+        if (content) content.innerHTML =
+          `<div class="rdoc-empty">
+            <i class="fas fa-folder-open" style="font-size:1.5rem;opacity:.3;display:block;margin-bottom:.5rem;"></i>
+            No ID documents on file for this guest.
+            ${_rdocAddTileHTML(DOC_MAX)}
+          </div>`;
         return;
       }
 
@@ -3330,7 +3557,16 @@ tr.rp-svc-voided .rp-actions-cell { opacity:.9; }
         </div>`
       ).join("");
 
-      if (content) content.innerHTML = `<div class="rdoc-grid">${imgTiles}</div>`;
+      // The add tile sits as the last cell of the grid, so "there is room
+      // for another photo" is shown by the layout rather than stated in a
+      // sentence. It disappears at the cap.
+      const addTile = _rdocAddTileHTML(DOC_MAX - urls.length);
+
+      if (content) content.innerHTML =
+        `<div class="rdoc-grid">${imgTiles}${addTile}</div>` +
+        (urls.length >= DOC_MAX
+          ? `<div class="rdoc-cap-note">${DOC_MAX} of ${DOC_MAX} photos — remove one from the customer record to add another.</div>`
+          : "");
 
     } catch (err) {
       if (content) content.innerHTML = `<div class="rdoc-empty" style="color:#dc3545;">Network error — could not load documents.</div>`;

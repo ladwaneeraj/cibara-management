@@ -1355,14 +1355,14 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
     <div class="bl-card bl-cash">
       <div class="bl-label">Cash (Period)</div>
       <div class="bl-value" id="bl-tc-cash">₹0</div>
-      <div style="font-size:.66rem;color:#aaa;margin-top:2px;" title="Includes advance payments received before checkout date">
+      <div class="bl-note" title="Includes advance payments received before checkout date">
         incl. advances *
       </div>
     </div>
     <div class="bl-card bl-upi">
       <div class="bl-label">UPI (Period)</div>
       <div class="bl-value" id="bl-tc-upi">₹0</div>
-      <div style="font-size:.66rem;color:#aaa;margin-top:2px;" title="Includes advance payments received before checkout date">
+      <div class="bl-note" title="Includes advance payments received before checkout date">
         incl. advances *
       </div>
     </div>
@@ -1381,7 +1381,7 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
     <div class="bl-card" style="border-left:3px solid #6f42c1;">
       <div class="bl-label">GST Collected</div>
       <div class="bl-value" id="bl-tc-gst" style="color:#6f42c1;">₹0</div>
-      <div style="font-size:.68rem;color:#888;margin-top:2px;">
+      <div class="bl-note bl-note-gst">
         <span id="bl-tc-gst-accom">Accom: ₹0</span> &nbsp;|&nbsp;
         <span id="bl-tc-gst-water">Water: ₹0</span>
       </div>

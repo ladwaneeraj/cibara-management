@@ -222,8 +222,76 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
 .bl-view-btn:hover { border-color: var(--primary, #3f51b5); color: var(--primary, #3f51b5); }
 .bl-view-btn.bl-view-active { background: var(--primary, #3f51b5); color: #fff; border-color: var(--primary, #3f51b5); }
 
-@media (max-width: 600px) {
+/* ── Compact filter bar ──────────────────────────────────────────────────
+   Applies from 1149px down, not 600px. Measured, not guessed: the full
+   desktop bar (date + 3 ranges + 3 selects + search) only fits on one line
+   at 1150px and up. Between 601px and 1149px it wrapped, the search took a
+   line of its own at flex:1, and the three selects sat at their natural
+   width with empty bar to their right. Every phone, every tablet and any
+   half-width desktop window landed in that band.
+
+   Row 1  date field + Today / Last 3 Days / Month
+   Row 2  All Payments · All Sources · All Bills · search   (one row, flush
+          to both edges)
+
+   Row 2 uses flex-basis 0 so the row is divided by GROW WEIGHT alone rather
+   than by each control's natural width. That is what removes the dead space:
+   percentage or content-based bases leave whatever does not divide evenly,
+   a 0 basis cannot. Weights are 1 / 1 / 1 / 1.6, so the search gets ~26% and
+   each select ~21%.
+
+   Below ~430px those selects fall under about 75px and clip to "All Pay…".
+   That is the accepted cost of keeping all four on one row; the arrow still
+   shows and the options read in full once opened. */
+@media (max-width: 1149px) {
   .bl-filter-bar label { display: none; }
+  .bl-filter-bar { flex-wrap: wrap; row-gap: 0.45rem; padding: 0.5rem; }
+
+  /* The divider does the line break. the CSS order property only reorders items, it never
+     starts a new flex line, so with a 0 flex-basis on row 2 the browser
+     happily packed all seven controls onto row 1 and gave the selects 10px
+     each. A full-width, zero-height item forces the wrap, and the divider
+     already sits in exactly the right place in the markup (after the quick
+     ranges, before the first select), so no template change is needed.
+     Negative top margin cancels the second row-gap this empty line would
+     otherwise introduce. */
+  .bl-filter-divider {
+    order: 0; flex: 0 0 100%; width: 100%; height: 0;
+    background: none; margin: -0.45rem 0 0;
+  }
+
+  /* Row 1. Fixed narrow date field so it plus all three quick ranges stay on
+     ONE row; letting it size to "18 Aug 2026 to 20 Aug 2026" pushed the
+     buttons onto lines of their own. The range clips inside the field, which
+     is fine: it is a picker, not a label. */
+  .bl-filter-bar .bl-date-range-wrap { order: 0; flex: 0 0 auto; min-width: 0; }
+  .bl-filter-bar .bl-quick-btn {
+    order: 0; flex: 0 0 auto;
+    padding: 0.22rem 0.5rem; font-size: 0.68rem; letter-spacing: -0.01em;
+  }
+  .bl-date-range-input { width: 92px; min-width: 0; text-overflow: ellipsis; }
+
+  /* Row 2. Same order value on all four, so they share one line.
+     min-width:0 is required — form controls default to min-width:auto, which
+     refuses to shrink below their intrinsic width and would push the search
+     back onto its own row. */
+  .bl-filter-bar select {
+    order: 1; flex: 1 1 0; min-width: 0;
+    font-size: 0.72rem; padding: 0.25rem 0.2rem;
+  }
+  .bl-filter-bar .bl-search-input {
+    order: 1; flex: 1.6 1 0; min-width: 0;
+    font-size: 0.75rem; padding-left: 1.6rem;
+  }
+
+  /* Edge to edge. 1rem each side costs 32px of usable width on a phone,
+     which is most of a dropdown. 0.5rem keeps the cards off the bezel
+     without spending the row. */
+  .bills-container { padding: 0.5rem; }
+}
+
+
+@media (max-width: 600px) {
   .bills-table { font-size: 0.73rem; }
   .bills-table th, .bills-table td { padding: 0.35rem 0.25rem; }
 
@@ -236,6 +304,15 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
   .bl-card { padding: 0.45rem 0.5rem; }
   .bl-card .bl-label { font-size: 0.58rem; }
   .bl-card .bl-value { font-size: 0.82rem; }
+}
+
+@media (max-width: 430px) {
+  /* Last squeeze before the selects would clip mid-word on small phones. */
+  .bl-filter-bar { gap: 0.3rem; padding: 0.45rem 0.4rem; }
+  .bl-filter-bar select { font-size: 0.64rem; padding: 0.25rem 0.1rem; }
+  .bl-filter-bar .bl-search-input { font-size: 0.7rem; padding-left: 1.45rem; }
+  .bills-container { padding: 0.4rem; }
+  .bills-table-container { border-radius: 6px; }
 }
 
 /* ── Pay modal ── */
@@ -580,6 +657,36 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
 .bl-gst-modal input { width:100%; padding:.5rem .65rem; border:1px solid #cbd5e1;
   border-radius:7px; font-size:.88rem; outline:none; box-sizing:border-box;
   transition:border-color .15s, box-shadow .15s; color:#0f172a; }
+.bl-gst-typeahead { position:relative; }
+.bl-gst-suggestions {
+  position:absolute; top:100%; left:0; right:0; z-index:60;
+  background:#fff; border:1px solid #cbd5e1; border-top:none;
+  border-radius:0 0 8px 8px; max-height:240px; overflow-y:auto;
+  box-shadow:0 10px 24px rgba(15,23,42,.14);
+}
+/* The suggestion rows reuse the .ms-* classes from the guest lookup so the
+   two type-aheads look identical. These rules are a scoped fallback: if the
+   global sheet ever stops loading on this page, the list still reads as a
+   list instead of a stack of naked divs. */
+.bl-gst-suggestions .ms-row { display:flex; align-items:center; gap:.5rem;
+  padding:.45rem .6rem; cursor:pointer; border-bottom:1px solid #f1f5f9; }
+.bl-gst-suggestions .ms-row:last-child { border-bottom:none; }
+.bl-gst-suggestions .ms-row:hover { background:#f8fafc; }
+.bl-gst-suggestions .ms-main { flex:1; min-width:0; }
+.bl-gst-suggestions .ms-name { font-weight:700; font-size:.85rem; color:#0f172a; }
+.bl-gst-suggestions .ms-sub { color:#94a3b8; font-size:.74rem; margin-top:.1rem;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+.bl-gst-note { padding:.5rem .6rem; font-size:.76rem; line-height:1.4;
+  color:#64748b; cursor:default; }
+.bl-gst-note.warn { color:#92400e; background:#fffbeb; }
+.bl-gst-fill-status { font-size:.7rem; line-height:1.45; padding:.3rem .5rem;
+  border-radius:6px; margin-top:.3rem; }
+.bl-gst-fill-status.ok   { color:#065f46; background:#ecfdf5; border:1px solid #a7f3d0; }
+.bl-gst-fill-status.warn { color:#92400e; background:#fffbeb; border:1px solid #fde68a; }
+.bl-gst-known-empty { color:#64748b; background:#f8fafc; border-color:#e2e8f0; }
+.bl-gst-known-hint { font-size:.68rem; color:#0f766e; background:#f0fdfa;
+  border:1px solid #99f6e4; border-radius:6px; padding:.3rem .5rem;
+  margin-top:.3rem; line-height:1.45; }
 .bl-gst-modal input:focus { border-color:#1e40af;
   box-shadow:0 0 0 3px rgba(30,64,175,.12); }
 .bl-gst-modal input::placeholder { color:#94a3b8; font-size:.85rem; }
@@ -1499,7 +1606,15 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
     <div class="bl-gst-body">
       <div class="bl-gst-row">
         <label for="bl-gst-gstin">GSTIN<span class="bl-req">*</span></label>
-        <input id="bl-gst-gstin" maxlength="15" placeholder="e.g. 29AAACB1234F1Z5" autocomplete="off" />
+        <div class="bl-gst-typeahead">
+          <input id="bl-gst-gstin" maxlength="15" placeholder="e.g. 29AAACB1234F1Z5"
+                 autocomplete="off" spellcheck="false" data-lpignore="true" />
+          <!-- Same dropdown the guest-mobile lookup uses, down to the .ms-*
+               classes, so it reads as one pattern rather than two. -->
+          <div id="bl-gst-suggestions" class="bl-gst-suggestions" style="display:none;"></div>
+        </div>
+        <div class="bl-gst-known-hint" id="bl-gst-known-hint" style="display:none;"></div>
+        <div class="bl-gst-fill-status" id="bl-gst-fill-status" style="display:none;"></div>
         <div class="bl-gst-derived" id="bl-gst-state-hint">15 characters · 2-digit state code · 10-char PAN · entity number · checksum</div>
       </div>
 
@@ -2221,7 +2336,10 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
     if (subBills) subBills.addEventListener("click", () => _setSubTab("bills"));
     if (subCn)    subCn.addEventListener("click",    () => _setSubTab("cn"));
 
-    // ── GST recipient modal wiring (save / clear / cancel) ────────────────
+  
+
+
+  // ── GST recipient modal wiring (save / clear / cancel) ────────────────
     // These buttons live inside the static modal HTML. openGstModal only
     // sets the input values; the click handlers need to be bound once.
     const gstSave   = dom("bl-gst-save");
@@ -2594,10 +2712,19 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
   }
 
   // ── Filters — completed + pending_settlement entries with a bill_number ──────
-  function applyFilters() {
-    // Include completed bills AND pending_settlement bills (settle-later checkouts).
-    // bill_number presence is the canonical indicator that a bill was generated.
-    let f = state.allEntries.filter(
+  //
+  // The canonical "this document belongs in a GST return" predicate: every
+  // numbered document of the loaded period, regardless of what the operator
+  // happens to be looking at. Completed bills, pending_settlement bills
+  // (settle-later checkouts) and cancelled bills all qualify — a cancelled
+  // number still has to appear in Table 13. bill_number presence is the
+  // canonical indicator that a bill was generated.
+  //
+  // applyFilters() narrows this further with the on-screen search / source /
+  // payment / type filters. exportToExcel() must NOT: the CA workbook is
+  // always the whole period. See the note at the top of exportToExcel.
+  function gstReportableEntries() {
+    return state.allEntries.filter(
       (e) =>
         (e.status === "completed" || e.status === "pending_settlement" ||
          e.status === "cancelled") &&
@@ -2605,6 +2732,23 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
         e.bill_number !== "-" &&
         e.bill_number.trim() !== "",
     );
+  }
+
+  // Human-readable list of the on-screen filters currently narrowing the Bills
+  // table. Empty array means the table is showing the whole loaded period.
+  // Used by the export to tell the operator what it deliberately ignored.
+  function activeFilterLabels() {
+    const { search, source, payment, type } = state.filters;
+    const out = [];
+    if (search) out.push(`search "${search}"`);
+    if (source && source !== "all") out.push(`source = ${source}`);
+    if (payment && payment !== "all") out.push(`payment = ${payment}`);
+    if (type && type !== "all") out.push(`type = ${type}`);
+    return out;
+  }
+
+  function applyFilters() {
+    let f = gstReportableEntries();
 
     const { search, source, payment, type } = state.filters;
 
@@ -3756,14 +3900,75 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
   // Column orders mirror GSTN's published GSTR-1 JSON schema (2.1) field
   // order so a CA can paste rows directly into the offline GSTR-1 utility.
   // Schema version recorded in the hidden _schema sheet.
+  // ── Workbook file name ─────────────────────────────────────────────────────
+  // The CA receives one of these per period, often several revisions of the
+  // same period, and they all land in one Downloads folder. The name has to
+  // answer, without opening the file: whose lodge, which return, which period,
+  // and which revision. The old name gave the raw dateRange with no business
+  // name and no revision stamp, so two exports of the same month collided as
+  // "…(1).xlsx" and the CA had no way to tell which was current.
+  //
+  // A whole calendar month gets the short readable form (Jul-2026); anything
+  // else spells both ends out.
+  function _workbookFileName(startYmd, endYmd) {
+    const MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                 "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    const p2 = v => String(v).padStart(2, "0");
+    const parse = ymd => {
+      const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(ymd || ""));
+      return m ? { y: +m[1], m: +m[2], d: +m[3] } : null;
+    };
+    const now = new Date();
+    const stamp = `${now.getFullYear()}${p2(now.getMonth() + 1)}${p2(now.getDate())}`
+                + `-${p2(now.getHours())}${p2(now.getMinutes())}`;
+
+    const s = parse(startYmd), e = parse(endYmd);
+    if (!s || !e) return `Cibara_Comforts_GSTR1_gen${stamp}.xlsx`;
+
+    // Day 0 of the NEXT month is the last day of this one.
+    const lastOfStartMonth = new Date(s.y, s.m, 0).getDate();
+    const wholeMonth = s.y === e.y && s.m === e.m
+                    && s.d === 1 && e.d === lastOfStartMonth;
+
+    const span = wholeMonth
+      ? `${MON[s.m - 1]}-${s.y}`
+      : `${p2(s.d)}${MON[s.m - 1]}${s.y}_to_${p2(e.d)}${MON[e.m - 1]}${e.y}`;
+
+    return `Cibara_Comforts_GSTR1_${span}_gen${stamp}.xlsx`;
+  }
+
   async function exportToExcel() {
-    if (!state.filteredEntries.length) {
-      alert("No invoiced bills to export.");
-      return;
-    }
     if (typeof XLSX === "undefined") {
       alert("Excel library not loaded. Refresh and retry.");
       return;
+    }
+    if (!state.dateRange.start || !state.dateRange.end) {
+      alert("Pick a date range before exporting.");
+      return;
+    }
+
+    // ── The export IGNORES the on-screen filters, deliberately ──────────────
+    // This used to read state.filteredEntries, which is set AFTER the search
+    // box and the source / payment / type dropdowns have narrowed the table.
+    // Leaving "Show: B2B" selected and clicking Export produced a workbook
+    // labelled with the full month whose B2C Summary read zero and whose
+    // Table 13 serial range was short, with nothing anywhere recording that a
+    // filter had been active. A GST return is not a view of the Bills tab.
+    const _reportable = gstReportableEntries();
+    if (!_reportable.length) {
+      alert("No invoiced bills in this date range to export.");
+      return;
+    }
+    const _ignoredFilters = activeFilterLabels();
+    if (_ignoredFilters.length) {
+      const ok = confirm(
+        `The Bills table is filtered by ${_ignoredFilters.join(", ")}, ` +
+        `showing ${state.filteredEntries.length} of ${_reportable.length} documents.\n\n` +
+        `The workbook will ignore that filter and export all ` +
+        `${_reportable.length} documents for the period, because a GST return ` +
+        `must cover the whole period.\n\nContinue?`
+      );
+      if (!ok) return;
     }
 
     const period = `${state.dateRange.start} to ${state.dateRange.end}`;
@@ -3772,7 +3977,15 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
     // Fetch credit notes for the same period (parallel with bill aggregation
     // — Firestore call, ~200ms typical). If it fails we still produce a
     // best-effort export with empty CN sheets.
+    //
+    // A failed fetch here is NOT best-effort. An empty creditNotes array is
+    // indistinguishable from "this period had no credit notes": the CDNR and
+    // B2C Credit Note sheets print "(none in this period)" and the GSTR-3B
+    // reversal line reads zero. That understates the output tax reversal on a
+    // return the CA signs. So this one aborts the export instead.
     let creditNotes = [];
+    let cnLoaded = false;
+    let cnFailReason = "";
     try {
       const cnRes = await apiFetch("/list_credit_notes", {
         method: "POST",
@@ -3782,14 +3995,36 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
           end_date:   state.dateRange.end,
         }),
       });
-      const cnData = await cnRes.json();
-      if (cnData && cnData.success) creditNotes = cnData.credit_notes || [];
+      if (!cnRes.ok) {
+        cnFailReason = `server returned ${cnRes.status}`;
+      } else {
+        const cnData = await cnRes.json();
+        if (cnData && cnData.success) {
+          creditNotes = cnData.credit_notes || [];
+          cnLoaded = true;
+        } else {
+          cnFailReason = (cnData && cnData.message) || "unexpected response";
+        }
+      }
     } catch (err) {
       console.warn("[Bills] export: list_credit_notes failed", err);
+      cnFailReason = err && err.message ? err.message : "network error";
+    }
+    if (!cnLoaded) {
+      alert(
+        "Export cancelled: the credit notes for this period could not be " +
+        `loaded (${cnFailReason}).\n\n` +
+        "Exporting now would produce a workbook stating there were NO credit " +
+        "notes. If any were issued, the output tax reversal would be missing " +
+        "from GSTR-3B and the return would be short.\n\n" +
+        "Check your connection and try again."
+      );
+      return;
     }
 
     // Pull advances (Table 11A/B) for the same period.
     let advances = [];
+    let advLoaded = false;
     try {
       const advRes = await apiFetch("/list_advances", {
         method: "POST",
@@ -3800,9 +4035,22 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
         }),
       });
       const advData = await advRes.json();
-      if (advData && advData.success) advances = advData.advances || [];
+      if (advData && advData.success) {
+        advances = advData.advances || [];
+        advLoaded = true;
+      }
     } catch (err) {
       console.warn("[Bills] export: list_advances failed", err);
+    }
+    if (!advLoaded) {
+      // Not fatal like the credit notes above (Table 11A is a liability the CA
+      // can also reconstruct from the bank), but the placeholder row must say
+      // "not loaded", never "(none in this period)".
+      alert(
+        "Note: the advances (Table 11) sheet could not be loaded. The rest of " +
+        "the workbook will still export, and that sheet will be stamped " +
+        "NOT LOADED so it is not mistaken for a nil return."
+      );
     }
 
     // Pull GST-bearing expenses (input tax credit) for the same period. The
@@ -3860,6 +4108,17 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
       b2bTax:     { taxable: 0, cgst: 0, sgst: 0 },
       b2clTax:    { taxable: 0, cgst: 0, sgst: 0 },
       water5:     { taxable: 0, cgst: 0, sgst: 0, igst: 0, mrp: 0 },
+      // ── Exempt outward supply — GSTR-1 Table 8 / GSTR-3B 3.1(c) ──────────
+      // Table 8 splits on the RECIPIENT'S REGISTRATION, not on the B2B/B2CL/
+      // B2C bucket, so this is accumulated separately from accomExmpt (which
+      // is B2C-only, for the Table 7 sheet). Every row here is intra-state:
+      // place of supply is Karnataka for accommodation (Sec 12(3)(b) IGST
+      // Act) and for counter-sold goods (Sec 10(1)(c)). The inter-state rows
+      // are still emitted, at zero, because Table 8 has a fixed four-row shape.
+      exempt: {
+        accomReg: 0, accomUnreg: 0,   // exempt accommodation value
+        svcReg:   0, svcUnreg:   0,   // exempt / non-taxable services
+      },
       // SAC 999794 — cancellation forfeiture / agreement to refrain.
       // Separate bucket so it lands in its own HSN row, not bundled with 9963.
       cancel18:   { taxable: 0, cgst: 0, sgst: 0, igst: 0, count: 0 },
@@ -3874,7 +4133,7 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
     // Invoice Register reads top-to-bottom as 1, 2, 3 … N regardless of how
     // the on-screen Bills tab is sorted (latest-first by default for the
     // operator).
-    const _exportEntries = [...state.filteredEntries].sort(
+    const _exportEntries = [..._reportable].sort(
       (a, b) => parseBillNo(a.bill_number) - parseBillNo(b.bill_number),
     );
     _exportEntries.forEach((e) => {
@@ -4125,6 +4384,36 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
         b.cancel18.count   += 1;
       }
 
+      // ── Exempt outward supply (GSTR-1 Table 8 / GSTR-3B 3.1(c)) ──────────
+      // Runs for EVERY invoice type, not just B2C: a corporate folio can
+      // carry exempt nights too, and Table 8 has a row for exempt supplies to
+      // registered persons. Split on the recipient's GSTIN, which is what
+      // Table 8 keys on.
+      //
+      // This value must NOT also be summed into 3.1(a). It used to be — the
+      // exempt row was included in the B2C total that fed "Outward taxable
+      // supplies" — which reported exempt turnover as taxable and left 3.1(c)
+      // blank. Rule 88C compares GSTR-1 against GSTR-3B and raises a DRC-01B
+      // intimation on exactly that mismatch, and an unanswered DRC-01B blocks
+      // the next GSTR-1 filing.
+      if (!isCancelCharge) {
+        const _regRecipient = !!(recipientGstin || "").trim();
+        let _exemptAccom = 0;
+        for (const r of (ag.rows || [])) {
+          if (r.category !== "accommodation") continue;
+          if (r.rate !== 0) continue;
+          _exemptAccom += r.taxable;
+        }
+        const _exemptSvc = nonWaterSvcTotal || 0;
+        if (_regRecipient) {
+          b.exempt.accomReg += _exemptAccom;
+          b.exempt.svcReg   += _exemptSvc;
+        } else {
+          b.exempt.accomUnreg += _exemptAccom;
+          b.exempt.svcUnreg   += _exemptSvc;
+        }
+      }
+
       // ── HSN/SAC (Table 12) — EVERY invoice type ──────────────────────────
       // Table 12 is a rate-wise summary of ALL outward supply; it is not
       // scoped to B2C. Accommodation on B2B and B2CL invoices was previously
@@ -4170,6 +4459,13 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
     // with the operator's actual GSTR-1 Table 7 row.
     let b2cCnTaxable5  = 0, b2cCnCgst5  = 0, b2cCnSgst5  = 0;
     let b2cCnTaxable18 = 0, b2cCnCgst18 = 0, b2cCnSgst18 = 0;
+    // A B2C credit note at any rate other than 5 or 18 matches no row above,
+    // so Table 7 cannot net it. Rather than dropping it silently, park it here
+    // and deduct it explicitly on the GSTR-3B net-output line, flagged for the
+    // CA. Zero-rate credit notes land here too, which is correct: they carry
+    // no tax and nothing should be deducted for them.
+    let b2cCnUnmappedTaxable = 0, b2cCnUnmappedCgst = 0, b2cCnUnmappedSgst = 0;
+    let b2cCnUnmappedCount = 0;
     creditNotes.forEach(cn => {
       const isB2B = !!(cn.recipient_gstin || "").trim();
       if (isB2B) return;
@@ -4179,6 +4475,13 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
       const sgst = parseFloat(cn.credit_amount_sgst || 0);
       if (rate === 18) { b2cCnTaxable18 += tax; b2cCnCgst18 += cgst; b2cCnSgst18 += sgst; }
       else if (rate === 5) { b2cCnTaxable5  += tax; b2cCnCgst5  += cgst; b2cCnSgst5  += sgst; }
+      else {
+        b2cCnUnmappedTaxable += tax;
+        b2cCnUnmappedCgst    += cgst;
+        b2cCnUnmappedSgst    += sgst;
+        b2cCnUnmappedCount   += 1;
+        console.warn("[Bills] export: B2C credit note at unmapped rate", rate, cn.cn_number);
+      }
     });
 
     // Sheet 1: Invoice Register
@@ -4224,7 +4527,16 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
         "Integrated Tax Amount": 0, "Central Tax Amount": 0,
         "State/UT Tax Amount":   0, "Cess Amount": 0,
         "Total Taxable Value":   r2(b.accomExmpt.taxable),
-        "Remarks":               "Room charges below ₹1,000/night",
+        "Remarks":               "Room charges below ₹1,000/night. EXEMPT — goes to GSTR-3B 3.1(c) and GSTR-1 Table 8, NOT 3.1(a). See the 'Exempt (Table 8)' sheet.",
+      },
+      {
+        "Description":           "Other services — exempt / non-taxable (B2C only)",
+        "Place of Supply":       "Karnataka (KA-29)",
+        "Applicable % of Tax":   "0%",
+        "Integrated Tax Amount": 0, "Central Tax Amount": 0,
+        "State/UT Tax Amount":   0, "Cess Amount": 0,
+        "Total Taxable Value":   r2(b.exempt.svcUnreg),
+        "Remarks":               "Service lines the server matched to no HSN/SAC. EXEMPT — 3.1(c) / Table 8, NOT 3.1(a).",
       },
       {
         "Description":           "Packaged Drinking Water (HSN 2201) — 5% slab",
@@ -4249,11 +4561,22 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
         "Remarks":               "Agreement to refrain — Schedule II (count: " + b.cancel18.count + ")",
       }] : []),
     ];
+    // GSTR-3B 3.1(a) is the TAXABLE row. Exempt value belongs in 3.1(c) and
+    // GSTR-1 Table 8, so it is split out of `allTaxbl` here rather than summed
+    // in. Keying off the row's own stated rate keeps this correct if another
+    // exempt row is ever added above.
+    const _isExemptRow = r =>
+      String(r["Applicable % of Tax"] || "").trim() === "0%";
     const allCgst = r2(b2cRows.reduce((s, r) => s + parseFloat(r["Central Tax Amount"] || 0), 0));
     const allSgst = r2(b2cRows.reduce((s, r) => s + parseFloat(r["State/UT Tax Amount"] || 0), 0));
-    const allTaxbl = r2(b2cRows.reduce((s, r) => s + parseFloat(r["Total Taxable Value"] || 0), 0));
+    const allTaxbl = r2(b2cRows
+      .filter(r => !_isExemptRow(r))
+      .reduce((s, r) => s + parseFloat(r["Total Taxable Value"] || 0), 0));
+    const exemptTaxblB2C = r2(b2cRows
+      .filter(_isExemptRow)
+      .reduce((s, r) => s + parseFloat(r["Total Taxable Value"] || 0), 0));
     b2cRows.push({
-      "Description":           "TOTAL (B2C, net of CNs)",
+      "Description":           "TOTAL — TAXABLE only (B2C, net of CNs)  →  GSTR-3B 3.1(a)",
       "Place of Supply":       "",
       "Applicable % of Tax":   "",
       "Integrated Tax Amount": 0,
@@ -4261,7 +4584,18 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
       "State/UT Tax Amount":   allSgst,
       "Cess Amount":           0,
       "Total Taxable Value":   allTaxbl,
-      "Remarks":               `Period: ${period}`,
+      "Remarks":               `Period: ${period}. Excludes the exempt rows above.`,
+    });
+    b2cRows.push({
+      "Description":           "TOTAL — EXEMPT (B2C)  →  GSTR-3B 3.1(c) / GSTR-1 Table 8",
+      "Place of Supply":       "",
+      "Applicable % of Tax":   "",
+      "Integrated Tax Amount": 0,
+      "Central Tax Amount":    0,
+      "State/UT Tax Amount":   0,
+      "Cess Amount":           0,
+      "Total Taxable Value":   exemptTaxblB2C,
+      "Remarks":               "Value only, no tax. Do NOT add this to 3.1(a).",
     });
     const wsB2C = XLSX.utils.json_to_sheet(b2cRows);
 
@@ -4377,6 +4711,9 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
         "Taxable Value":              r2(cn.credit_amount_taxable || 0),
         "CGST":                       r2(cn.credit_amount_cgst || 0),
         "SGST":                       r2(cn.credit_amount_sgst || 0),
+        // An inter-state credit note routes its whole tax into IGST. This
+        // column used to be absent, so that tax was invisible on every sheet.
+        "IGST":                       r2(cn.credit_amount_igst || 0),
         "Guest Name":                 cn.guest_name || "",
         "Room":                       cn.room || "",
       }));
@@ -4384,8 +4721,49 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
       "CN Number": "(none in this period)",
       "CN Date":"","Original Invoice Number":"","Original Invoice Date":"",
       "Reason":"","Reason Narrative":"","Place of Supply":"","CN Value":0,
-      "Rate":0,"Taxable Value":0,"CGST":0,"SGST":0,"Guest Name":"","Room":"",
+      "Rate":0,"Taxable Value":0,"CGST":0,"SGST":0,"IGST":0,
+      "Guest Name":"","Room":"",
     }]);
+
+    // ── Sheet: Exempt / Nil-rated / Non-GST outward supplies (Table 8) ──────
+    // Fixed four-row shape, split on the recipient's registration and on
+    // inter- vs intra-state. The lodge's place of supply is always Karnataka
+    // (Sec 12(3)(b) IGST Act for accommodation, Sec 10(1)(c) for goods handed
+    // over at the counter), so the inter-state rows are structurally zero —
+    // emitted anyway so the sheet matches the portal's layout row for row.
+    //
+    // Everything here is "Exempted", not "Nil Rated": nil-rated means a
+    // taxable supply at a 0% rate, whereas this value is exempt by
+    // notification. If the exempt band in _slab_for_value is ever withdrawn,
+    // these rows go to zero on their own and 3.1(a) picks the value up.
+    const t8Rows = [
+      { "Description": "Inter-State supplies to registered persons",
+        "Nil Rated Supplies": 0, "Exempted (other than nil rated/non-GST)": 0,
+        "Non-GST Supplies": 0,
+        "Note": "Structurally nil — place of supply is always Karnataka" },
+      { "Description": "Intra-State supplies to registered persons",
+        "Nil Rated Supplies": 0,
+        "Exempted (other than nil rated/non-GST)": r2(b.exempt.accomReg + b.exempt.svcReg),
+        "Non-GST Supplies": 0,
+        "Note": `Accommodation ${r2(b.exempt.accomReg)} + other services ${r2(b.exempt.svcReg)}` },
+      { "Description": "Inter-State supplies to unregistered persons",
+        "Nil Rated Supplies": 0, "Exempted (other than nil rated/non-GST)": 0,
+        "Non-GST Supplies": 0,
+        "Note": "Structurally nil — place of supply is always Karnataka" },
+      { "Description": "Intra-State supplies to unregistered persons",
+        "Nil Rated Supplies": 0,
+        "Exempted (other than nil rated/non-GST)": r2(b.exempt.accomUnreg + b.exempt.svcUnreg),
+        "Non-GST Supplies": 0,
+        "Note": `Accommodation ${r2(b.exempt.accomUnreg)} + other services ${r2(b.exempt.svcUnreg)}` },
+      { "Description": "TOTAL  →  GSTR-3B 3.1(c)",
+        "Nil Rated Supplies": 0,
+        "Exempted (other than nil rated/non-GST)":
+          r2(b.exempt.accomReg + b.exempt.svcReg +
+             b.exempt.accomUnreg + b.exempt.svcUnreg),
+        "Non-GST Supplies": 0,
+        "Note": "Must NOT also appear in 3.1(a). Cross-check against the B2C Summary sheet's exempt total." },
+    ];
+    const wsExempt = XLSX.utils.json_to_sheet(t8Rows);
 
     // Sheet 8: GSTR-3B Summary (output tax / ITC / RCM / net cash)
     // ITC and RCM are NOT computed here — the operator's CA will fill them
@@ -4400,29 +4778,73 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
     // no summary sheet at all.
     const b2bOutputCgst = r2(b.b2bTax.cgst + b.b2clTax.cgst);
     const b2bOutputSgst = r2(b.b2bTax.sgst + b.b2clTax.sgst);
-    const totalCnCgst = r2(creditNotes.reduce((s, cn) => s + parseFloat(cn.credit_amount_cgst || 0), 0));
-    const totalCnSgst = r2(creditNotes.reduce((s, cn) => s + parseFloat(cn.credit_amount_sgst || 0), 0));
+
+    // ── Credit notes, split the way the sheets above are split ─────────────
+    // The B2C rows of the Table 7 sheet are ALREADY net of B2C credit notes
+    // (see the netting block above), and `allCgst` / `totalOutputCgst` is the
+    // sum of those rows. So the net-output line must deduct the B2B credit
+    // notes ONLY. It used to deduct the full CN total on top of the already
+    // netted B2C figure, so every B2C credit note was subtracted twice and the
+    // tax payable came out short by exactly one CN's worth of tax.
+    const _cnIsB2B = cn => !!(cn.recipient_gstin || "").trim();
+    const _cnSum = (arr, k) =>
+      r2(arr.reduce((s, cn) => s + parseFloat(cn[k] || 0), 0));
+    const cnB2B = creditNotes.filter(_cnIsB2B);
+    const cnB2C = creditNotes.filter(cn => !_cnIsB2B(cn));
+    const b2bCnTaxable = _cnSum(cnB2B, "credit_amount_taxable");
+    const b2bCnCgst    = _cnSum(cnB2B, "credit_amount_cgst");
+    const b2bCnSgst    = _cnSum(cnB2B, "credit_amount_sgst");
+    const b2bCnIgst    = _cnSum(cnB2B, "credit_amount_igst");
+    const b2cCnTaxableAll = _cnSum(cnB2C, "credit_amount_taxable");
+    const b2cCnCgstAll    = _cnSum(cnB2C, "credit_amount_cgst");
+    const b2cCnSgstAll    = _cnSum(cnB2C, "credit_amount_sgst");
+    const b2cCnIgstAll    = _cnSum(cnB2C, "credit_amount_igst");
+
+    const _exemptTotal = r2(exemptTaxblB2C + b.exempt.accomReg + b.exempt.svcReg);
+    const _unmappedNote = b2cCnUnmappedCount
+      ? `Includes ${b2cCnUnmappedCount} B2C credit note(s) at a rate other than 5%/18% that Table 7 could not net — CA to verify`
+      : "";
+    const _igstNote = (b2bCnIgst || b2cCnIgstAll)
+      ? "IGST appears only on credit notes here — accommodation is always intra-state, so check the original invoice"
+      : "";
+
     const gstr3b = [
-      { "Item": "Outward taxable supplies (B2C, accommodation+water)",
-        "Taxable Value": allTaxbl, "CGST": totalOutputCgst, "SGST": totalOutputSgst, "IGST": 0, "Cess": 0 },
-      { "Item": "Outward taxable supplies (B2B + B2CL)",
+      { "Item": "3.1(a) Outward taxable supplies — B2C (accommodation + goods/services)",
+        "Taxable Value": allTaxbl, "CGST": totalOutputCgst, "SGST": totalOutputSgst,
+        "IGST": 0, "Cess": 0,
+        "Note": "Already NET of B2C credit notes" },
+      { "Item": "3.1(a) Outward taxable supplies — B2B + B2CL",
         "Taxable Value": r2(b.b2bTax.taxable + b.b2clTax.taxable),
-        "CGST": b2bOutputCgst, "SGST": b2bOutputSgst, "IGST": 0, "Cess": 0 },
-      { "Item": "(less) Credit Notes issued (CDNR + B2C-CN)",
-        "Taxable Value": r2(creditNotes.reduce((s, cn) => s + parseFloat(cn.credit_amount_taxable || 0), 0)),
-        "CGST": totalCnCgst, "SGST": totalCnSgst, "IGST": 0, "Cess": 0 },
-      { "Item": "Net output tax (after CN reversal)",
+        "CGST": b2bOutputCgst, "SGST": b2bOutputSgst, "IGST": 0, "Cess": 0,
+        "Note": "GROSS — B2B credit notes deducted two rows below" },
+      { "Item": "3.1(c) Other outward supplies (Nil rated, exempted)",
+        "Taxable Value": _exemptTotal,
+        "CGST": 0, "SGST": 0, "IGST": 0, "Cess": 0,
+        "Note": "Value only, no tax. Detail in the 'Exempt (Table 8)' sheet." },
+      { "Item": "(less) Credit notes — B2B / CDNR",
+        "Taxable Value": b2bCnTaxable, "CGST": b2bCnCgst, "SGST": b2bCnSgst,
+        "IGST": b2bCnIgst, "Cess": 0,
+        "Note": "Deducted from the net output line below" },
+      { "Item": "(memo) Credit notes — B2C, ALREADY netted into the B2C row above",
+        "Taxable Value": b2cCnTaxableAll, "CGST": b2cCnCgstAll, "SGST": b2cCnSgstAll,
+        "IGST": b2cCnIgstAll, "Cess": 0,
+        "Note": "MEMO ONLY — do NOT subtract again" },
+      { "Item": "Net output tax (after credit note reversal)",
         "Taxable Value": "(see CA reconciliation)",
-        "CGST": r2(parseFloat(totalOutputCgst) + parseFloat(b2bOutputCgst) - parseFloat(totalCnCgst)),
-        "SGST": r2(parseFloat(totalOutputSgst) + parseFloat(b2bOutputSgst) - parseFloat(totalCnSgst)),
-        "IGST": 0, "Cess": 0 },
+        "CGST": r2(totalOutputCgst + b2bOutputCgst - b2bCnCgst - b2cCnUnmappedCgst),
+        "SGST": r2(totalOutputSgst + b2bOutputSgst - b2bCnSgst - b2cCnUnmappedSgst),
+        "IGST": r2(0 - b2bCnIgst - b2cCnIgstAll), "Cess": 0,
+        "Note": [_unmappedNote, _igstNote].filter(Boolean).join(" | ") },
       { "Item": "Eligible ITC from expenses (NOT auto-computed — CA to fill)",
-        "Taxable Value": "—", "CGST": "—", "SGST": "—", "IGST": "—", "Cess": "—" },
+        "Taxable Value": "—", "CGST": "—", "SGST": "—", "IGST": "—", "Cess": "—",
+        "Note": "" },
       { "Item": "RCM liability on OTA commission (NOT auto-computed — see migration doc)",
-        "Taxable Value": "—", "CGST": "—", "SGST": "—", "IGST": "—", "Cess": "—" },
+        "Taxable Value": "—", "CGST": "—", "SGST": "—", "IGST": "—", "Cess": "—",
+        "Note": "" },
       { "Item": "Net cash payable",
         "Taxable Value": "(net output - ITC + RCM)",
-        "CGST": "—", "SGST": "—", "IGST": "—", "Cess": "—" },
+        "CGST": "—", "SGST": "—", "IGST": "—", "Cess": "—",
+        "Note": "" },
     ];
     const wsGSTR3B = XLSX.utils.json_to_sheet(gstr3b);
 
@@ -4444,8 +4866,12 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
       "IGST":              0,
       "Method":            a.method || "",
     }));
+    // An empty sheet must distinguish "there were none" from "we could not
+    // check" — the two read identically to a CA and only one is safe to file.
     const wsAdvances = XLSX.utils.json_to_sheet(advRows.length ? advRows : [{
-      "Status": "(none in this period)",
+      "Status": advLoaded
+        ? "(none in this period)"
+        : "*** NOT LOADED — the advances endpoint failed. DO NOT treat this sheet as nil. ***",
       "Date": "", "Booking ID": "", "Guest Name": "", "Room": "",
       "Check-in Date": "", "Bill Number": "", "Place Of Supply": "",
       "Rate": 0, "Gross Amount": 0, "Taxable Value": 0,
@@ -4531,6 +4957,15 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
       { "Field": "Generated By",              "Value": "Cibara Comforts Lodge Mgmt" },
       { "Field": "Generated At",              "Value": new Date().toISOString() },
       { "Field": "Period",                    "Value": period },
+      // Provenance: what this file actually covers. The export deliberately
+      // ignores the Bills tab's on-screen filters; recording that here means a
+      // CA never has to take it on trust.
+      { "Field": "Documents Exported",        "Value": `${_reportable.length} numbered documents (all statuses: completed, pending_settlement, cancelled)` },
+      { "Field": "On-screen Filters",         "Value": _ignoredFilters.length
+                                                  ? `IGNORED by design: ${_ignoredFilters.join(", ")} (table was showing ${state.filteredEntries.length})`
+                                                  : "none active" },
+      { "Field": "Exempt Supplies",           "Value": "Exempt accommodation and services are reported in the 'Exempt (Table 8)' sheet and GSTR-3B 3.1(c). They are EXCLUDED from 3.1(a). Note: the sub-₹1,000 exemption (Entry 14, Notn. 12/2017-CTR) was omitted by Notn. 04/2022-CTR w.e.f. 18-Jul-2022 — if the CA's position is that it does not apply, these sheets go to zero and the value moves to the 5% rows." },
+      { "Field": "Credit Notes",              "Value": "B2C credit notes are netted INSIDE the B2C Summary rows. The GSTR-3B net-output line therefore deducts B2B/CDNR credit notes only — deducting the full CN total again would double-count." },
       { "Field": "B2CL Threshold",            "Value": "₹1,00,000 (Notification 12/2024-CT)" },
       { "Field": "Place of Supply",           "Value": "Always Karnataka (KA-29) for SAC 9963" },
       { "Field": "Advances Table",            "Value": "Table 11A/B — cross-month advances only; same-month advances net out and are excluded" },
@@ -4608,6 +5043,7 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
       XLSX.utils.book_append_sheet(wb, wsB2C,    "B2C Summary");
       XLSX.utils.book_append_sheet(wb, wsB2CL,   "B2CL Invoices");
       XLSX.utils.book_append_sheet(wb, wsHSN,    "HSN SAC Summary");
+      XLSX.utils.book_append_sheet(wb, wsExempt, "Exempt (Table 8)");
       XLSX.utils.book_append_sheet(wb, wsDocs,   "Docs Issued (Table 13)");
       XLSX.utils.book_append_sheet(wb, wsCDNR,   "CDNR (B2B CNs)");
       XLSX.utils.book_append_sheet(wb, wsB2CCN,  "B2C Credit Notes");
@@ -4622,10 +5058,8 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
           wb.Workbook.Sheets[idx].Hidden = 1;
         }
       }
-      XLSX.writeFile(
-        wb,
-        `CIBARA_GSTR1_Workbook_${state.dateRange.start}_to_${state.dateRange.end}.xlsx`,
-      );
+      XLSX.writeFile(wb, _workbookFileName(state.dateRange.start,
+                                           state.dateRange.end));
     } catch (err) {
       console.error("[Bills] export error:", err);
       alert("Export failed: " + err.message);
@@ -4792,6 +5226,388 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
     "36":"Telangana","37":"Andhra Pradesh","38":"Ladakh"
   };
 
+  // ── Known GST recipients — type-ahead + autofill ─────────────────────────
+  // Companies this lodge has invoiced before, offered as you type. Re-keying
+  // a 15-character GSTIN by hand is where B2B invoices go wrong: one wrong
+  // character and the customer cannot claim the credit, and nobody finds out
+  // until they reconcile GSTR-2B weeks later.
+  //
+  // Deliberately an OFFER, never an automatic application. Picking a company
+  // fills the other three fields; typing a GSTIN that happens to match one
+  // fills them too, but only while they are still empty — see _gstAutofill.
+  // The same guest can stay on company business one week and privately the
+  // next, so nothing is ever stamped on without the operator choosing it.
+  let _gstKnown = null;          // null = never loaded, [] = loaded, none found
+  let _gstKnownFailed = false;   // distinguishes "none exist" from "load failed"
+  let _gstKnownWhy = "";         // the reason, in words the operator can act on
+  let _gstInFlight = null;       // the running fetch, so two opens share one call
+  let _gstSuppressOpen = false;  // true while replaying a synthetic input event
+
+  // Was the last attempt a success? A failed attempt must NOT be remembered
+  // as "loaded", or the modal is dead for the rest of the page's life.
+  //
+  // This is the bug that made a real, existing company invisible. The old
+  // version set `_gstKnown = []` up front as a re-entrancy guard and then
+  // returned that same [] on every error path, while the only cache check
+  // was `if (_gstKnown !== null) return`. So one bad first load — the server
+  // not yet restarted, a dropped connection, a session that had just
+  // expired — pinned an empty directory in memory until the operator
+  // reloaded the whole page, and every later open silently short-circuited
+  // to nothing. Nothing on screen said so. It just looked broken.
+  function _gstNeedsLoad() {
+    return _gstKnown === null || _gstKnownFailed;
+  }
+
+  async function _loadGstKnown(force) {
+    if (!force && !_gstNeedsLoad()) return _gstKnown;
+    if (_gstInFlight) return _gstInFlight;   // share one in-flight request
+    _gstInFlight = _fetchGstKnown().finally(() => { _gstInFlight = null; });
+    return _gstInFlight;
+  }
+
+  async function _fetchGstKnown() {
+    _gstKnownFailed = false;
+    _gstKnownWhy = "";
+    try {
+      const res = await apiFetch("/gst_recipients", { method: "GET" });
+      if (!res.ok) {
+        // Name the actual cause. "Could not load" on its own sent us hunting
+        // through query syntax and permissions when the answer was that the
+        // server had not been restarted — a new Python route does not exist
+        // until the Flask process reloads, so it 404s while the browser
+        // happily picks up the new JS.
+        _gstKnownFailed = true;
+        _gstKnownWhy =
+          res.status === 404
+            ? "the server needs a restart to pick up this feature"
+            : res.status === 403
+              ? "your account lacks the bill.gst.edit permission"
+              : res.status === 401
+                ? "your session expired — sign in again"
+                : `server error ${res.status}`;
+        return _gstKnown || [];
+      }
+      const data = await res.json().catch(() => ({}));
+      if (data && data.success && Array.isArray(data.recipients)) {
+        _gstKnown = data.recipients;
+        _gstKnownFailed = !!data.degraded;
+        if (data.degraded) _gstKnownWhy = "the lookup failed on the server";
+      } else {
+        _gstKnownFailed = true;
+        _gstKnownWhy = (data && data.message) || "unexpected response";
+      }
+    } catch (e) {
+      // A convenience feature must never block the modal. Typing by hand
+      // still works exactly as before.
+      _gstKnownFailed = true;
+      _gstKnownWhy = "could not reach the server";
+      console.warn("[Bills] gst_recipients unavailable", e);
+    }
+    if (_gstKnown === null) _gstKnown = [];
+    return _gstKnown;
+  }
+
+  function _gstRenderKnown() {
+    const hint = dom("bl-gst-known-hint");
+    if (!hint) return;
+    // Still loading: say nothing rather than "none yet", which is a claim we
+    // cannot make until the fetch lands.
+    if (_gstKnown === null) { hint.style.display = "none"; hint.innerHTML = ""; return; }
+    const rows = _gstKnown || [];
+
+    // This line now carries ONLY the states the dropdown cannot express.
+    //
+    // It used to also render a row of "recently invoiced" chips. That was a
+    // workaround for the <datalist> being invisible, and once the real
+    // dropdown replaced the datalist the chips became a second, redundant
+    // picker — and worse, an empty teal bar under the field whenever the
+    // strip rendered with nothing to show. The dropdown opens on focus and
+    // filters as you type, so there is nothing left for chips to add.
+    //
+    // The empty and failed states still belong here: a dropdown that never
+    // opens looks exactly like a dropdown that is broken, so those two cases
+    // have to say which they are.
+    if (rows.length) {
+      hint.style.display = "none";
+      hint.innerHTML = "";
+      return;
+    }
+
+    hint.style.display = "";
+    hint.className = "bl-gst-known-hint bl-gst-known-empty";
+    hint.textContent = _gstKnownFailed
+      ? `Suggestions unavailable — ${_gstKnownWhy || "unknown reason"}. ` +
+        `Type the details in by hand.`
+      : "No previously invoiced companies yet. The first B2B bill you save will appear here.";
+  }
+
+
+  // Fill the remaining fields from a matched company.
+  //
+  // `force` is true when the operator explicitly picked from the list, and
+  // false when we merely noticed the typed GSTIN matches one. In the second
+  // case only BLANK fields are filled, so a half-typed correction is never
+  // overwritten under the operator's hands.
+  function _gstAutofill(gstin, force) {
+    const rec = (_gstKnown || []).find(
+      r => r.gstin === String(gstin || "").trim().toUpperCase());
+    if (!rec) return false;
+
+    // Track what was actually written. The first version announced
+    // "Filled from NEERAJ" whenever a GSTIN matched, even when the stored
+    // record carried nothing but the GSTIN itself — so the operator was told
+    // the form had been filled while Legal Name sat empty in front of them.
+    const filled = [];
+    [["bl-gst-legal", rec.legal_name, "legal name"],
+     ["bl-gst-trade", rec.trade_name, "trade name"],
+     ["bl-gst-addr",  rec.address,    "address"]].forEach(([id, val, label]) => {
+      const el = dom(id);
+      if (!el || !val) return;
+      if (force || !el.value.trim()) { el.value = val; filled.push(label); }
+    });
+
+    // Write to its OWN node. This used to set hint.textContent, and the hint
+    // is where the company chips live — so the moment autofill ran, the list
+    // the operator was picking from vanished and could not be reopened
+    // without closing and reopening the modal.
+    const st = dom("bl-gst-fill-status");
+    if (st) {
+      const who = rec.trade_name || rec.legal_name || rec.gstin;
+      st.style.display = "";
+      if (filled.length) {
+        st.className = "bl-gst-fill-status ok";
+        st.textContent = `Filled ${filled.join(", ")} from ${who}` +
+          (rec.last_used ? ` · last invoiced ${rec.last_used}` : "") +
+          (rec.count > 1 ? ` · ${rec.count} invoices` : "");
+      } else if (!rec.legal_name && !rec.trade_name && !rec.address) {
+        // Matched, but the stored record really is bare.
+        st.className = "bl-gst-fill-status warn";
+        st.textContent = `${who} is on file, but no legal name or address was ` +
+          `saved with it — please fill those in.`;
+      } else {
+        // Matched, the record has data, and nothing was written because the
+        // form already holds it. Say nothing rather than contradict the
+        // message we just showed: picking a row fires a synthetic "input"
+        // event to re-run the GSTIN validator, and that second pass filled
+        // nothing (the fields were no longer blank) - so the old code
+        // immediately replaced "Filled legal name, address from NEERAJ" with
+        // "no legal name or address was saved with it", which is false and
+        // reads as a broken record.
+        st.style.display = "none";
+        st.textContent = "";
+      }
+    }
+    return true;
+  }
+
+  function _gstClearFillStatus() {
+    const st = dom("bl-gst-fill-status");
+    if (st) { st.style.display = "none"; st.textContent = ""; }
+  }
+
+  // ── GSTIN suggestion dropdown ────────────────────────────────────────────
+  // Deliberately the same interaction as the guest lookup on check-in: type a
+  // few characters, a list drops under the field, click a row and the form
+  // fills. Same .ms-* classes, so it is the same component visually and there
+  // is one pattern to learn rather than two.
+  //
+  // Filtering runs on the client against the list fetched when the modal
+  // opened. The directory is one row per company ever invoiced, so a round
+  // trip per keystroke would be latency for nothing.
+
+  function _gstHideSuggestions() {
+    const el = dom("bl-gst-suggestions");
+    if (el) el.style.display = "none";
+  }
+
+  // Match on GSTIN or on company name, because the operator remembers the
+  // company, not the 15 characters. An empty query lists the most recent,
+  // which is what makes the feature visible at all on focus.
+  function _gstMatches(q) {
+    const rows = _gstKnown || [];
+    const t = String(q || "").trim().toUpperCase();
+    if (!t) return rows.slice(0, 8);
+    return rows.filter(r =>
+      String(r.gstin || "").toUpperCase().includes(t) ||
+      String(r.trade_name || "").toUpperCase().includes(t) ||
+      String(r.legal_name || "").toUpperCase().includes(t)
+    ).slice(0, 8);
+  }
+
+  function _fmtGstDate(d) {
+    const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(d || ""));
+    if (!m) return String(d || "");
+    const MON = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+    return m[3] + " " + MON[Number(m[2]) - 1] + " " + m[1];
+  }
+
+  // Show one non-clickable line instead of an empty box. Every state the
+  // dropdown can be in has to be visible, because "nothing dropped down" is
+  // indistinguishable from "the feature is broken" from the operator's side
+  // of the screen, and that ambiguity is exactly what cost us this bug.
+  function _gstNote(el, text, cls) {
+    el.innerHTML = "";
+    const row = document.createElement("div");
+    row.className = "bl-gst-note" + (cls ? " " + cls : "");
+    row.textContent = text;
+    el.appendChild(row);
+    el.style.display = "block";
+  }
+
+  // A thrown error inside the renderer used to mean the list simply never
+  // opened - the exact failure this whole fix is about. Catch it here so the
+  // next one announces itself on screen instead of hiding for weeks.
+  function _gstRenderSuggestions(q) {
+    try {
+      _gstRenderSuggestionsInner(q);
+    } catch (e) {
+      console.error("[Bills] GST suggestion render failed", e);
+      const el = dom("bl-gst-suggestions");
+      if (el) _gstNote(el, "Suggestions could not be drawn. Type the details " +
+                           "in by hand.", "warn");
+    }
+  }
+
+  function _gstRenderSuggestionsInner(q) {
+    const el = dom("bl-gst-suggestions");
+    if (!el) return;
+
+    // Order matters: a FAILED load also leaves _gstKnown at null, so the
+    // failure has to be reported first or a dead feature reads as "Loading"
+    // forever.
+    if (_gstKnownFailed) {
+      _gstNote(el,
+        "Suggestions unavailable \u2014 " + (_gstKnownWhy || "unknown reason") +
+        ". Type the details in by hand.", "warn");
+      return;
+    }
+
+    // Still fetching. The old code rendered zero hits and hid the list, so
+    // an operator who clicked the field and started typing straight away -
+    // which is what everybody does - raced the request and saw nothing, and
+    // nothing re-rendered when the data finally arrived.
+    if (_gstKnown === null) {
+      _gstNote(el, "Loading previously invoiced companies\u2026", "muted");
+      return;
+    }
+
+    const hits = _gstMatches(q);
+    if (!hits.length) {
+      const rows = _gstKnown || [];
+      _gstNote(el, rows.length
+        ? "No match in " + rows.length + " previously invoiced " +
+          (rows.length === 1 ? "company" : "companies")
+        : "No previously invoiced companies yet", "muted");
+      return;
+    }
+
+    el.innerHTML = "";
+    hits.forEach((r) => {
+      const row = document.createElement("div");
+      row.className = "ms-row";
+      const name = r.trade_name || r.legal_name || "(no name on file)";
+      const sub = [r.gstin];
+      if (r.last_used) sub.push(_fmtGstDate(r.last_used));
+      const n = Number(r.count || 0);
+      if (n > 0) sub.push(n + " invoice" + (n > 1 ? "s" : ""));
+      // Built with textContent, not an HTML string.
+      //
+      // This line is why the dropdown appeared dead. It called escapeAttr(),
+      // which is a PRIVATE function inside register.js's IIFE - it was never
+      // a global, so in this module it is simply undefined. The moment a
+      // company matched, the loop threw ReferenceError on the first row, the
+      // `el.style.display = "block"` at the end of the function never ran,
+      // and the list stayed hidden. No match, no error on screen, nothing:
+      // the failure looked exactly like "there are no companies on file",
+      // which is why "29AAWFC1962B1Z9 exists but 29AA shows nothing".
+      //
+      // textContent removes the whole class of problem. Company names and
+      // addresses are operator-typed free text, so they must never be
+      // concatenated into markup anyway - an apostrophe in "O'Brien & Co"
+      // is a bug waiting in an escaping helper, and no bug at all here.
+      const main = document.createElement("div");
+      main.className = "ms-main";
+      const nameEl = document.createElement("div");
+      nameEl.className = "ms-name";
+      nameEl.textContent = name;
+      const subEl = document.createElement("div");
+      subEl.className = "ms-sub";
+      subEl.textContent = sub.join(" \u00b7 ");
+      main.appendChild(nameEl);
+      main.appendChild(subEl);
+      row.appendChild(main);
+      row.addEventListener("mousedown", (ev) => {
+        // mousedown, not click: the input's blur fires first and would hide
+        // the list before a click ever landed on it.
+        ev.preventDefault();
+        const gi = dom("bl-gst-gstin");
+        if (gi) gi.value = r.gstin;
+        _gstHideSuggestions();
+        _gstAutofill(r.gstin, true);
+        // Let the existing validator light up the state chip and checksum
+        // hint exactly as if the GSTIN had been typed - but suppress the
+        // suggestion redraw, or the list the operator just picked from
+        // springs straight back open under their cursor.
+        _gstSuppressOpen = true;
+        try {
+          if (gi) gi.dispatchEvent(new Event("input", { bubbles: true }));
+        } finally {
+          _gstSuppressOpen = false;
+        }
+      });
+      el.appendChild(row);
+    });
+    el.style.display = "block";
+  }
+
+  // Redraw whatever is on screen once the directory arrives. Without this the
+  // dropdown is a snapshot of the moment it was opened and never updates.
+  function _gstRepaint(inp) {
+    _gstRenderKnown();
+    const el = dom("bl-gst-suggestions");
+    const focused = document.activeElement === inp;
+    const open = el && el.style.display !== "none";
+    if (focused || open) _gstRenderSuggestions(inp ? inp.value : "");
+  }
+
+  function _wireGstAutofill() {
+    const inp = dom("bl-gst-gstin");
+    if (!inp || inp.dataset.gstAutofillBound) return;
+    inp.dataset.gstAutofillBound = "1";
+    // Focus lists the most recent companies immediately. This is the
+    // discoverability fix: the previous version used a <datalist>, which
+    // renders nothing until the typed text matches, so an empty field looked
+    // like an ordinary box and the feature appeared not to exist.
+    inp.addEventListener("focus", () => {
+      _gstRenderSuggestions(inp.value);
+      // Retry a failed load on the next focus rather than making the
+      // operator reload the page. _loadGstKnown is a no-op when the
+      // directory is already in hand.
+      if (_gstNeedsLoad()) _loadGstKnown().then(() => _gstRepaint(inp));
+    });
+    inp.addEventListener("input", () => {
+      const v = inp.value.trim().toUpperCase();
+      if (!_gstSuppressOpen) _gstRenderSuggestions(v);
+      if (v.length === 15) {
+        if (!_gstSuppressOpen) _gstAutofill(v, false);
+      } else {
+        // Half a GSTIN matches nothing, so a status line from an earlier
+        // match is stale and misleading.
+        _gstClearFillStatus();
+      }
+    });
+    inp.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") _gstHideSuggestions();
+    });
+    // Close on a click outside the field or the list — the same
+    // document-level handler the guest lookup uses.
+    document.addEventListener("click", (e) => {
+      const el = dom("bl-gst-suggestions");
+      if (!el || el.style.display === "none") return;
+      if (!inp.contains(e.target) && !el.contains(e.target)) _gstHideSuggestions();
+    });
+  }
+
   function openGstModal(billId, billNumber, locked) {
     const e = state.allEntries.find(x => x.id === billId);
     const bd = dom("bl-gst-backdrop");
@@ -4810,6 +5626,15 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
 
     if (billnoEl) billnoEl.textContent = billNumber || "—";
     if (gstinEl)  gstinEl.value = (e && e.recipient_gstin) || "";
+
+    // Load the directory of previously-invoiced companies and wire the
+    // type-ahead. Fired without awaiting so the modal opens instantly; the
+    // suggestions appear a moment later, and until then the fields behave
+    // exactly as they always did.
+    _wireGstAutofill();
+    _gstClearFillStatus();
+    _gstHideSuggestions();
+    _loadGstKnown().then(() => _gstRepaint(dom("bl-gst-gstin")));
     if (legalEl)  legalEl.value = (e && e.recipient_legal_name) || "";
     if (tradeEl)  tradeEl.value = (e && e.recipient_trade_name) || "";
     if (addrEl)   addrEl.value  = (e && e.recipient_address) || "";

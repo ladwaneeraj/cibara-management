@@ -10,6 +10,25 @@
         { "fieldPath": "targetId", "order": "ASCENDING" },
         { "fieldPath": "server_ts", "order": "DESCENDING" }
       ]
+    },
+    {
+      "//": "routes/rooms.py :: get_stay_payments Q1 (room == X AND date >= checkin_date). Equality + range on different fields needs a composite index. Confirmed failing in lodge.log ('The query requires an index', 2026-08-21 11:00:25), which silently removes the legacy safety net behind the stay_id fast path.",
+      "collectionGroup": "payments",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "room", "order": "ASCENDING" },
+        { "fieldPath": "date", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "//": "services/payment_service.py :: query_payments_for_stay Q1 (room == X AND name == Y AND date >= checkin_date). Same equality + range shape as above with the guest-name equality folded in. Feeds /get_history and every legacy-stay bill rebuild.",
+      "collectionGroup": "payments",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "room", "order": "ASCENDING" },
+        { "fieldPath": "name", "order": "ASCENDING" },
+        { "fieldPath": "date", "order": "ASCENDING" }
+      ]
     }
   ],
   "fieldOverrides": []

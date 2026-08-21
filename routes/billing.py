@@ -248,7 +248,10 @@ def get_register_data():
             room_price = guest.get("price", 0)
             days = (room_data_item.get("renewal_count") or 0) + 1
             room_charges = room_price * days
-            services_total = sum(a.get("price", 0) for a in room_data_item.get("add_ons", []))
+            services_total = sum(
+                a.get("price", 0) for a in room_data_item.get("add_ons", [])
+                if payment_service.is_live_charge(a)
+            )
 
             # ── Payments lookup for active stays — keyed by stay_id ───────
             # The pre-built `payments_by_room` index is date-range scoped, so
@@ -306,13 +309,20 @@ def get_register_data():
                         )
                         stay_payments = payments_by_room.get((room_str, guest_name), [])
 
+                # is_live_charge here too. The stamped fast path above reads
+                # room.stay_payment_cash, which refresh_room_stay_aggregates
+                # already filters, so without this the SAME stay reported two
+                # different figures depending on whether the stamp was fresh —
+                # an invisible cache field deciding which number is true.
                 payment_cash = sum(
                     p.get("amount", 0) for p in stay_payments
                     if p.get("method") == "cash" and p.get("type") not in _refund_types
+                    and payment_service.is_live_charge(p)
                 )
                 payment_online = sum(
                     p.get("amount", 0) for p in stay_payments
                     if p.get("method") == "online" and p.get("type") not in _refund_types
+                    and payment_service.is_live_charge(p)
                 )
 
             serial = _find_serial_fast(room_str, guest_name, checkin_dt, log_index)
@@ -346,7 +356,11 @@ def get_register_data():
                 # convert_booking_to_checkin. Walk-ins default to "normal".
                 "booking_source": room_data_item.get("booking_source", "normal"),
                 "payment_source": room_data_item.get("payment_source", "hotel"),
-                # Include add_ons so the payment modal can display services
+                # Include add_ons so the payment modal can display services.
+                # Voided rows are sent through with their flag intact rather
+                # than filtered out: the modal renders them struck through so
+                # the operator can see a correction was made, and every place
+                # that SUMS them calls payment_service.is_live_charge.
                 "services": room_data_item.get("add_ons", []),
                 "guest_count": guest.get("guests", 1),
                 # Attribution from the live room doc — populates the
@@ -1584,13 +1598,19 @@ def recalculate_bill():
         _refund_types = ("refund", "checkout_refund", "manual_refund",
                          "booking_cancel_refund")
 
+        # is_live_charge — this route REWRITES these onto a finalised invoice
+        # and regenerates the PDF, so an unguarded sum does not just report the
+        # error, it entrenches it. Recalculating a bill to fix a void used to
+        # re-stamp the same wrong figures.
         payment_cash = sum(
             p.get("amount", 0) for p in stay_payments
             if p.get("method") == "cash" and p.get("type") not in _exclude
+            and payment_service.is_live_charge(p)
         )
         payment_online = sum(
             p.get("amount", 0) for p in stay_payments
             if p.get("method") == "online" and p.get("type") not in _exclude
+            and payment_service.is_live_charge(p)
         )
         # OTA-settled (MMT prepaid room). Not a drawer receipt, but it does
         # settle the guest's liability, so it must be subtracted from the
@@ -1599,6 +1619,7 @@ def recalculate_bill():
         payment_ota = sum(
             p.get("amount", 0) for p in stay_payments
             if p.get("method") == "ota" and p.get("type") not in _exclude
+            and payment_service.is_live_charge(p)
         )
         total_refunds = sum(
             p.get("amount", 0) for p in stay_payments
@@ -3501,6 +3522,127 @@ def render_bill_pdf():
 # are LOCKED. Past-month corrections must go via Credit Note + fresh invoice.
 # A linked Credit Note also locks GST editing.
 
+# ═══════════════════════════════════════════════════════════════════════════
+# GST recipient directory — every company this lodge has invoiced before
+# ═══════════════════════════════════════════════════════════════════════════
+
+_GST_DIR_CACHE = {"rows": None, "ts": 0.0}
+_GST_DIR_TTL_S = 600          # 10 minutes
+_GST_DIR_SCAN_LIMIT = 300     # newest N B2B invoices
+
+
+def _gst_dir_invalidate() -> None:
+    """
+    Drop the cached recipient directory after a bill's GST details change.
+
+    Without this, a company invoiced two minutes ago is missing from the
+    type-ahead for up to ten more minutes, and the operator - who just typed
+    those 15 characters - is told there is no such company on file. Worse,
+    the very first lookup on a fresh process can cache an empty list, so a
+    lodge that has never opened the modal before sees "none yet" for ten
+    minutes after saving its first ever B2B invoice.
+
+    Clearing on write is cheap: this list changes only when someone edits GST
+    recipient details, which is a handful of times a day at most.
+    """
+    _GST_DIR_CACHE["rows"] = None
+    _GST_DIR_CACHE["ts"] = 0.0
+
+
+@billing_bp.route("/gst_recipients", methods=["GET"])
+@requires_permission("bill.gst.edit")
+def gst_recipients():
+    """
+    Companies this lodge has invoiced before, newest first.
+
+    Feeds the type-ahead on the GST Recipient Details modal: the operator
+    starts typing a GSTIN or a company name and picks the one they billed
+    last month instead of re-keying 15 characters plus a legal name and
+    address. Re-keying is where B2B invoices go wrong — one wrong character
+    in a GSTIN and the customer cannot claim the credit, and the mismatch
+    only surfaces when they reconcile GSTR-2B weeks later.
+
+    Source is the bills themselves rather than a separate directory, so
+    there is nothing to seed, nothing to migrate, and nothing that can drift
+    out of step with what was actually invoiced.
+
+    Cost: `recipient_gstin > ""` is an inequality on a single field, which
+    Firestore auto-indexes — no composite index to deploy. It also returns
+    ONLY B2B bills, so the scan is bounded by how much B2B this lodge
+    actually does, not by total bill volume. Capped at 300 documents and
+    cached for ten minutes process-wide, because this list changes about as
+    often as the lodge takes on a new corporate customer.
+    """
+    try:
+        import time as _t
+        now = _t.time()
+        if (_GST_DIR_CACHE["rows"] is not None
+                and now - _GST_DIR_CACHE["ts"] < _GST_DIR_TTL_S):
+            return jsonify(success=True, cached=True,
+                           recipients=_GST_DIR_CACHE["rows"])
+
+        q = (bills_ref
+             .where(filter=FieldFilter("recipient_gstin", ">", ""))
+             .limit(_GST_DIR_SCAN_LIMIT))
+
+        # GSTIN -> best row. "Best" is the most recently invoiced, because a
+        # company that moved office should offer its current address, not the
+        # first one ever typed.
+        by_gstin = {}
+        for snap in q.stream():
+            b = snap.to_dict() or {}
+            gstin = str(b.get("recipient_gstin") or "").strip().upper()
+            if len(gstin) != 15:
+                continue          # never offer something that will not validate
+            when = str(b.get("checkout_time") or "")
+            prev = by_gstin.get(gstin)
+            if prev and prev["_when"] >= when:
+                prev["count"] += 1
+                continue
+            row = {
+                "gstin": gstin,
+                "legal_name":  str(b.get("recipient_legal_name") or "").strip(),
+                "trade_name":  str(b.get("recipient_trade_name") or "").strip(),
+                "address":     str(b.get("recipient_address") or "").strip(),
+                "state":       str(b.get("recipient_state") or "").strip(),
+                "state_code":  str(b.get("recipient_state_code") or "").strip(),
+                "last_used":   when[:10],
+                "count":       (prev["count"] + 1) if prev else 1,
+                "_when":       when,
+            }
+            by_gstin[gstin] = row
+
+        # Merge in the per-guest GST profiles as well. A profile is written the
+        # moment /update_bill_gst succeeds, so it survives a bill later being
+        # cancelled or reverted to B2C — and on a fresh deployment it is
+        # usually the only place anything exists at all. Bills win on a clash,
+        # because they are what was actually invoiced.
+        try:
+            for prof in (customer_service.list_gst_profiles(200) or []):
+                g = prof.get("gstin")
+                if not g or g in by_gstin:
+                    continue
+                prof["count"] = 1
+                prof["_when"] = prof.get("last_used") or ""
+                by_gstin[g] = prof
+        except Exception as _pe:  # noqa: BLE001
+            logger.warning(f"gst_recipients: profile merge skipped: {_pe}")
+
+        rows = sorted(by_gstin.values(), key=lambda r: r.get("_when") or "",
+                      reverse=True)
+        for r in rows:
+            r.pop("_when", None)
+
+        _GST_DIR_CACHE["rows"] = rows
+        _GST_DIR_CACHE["ts"] = now
+        return jsonify(success=True, cached=False, recipients=rows)
+    except Exception as e:  # noqa: BLE001
+        # Never break the GST modal over a convenience feature — the operator
+        # can always type the details by hand.
+        logger.error(f"gst_recipients failed: {e}", exc_info=True)
+        return jsonify(success=True, recipients=[], degraded=True)
+
+
 @billing_bp.route("/update_bill_gst", methods=["POST"])
 @requires_permission("bill.gst.edit")
 def update_bill_gst():
@@ -3598,6 +3740,7 @@ def update_bill_gst():
             }
             update.update(attribution_update())
             bills_ref.document(bill_id).update(update)
+            _gst_dir_invalidate()
             after_snapshot = {k: update.get(k, bill.get(k)) for k in gst_fields}
             write_log(
                 "bill.gst.clear",
@@ -3643,6 +3786,7 @@ def update_bill_gst():
             }
             update.update(attribution_update())
             bills_ref.document(bill_id).update(update)
+            _gst_dir_invalidate()
 
             after_snapshot = {k: update.get(k, bill.get(k)) for k in gst_fields}
             write_log(
@@ -3743,6 +3887,7 @@ def update_bill_gst():
             }
             update.update(attribution_update())
             bills_ref.document(bill_id).update(update)
+            _gst_dir_invalidate()
 
             after_snapshot = {k: update.get(k, bill.get(k)) for k in gst_fields}
             write_log(

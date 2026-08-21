@@ -628,12 +628,52 @@ tr.reg-row-located.reg-row-located-fade > td {
   .reg-filter-bar label { display: none; }
   .register-table { font-size: 0.73rem; }
   .register-table th, .register-table td { padding: 0.35rem 0.25rem; }
-  /* Row 1: date fills available width, quick btns stay compact */
-  .reg-filter-row-1 { flex-wrap: nowrap; }
-  .reg-date-range-input { width: 110px; }
-  /* Row 2: selects equal width, search fills rest */
-  .reg-filter-row-2 select { flex: 1; min-width: 0; }
-  .reg-search-input { min-width: 0; }
+
+  /* ── Mobile filter order: dates, then SEARCH, then the dropdowns ──────
+     One wrapping flex row serves both layouts, so on a phone it used to
+     land as [dates] / [dropdowns] / [search] — burying the control staff
+     reach for most at the bottom. The CSS order property promotes the search to its own
+     full-width second row without re-templating the markup, so the desktop
+     single-line bar is untouched.
+
+     Everything is given an explicit flex-basis so the left edges line up
+     down the column: the search spans the full width, the dropdowns take
+     half each (a third select wraps to a fourth row rather than being
+     squeezed to "All Sourc…"), and the date field absorbs whatever the
+     quick buttons leave on row one. */
+  .reg-filter-row { flex-wrap: wrap; row-gap: 0.45rem; }
+  /* Fixed narrow width so the date and all three quick buttons stay on
+     ONE row, which is how this bar already behaved. Letting the field size
+     to its content ("18 Aug 2026 to 20 Aug 2026") pushed the buttons onto
+     lines of their own and made the bar five rows tall. The range clips
+     inside the field, which is fine: it is a picker, not a label. */
+  .reg-filter-row .reg-date-range-wrap { order: 0; flex: 0 0 auto; min-width: 0; }
+  .reg-filter-row .reg-quick-btn {
+    order: 0; flex: 0 0 auto;
+    /* Tightened so the date field plus all three ranges fit one row at
+       360px. At the desktop size they needed 222px against 322px of
+       available width once the date field is in, which dropped "Month"
+       onto a row of its own. */
+    padding: 0.22rem 0.5rem; font-size: 0.68rem; letter-spacing: -0.01em;
+  }
+  /* Line two carries the dropdowns AND the search together. The dates
+     above answer "which period"; these answer "narrow it down", so they
+     belong in one group. Same order value so they flow as a unit, each
+     with a sensible minimum: they share the row where there is width and
+     wrap together where there is not. */
+  .reg-filter-row select { order: 1; flex: 1 1 auto; min-width: 88px; }
+  .reg-filter-row .reg-search-input { order: 1; flex: 2 1 130px; min-width: 0; }
+  /* The divider already sits between the two groups in the markup, so
+     rather than hiding it, reuse it as a hard row break: zero height, full
+     width, no rule. Without it a leftover quick button could slot onto the
+     start of the dropdown row when the dates did not quite fit — a date
+     range control stranded among the filters. This guarantees the split is
+     always dates / filters, at every width. */
+  .reg-filter-divider {
+    flex: 0 0 100%; width: 100%; height: 0;
+    background: none; margin: 0; order: 0;
+  }
+  .reg-date-range-input { width: 92px; min-width: 0; text-overflow: ellipsis; }
   /* Header button: icon only on mobile */
   .reg-customers-label { display: none; }
   .reg-customers-header-btn { padding: 0; width: 32px; justify-content: center; }
@@ -766,6 +806,117 @@ tr.reg-row-located.reg-row-located-fade > td {
 .rpm-submit-btn:hover { opacity: .85; }
 
 /* ── Payments detail modal ── */
+.rp-svc-lbl { font-size:.75rem; font-weight:600; color:#555; white-space:nowrap; }
+/* Label above its control, matching .rp-edit-field in the payments form, so
+   the two edit forms in this modal read the same way. */
+.rp-svc-field { display: inline-flex; flex-direction: column; gap: .15rem; }
+.rp-svc-edit-actions { display: inline-flex; gap: .4rem; }
+.rp-svc-size-sel {
+  padding:6px 8px; border:1px solid #cbd5e1; border-radius:6px;
+  font-size:.82rem; background:#fff; color:#0f172a; min-width:120px;
+}
+.rp-svc-edit-form input {
+  padding:6px 8px; border:1px solid #cbd5e1; border-radius:6px; font-size:.82rem;
+}
+.rp-svc-del-btn {
+  padding:4px 9px; font-size:.72rem; font-weight:600; color:#dc2626;
+  background:#fff; border:1px solid #fecaca; border-radius:6px; cursor:pointer;
+  margin-left:4px;
+}
+tr.rp-svc-voided td[data-label] { opacity:.5; text-decoration:line-through; }
+tr.rp-svc-voided .rp-actions-cell { opacity:.9; }
+.rp-svc-voided-tag {
+  font-size:.68rem; font-weight:700; color:#b91c1c; background:#fee2e2;
+  padding:2px 7px; border-radius:5px;
+}
+/* ═══════════════════════════════════════════════════════════════════════
+   Payment Records modal — small screens
+   ═══════════════════════════════════════════════════════════════════════
+   The table stays a table at every width. Two earlier attempts rebuilt it
+   as labelled cards and then as two-line rows; both lost the thing that
+   makes a table worth having, which is that Date / Mode / Amount / Type
+   line up in columns you can run your eye down.
+
+   What actually broke on a phone was not the table, it was that the modal
+   was narrower than the table and simply clipped the last column, so the
+   Delete button sat half off the edge with no way to reach it. The fix is
+   a horizontal scroller around the table and a min-width that keeps the
+   columns readable instead of crushing "18 Aug 2026" into three lines.
+
+   Vertical: the modal gets a max-height and scrolls its body, so a stay
+   with a dozen payments cannot run off the bottom of the screen. */
+.rp-tscroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-x: contain;   /* don't chain to the page/back-gesture */
+}
+.rp-tscroll .rp-table { min-width: 520px; }
+.rp-tscroll .rp-svc-table { min-width: 420px; }
+
+/* Keep the columns from wrapping mid-value — wrapping is what turned a
+   date into three lines. The scroller is what gives them room. */
+.rp-table td, .rp-table th,
+.rp-svc-table td, .rp-svc-table th { white-space: nowrap; }
+/* The service name is the one value allowed to be long, so it wraps rather
+   than pushing the whole table wider. */
+.rp-svc-table td[data-label="Service"] { white-space: normal; min-width: 120px; }
+
+/* A soft edge so it is obvious there is more table to the right. */
+.rp-tscroll { background:
+  linear-gradient(90deg, #fff 30%, rgba(255,255,255,0)) left / 24px 100% no-repeat,
+  linear-gradient(90deg, rgba(255,255,255,0), #fff 70%) right / 24px 100% no-repeat,
+  radial-gradient(farthest-side at 0 50%, rgba(15,23,42,.14), transparent) left / 12px 100% no-repeat,
+  radial-gradient(farthest-side at 100% 50%, rgba(15,23,42,.14), transparent) right / 12px 100% no-repeat;
+  background-attachment: local, local, scroll, scroll;
+}
+
+@media (max-width: 620px) {
+  /* Use the full width, and let the body scroll instead of the page. */
+  .rp-overlay { padding: .5rem; align-items: flex-start; }
+  .rp-modal {
+    max-width: 100%; margin-top: .5rem;
+    max-height: calc(100vh - 1rem);
+    display: flex; flex-direction: column;
+  }
+  .rp-body { overflow-y: auto; -webkit-overflow-scrolling: touch; padding: .8rem; }
+  .rp-header { padding: .7rem .8rem; }
+  .rp-meta { font-size: .78rem; }
+
+  /* The edit form is the one part that cannot stay in a row: five controls
+     in one colspan cell have nowhere to go. It stacks, with price and qty
+     sharing a line since they are two- and one-digit fields.
+     
+     It also has to escape the table's min-width. The edit row is a row of
+     the same table, so it inherits the 520px and its Save/Cancel end up off
+     the right edge with the rest of the row. Pinning the form to the left of
+     the scroller and sizing it to the visible width keeps it fully on screen
+     whatever the table is doing behind it. */
+  .rp-edit-row td, .rp-svc-edit-row td { padding: .45rem .3rem !important; }
+  .rp-edit-row td > .rp-edit-form,
+  .rp-svc-edit-row td > .rp-svc-edit-form {
+    position: sticky; left: 0;
+    width: calc(100vw - 4.6rem);
+    max-width: 100%;
+    box-sizing: border-box;
+  }
+  .rp-edit-form { flex-direction: column; align-items: stretch; gap: .5rem; }
+  .rp-edit-field { width: 100%; }
+  .rp-svc-edit-form {
+    display: grid; grid-template-columns: 1fr 1fr; gap: .5rem .6rem;
+  }
+  .rp-svc-field { display: flex; flex-direction: column; gap: .18rem; min-width: 0; }
+  .rp-svc-field--wide { grid-column: 1 / -1; }
+  .rp-svc-edit-actions { grid-column: 1 / -1; display: flex; gap: .5rem; }
+  .rp-edit-actions { display: flex; gap: .5rem; width: 100%; }
+  .rp-edit-actions > button, .rp-svc-edit-actions > button { flex: 1; min-height: 42px; }
+  .rp-edit-form input, .rp-edit-form select,
+  .rp-svc-edit-form input, .rp-svc-edit-form select, .rp-svc-size-sel {
+    width: 100% !important; min-width: 0 !important; min-height: 42px;
+    font-size: 1rem;   /* 16px stops iOS Safari zooming the page on focus */
+  }
+  .rp-edit-form .rp-edit-dt-input { min-width: 0; }
+}
+
 .rp-overlay {
   display: none; position: fixed; inset: 0;
   background: rgba(0,0,0,.5); z-index: 1200;
@@ -3557,7 +3708,13 @@ tr.reg-row-located.reg-row-located-fade > td {
       // Hide zero-amount internal log entries
       if (INTERNAL_TYPES.has(p.type)) return false;
       return true;
-    });
+    }).filter(p => p.type !== "addon");
+    // Services live in the Services section below, with an editor that knows
+    // an amount is the CONSEQUENCE of an item and a quantity. Left in this
+    // table they would be editable as a bare amount, producing a line that
+    // contradicts itself ("Water 2L  Rs.30"), and their Delete would hit
+    // /delete_stay_payment — which removes the billing record while leaving
+    // the charge sitting on the room's balance forever.
 
     if (!payments.length) {
       container.innerHTML = `<div class="rp-empty">No payment records found for this stay.</div>`;
@@ -3569,6 +3726,9 @@ tr.reg-row-located.reg-row-located-fade > td {
       const isEditing = (pmState.editId === p.id);
       const isRefund  = REFUND_TYPES.has(p.type);
 
+      // Services (add-ons) are charges, not receipts, and are edited in the
+      // Services section below — they are filtered out of this table at the
+      // top of the function so the same row cannot be edited two ways.
       if (isEditing) {
         rows += `
         <tr class="rp-edit-row" data-pid="${p.id}">
@@ -3611,12 +3771,12 @@ tr.reg-row-located.reg-row-located-fade > td {
           : '<span class="rp-by rp-by-unknown">—</span>';
         rows += `
         <tr data-pid="${p.id}">
-          <td>${_fmtPmDate(p.date)}${p.time ? ' <span style="color:#999;font-size:.7rem;">' + p.time + '</span>' : ''}</td>
-          <td><span class="${_methodCls(p.method)}">${_methodLbl(p.method)}</span></td>
-          <td><strong>₹${(p.amount || 0).toLocaleString("en-IN")}</strong></td>
-          <td style="color:#666;font-size:.73rem;">${_typeLabel(p.type)}</td>
-          <td>${_byCell}</td>
-          <td style="white-space:nowrap">
+          <td data-label="Date">${_fmtPmDate(p.date)}${p.time ? ' <span style="color:#999;font-size:.7rem;">' + p.time + '</span>' : ''}</td>
+          <td data-label="Mode"><span class="${_methodCls(p.method)}">${_methodLbl(p.method)}</span></td>
+          <td data-label="Amount"><strong>₹${(p.amount || 0).toLocaleString("en-IN")}</strong></td>
+          <td data-label="Type" style="color:#666;font-size:.73rem;">${_typeLabel(p.type)}</td>
+          <td data-label="By">${_byCell}</td>
+          <td class="rp-actions-cell" style="white-space:nowrap">
             <button class="rp-edit-btn"   onclick="_rpStartEdit('${p.id}')">Edit</button>
             <button class="rp-delete-btn" onclick="_rpDelete('${p.id}')">Delete</button>
           </td>
@@ -3625,6 +3785,7 @@ tr.reg-row-located.reg-row-located-fade > td {
     });
 
     container.innerHTML = `
+      <div class="rp-tscroll">
       <table class="rp-table">
         <thead>
           <tr>
@@ -3632,13 +3793,15 @@ tr.reg-row-located.reg-row-located-fade > td {
           </tr>
         </thead>
         <tbody>${rows}</tbody>
-      </table>`;
+      </table>
+      </div>`;
 
     // Upgrade the edit row's Date & time field to a flatpickr calendar +
     // time picker — styled, consistent with the app's other date pickers,
     // and clearer than the native browser controls.
     _rpInitDateTimePicker();
   }
+
 
   // Called by onclick attributes in the rendered table
   window._rpStartEdit = function(payId) {
@@ -3830,61 +3993,397 @@ tr.reg-row-located.reg-row-located-fade > td {
   function _renderServicesSection(container) {
     if (!container) return;
     const entry = pmState.entry || {};
-    // Filter out water services
-    const services = (entry.services || []).filter(svc => {
-      const nm = (svc.item || "").toLowerCase();
-      return !nm.includes("water");
-    });
 
-    if (!services.length) {
-      container.innerHTML = "";
-      return;
-    }
-
-    // Only allow editing for completed bills (id doesn't start with "active_")
+    // An ACTIVE stay has no invoice yet, so a service can simply be fixed:
+    // the bill is built fresh at checkout. A completed bill already carries
+    // an invoice number, so only the legacy amount-only edit is offered
+    // there — changing a charge on an issued invoice is a credit-note
+    // amendment, not an edit.
     const isBill = entry.id && !String(entry.id).startsWith("active_");
+    const room = entry.room;
+    const liveRoom = (typeof rooms !== "undefined" && room != null) ? rooms[room] : null;
+
+    // "Active" means THIS stay is the one currently in the room — not merely
+    // that the room number is occupied by somebody. Rooms turn over daily, so
+    // the weaker test showed the new guest's services under the previous
+    // guest's invoice, with a live Delete button next to them. Matching on
+    // active_bill_id ties the two together; when the room doc predates that
+    // field we fall back to the check-in timestamp rather than assuming.
+    const _entryStay = entry.stay_id || entry.id || "";
+    const _sameStay = liveRoom && (
+      (liveRoom.active_bill_id && _entryStay &&
+       String(liveRoom.active_bill_id) === String(_entryStay)) ||
+      (!liveRoom.active_bill_id && entry.checkin_time &&
+       String(liveRoom.checkin_time || "") === String(entry.checkin_time))
+    );
+    const isActive = !!(liveRoom && liveRoom.status === "occupied" &&
+                        liveRoom.guest && _sameStay);
+
+    // Every service, water included. Two fixes live in this one line.
+    //
+    // First: this list used to drop anything whose name contained "water",
+    // so the most common line at the counter was the one nobody could edit.
+    //
+    // Second: it read entry.services and nothing else. That field is filled
+    // by the Register tab's server-side entry builder, but a caller opening
+    // this modal from somewhere else (the checkout screen) has no reason to
+    // know that, so the section reported "No services on this stay" for a
+    // room that visibly had some. On a live stay the room doc is both the
+    // authoritative and the freshest source, so read that first and fall
+    // back to whatever the caller supplied for checked-out bills.
+    const services = (isActive && liveRoom && Array.isArray(liveRoom.add_ons))
+      ? liveRoom.add_ons
+      : (entry.services || []);
+    _svcRendered = services;   // handlers index THIS array, never another
 
     let rows = "";
     services.forEach((svc, idx) => {
       const isEditing = (pmState.editSvcIdx === idx);
-      if (isEditing && isBill) {
+      const voided = !!svc.voided;
+      const qty = Math.max(1, parseInt(svc.quantity, 10) || 1);
+      // Old rows stored only a total. Deriving the unit price stops the form
+      // showing 0 and silently zeroing the charge if it is saved unchanged.
+      let unit = parseInt(svc.unit_price, 10);
+      if (!Number.isFinite(unit) || unit <= 0) {
+        unit = Math.round((svc.price || 0) / qty) || (svc.price || 0);
+      }
+
+      if (isEditing && isActive && !voided) {
         rows += `
         <tr class="rp-svc-edit-row" data-svcidx="${idx}">
           <td colspan="4">
             <div class="rp-svc-edit-form">
-              <label style="font-size:.75rem;font-weight:600;color:#555;">${svc.item || "Service"}</label>
-              <label style="font-size:.75rem;font-weight:600;color:#555;white-space:nowrap;">Amount (₹):</label>
+              <div class="rp-svc-field rp-svc-field--wide">${(() => {
+                // Water lines get a size picker; picking a size sets the item
+                // AND the unit price together, which is the whole point —
+                // changing "Water 2L" to "Water 1L" while leaving ₹30 on the
+                // line would print a bill that contradicts itself.
+                const sizes = _isWaterItem(svc.item) ? _waterSizeOptions() : [];
+                if (!sizes.length) {
+                  return `<input type="text" id="rp-svc-item-${idx}"
+                                 value="${escapeAttr(svc.item || "")}"
+                                 placeholder="Item" style="width:150px;" />`;
+                }
+                // The current value is kept as an option even if it matches no
+                // chip (an old size, or a renamed one), so opening the editor
+                // can never silently change the item just by rendering.
+                // _isWaterItem only fires on an exact chip match, so the
+                // current value is always in `sizes`. The guard stays as a
+                // belt-and-braces against a chip being renamed in index.html
+                // between a row being saved and the editor being opened.
+                const known = sizes.some(o => o.item === svc.item);
+                const opts = (known ? sizes : [{ item: svc.item, price: null }, ...sizes])
+                  .map(o => `<option value="${escapeAttr(o.item)}"
+                                     data-price="${o.price == null ? "" : o.price}"
+                                     ${o.item === svc.item ? "selected" : ""}>${escapeAttr(o.item)}</option>`)
+                  .join("");
+                return `<select id="rp-svc-item-${idx}" class="rp-svc-size-sel"
+                                onchange="_svcSizeChanged(${idx})">${opts}</select>`;
+              })()}</div>
+              <div class="rp-svc-field">
+                <label class="rp-svc-lbl" for="rp-svc-unit-${idx}">₹ each</label>
+                <input type="number" id="rp-svc-unit-${idx}" value="${unit}" min="0" style="width:80px;" />
+              </div>
+              <div class="rp-svc-field">
+                <label class="rp-svc-lbl" for="rp-svc-qty-${idx}">Qty</label>
+                <input type="number" id="rp-svc-qty-${idx}" value="${qty}" min="1" style="width:62px;" />
+              </div>
+              <div class="rp-svc-edit-actions">
+                <button class="rp-svc-save-btn"   onclick="_svcSaveActive(${idx})">Save</button>
+                <button class="rp-svc-cancel-btn" onclick="_svcCancelEdit()">Cancel</button>
+              </div>
+            </div>
+          </td>
+        </tr>`;
+      } else if (isEditing && isBill) {
+        // Legacy path, unchanged: on an issued bill only the amount moves.
+        rows += `
+        <tr class="rp-svc-edit-row" data-svcidx="${idx}">
+          <td colspan="4">
+            <div class="rp-svc-edit-form">
+              <label class="rp-svc-lbl">${escapeAttr(svc.item || "Service")}</label>
+              <label class="rp-svc-lbl">Amount (₹):</label>
               <input type="number" id="rp-svc-amount-${idx}" value="${svc.price || 0}" min="0" style="width:80px;" />
-              <button class="rp-svc-save-btn" onclick="_svcSave(${idx})">Save</button>
-              <button class="rp-svc-cancel-btn" onclick="_svcCancelEdit()">Cancel</button>
+              <div class="rp-svc-edit-actions">
+                <button class="rp-svc-save-btn"   onclick="_svcSave(${idx})">Save</button>
+                <button class="rp-svc-cancel-btn" onclick="_svcCancelEdit()">Cancel</button>
+              </div>
             </div>
           </td>
         </tr>`;
       } else {
-        const editBtn = isBill
-          ? `<button class="rp-svc-edit-btn" onclick="_svcStartEdit(${idx})">Edit</button>`
-          : "";
+        const btns = voided
+          ? '<span class="rp-svc-voided-tag">removed</span>'
+          : (isActive
+              ? `<button class="rp-svc-edit-btn" onclick="_svcStartEdit(${idx})">Edit</button>
+                 <button class="rp-svc-del-btn"  onclick="_svcVoid(${idx})">Delete</button>`
+              : isBill
+                ? `<button class="rp-svc-edit-btn" onclick="_svcStartEdit(${idx})">Edit</button>`
+                : "");
         rows += `
-        <tr data-svcidx="${idx}">
-          <td>${svc.item || "-"}</td>
-          <td style="text-align:center;">${svc.quantity || 1}</td>
-          <td>₹${(svc.price || 0).toLocaleString("en-IN")}</td>
-          <td>${editBtn}</td>
+        <tr data-svcidx="${idx}" class="${voided ? "rp-svc-voided" : ""}">
+          <td data-label="Service">${escapeAttr(svc.item || "-")}</td>
+          <td data-label="Qty" style="text-align:center;">${qty}</td>
+          <td data-label="Amount">₹${(svc.price || 0).toLocaleString("en-IN")}</td>
+          <td class="rp-actions-cell" style="white-space:nowrap">${btns}</td>
         </tr>`;
       }
     });
 
+    if (!services.length) { container.innerHTML = ""; return; }
+
     container.innerHTML = `
       <div class="rp-svc-section">
         <h4><i class="fas fa-concierge-bell" style="margin-right:.3rem;"></i>Services</h4>
+        <div class="rp-tscroll">
         <table class="rp-svc-table">
           <thead>
             <tr><th>Service</th><th>Qty</th><th>Amount</th><th></th></tr>
           </thead>
           <tbody>${rows}</tbody>
         </table>
+        </div>
       </div>`;
   }
+
+  // ── Water sizes, read from the buttons that already exist ────────────────
+  // The checkout screen ships .svc-chip buttons carrying data-service and
+  // data-price ("Water 2L" ₹30, "Water 1L" ₹20). Reading them is what keeps
+  // the dropdown honest: change a chip's price in index.html and this follows,
+  // with no second list to forget to update.
+  //
+  // Returns [] when the chips are not in the DOM (a page variant, or a
+  // stale cached template). The caller then falls back to the plain text
+  // field, so a missing dropdown degrades to what was there before.
+  function _waterSizeOptions() {
+    const out = [];
+    try {
+      document.querySelectorAll(".svc-chip[data-service]").forEach((chip) => {
+        const name = chip.getAttribute("data-service") || "";
+        if (!/water/i.test(name)) return;
+        const price = parseInt(chip.getAttribute("data-price"), 10);
+        out.push({ item: name, price: Number.isFinite(price) ? price : null });
+      });
+    } catch (e) { /* fall back to the text field */ }
+    return out;
+  }
+
+  // Is this line one of the water sizes? Only those get the dropdown; every
+  // other service keeps the free-text field, because the point of the
+  // dropdown is swapping between two known sizes, not constraining the rest.
+  function _isWaterItem(name) {
+    // Only the exact chip names get the size picker. Matching the substring
+    // "water" swallowed "Mineral water bottle", "Hot water flask" and
+    // "Waterproof bag" — and because the picker REPLACES the text field,
+    // those items could then only ever be renamed to one of the two chip
+    // values. The picker exists to swap between known sizes, so it should
+    // appear only on a line that already IS one of those sizes.
+    const n = String(name || "").trim().toLowerCase();
+    if (!n) return false;
+    return _waterSizeOptions().some(o => String(o.item).trim().toLowerCase() === n);
+  }
+
+  // ── Active-stay service edit / remove ────────────────────────────────────
+  // Both go to the add-on routes, never to /delete_stay_payment. Those routes
+  // move BOTH stores — the room's add_ons array and the payments doc the bill
+  // is actually assembled from — adjust the balance or the day's cash counter
+  // by the delta in one transaction, and refuse the whole correction if the
+  // two cannot be matched unambiguously. Touching only the payment doc would
+  // leave the charge sitting on the room's balance with nothing to explain it.
+
+  // The exact array the current render used. Set by _renderServicesSection on
+  // every render; read by every handler.
+  //
+  // This used to read pmState.entry.services while the table was rendered
+  // from liveRoom.add_ons. Those are two separate fetches: entry.services
+  // comes from /get_register_data (behind a 30s cache) and add_ons from the
+  // live room doc. When they differed in length the last row's Delete hit
+  // `undefined` and did nothing at all; when they differed in ORDER the
+  // handler cancelled a charge the operator had not selected. Indexing the
+  // rendered array removes the class of bug rather than papering one case.
+  let _svcRendered = [];
+
+  function _svcAt(idx) {
+    return _svcRendered[idx] || null;
+  }
+
+  // Identify a service for the server: `addon_uid` when the row has one, the
+  // content fingerprint when it predates that field. Exactly one, never both
+  // — sending match fields for a keyed row would make the server fall back to
+  // content matching and possibly correct a different line.
+  function _svcIdent(svc) {
+    if (svc.addon_uid) return { addon_uid: svc.addon_uid };
+    return {
+      match_item:  svc.item || "",
+      match_price: svc.price || 0,
+      match_date:  svc.date || "",
+      match_time:  svc.time || "",
+    };
+  }
+
+  // Re-read after any change rather than patching local state: the server
+  // owns the snapped price, the new balance and the outcome of a concurrent
+  // edit, so re-fetching is the only way the table matches what was stored.
+  // Apply a correction's result without a single extra round trip.
+  //
+  // This used to invalidate every cache, await a full rooms refresh, then
+  // await a payments refetch — three sequential trips to discover something
+  // the correction response already carried. The operator watched a spinner
+  // after being told the change had saved, and the checkout modal behind the
+  // editor then did a fourth fetch when it closed.
+  //
+  // Now the server returns the resulting add_ons array and balance, so the
+  // visible state updates immediately from `data`. The slower work (rooms
+  // refresh for the room card, and warming the checkout history cache) is
+  // started but NOT awaited: nothing on screen depends on it, and by the time
+  // the editor closes the history is normally already cached.
+  function _svcApply(data) {
+    pmState.editSvcIdx = null;
+    // _closePaymentsModal nulls pmState.entry. If the operator closed the
+    // modal while the save was in flight we would otherwise skip every
+    // invalidation and leave the pre-edit charge cached for 3-5 minutes.
+    // _svcCtx is captured when the request is sent, so the caches still get
+    // cleared for the right room.
+    const e = pmState.entry || _svcCtx;
+    if (e && !Array.isArray(data.add_ons)) {
+      // Older server build, or a response shape that drifted. The write
+      // succeeded but we cannot know the resulting state, so refetch and say
+      // so rather than re-rendering the pre-edit numbers under a success toast.
+      console.warn("[svc] response carried no add_ons — falling back to a refetch");
+      _invalidateStayPmtCache(e);
+      if (typeof window.invalidatePayHistoryCache === "function") {
+        window.invalidatePayHistoryCache(e.room);
+      }
+      if (typeof window.refreshRoomsData === "function") {
+        try { window.refreshRoomsData(); } catch (err) { /* cosmetic */ }
+      }
+      _notify("Saved. Reopen the list to see it.", "info");
+      return;
+    }
+    if (e && Array.isArray(data.add_ons)) {
+      e.services = data.add_ons;
+      // Keep the in-memory room doc in step too, so the Services section
+      // reads the same array whichever source it picks.
+      if (typeof rooms !== "undefined" && rooms[e.room]) {
+        rooms[e.room].add_ons = data.add_ons;
+        if (typeof data.balance === "number") rooms[e.room].balance = data.balance;
+      }
+    }
+    _invalidateStayPmtCache(e);
+    _renderServicesSection(dom("rp-services-section"));
+
+    // Background, deliberately un-awaited.
+    if (e && typeof window.prefetchPayHistory === "function") {
+      window.prefetchPayHistory(e.room);
+    }
+    if (typeof window.refreshRoomsData === "function") {
+      try { window.refreshRoomsData(); } catch (err) { /* card refresh is cosmetic */ }
+    }
+    // The payments table itself is unaffected by a service correction —
+    // services are filtered out of it — so it is not re-rendered here.
+  }
+
+  // Guards double submission for EVERY caller, including the ones with no
+  // button to disable. _svcVoid passes btn=null, so before this latch a
+  // double-tap on a phone fired two identical voids — and on a stay with two
+  // identical legacy lines the second one cancelled the OTHER line, crediting
+  // the guest twice.
+  let _svcBusy = false;
+  let _svcCtx = null;
+
+  async function _svcPost(url, payload, btn, okMsg) {
+    if (_svcBusy) return false;
+    _svcBusy = true;
+    // Set once the server has accepted the write. After that point nothing
+    // local may tell the operator it failed.
+    let _applied = false;
+    // Snapshot of the stay this request belongs to, so a close mid-flight
+    // cannot orphan the cache invalidation.
+    _svcCtx = pmState.entry || null;
+    const was = btn ? btn.textContent : "";
+    if (btn) { btn.disabled = true; btn.textContent = "Saving…"; }
+    try {
+      const res = await apiFetch(url, {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify(payload),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.success) {
+        // The server's wording is written for the person at the counter.
+        _notify(data.message || `Could not save (error ${res.status}).`, "error");
+        if (btn) { btn.disabled = false; btn.textContent = was; }
+        return false;
+      }
+      _notify(data.message || okMsg, "success");
+      _applied = true;
+      _svcApply(data);
+      return true;
+    } catch (e) {
+      if (_applied) {
+        // The write committed and the local refresh threw. Reporting "nothing
+        // was saved" here would be a lie that makes the operator repeat a
+        // change that already landed.
+        console.error("[svc] post-save refresh failed", e);
+        _notify("Saved, but the screen could not refresh. Reopen to see it.", "info");
+        return true;
+      }
+      _notify("Network problem — nothing was saved. Try again.", "error");
+      if (btn) { btn.disabled = false; btn.textContent = was; }
+      return false;
+    } finally {
+      _svcBusy = false;
+    }
+  }
+
+
+  // Picking a size rewrites the unit price to that size's chip price. The
+  // field stays editable afterwards, so a one-off price is still possible —
+  // this sets a sensible default, it does not lock the number.
+  window._svcSizeChanged = function (idx) {
+    const sel = dom(`rp-svc-item-${idx}`);
+    const unit = dom(`rp-svc-unit-${idx}`);
+    if (!sel || !unit) return;
+    const opt = sel.options[sel.selectedIndex];
+    const price = opt ? parseInt(opt.getAttribute("data-price"), 10) : NaN;
+    if (Number.isFinite(price)) unit.value = price;
+  };
+
+  window._svcSaveActive = function (idx) {
+    const svc = _svcAt(idx);
+    if (!svc) return;
+    const item = (dom(`rp-svc-item-${idx}`).value || "").trim();
+    const unit = parseInt(dom(`rp-svc-unit-${idx}`).value, 10);
+    const qty  = parseInt(dom(`rp-svc-qty-${idx}`).value, 10);
+    const btn  = document.querySelector(`.rp-svc-edit-row[data-svcidx="${idx}"] .rp-svc-save-btn`);
+
+    if (!item) return _notify("Item name cannot be empty.", "error");
+    if (!Number.isFinite(unit) || unit < 0) return _notify("Unit price must be 0 or more.", "error");
+    if (!Number.isFinite(qty) || qty < 1)  return _notify("Quantity must be at least 1.", "error");
+
+    if (item === (svc.item || "") && unit * qty === (svc.price || 0)
+        && qty === (parseInt(svc.quantity, 10) || 1)) {
+      pmState.editSvcIdx = null;
+      _renderServicesSection(dom("rp-services-section"));
+      return;
+    }
+    _svcPost("/update_add_on", {
+      room: String((pmState.entry || {}).room || ""),
+      ..._svcIdent(svc),
+      item, unit_price: unit, quantity: qty,
+    }, btn, "Service updated.");
+  };
+
+  window._svcVoid = function (idx) {
+    const svc = _svcAt(idx);
+    if (!svc) return;
+    if (!confirm(`Remove ${svc.item || "this service"} (₹${svc.price || 0})?\n\n` +
+                 `It stays in the history marked removed, and comes off the bill.`)) return;
+    _svcPost("/void_add_on", {
+      room: String((pmState.entry || {}).room || ""),
+      ..._svcIdent(svc), reason: "",
+    }, null, "Service removed.");
+  };
 
   window._svcStartEdit = function (idx) {
     pmState.editSvcIdx = idx;

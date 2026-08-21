@@ -9,6 +9,7 @@ from config import (
     rooms_ref, get_next_serial_number, store_transaction_metadata, send_whatsapp_message,
     settlements_ref, ota_settlements_ref,  # logs_ref kept for whatsapp_messages only
     create_cancellation_charge_bill,
+    is_ota_prepaid, OTA_PREPAID_SOURCES,
 )
 from services import payment_service, customer_service, bills_service, expense_service
 from services.auth_service import requires_permission
@@ -232,9 +233,14 @@ def create_booking():
 
         booking_id = str(uuid.uuid4())
         booking_source = booking_data.get("booking_source", "normal")
-        is_mmt = booking_source == "mmt"
+        # Agoda too — the New Booking form offers it as a source (the
+        # multi-room route at line ~371 explicitly redirects mmt AND agoda
+        # here), but only "mmt" took the OTA branch, so a manually entered
+        # Agoda booking fell through to the walk-in branch and lost
+        # ota_total_amount, ota_commission and net_receivable entirely.
+        is_mmt = booking_source in OTA_PREPAID_SOURCES
 
-        # For MMT: total_amount = net_receivable; advance payment is not collected at hotel
+        # For MMT/Agoda: total_amount = ota_total; no advance is collected at the hotel
         if is_mmt:
             ota_total = int(booking_data.get("ota_total_amount", 0))
             ota_commission = float(booking_data.get("ota_commission", 0))
@@ -968,7 +974,12 @@ def convert_booking_to_checkin():
         # an "ota" payment after commit so the invoice nets to a zero balance.
         # MMT settles the net amount to the bank later (marked via
         # /mark_ota_settlement), which is when the commission expense is booked.
-        _is_mmt = booking.get("booking_source") == "mmt"
+        # Agoda too. Its ingested booking has the identical shape
+        # (ota_total_amount, payment_source="ota", paid_amount=0), and
+        # config.py already invoices it as OTA — this line was the only place
+        # that still said "mmt" only, which is what left Agoda stays opening
+        # with the full tariff as balance due.
+        _is_mmt = is_ota_prepaid(booking)
         _renewal_count_at_checkin = 0
         _ota_prepaid = 0
         if _is_mmt:
@@ -1290,7 +1301,9 @@ def convert_booking_to_checkin():
                 "stay_room_key": stay_key,
                 "transaction_type": "ota_prepaid",
                 "mobile": booking["guest_mobile"],
-                "platform": "mmt",
+                # Was hard-coded "mmt", which mislabelled every Agoda prepaid
+                # row the moment Agoda started taking this branch.
+                "platform": booking.get("booking_source") or "mmt",
             })
 
         # Fix 7: sync=True so errors surface in logs rather than dying silently

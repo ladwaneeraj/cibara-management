@@ -23,6 +23,7 @@ from config import (
     allocate_and_finalize_bill,
     find_serial_number_for_checkin, _build_active_entry_fast, _find_serial_fast,
     _batch_fill_serials, room_category, room_base_price, AC_SURCHARGE,
+    OTA_PREPAID_SOURCES,
     validate_gstin, derive_state_from_gstin,
     snap_to_exempt_band, EXEMPT_BAND_TARGET,
 )
@@ -1498,6 +1499,63 @@ def revert_checkout():
         new_stay_id = revert_result.get("new_stay_id") or stay_id
         revert_cn   = revert_result.get("credit_note")
 
+        # 6c-bis. Re-point this stay's payments at the FRESH stay_id.
+        #
+        # revert_to_draft mints a new stay_id for a stay that is still
+        # running. Without this step the payments already written keep the
+        # OLD id, and every fast path that keys off the canonical FK — and
+        # returns as soon as that FK yields ANY row — reports only whatever
+        # is written AFTER the revert:
+        #
+        #   create_bill_record._fetch_payments  -> the re-issued invoice
+        #   query_payments_for_stay Q0          -> /get_history
+        #   get_stay_payments Q0                -> Payment History modal
+        #
+        # Observed: revert room 200, add one AC add-on, and the payment
+        # history collapses to that single row while the re-issued bill
+        # drops every earlier add-on and receipt. Under-billing, not a
+        # display glitch.
+        #
+        # Runs INSIDE the same batch as the bill + room writes, so the FK
+        # can never be left split across two stay_ids by a partial commit.
+        # Only the stay_id pointer is rewritten; amounts and audit fields
+        # are untouched, and the cancelled predecessor bill still renders
+        # from its own stored services / payment_* fields.
+        _relink_checkin = snapshot.get("checkin_time") or bill.get("checkin_time") or ""
+        try:
+            _relinked = payment_service.relink_stay_payments(
+                stay_id, new_stay_id,
+                room=str(room), checkin_time=_relink_checkin,
+                batch=batch,
+            )
+        except Exception as _rl_e:
+            # Never block a revert on the re-stamp. The legacy Q1/Q2
+            # fallbacks still find the rows by room/stay_room_key.
+            logger.error(f"revert_checkout: relink_stay_payments failed: {_rl_e}",
+                         exc_info=True)
+            _relinked = 0
+
+        # 6c-ter. The booking carries the same foreign key and must follow.
+        # create_bill_record finds it with bookings.where(stay_id == X) and
+        # falls back to a (room, guest, check_in_date) heuristic that misses
+        # whenever the guest arrived on a different calendar date than they
+        # booked. On that miss every booking-derived field defaults: the
+        # re-issued invoice comes out B2C with a blank recipient_gstin, and
+        # the OTA settlement figures reset to zero. For a corporate MyBiz
+        # booking that is a B2B invoice silently downgraded to B2C — and it
+        # is the re-issued one that goes into GSTR-1.
+        try:
+            _bk_relinked = 0
+            for _bk in bookings_ref.where(
+                filter=FieldFilter("stay_id", "==", stay_id)
+            ).stream():
+                batch.update(_bk.reference, {"stay_id": new_stay_id})
+                _bk_relinked += 1
+        except Exception as _bk_e:
+            logger.error(f"revert_checkout: booking relink failed: {_bk_e}",
+                         exc_info=True)
+            _bk_relinked = 0
+
         # 6d. Room: restore from snapshot.
         restored_balance = int(snapshot.get("balance", guest_snap.get("balance", 0)) or 0)
         room_restore = {
@@ -1556,11 +1614,25 @@ def revert_checkout():
                     "transaction_type": "revert_checkout_refund_reversal",
                     "stay_room_key":    f"{room}_{snapshot.get('checkin_time', bill.get('checkin_time', ''))}",
                     "reverted_stay_id": stay_id,
+                    # Stamp the author HERE, on the request thread. The write
+                    # below runs on a daemon thread where flask.g and the
+                    # request are both gone, so payment_service's resolver
+                    # would fall through to "system" and this reversal would
+                    # look like the machine did it. _normalise only fills
+                    # createdBy when it is absent, so setting it wins.
+                    "createdBy": (_safe_user() or {}).get("userId") or "system",
                 }
+                # NEW stay_id, not the old one. The original checkout_refund
+                # row is re-pointed to the successor by the relink above, so
+                # writing its reversal against the predecessor split the pair
+                # across two stays: the re-issued bill then saw the refund
+                # without its reversal and over-billed by exactly that amount.
+                # (Rs.1,100 refunded, reverted, re-checked out -> bill asked
+                # for Rs.900 instead of crediting Rs.200.)
                 import threading as _thr
                 _thr.Thread(
                     target=payment_service.write_payment_with_stay,
-                    args=(stay_id, _reversal_payload),
+                    args=(new_stay_id, _reversal_payload),
                     daemon=True,
                 ).start()
             except Exception as _e:
@@ -1587,6 +1659,8 @@ def revert_checkout():
                 "age_hours_at_revert":  round(age_hours, 3),
                 "credit_note_number":   (revert_cn or {}).get("cn_number"),
                 "credit_note_id":       (revert_cn or {}).get("cn_id"),
+                "payments_relinked":    _relinked,
+                "bookings_relinked":    _bk_relinked,
             })
         except Exception as _e:
             logger.warning(f"revert_checkout: audit log write failed: {_e}")
@@ -1742,6 +1816,8 @@ def add_on():
                 for _prev in (room_data.get("add_ons") or []):
                     if not _prev.get("accommodation_charge"):
                         continue
+                    if not payment_service.is_live_charge(_prev):
+                        continue   # voided line adds nothing to this night
                     if applied_on_date and _prev.get("applied_on_date"):
                         if _prev.get("applied_on_date") != applied_on_date:
                             continue
@@ -1765,7 +1841,40 @@ def add_on():
                 logger.warning("add_on: 999-snap skipped: %s", _snap_e)
                 snap_given_up = 0
 
+        # ── Stable identity ─────────────────────────────────────────────
+        # Two things depend on this.
+        #
+        # 1. Corrections. /update_add_on and /void_add_on have to name ONE
+        #    row in an array and the matching doc in the payments collection.
+        #    Before this key existed the only handle was the row's content,
+        #    which cannot distinguish two identical lines.
+        # 2. ArrayUnion de-duplicates structurally equal elements. Two
+        #    genuine "Water 2L ₹60" sales in the same minute produced one
+        #    identical dict, so the second silently never got written and the
+        #    guest was undercharged. A unique key per row makes every element
+        #    distinct, so ArrayUnion appends both.
+        #
+        # The SAME value is stamped into the payments doc below. That pairing
+        # is what lets a correction move both stores together.
+        _addon_uid = uuid.uuid4().hex
+
+        # Does this add-on permanently raise the nightly rate? Computed here,
+        # before the entry is built, so the flag can be stored on the row —
+        # and reused by the branch below instead of being derived twice.
+        # A row carrying this flag is refused by /update_add_on and
+        # /void_add_on: reversing it means unpicking guest.price,
+        # pre_transfer_charges and transfer_day_offset, and a wrong guess
+        # there silently misprices every remaining night.
+        _will_bump_rate = bool(
+            accommodation_charge
+            and applied_on_day >= _default_day_idx
+            and data_json.get("apply_to_all_nights", False)
+        )
+
         add_on_entry = {
+            "addon_uid": _addon_uid,
+            "voided": False,
+            "bumped_nightly_rate": _will_bump_rate,
             "room": room,
             "item": item,
             "price": price,
@@ -1827,8 +1936,16 @@ def add_on():
         if payment_method in ["cash", "online"]:
             totals_update[payment_method] = firestore.Increment(price)
         else:
-            new_balance = room_data["balance"] + price
-            batch.update(rooms_ref.document(room), {"balance": new_balance})
+            # Increment, not read-add-write. `room_data` was read before this
+            # request did any work, so computing balance+price here and
+            # writing an absolute value meant two staff adding a service to
+            # the same room within the same second each wrote a total derived
+            # from the SAME stale read — the second overwrote the first and
+            # one charge silently vanished from the balance while staying on
+            # the bill. The totals doc on the next line already used
+            # Increment; the room doc was the odd one out.
+            batch.update(rooms_ref.document(room),
+                         {"balance": firestore.Increment(price)})
             totals_update["balance"] = firestore.Increment(price)
 
         room_update = {"add_ons": firestore.ArrayUnion([add_on_entry])}
@@ -1856,7 +1973,7 @@ def add_on():
         #     → just record the addon, don't touch guest.price
         #   applied_on_day >= _default_day_idx → going-forward
         #     → bump guest.price + snapshot prior days (legacy behaviour)
-        is_retroactive = applied_on_day < _default_day_idx
+        # (Both halves of that test are folded into _will_bump_rate above.)
         # One-time by default: an accommodation add-on (Extra Bed / AC / extra
         # person) is a SINGLE charge for the day it is applied and must NOT
         # raise the nightly rent. Bumping guest.price made every later renewal
@@ -1865,8 +1982,12 @@ def add_on():
         # a Rs.150 Extra Bed silently turned Rs.450/night into Rs.600/night).
         # Set apply_to_all_nights=true ONLY for a genuine permanent per-night
         # increase for the rest of the stay (e.g. a real AC upgrade).
-        _apply_to_all_nights = bool(data_json.get("apply_to_all_nights", False))
-        if accommodation_charge and not is_retroactive and _apply_to_all_nights:
+        # _will_bump_rate (computed above, and stored on the row) is exactly
+        # this condition: accommodation_charge and not retroactive and
+        # apply_to_all_nights. `is_retroactive` is `applied_on_day <
+        # _default_day_idx`, so `not is_retroactive` is `>=`. One source of
+        # truth, so the stored flag can never disagree with what ran.
+        if _will_bump_rate:
             guest        = room_data.get("guest", {})
             old_price    = guest.get("price", 0)
             renewal_count = room_data.get("renewal_count", 0)
@@ -1910,6 +2031,10 @@ def add_on():
             "time": datetime.now(IST).strftime("%H:%M"),
             "item": item, "unit_price": unit_price, "quantity": quantity,
             "transaction_type": "service",
+            # Same key as the room.add_ons entry. This is the join that lets
+            # /update_add_on and /void_add_on correct both stores together.
+            "addon_uid": _addon_uid,
+            "voided": False,
             "accommodation_charge": accommodation_charge,
             "applied_on_day":  applied_on_day,
             "applied_on_date": applied_on_date,
@@ -1934,6 +2059,553 @@ def add_on():
     except Exception as e:
         logger.error(f"Error adding add-on: {str(e)}")
         return jsonify(success=False, message=f"Error adding add-on: {str(e)}")
+
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# ADD-ON CORRECTIONS  —  /update_add_on  and  /void_add_on
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# The operator taps a service row in Payment History ("Water 2L ₹60") and
+# fixes it: wrong item, wrong quantity, wrong price, or added by mistake.
+#
+# What makes this dangerous, and what these routes do about it:
+#
+#   1. TWO STORES. The counter UI reads `room.add_ons`; the GUEST'S BILL is
+#      built from the `payments` collection (create_bill_record assembles
+#      `services` from stay_payments where type == "addon"). Correcting one
+#      and not the other changes what staff see and not what the guest pays.
+#      Both routes locate the payments doc FIRST and refuse the whole
+#      correction if it cannot be found unambiguously, before anything is
+#      mutated.
+#
+#   2. MONEY ALREADY MOVED. /add_on incremented either room.balance (method
+#      "balance") or the day's cash/online counter. A correction has to move
+#      the same counter by exactly the delta, in the same transaction as the
+#      array rewrite, or the room balance and the totals drift apart.
+#
+#   3. ACTIVE STAYS ONLY. Once a guest is checked out an invoice number
+#      exists, and changing a service then is a Section 34 amendment, not an
+#      edit. That path needs a credit note and an amendment record, neither
+#      of which exists yet. Both routes require room.status == "occupied"
+#      with a live guest and refuse otherwise.
+#
+#   4. VOID, NEVER DELETE. A voided row stays in both stores with the
+#      voided flag, who did it, when, and why. Every place that sums money
+#      calls payment_service.is_live_charge, so a voided row contributes
+#      nothing while remaining visible in history.
+#
+#   5. RATE-BUMPING ROWS ARE REFUSED. An accommodation add-on saved with
+#      apply_to_all_nights rewrote guest.price, guest.pre_transfer_charges
+#      and guest.transfer_day_offset. Unpicking that correctly is not
+#      possible from the row alone, and guessing would misprice every
+#      remaining night. Those rows carry bumped_nightly_rate and both routes
+#      reject them with an explanation.
+
+def _addon_match_key(entry: dict) -> tuple:
+    """
+    Fingerprint used to find a row that predates `addon_uid`.
+
+    Deliberately the same tuple payment_service.find_addon_payment falls
+    back to, so the room array and the payments collection are matched on
+    identical criteria. If one store finds exactly one row and the other
+    finds two, the correction is refused rather than half-applied.
+    """
+    return (
+        str(entry.get("room") or ""),
+        str(entry.get("item") or ""),
+        int(entry.get("price") or entry.get("amount") or 0),
+        str(entry.get("date") or ""),
+        str(entry.get("time") or ""),
+    )
+
+
+def _locate_addon(add_ons: list, addon_uid: str, legacy: dict):
+    """
+    Find one add-on in `room.add_ons`.
+
+    Returns (index, entry, reason). index is None when nothing safe was
+    found; reason is "" on success, else "not_found" or "ambiguous".
+
+    Never returns a match when two rows are equally good. An ambiguous
+    correction is refused because editing the wrong ₹60 line is a silent
+    billing error, and refusing is a visible one the operator can act on.
+    """
+    rows = list(add_ons or [])
+
+    if addon_uid:
+        hits = [i for i, a in enumerate(rows)
+                if isinstance(a, dict) and a.get("addon_uid") == addon_uid]
+        if len(hits) == 1:
+            return (hits[0], rows[hits[0]], "")
+        if len(hits) > 1:
+            return (None, None, "ambiguous")
+        return (None, None, "not_found")
+
+    want = _addon_match_key(legacy or {})
+    hits = [i for i, a in enumerate(rows)
+            if isinstance(a, dict)
+            and not a.get("addon_uid")
+            and _addon_match_key(a) == want]
+    if len(hits) == 1:
+        return (hits[0], rows[hits[0]], "")
+    if len(hits) > 1:
+        return (None, None, "ambiguous")
+    return (None, None, "not_found")
+
+
+def _addon_correction_preflight(data_json):
+    """
+    Shared guard for both correction routes.
+
+    Resolves the room, the target row and the paired payments doc, and
+    enforces every refusal rule, WITHOUT mutating anything. Returns either
+    ("err", (payload, http_status)) or ("ok", context-dict).
+
+    Separated from the mutating transaction on purpose: every reason to say
+    no is evaluated and reported before a single byte is written, so a
+    refused correction can never leave a half-applied state behind.
+    """
+    room = str(data_json.get("room") or "").strip()
+    if not room:
+        return ("err", ({"success": False, "message": "room is required"}, 400))
+
+    addon_uid = str(data_json.get("addon_uid") or "").strip()
+    legacy = {
+        "room": room,
+        "item": data_json.get("match_item"),
+        "price": data_json.get("match_price"),
+        "date": data_json.get("match_date"),
+        "time": data_json.get("match_time"),
+    }
+    if not addon_uid and not (legacy["item"] and legacy["date"] is not None):
+        return ("err", ({
+            "success": False,
+            "message": "Could not identify which service to change. "
+                       "Reload the room and try again.",
+        }, 400))
+
+    room_snap = rooms_ref.document(room).get()
+    if not room_snap.exists:
+        return ("err", ({"success": False, "message": "Room not found"}, 404))
+    room_data = room_snap.to_dict() or {}
+
+    # Guard 3 — active stays only.
+    if room_data.get("status") != "occupied" or not room_data.get("guest"):
+        return ("err", ({
+            "success": False,
+            "message": "This stay is no longer active. A service on a "
+                       "checked-out bill has to be corrected with a credit "
+                       "note, not edited.",
+        }, 409))
+
+    idx, entry, why = _locate_addon(room_data.get("add_ons"), addon_uid, legacy)
+    if idx is None:
+        return ("err", ({
+            "success": False,
+            "message": ("That service was already changed by someone else — "
+                        "reload and try again."
+                        if why == "not_found" else
+                        "There are two identical service lines on this room, "
+                        "so it is not clear which one to change. Void both "
+                        "and re-add the correct one."),
+        }, 409))
+
+    # Guard 5 — rows that permanently changed the nightly rate.
+    if entry.get("bumped_nightly_rate"):
+        return ("err", ({
+            "success": False,
+            "message": "This charge also raised the nightly rate for the rest "
+                       "of the stay, so it cannot be corrected on its own. "
+                       "Fix the room rate directly instead.",
+        }, 409))
+
+    stay_id = room_data.get("active_bill_id")
+    if not stay_id:
+        return ("err", ({
+            "success": False,
+            "message": "This stay has no bill record yet, so its services "
+                       "cannot be corrected. Reload the room and try again.",
+        }, 409))
+
+    # Guard 1 — resolve the payments doc BEFORE touching anything.
+    pay_id, pay_doc, pay_why = payment_service.find_addon_payment(
+        stay_id, addon_uid,
+        room=entry.get("room"), item=entry.get("item"),
+        amount=entry.get("price"), date=entry.get("date"),
+        time_str=entry.get("time"),
+    )
+    if not pay_id:
+        return ("err", ({
+            "success": False,
+            "message": ("This service is not linked to a billing record, so "
+                        "changing it here would not change the guest's bill. "
+                        "Nothing was modified."
+                        if pay_why == "not_found" else
+                        "This service matches more than one billing record, "
+                        "so it is not safe to change automatically. Nothing "
+                        "was modified."),
+            "reason": pay_why,
+        }, 409))
+
+    if pay_doc.get("voided"):
+        return ("err", ({
+            "success": False,
+            "message": "This service was already voided.",
+        }, 409))
+
+    return ("ok", {
+        "room": room, "room_data": room_data, "idx": idx, "entry": entry,
+        "stay_id": stay_id, "pay_id": pay_id, "pay_doc": pay_doc,
+        "addon_uid": addon_uid or entry.get("addon_uid") or "",
+    })
+
+
+def _commit_addon_correction(room, idx, new_entry, delta, method, expect_uid,
+                             expect_key):
+    """
+    Rewrite one element of room.add_ons and move the money, atomically.
+
+    Read-modify-write inside a transaction rather than ArrayRemove +
+    ArrayUnion: those two are not atomic together, and a failure between
+    them would drop the row entirely. The transaction re-reads the array and
+    re-verifies that the element at `idx` is still the row we decided to
+    change (by addon_uid, or by content fingerprint for legacy rows). If a
+    concurrent /add_on or transfer shifted the array underneath us, the
+    correction aborts instead of overwriting the wrong line.
+
+    `delta` is the signed change in rupees: (new price - old price) for an
+    edit, -old_price for a void. It moves room.balance for balance-method
+    rows and the day's cash/online counter otherwise, mirroring exactly what
+    /add_on incremented.
+    """
+    room_ref = rooms_ref.document(room)
+
+    @firestore.transactional
+    def _txn(txn):
+        snap = room_ref.get(transaction=txn)
+        if not snap.exists:
+            return ("err", "Room not found")
+        rd = snap.to_dict() or {}
+        if rd.get("status") != "occupied" or not rd.get("guest"):
+            return ("err", "This stay is no longer active.")
+
+        rows = list(rd.get("add_ons") or [])
+        if idx >= len(rows) or not isinstance(rows[idx], dict):
+            return ("err", "That service was already changed — reload and retry.")
+
+        current = rows[idx]
+        if expect_uid:
+            if current.get("addon_uid") != expect_uid:
+                return ("err", "That service was already changed — reload and retry.")
+        elif _addon_match_key(current) != expect_key:
+            return ("err", "That service was already changed — reload and retry.")
+        if current.get("voided"):
+            return ("err", "This service was already voided.")
+
+        rows[idx] = new_entry
+        room_update = {"add_ons": rows}
+
+        totals_update = {}
+        if delta:
+            if method in ("cash", "online"):
+                totals_update[method] = firestore.Increment(delta)
+            else:
+                room_update["balance"] = int(rd.get("balance") or 0) + delta
+                totals_update["balance"] = firestore.Increment(delta)
+
+        txn.update(room_ref, room_update)
+        if totals_update:
+            txn.update(totals_ref.document("current_totals"), totals_update)
+        return ("ok", None)
+
+    return _txn(db.transaction())
+
+
+@rooms_bp.route("/update_add_on", methods=["POST"])
+@requires_permission("payment.edit")
+def update_add_on():
+    """
+    Correct a service already recorded against an ACTIVE stay.
+
+    Body: room, addon_uid (or match_item/match_price/match_date/match_time
+    for rows written before addon_uid existed), plus the new item /
+    unit_price / quantity.
+
+    The payment method is deliberately NOT editable. Moving a charge between
+    "balance" and "cash" moves money between the guest's outstanding balance
+    and the physical drawer, which is a cash movement, not a typo fix. Void
+    the row and re-add it if the method was wrong.
+    """
+    try:
+        data_json = request.json or {}
+        status, payload = _addon_correction_preflight(data_json)
+        if status == "err":
+            body, code = payload
+            return jsonify(**body), code
+        ctx = payload
+        entry = ctx["entry"]
+
+        new_item = str(data_json.get("item") or entry.get("item") or "").strip()
+        if not new_item:
+            return jsonify(success=False, message="Item name cannot be empty"), 400
+        try:
+            new_qty = int(data_json.get("quantity", entry.get("quantity", 1)) or 1)
+            new_unit = int(data_json.get(
+                "unit_price", entry.get("unit_price", entry.get("price", 0))) or 0)
+        except (TypeError, ValueError):
+            return jsonify(success=False, message="Price and quantity must be numbers"), 400
+        if new_qty < 1:
+            return jsonify(success=False, message="Quantity must be at least 1"), 400
+        if new_unit < 0:
+            return jsonify(success=False, message="Price cannot be negative"), 400
+
+        new_price = new_unit * new_qty
+        old_price = int(entry.get("price") or 0)
+        method = entry.get("payment_method") or "balance"
+        accommodation_charge = bool(entry.get("accommodation_charge"))
+
+        # ── ₹999 snap, re-evaluated ─────────────────────────────────────────
+        # Runs on edit for the same reason it runs on add: the price that
+        # reaches Firestore must be the price that gets billed, whichever
+        # route wrote it. The night's value is recomputed EXCLUDING this row,
+        # otherwise the row's own old price would be counted twice and the
+        # snap would trim against a night that does not exist.
+        snap_given_up = 0
+        if accommodation_charge:
+            try:
+                _night = int((ctx["room_data"].get("guest") or {}).get("price") or 0)
+                _adate = entry.get("applied_on_date")
+                _aday = int(entry.get("applied_on_day") or 1)
+                for _prev in (ctx["room_data"].get("add_ons") or []):
+                    if not isinstance(_prev, dict):
+                        continue
+                    if _prev is entry or _prev.get("addon_uid") == entry.get("addon_uid"):
+                        continue           # never count the row being edited
+                    if not _prev.get("accommodation_charge"):
+                        continue
+                    if not payment_service.is_live_charge(_prev):
+                        continue
+                    if _adate and _prev.get("applied_on_date"):
+                        if _prev.get("applied_on_date") != _adate:
+                            continue
+                    elif int(_prev.get("applied_on_day") or 1) != _aday:
+                        continue
+                    _night += int(_prev.get("price") or 0)
+                _snapped, snap_given_up = snap_to_exempt_band(_night, new_price, new_qty)
+                if snap_given_up:
+                    new_price = _snapped
+                    new_unit = _snapped
+            except (TypeError, ValueError, AttributeError) as _e:
+                logger.warning(f"update_add_on: 999-snap skipped: {_e}")
+                snap_given_up = 0
+
+        delta = new_price - old_price
+        if (new_item == entry.get("item") and new_price == old_price
+                and new_qty == int(entry.get("quantity") or 1)):
+            return jsonify(success=True, unchanged=True,
+                           message="Nothing changed."), 200
+
+        actor = _safe_user()
+        now = datetime.now(IST)
+        new_entry = dict(entry)
+        new_entry.update({
+            "item": new_item,
+            "price": new_price,
+            "unit_price": new_unit,
+            "quantity": new_qty,
+            "price_snapped_from": (new_price + snap_given_up) if snap_given_up else None,
+            "editedBy": actor,
+            "editedAt": now.strftime("%Y-%m-%d %H:%M"),
+            "edit_count": int(entry.get("edit_count") or 0) + 1,
+        })
+
+        # Re-infer the tax tag: the item name decides HSN/SAC and rate, so a
+        # rename from "Water 2L" to "Laundry" must not keep the water tag.
+        # Accommodation charges keep SAC 996311 and take their rate from the
+        # folio, exactly as /add_on does.
+        try:
+            if accommodation_charge:
+                new_entry["hsn_or_sac"] = "996311"
+                new_entry["tax_category"] = "accommodation"
+                new_entry.pop("gst_rate", None)
+            else:
+                from routes.billing import infer_service_tax as _infer
+                _hsn, _rate, _cat = _infer({"item": new_item})
+                if _hsn:
+                    new_entry["hsn_or_sac"] = _hsn
+                    new_entry["gst_rate"] = _rate
+                    new_entry["tax_category"] = _cat
+                else:
+                    new_entry.pop("hsn_or_sac", None)
+                    new_entry.pop("gst_rate", None)
+                    new_entry["tax_category"] = "exempt"
+        except Exception as _tax_e:  # noqa: BLE001
+            logger.warning(f"update_add_on: tax inference failed: {_tax_e}")
+
+        st, err = _commit_addon_correction(
+            ctx["room"], ctx["idx"], new_entry, delta, method,
+            ctx["addon_uid"], _addon_match_key(entry),
+        )
+        if st == "err":
+            return jsonify(success=False, message=err), 409
+
+        # Move the billing record. Synchronous: the money has already moved
+        # above, so a silent failure here is the one outcome we cannot allow
+        # to pass unreported.
+        ok = payment_service.apply_addon_correction(ctx["pay_id"], {
+            "item": new_item,
+            "amount": new_price,
+            "unit_price": new_unit,
+            "quantity": new_qty,
+            "editedBy": actor,
+            "editedAt": now.isoformat(),
+        })
+        if not ok:
+            logger.error(
+                "update_add_on: room %s array updated but payments doc %s did "
+                "NOT — bill and balance now disagree", ctx["room"], ctx["pay_id"]
+            )
+            write_log("room.addon.edit.split", target_collection="rooms",
+                      target_id=str(ctx["room"]),
+                      metadata={"addon_uid": ctx["addon_uid"],
+                                "payment_id": ctx["pay_id"],
+                                "room_delta_applied": delta,
+                                "bill_updated": False})
+            return jsonify(
+                success=False,
+                message="The service was changed on the room but the billing "
+                        "record did not update. Do not check this guest out — "
+                        "tell the administrator.",
+            ), 500
+
+        try:
+            payment_service.refresh_room_stay_aggregates(ctx["stay_id"])
+        except Exception:  # noqa: BLE001
+            logger.warning("update_add_on: aggregate refresh failed", exc_info=True)
+
+        invalidate_rooms_and_totals()
+        write_log("room.addon.edit", target_collection="rooms",
+                  target_id=str(ctx["room"]),
+                  metadata={
+                      "addon_uid": ctx["addon_uid"],
+                      "payment_id": ctx["pay_id"],
+                      "from": {"item": entry.get("item"), "price": old_price,
+                               "quantity": entry.get("quantity")},
+                      "to": {"item": new_item, "price": new_price,
+                             "quantity": new_qty},
+                      "delta": delta, "method": method,
+                      "snapped": bool(snap_given_up),
+                  })
+        logger.info(
+            f"add_on edit: room {ctx['room']} {entry.get('item')} ₹{old_price} "
+            f"-> {new_item} ₹{new_price} (delta ₹{delta}, {method}) by {actor}"
+        )
+        # Return the resulting state, not just an acknowledgement. The client
+        # otherwise has to re-fetch the whole room list and then the payment
+        # history to discover what this call already knows, which is two extra
+        # round trips and a visible spinner on a correction the operator has
+        # already been told succeeded.
+        _fresh = (rooms_ref.document(ctx["room"]).get().to_dict() or {})
+        return jsonify(
+            success=True, price=new_price, unit_price=new_unit,
+            quantity=new_qty, delta=delta, snapped=bool(snap_given_up),
+            add_ons=_fresh.get("add_ons", []),
+            balance=_fresh.get("balance", 0),
+            message=(f"Updated to {new_item} (₹{new_price})"
+                     + (f", trimmed from ₹{new_price + snap_given_up} to keep the "
+                        f"night under ₹1,000" if snap_given_up else "")),
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"update_add_on error: {e}", exc_info=True)
+        return jsonify(success=False, message=f"Error: {e}"), 500
+
+
+@rooms_bp.route("/void_add_on", methods=["POST"])
+@requires_permission("payment.edit")
+def void_add_on():
+    """
+    Void a service on an ACTIVE stay. The row is kept, not deleted.
+
+    Body: room, addon_uid (or the legacy match_* fields), optional reason.
+    """
+    try:
+        data_json = request.json or {}
+        status, payload = _addon_correction_preflight(data_json)
+        if status == "err":
+            body, code = payload
+            return jsonify(**body), code
+        ctx = payload
+        entry = ctx["entry"]
+
+        old_price = int(entry.get("price") or 0)
+        method = entry.get("payment_method") or "balance"
+        reason = str(data_json.get("reason") or "").strip()[:200]
+        actor = _safe_user()
+        now = datetime.now(IST)
+
+        new_entry = dict(entry)
+        new_entry.update({
+            "voided": True,
+            "voidedBy": actor,
+            "voidedAt": now.strftime("%Y-%m-%d %H:%M"),
+            "void_reason": reason,
+            # The price is preserved. is_live_charge is what keeps a voided
+            # row out of every total, so zeroing the amount here would only
+            # destroy the record of what was originally charged.
+        })
+
+        st, err = _commit_addon_correction(
+            ctx["room"], ctx["idx"], new_entry, -old_price, method,
+            ctx["addon_uid"], _addon_match_key(entry),
+        )
+        if st == "err":
+            return jsonify(success=False, message=err), 409
+
+        ok = payment_service.apply_addon_correction(ctx["pay_id"], {
+            "voided": True,
+            "voidedBy": actor,
+            "voidedAt": now.isoformat(),
+            "void_reason": reason,
+        })
+        if not ok:
+            logger.error(
+                "void_add_on: room %s array voided but payments doc %s did NOT "
+                "— the charge is off the balance but still on the bill",
+                ctx["room"], ctx["pay_id"]
+            )
+            return jsonify(
+                success=False,
+                message="The service was removed from the room but the billing "
+                        "record did not update. Do not check this guest out — "
+                        "tell the administrator.",
+            ), 500
+
+        try:
+            payment_service.refresh_room_stay_aggregates(ctx["stay_id"])
+        except Exception:  # noqa: BLE001
+            logger.warning("void_add_on: aggregate refresh failed", exc_info=True)
+
+        invalidate_rooms_and_totals()
+        write_log("room.addon.void", target_collection="rooms",
+                  target_id=str(ctx["room"]),
+                  metadata={"addon_uid": ctx["addon_uid"],
+                            "payment_id": ctx["pay_id"],
+                            "item": entry.get("item"), "price": old_price,
+                            "method": method, "reason": reason})
+        logger.info(
+            f"add_on void: room {ctx['room']} {entry.get('item')} ₹{old_price} "
+            f"({method}) by {actor} reason={reason!r}"
+        )
+        _fresh = (rooms_ref.document(ctx["room"]).get().to_dict() or {})
+        return jsonify(success=True, delta=-old_price,
+                       add_ons=_fresh.get("add_ons", []),
+                       balance=_fresh.get("balance", 0),
+                       message=f"Removed {entry.get('item')} (₹{old_price})")
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"void_add_on error: {e}", exc_info=True)
+        return jsonify(success=False, message=f"Error: {e}"), 500
+
 
 @rooms_bp.route("/renew_rent", methods=["POST"])
 def renew_rent():
@@ -2975,8 +3647,14 @@ def transfer_room():
         # adjustment. transfer_day_prebilled marks that the in-progress day
         # is already covered by the segment, so checkout's minimum-1-day
         # rule must not double-bill it on a same-day checkout.
+        # "ota" was a source that is never written ("mmt"/"agoda"/"normal" are),
+        # and "agoda" was missing, so a cross-category transfer re-rated an
+        # Agoda stay and moved its balance — something that never happens to
+        # an MMT stay. guest.payment == "ota" stays as the primary signal
+        # because it survives on the room doc after conversion; the source
+        # check is the fallback for rooms that predate that stamp.
         _is_ota = (new_room_data["guest"].get("payment") == "ota") or (
-            new_room_data.get("booking_source") in ("mmt", "ota"))
+            new_room_data.get("booking_source") in OTA_PREPAID_SOURCES)
         transfer_day_prebilled = False
         if cross_category and not _is_ota and not apply_today_diff:
             _renewals_now = int(new_room_data.get("renewal_count", 0) or 0)
@@ -4178,6 +4856,43 @@ def update_stay_payment():
                 ),
             ), 409
 
+        # (b2) An ADD-ON is a charge, not a receipt, and this route only
+        # knows how to move receipts.
+        #
+        # get_stay_payments renders any cash/online add-on as an editable row
+        # (it filters only expense/discount and cash/online), so "Water 2L
+        # Rs.60" shows up in Payment History looking exactly like a payment.
+        # Editing it here moved three stores in three different directions:
+        #
+        #   * the payments doc amount changed, so the BILL now charges the new
+        #     figure and credits it as received;
+        #   * step 3 below applied balance += (old - new), but a cash/online
+        #     add-on never touched the balance when it was created, so that
+        #     invents money — editing Rs.60 to Rs.80 left a phantom Rs.20
+        #     CREDIT on a room that owed nothing;
+        #   * room.add_ons was not touched at all, so the counter UI, the
+        #     balance preview and the Rs.999 snap kept using the old price
+        #     while the invoice used the new one.
+        #
+        # /update_add_on already does all of this correctly and moves both
+        # stores together, so charges go there. Mirrors the USE_SERVICE_VOID
+        # guard in /delete_stay_payment.
+        if old_data.get("type") == "addon":
+            _room_id_chk = str(old_data.get("room", ""))
+            _rsnap = rooms_ref.document(_room_id_chk).get() if _room_id_chk else None
+            if _rsnap is not None and _rsnap.exists \
+                    and (_rsnap.to_dict() or {}).get("status") == "occupied":
+                return jsonify(
+                    success=False,
+                    code="USE_SERVICE_EDIT",
+                    message=("This is a service charge, not a payment. Change "
+                             "it with Edit next to the service itself — that "
+                             "also updates the guest's balance and the bill."),
+                ), 409
+            # Checked-out stay: room.add_ons is no longer live, so there is no
+            # second store to drift and no balance to corrupt. Allow the edit,
+            # but never let step 3 touch a balance for a charge.
+
         # (c) If this payment is THE trigger that made the stay
         # invoiceable AND the method is changing away from online, the
         # stay's invoiceable state is no longer justified. Attempt to
@@ -4262,8 +4977,14 @@ def update_stay_payment():
             if totals_delta:
                 batch.update(totals_doc_ref, totals_delta)
 
-        # 3. If amount changed, adjust room balance (only if room still occupied)
-        if new_amount is not None and new_amount != old_amount:
+        # 3. If amount changed, adjust room balance (only if room still
+        #    occupied). Receipts only — a charge row is refused above while the
+        #    room is live, and on a checked-out stay there is no balance to
+        #    move. Without this second check the "guest paid less than
+        #    recorded" reasoning would still fire on an add-on and invent a
+        #    balance the stay never had.
+        if (new_amount is not None and new_amount != old_amount
+                and old_data.get("type") != "addon"):
             room_id = str(old_data.get("room", ""))
             if room_id:
                 room_snap = rooms_ref.document(room_id).get()
@@ -4400,15 +5121,50 @@ def delete_stay_payment():
 
         # 3. If room is still occupied, add the amount back to balance
         #    (guest paid this, but we're removing the record → they owe it again)
-        if room_id and old_amount > 0:
+        #
+        # That reasoning holds for a RECEIPT and is exactly backwards for a
+        # CHARGE. An add-on row is a charge: "Water 2L ₹60" on the balance
+        # means the guest OWES ₹60. Deleting it should take ₹60 off the
+        # balance, not add ₹60 on — the old code moved it the wrong way, a
+        # ₹120 error on a ₹60 line. For a cash/online add-on it was worse
+        # still: that charge never touched the balance when it was created,
+        # so any balance adjustment on delete invents money.
+        #
+        # Deleting an add-on also left the matching entry in room.add_ons, so
+        # the charge disappeared from the guest's bill (built from payments)
+        # while the room's balance and the ₹999 snap still counted it.
+        #
+        # There is already a route that does all of this correctly and moves
+        # both stores in one transaction, so charges are sent there instead of
+        # being half-handled here.
+        _is_charge = (old_data.get("type") == "addon")
+
+        if _is_charge:
+            room_snap = rooms_ref.document(room_id).get() if room_id else None
+            if room_snap is not None and room_snap.exists \
+                    and (room_snap.to_dict() or {}).get("status") == "occupied":
+                return jsonify(
+                    success=False,
+                    code="USE_SERVICE_VOID",
+                    message=("This is a service charge, not a payment. Remove it "
+                             "with Delete next to the service itself — that also "
+                             "takes it off the guest's balance and off the bill."),
+                ), 409
+            # Checked-out stay: no live balance to correct, so the delete is
+            # allowed. The balance block below is skipped for charges.
+
+        if room_id and old_amount > 0 and not _is_charge:
             room_snap = rooms_ref.document(room_id).get()
             if room_snap.exists and room_snap.to_dict().get("status") == "occupied":
+                # Increment for the same reason /add_on now uses it: this read
+                # and the commit are not atomic together.
                 current_balance = int(room_snap.to_dict().get("balance", 0))
-                new_balance = current_balance + old_amount
-                batch.update(rooms_ref.document(room_id), {"balance": new_balance})
+                batch.update(rooms_ref.document(room_id),
+                             {"balance": firestore.Increment(old_amount)})
                 logger.info(
                     f"delete_stay_payment: room {room_id} balance adjusted "
-                    f"{current_balance} → {new_balance} (deleted amount {old_amount})"
+                    f"{current_balance} → {current_balance + old_amount} "
+                    f"(deleted receipt {old_amount})"
                 )
 
         batch.commit()

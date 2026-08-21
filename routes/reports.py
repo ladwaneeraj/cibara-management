@@ -449,13 +449,21 @@ def get_reports():
         _exclude_refunds = ("refund", "checkout_refund", "manual_refund",
                             "booking_cancel_refund")
 
+        # A voided service keeps method="cash"/"online" and type="addon", so
+        # without this filter it stayed in BOTH the cash total and the services
+        # total while the guest's bill excluded it — the drawer report and the
+        # invoice could never be reconciled.
+        _live = payment_service.is_live_charge
         cash_logs = [p for p in all_payments if p.get("method") == "cash"
                      and p.get("type") not in _exclude_refunds
-                     and p.get("type") not in ("expense", "discount")]
+                     and p.get("type") not in ("expense", "discount")
+                     and _live(p)]
         online_logs = [p for p in all_payments if p.get("method") == "online"
                        and p.get("type") not in _exclude_refunds
-                       and p.get("type") not in ("expense", "discount")]
-        add_on_logs = [p for p in all_payments if p.get("type") == "addon"]
+                       and p.get("type") not in ("expense", "discount")
+                       and _live(p)]
+        add_on_logs = [p for p in all_payments
+                       if p.get("type") == "addon" and _live(p)]
         refund_logs = [p for p in all_payments if p.get("type") in _exclude_refunds]
         renewal_logs = [p for p in all_payments if p.get("type") == "renewal"]
 

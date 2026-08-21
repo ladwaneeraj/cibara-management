@@ -846,6 +846,42 @@ class BillCreationError(Exception):
         self.bill_number = bill_number
 
 
+# ── OTA prepaid channels ────────────────────────────────────────────────────
+# Channels that collect the FULL stay tariff from the guest up front and settle
+# net to the hotel later. The guest owes the front desk nothing on arrival, so
+# the whole stay is pre-charged at check-in, the tariff is recorded as an "ota"
+# payment, and the room carries a zero balance.
+#
+# This lived as three separate literal comparisons that had drifted apart:
+#   config.py         booking_source in ("mmt", "agoda")   <- invoicing
+#   bookings.py:971   booking_source == "mmt"              <- prepaid handling
+#   rooms.py:3650     booking_source in ("mmt", "ota")     <- transfer re-rating
+#
+# So an Agoda stay was invoiced as OTA but never given the prepaid treatment:
+# no ota_prepaid payment row, renewal_count left at 0, and the room opened with
+# the full tariff as balance due. A Rs.2,400 two-night Agoda booking showed
+# Rs.2,400 outstanding on an invoice the guest had already paid Agoda for, and
+# checkout blocked on it. The transfer path was inconsistent a third way and
+# re-rated Agoda stays that should never be re-rated.
+#
+# One tuple, one predicate, imported everywhere. Adding a channel is one edit.
+OTA_PREPAID_SOURCES = ("mmt", "agoda")
+
+
+def is_ota_prepaid(doc) -> bool:
+    """True when this booking/room is an OTA stay the channel has prepaid.
+
+    Requires BOTH the source and payment_source == "ota": an OTA-sourced
+    booking the hotel collects for itself is an ordinary stay.
+    Accepts a booking doc or a room doc; missing/odd shapes return False.
+    """
+    if not isinstance(doc, dict):
+        return False
+    if (doc.get("payment_source") or "") != "ota":
+        return False
+    return (doc.get("booking_source") or "") in OTA_PREPAID_SOURCES
+
+
 def create_bill_record(room, room_data, checkout_time, batch=None,
                        settle_later=False, settlement_id=None,
                        defer_number=False):
@@ -985,13 +1021,27 @@ def create_bill_record(room, room_data, checkout_time, batch=None,
         _exclude = ("refund", "checkout_refund", "manual_refund",
                      "booking_cancel_refund", "discount", "expense")
 
+        # is_live_charge on the RECEIPT side too, not just the charge side.
+        # /void_add_on flags the payments row `voided` whatever the method was
+        # AND decrements totals[cash|online] — the money is treated as handed
+        # back. Filtering the charge (services_total, below) without filtering
+        # the receipt left the void counted as money still in the drawer:
+        # a Rs.700 night with a voided Rs.60 cash add-on billed Rs.700 against
+        # Rs.760 received and offered the guest a SECOND Rs.60 refund, while
+        # /reports (which does filter) and the Bills tab (which reads the
+        # stored payment_cash) reported two further different figures for the
+        # same stay. It also defeated the is_no_bill check below — a voided
+        # ONLINE add-on left payment_online > 0 and burned a sequential GST
+        # invoice number on a stay that should never have had one.
         payment_cash = sum(
             p.get("amount", 0) for p in stay_payments
             if p.get("method") == "cash" and p.get("type") not in _exclude
+            and payment_service.is_live_charge(p)
         )
         payment_online = sum(
             p.get("amount", 0) for p in stay_payments
             if p.get("method") == "online" and p.get("type") not in _exclude
+            and payment_service.is_live_charge(p)
         )
         # OTA-settled amount (method="ota"): the room money MMT collected up
         # front and settles to the bank later. It is NOT a front-desk receipt
@@ -1002,12 +1052,17 @@ def create_bill_record(room, room_data, checkout_time, batch=None,
         payment_ota = sum(
             p.get("amount", 0) for p in stay_payments
             if p.get("method") == "ota" and p.get("type") not in _exclude
+            and payment_service.is_live_charge(p)
         )
 
         services = []
         services_total = 0
         for p in stay_payments:
-            if p.get("type") == "addon":
+            # is_live_charge: a voided add-on stays in the collection for
+            # history but must not reach the invoice. Single definition in
+            # payment_service so the folio, the balance preview and the
+            # payment modal cannot drift apart from the bill.
+            if p.get("type") == "addon" and payment_service.is_live_charge(p):
                 services.append({
                     "item": p.get("item", "Service"),
                     "quantity": p.get("quantity", 1),
@@ -1282,19 +1337,29 @@ def create_bill_record(room, room_data, checkout_time, batch=None,
         # ── Invoice flag logic ────────────────────────────────────────────────────
         # invoice_generated = True when this bill qualifies as a formal GST tax invoice.
         # bill_number (CC/YYYY/MM/XXXXX) is the single reference — no separate INV/... number.
+        # Both flags gate whether a GST invoice number is minted, so a voided
+        # service must not satisfy them. Without is_live_charge here, adding a
+        # service by mistake on an MMT stay and voiding it still tripped the
+        # service-only-bill branch and burned an invoice number on a stay with
+        # no live services — a number that then has to be explained in GSTR-1.
         any_addon_online = any(
             p.get("type") == "addon" and p.get("method") == "online"
+            and payment_service.is_live_charge(p)
             for p in stay_payments
         )
         # any service/addon (cash OR online) — used for MMT service-only bill trigger
-        any_addon = any(p.get("type") == "addon" for p in stay_payments)
+        any_addon = any(
+            p.get("type") == "addon" and payment_service.is_live_charge(p)
+            for p in stay_payments
+        )
         is_same_day = checkin_dt.date() == checkout_dt.date()
         # OTA stays where the hotel issues the room tax invoice and the room
         # money settles to the bank (MMT and Agoda behave identically here).
         # Name kept as is_mmt_ota because the downstream invoice/GST branches
         # reference it; broadening the source set makes Agoda follow the exact
         # same path as MMT without a sprawling rename.
-        is_mmt_ota = (booking_source in ("mmt", "agoda") and payment_source == "ota")
+        is_mmt_ota = is_ota_prepaid({"booking_source": booking_source,
+                                    "payment_source": payment_source})
         is_booking_com = (booking_source == "booking.com")
         # ── Read billing config FIRST ────────────────────────────────────────
         # This MUST precede any use of mmt_hotel_issues_invoice / always_generate_bill
@@ -1954,7 +2019,10 @@ def _build_active_entry_fast(room_number, room_data, all_logs, checkin_dt, log_i
         room_price_per_night = guest.get("price", 0)
         days_stayed          = (room_data.get("renewal_count") or 0) + 1
         room_charges_total   = room_price_per_night * days_stayed
-        services_total       = sum(a.get("price", 0) for a in room_data.get("add_ons", []))
+        services_total       = sum(
+            a.get("price", 0) for a in room_data.get("add_ons", [])
+            if payment_service.is_live_charge(a)
+        )
         total_amount         = room_charges_total + services_total
 
         room_str = str(room_number)
@@ -1965,9 +2033,12 @@ def _build_active_entry_fast(room_number, room_data, all_logs, checkin_dt, log_i
         )
 
         # Read from payments collection (primary data source)
+        # Same void guard as create_bill_record — this row is what the
+        # operator reads before deciding whether to ask for money.
         payment_cash = sum(
             p.get("amount", 0) for p in (stay_payments or [])
             if p.get("method") == "cash"
+            and payment_service.is_live_charge(p)
             and p.get("type") not in ("refund", "checkout_refund",
                                        "manual_refund", "booking_cancel_refund",
                                        "discount", "expense")
@@ -1975,6 +2046,7 @@ def _build_active_entry_fast(room_number, room_data, all_logs, checkin_dt, log_i
         payment_online = sum(
             p.get("amount", 0) for p in (stay_payments or [])
             if p.get("method") == "online"
+            and payment_service.is_live_charge(p)
             and p.get("type") not in ("refund", "checkout_refund",
                                        "manual_refund", "booking_cancel_refund",
                                        "discount", "expense")
@@ -2319,6 +2391,12 @@ def compute_daily_folio(
     _checkin_date = checkin_dt.date() if checkin_dt else None
     for s in (accommodation_services or []):
         if not s.get("accommodation_charge"):
+            continue
+        if not payment_service.is_live_charge(s):
+            # Voided line. Skipped here as well as at the services build
+            # above: a voided add-on must not contribute to a night's value
+            # of supply, or it could push that night across a GST slab
+            # boundary while contributing nothing to the amount charged.
             continue
 
         day_idx = None

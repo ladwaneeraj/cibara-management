@@ -771,6 +771,56 @@ def remember_gst_profile(mobile: str, profile: dict, *,
     threading.Thread(target=_do, daemon=True).start()
 
 
+def list_gst_profiles(limit: int = 200) -> list:
+    """
+    Every stored GST profile, for the recipient type-ahead on the bill modal.
+
+    The per-guest profile written by remember_gst_profile() is keyed by
+    mobile and exists to OFFER a returning guest their own company at
+    check-in. This reader serves a different need: the operator is filling in
+    GST details on some bill and wants any company the lodge has invoiced
+    before, whoever booked it.
+
+    Reading it here as well as from the bills matters for the first-run case.
+    A profile is saved the moment /update_bill_gst succeeds, so it is present
+    even for a stay whose bill was later cancelled or reverted to B2C — and
+    on a fresh deployment it is usually the only place anything exists at all.
+
+    `gst_profile.gstin > ""` is an inequality on a single field, which
+    Firestore auto-indexes, so this needs no composite index and returns only
+    documents that actually carry a profile.
+
+    Never raises: the caller is a convenience feature and must degrade to an
+    empty list rather than break the modal.
+    """
+    if _customers_ref is None:
+        return []
+    try:
+        # Positional form, matching every other query in this module.
+        q = (_customers_ref
+             .where("gst_profile.gstin", ">", "")
+             .limit(int(limit or 200)))
+        out = []
+        for snap in q.stream():
+            gp = (snap.to_dict() or {}).get("gst_profile") or {}
+            gstin = str(gp.get("gstin") or "").strip().upper()
+            if len(gstin) != 15:
+                continue
+            out.append({
+                "gstin": gstin,
+                "legal_name": str(gp.get("legal_name") or "").strip(),
+                "trade_name": str(gp.get("trade_name") or "").strip(),
+                "address":    str(gp.get("address") or "").strip(),
+                "state":      str(gp.get("state") or "").strip(),
+                "state_code": str(gp.get("state_code") or "").strip(),
+                "last_used":  str(gp.get("last_used_at") or "")[:10],
+            })
+        return out
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"CustomerService list_gst_profiles failed: {e}")
+        return []
+
+
 def forget_gst_profile(mobile: str) -> bool:
     """
     Drop the stored GST details. Synchronous and returns a result, because

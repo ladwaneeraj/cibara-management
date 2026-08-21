@@ -2281,16 +2281,50 @@ function updateCheckoutModal(roomNumber) {
   // Reset the service form
   resetServiceForm();
 
-  // Show / hide the AC service button based on room type and current AC status.
-  // The button appears only for rooms 200–206 where the guest has NOT yet
-  // activated AC (isAC === false).  Once AC is added the flag flips server-side
-  // and the button disappears after the next fetchData() → updateCheckoutModal().
+  // ── Revert renewal (admin only) ──────────────────────────────────────────
+  // Renewing is a one-tap action and is easy to fire by mistake, or to fire
+  // and then not check the guest out. Each renewal adds a night's rent to the
+  // balance AND pushes the stay window forward 24h, so an accidental one
+  // silently overcharges and keeps the room looking occupied.
+  //
+  // The backend already existed — POST /shorten_stay, gated on discount.apply
+  // (admin-only; managers are explicitly excluded in services/permissions.py)
+  // — but nothing in the UI ever called it. This wires it to the Stay Status
+  // tile, one day per tap, so a 4-5 night stay unwinds a night at a time.
+  //
+  // The confirm spells out the resulting stay end, because that is what the
+  // operator is actually reasoning about. It falls out of the arithmetic
+  // rather than being set: the window is always
+  // check-in + (renewal_count + 1) x 24h, so dropping the count by one moves
+  // the end back exactly one day. Check-in yesterday 06:00, renewed today
+  // 09:00 by mistake, undo -> the stay ends today 06:00.
+  renderRevertRenewalControl(roomNumber, roomInfo);
+
+  // Show the AC service button for AC-capable rooms (200–206).
+  //
+  // It used to also require `guest.isAC === false`, on the assumption that
+  // adding AC is a one-time upgrade for the stay. It is not: AC is charged
+  // PER NIGHT — the add-on carries an applied_on_day / applied_on_date stamp
+  // and the bill shows it against a specific date ("AC ₹400 · For 18-08-2026").
+  // So the first add flipped guest.isAC to true server-side and the chip
+  // vanished on the next refresh, leaving no way to bill AC for night two.
+  //
+  // guest.isAC still does its real job — it drives the ❄️ marker on the room
+  // card — it just no longer doubles as a "already charged, hide the control"
+  // flag. Adding AC again does not raise the nightly rate: /add_on only bumps
+  // guest.price when apply_to_all_nights is explicitly set, and it defaults
+  // to false, so each tap is a single charge against one day.
+  //
+  // The label changes to "AC" once the room is already on AC, since "Add AC"
+  // reads like an upgrade prompt when the upgrade has already happened.
   const acServiceBtn = document.getElementById("ac-service-btn");
   if (acServiceBtn) {
     const roomNum = parseInt(roomNumber, 10);
     const isAcCapableRoom = roomNum >= 200 && roomNum <= 206;
-    const guestHasAc = roomInfo.guest && roomInfo.guest.isAC === true;
-    acServiceBtn.style.display = (isAcCapableRoom && !guestHasAc) ? "" : "none";
+    const guestHasAc = !!(roomInfo.guest && roomInfo.guest.isAC === true);
+    acServiceBtn.style.display = isAcCapableRoom ? "" : "none";
+    const acLabel = acServiceBtn.querySelector(".svc-chip-label");
+    if (acLabel) acLabel.textContent = guestHasAc ? "AC" : "Add AC";
   }
 
   // ── Housekeeping chip ────────────────────────────────────────────────────
@@ -2307,6 +2341,178 @@ function updateCheckoutModal(roomNumber) {
   if (typeof updatePaymentLogs === "function") {
     updatePaymentLogs(roomNumber);
   }
+}
+
+
+
+// A real dialog rather than window.confirm(). The native box cannot show the
+// before/after times as anything but a wall of text, is unstyled on every
+// platform, and on some mobile browsers is suppressed entirely — which would
+// make the button silently do nothing. This is also the only place the
+// operator sees what the undo will actually do, so it earns the space.
+//
+// Returns a Promise<boolean>. Resolves false on Cancel, Escape or a click on
+// the backdrop, so every dismissal path is a "no".
+function _confirmUndoRenewal(o) {
+  return new Promise((resolve) => {
+    document.getElementById("undo-renewal-backdrop")?.remove();
+
+    const wrap = document.createElement("div");
+    wrap.id = "undo-renewal-backdrop";
+    wrap.className = "undo-renewal-backdrop";
+    wrap.innerHTML = `
+      <div class="undo-renewal-box" role="dialog" aria-modal="true"
+           aria-labelledby="undo-renewal-title">
+        <div class="undo-renewal-head">
+          <span class="undo-renewal-icon"><i class="fas fa-rotate-left"></i></span>
+          <div>
+            <div class="undo-renewal-title" id="undo-renewal-title">Undo renewal</div>
+            <div class="undo-renewal-sub">Room ${o.room}</div>
+          </div>
+        </div>
+
+        <div class="undo-renewal-rows">
+          <div class="undo-renewal-row">
+            <span>Stay length</span>
+            <strong>Day ${o.dayFrom} <i class="fas fa-arrow-right"></i> Day ${o.dayTo}</strong>
+          </div>
+          <div class="undo-renewal-row">
+            <span>Balance</span>
+            <strong class="undo-renewal-money">&minus; &#8377;${o.price}</strong>
+          </div>
+          <div class="undo-renewal-row undo-renewal-row--stack">
+            <span>Stay ends</span>
+            <strong>
+              <span class="undo-renewal-was">${o.before}</span>
+              <i class="fas fa-arrow-right"></i>
+              <span class="undo-renewal-now">${o.after}</span>
+            </strong>
+          </div>
+        </div>
+
+        <div class="undo-renewal-note">
+          This reverses one night's rent and the charge for it. The checkout
+          time is not changed — the guest is still checked out when you check
+          them out.
+        </div>
+
+        <div class="undo-renewal-actions">
+          <button type="button" class="undo-renewal-cancel">Cancel</button>
+          <button type="button" class="undo-renewal-ok">Undo renewal</button>
+        </div>
+      </div>`;
+    document.body.appendChild(wrap);
+
+    const done = (v) => {
+      document.removeEventListener("keydown", onKey);
+      wrap.remove();
+      resolve(v);
+    };
+    const onKey = (e) => {
+      if (e.key === "Escape") done(false);
+      if (e.key === "Enter") done(true);
+    };
+    document.addEventListener("keydown", onKey);
+    wrap.addEventListener("click", (e) => { if (e.target === wrap) done(false); });
+    wrap.querySelector(".undo-renewal-cancel").addEventListener("click", () => done(false));
+    wrap.querySelector(".undo-renewal-ok").addEventListener("click", () => done(true));
+    setTimeout(() => wrap.querySelector(".undo-renewal-ok")?.focus(), 40);
+  });
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Undo renewal — admin-only reversal of an accidental rent renewal
+// ═══════════════════════════════════════════════════════════════════════════
+
+// Stay window end = check-in + (renewal_count + 1) x 24h. One renewal funds
+// one 24h cycle, and cycle 1 is funded by the check-in itself, hence the +1.
+function _stayEndAfter(checkinTime, renewalCount) {
+  if (!checkinTime) return null;
+  const d = new Date(String(checkinTime).replace(" ", "T"));
+  if (isNaN(d.getTime())) return null;
+  d.setHours(d.getHours() + 24 * ((Number(renewalCount) || 0) + 1));
+  return d;
+}
+
+function _fmtStayEnd(d) {
+  if (!d) return "unknown";
+  const p = (n) => String(n).padStart(2, "0");
+  return p(d.getDate()) + "-" + p(d.getMonth() + 1) + "-" + d.getFullYear() +
+         " " + p(d.getHours()) + ":" + p(d.getMinutes());
+}
+
+function renderRevertRenewalControl(roomNumber, roomInfo) {
+  const tile = document.getElementById("checkout-stay-status");
+  if (!tile) return;
+
+  const existing = document.getElementById("checkout-revert-renewal");
+  const count = Number((roomInfo && roomInfo.renewal_count) || 0);
+
+  // Admin only, and only when there is a renewal to take back. At count 0 the
+  // guest is still on the night their check-in paid for, so there is nothing
+  // to reverse and /shorten_stay would refuse anyway.
+  const canRevert = !!(
+    window.CibaraAuth &&
+    typeof window.CibaraAuth.userCan === "function" &&
+    window.CibaraAuth.userCan("discount.apply")
+  ) && count >= 1;
+
+  if (existing) existing.remove();   // rebuilt per render, never stacked
+  if (!canRevert) return;
+
+  const btn = document.createElement("button");
+  btn.id = "checkout-revert-renewal";
+  btn.type = "button";
+  btn.className = "checkout-revert-renewal-btn";
+  btn.innerHTML = '<i class="fas fa-rotate-left"></i> Undo renewal';
+  tile.appendChild(btn);
+
+  btn.addEventListener("click", async () => {
+    const price = Number((roomInfo.guest && roomInfo.guest.price) || 0);
+    const ci = roomInfo.checkin_time;
+    const before = _fmtStayEnd(_stayEndAfter(ci, count));
+    const after = _fmtStayEnd(_stayEndAfter(ci, count - 1));
+
+    const proceed = await _confirmUndoRenewal({
+      room: roomNumber, dayFrom: count + 1, dayTo: count,
+      price, before, after,
+    });
+    if (!proceed) return;
+
+    btn.disabled = true;
+    const original = btn.innerHTML;
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Undoing…';
+    try {
+      const res = await apiFetch("/shorten_stay", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ room: String(roomNumber), days_to_reverse: 1 }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.success) {
+        // The server covers cases this UI cannot know, e.g. trying to reverse
+        // more cycles than were actually accrued.
+        alert(data.message || ("Could not undo the renewal (error " + res.status + ")."));
+        btn.disabled = false;
+        btn.innerHTML = original;
+        return;
+      }
+      if (typeof showNotification === "function") {
+        showNotification(data.message || "Renewal undone.", "success");
+      }
+      // Re-read rather than patch: the server owns the new balance and count,
+      // and the payment history now carries a rent_reversal row to show.
+      if (typeof window.invalidatePayHistoryCache === "function") {
+        window.invalidatePayHistoryCache(roomNumber);
+      }
+      if (typeof fetchData === "function") await fetchData();
+      if (typeof updateCheckoutModal === "function") updateCheckoutModal(roomNumber);
+    } catch (e) {
+      alert("Network problem — the renewal was not undone. Try again.");
+      btn.disabled = false;
+      btn.innerHTML = original;
+    }
+  });
 }
 
 // Show checkout modal with detailed info

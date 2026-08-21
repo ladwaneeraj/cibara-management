@@ -1375,102 +1375,219 @@ class TransactionLogManager {
       // then this line), never 3, regardless of how many badges it carries.
       const line2 = `${forTagHtml}${methodBadgeHtml}${whenStr ? `<span class="pay-when">${whenStr}</span>` : ""}${byHtml}`;
 
+      // ── Tap-to-correct ────────────────────────────────────────────────
+      // Only service rows (add-ons) on an ACTIVE stay are correctable, and
+      // only for users with payment.edit. Everything else renders exactly as
+      // before with no tap affordance, so a cash receipt or a room-shift
+      // note can never be opened for editing.
+      //
+      // A row that permanently raised the nightly rate is excluded here as
+      // well as refused by the server: showing a tappable row that always
+      // errors is worse than not offering it.
+      // Any row opens the editor. Which rows can actually be changed, and
+      // how, is the modal's business — making only some rows tappable here
+      // would mean encoding those rules a second time, in a place that
+      // cannot see the payment records the modal loads.
+      const _voided = !!payment.voided;
+      const _tappable = _payRowsOpenable(roomNumber);
+
+      const _rowAttrs =
+        ` class="pay-row${_tappable ? " txn-payrow-tappable" : ""}` +
+        `${_voided ? " txn-row-voided" : ""}"` +
+        (_tappable ? ` role="button" tabindex="0"` : "");
+
+      const _voidNote = _voided
+        ? `<span class="pay-badge pay-badge--voided">Removed${
+             payment.voidedBy ? ` by ${_esc(payment.voidedBy)}` : ""}</span>`
+        : "";
+
       logsHtml += `
-        <div class="pay-row">
+        <div${_rowAttrs}>
           <div class="pay-icon pay-icon--${iconTone}"><i class="fas ${iconClass}"></i></div>
           <div class="pay-body">
             <div class="pay-line1">
               ${line1Label}
               ${showAmount ? `<span class="pay-amt pay-amt--${amtKind}">${amountText}</span>` : ""}
             </div>
-            ${line2 ? `<div class="pay-line2">${line2}</div>` : ""}
+            ${line2 || _voidNote ? `<div class="pay-line2">${_voidNote}${line2}</div>` : ""}
           </div>
         </div>
       `;
     });
 
     container.innerHTML = logsHtml;
+    // Refresh callback re-fetches rather than patching the DOM: the server
+    // is the only place that knows the snapped price, the new balance and
+    // whether a concurrent edit won, so re-reading is the only way the row
+    // on screen is guaranteed to match what was actually stored.
+    _wireAddonRows(container, roomNumber, () => {
+      if (typeof window.invalidatePayHistoryCache === "function") {
+        window.invalidatePayHistoryCache(roomNumber);
+      }
+      this.updatePaymentLogs(roomNumber);
+      if (typeof window.refreshRoomsData === "function") {
+        window.refreshRoomsData();          // balance changed on the room card
+      }
+    });
   }
 
-  // Renders the admin-only "Edit payments" button into the Payment
-  // History header slot (#checkout-payment-edit-slot in the checkout
-  // modal). Reuses the Register tab's payments modal
-  // (window.openRegisterPaymentsModal) so editing behaves identically
-  // wherever it is launched from — same modal, same RBAC, same backend.
-  // Gated on the payment.edit permission the modal itself enforces;
-  // the slot is cleared for anyone without it or when there is no
-  // active stay to edit.
+  // The header button that used to live here is gone. Correcting a payment or
+  // a service is now a tap on the row itself (see _wireAddonRows), so the
+  // operator points at the line they want instead of opening an editor and
+  // hunting for it. The slot is cleared on every render so a stale button
+  // from a cached page cannot survive a redeploy.
   _renderPaymentEditButton(roomNumber) {
-    // Resolve the header slot. index.html ships a
-    // #checkout-payment-edit-slot span in the Payment History header;
-    // if the loaded page HTML predates that span (stale cache / not yet
-    // redeployed), build the slot from the heading so the button still
-    // appears. Idempotent — reuses the slot/row on later renders.
-    let slot = document.getElementById("checkout-payment-edit-slot");
-    if (!slot) {
-      const logs = document.getElementById("checkout-payment-logs");
-      const wrap = logs ? logs.parentElement : null;
-      const heading = wrap ? wrap.querySelector("h3") : null;
-      if (wrap && heading) {
-        let headerRow = wrap.querySelector(".checkout-pay-header-row");
-        if (!headerRow) {
-          headerRow = document.createElement("div");
-          headerRow.className = "checkout-pay-header-row";
-          headerRow.style.cssText =
-            "display:flex;justify-content:space-between;align-items:center;gap:0.5rem;";
-          heading.parentNode.insertBefore(headerRow, heading);
-          headerRow.appendChild(heading);
-          heading.style.margin = "0";
-        }
-        slot = document.createElement("span");
-        slot.id = "checkout-payment-edit-slot";
-        headerRow.appendChild(slot);
-      }
-    }
-    if (!slot) return;
-    const roomInfo =
-      typeof rooms !== "undefined" && roomNumber != null
-        ? rooms[roomNumber]
-        : null;
-    const stayId = roomInfo && roomInfo.active_bill_id;
-    const canEdit = !!(
-      window.CibaraAuth &&
-      window.CibaraAuth.userCan &&
-      window.CibaraAuth.userCan("payment.edit")
-    );
-    if (!canEdit || !stayId) {
-      slot.innerHTML = "";
-      return;
-    }
-    slot.innerHTML = `
-      <button type="button" class="txn-edit-payments-btn"
-        style="display:inline-flex;align-items:center;gap:5px;padding:5px 11px;
-               font-size:0.75rem;font-weight:600;color:#3f51b5;background:#eef2ff;
-               border:1px solid #c7d2fe;border-radius:6px;cursor:pointer;">
-        <i class="fas fa-pen"></i> Edit payments
-      </button>`;
-    const btn = slot.querySelector(".txn-edit-payments-btn");
-    if (btn) {
-      btn.addEventListener("click", () => {
-        if (typeof window.openRegisterPaymentsModal !== "function") {
-          alert(
-            "Payment editor isn't ready yet — open the Register tab once, then try again.",
-          );
-          return;
-        }
-        window.openRegisterPaymentsModal({
-          id: stayId,
-          stay_id: stayId,
-          room: roomNumber,
-          guest_name: (roomInfo.guest && roomInfo.guest.name) || "",
-          checkin_time: roomInfo.checkin_time || "",
-        });
-      });
-    }
+    const slot = document.getElementById("checkout-payment-edit-slot");
+    if (slot) slot.innerHTML = "";
   }
 }
 
+
+// ═══════════════════════════════════════════════════════════════════════════
+// TAP A PAYMENT ROW TO CORRECT IT
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Every row in Payment History is a tap target, and all of them open the
+// SAME Payment Records modal the Register and Bills tabs use
+// (window.openRegisterPaymentsModal). One editor, one set of rules, one place
+// to fix a bug — rather than a second editor here that would drift away from
+// it. The old "Edit payments" header button is gone: the operator now points
+// at the line they want instead of opening an editor and hunting for it.
+//
+// That modal handles both kinds of row. Receipts (cash / online) keep their
+// existing date / mode / amount form. Service rows get an item / unit price /
+// quantity form plus an "Add service" panel, because a service is a charge
+// and its amount is a consequence of the item and the quantity — editing the
+// amount alone would produce a line that contradicts itself ("Water 2L ₹30").
+//
+// RBAC (payment.edit, admin-only) is enforced inside the modal and again on
+// the server. The check here only decides whether to show a tap affordance.
+
+function _esc(v) {
+  return String(v == null ? "" : v)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
+
+function _canEditAddons() {
+  return !!(
+    window.CibaraAuth &&
+    typeof window.CibaraAuth.userCan === "function" &&
+    window.CibaraAuth.userCan("payment.edit")
+  );
+}
+
+// Corrections are for stays in progress. Once a guest is checked out an
+// invoice number exists and changing a charge is a credit-note amendment,
+// which this flow does not do. The server enforces the same rule.
+function _stayIsActive(roomNumber) {
+  if (typeof rooms === "undefined" || roomNumber == null) return false;
+  const r = rooms[roomNumber];
+  return !!(r && r.status === "occupied" && r.guest);
+}
+
+// The single source of truth for "can this row be opened". The row renderer
+// asks the SAME question before adding the tap affordance — they used to
+// differ (the renderer checked occupied+guest, the wiring additionally needed
+// active_bill_id), so a legacy stay without active_bill_id got a pointer
+// cursor, a hover state, role="button" and a focus ring on every row, and
+// then did nothing at all when tapped.
+function _payRowsOpenable(roomNumber) {
+  if (!_canEditAddons() || !_stayIsActive(roomNumber)) return false;
+  const roomInfo =
+    typeof rooms !== "undefined" && roomNumber != null ? rooms[roomNumber] : null;
+  return !!(roomInfo && roomInfo.active_bill_id);
+}
+
+// Replaced on every render so the close-observer always refreshes the room
+// the operator is actually looking at.
+let _payRefreshCb = null;
+
+function _wireAddonRows(container, roomNumber, onChanged) {
+  const roomInfo =
+    typeof rooms !== "undefined" && roomNumber != null ? rooms[roomNumber] : null;
+  const stayId = roomInfo && roomInfo.active_bill_id;
+  if (!stayId) return;
+
+  const open = () => {
+    if (typeof window.openRegisterPaymentsModal !== "function") {
+      alert("Payment editor isn't ready yet — open the Register tab once, then try again.");
+      return;
+    }
+    // Refresh this list when the modal closes, so a correction made in there
+    // is reflected behind it instead of leaving a stale row on screen.
+    //
+    // Two things this has to get right, both of which the first version got
+    // wrong:
+    //
+    //   * WHICH ROOM. #rp-overlay is a singleton created once, so a
+    //     bind-once-per-element guard bound the FIRST room's callback and
+    //     kept it forever. Opening room 202 afterwards refreshed room 101 —
+    //     writing 101's history into the panel showing 202, and never
+    //     clearing 202's cache. The current callback is now stored on the
+    //     module and replaced on every open, so the observer always runs the
+    //     latest one.
+    //
+    //   * WHEN. Firing on "does not have .show" ran on ANY class write to the
+    //     overlay, each one costing a cache flush and a /get_history round
+    //     trip. It now fires only on a real shown -> hidden edge.
+    const ov = document.getElementById("rp-overlay");
+    if (ov && typeof onChanged === "function") {
+      _payRefreshCb = onChanged;
+      if (!ov.dataset.txnRefreshBound) {
+        ov.dataset.txnRefreshBound = "1";
+        let _wasShown = ov.classList.contains("show");
+        new MutationObserver(() => {
+          const nowShown = ov.classList.contains("show");
+          if (_wasShown && !nowShown && typeof _payRefreshCb === "function") {
+            _payRefreshCb();
+          }
+          _wasShown = nowShown;
+        }).observe(ov, { attributes: true, attributeFilter: ["class"] });
+      }
+    }
+    window.openRegisterPaymentsModal({
+      id: stayId,
+      stay_id: stayId,
+      room: roomNumber,
+      guest_name: (roomInfo.guest && roomInfo.guest.name) || "",
+      checkin_time: roomInfo.checkin_time || "",
+      // The modal's Services section reads entry.services. The Register tab
+      // fills this from the room doc server-side; opening from here it has to
+      // be passed explicitly, or the section renders "No services on this
+      // stay" for a room that plainly has some.
+      services: roomInfo.add_ons || [],
+    });
+  };
+
+  container.querySelectorAll(".txn-payrow-tappable").forEach((row) => {
+    row.addEventListener("click", open);
+    row.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); }
+    });
+  });
+}
+
 const transactionTrackingStyles = `
+    /* ── Tappable service row (add-on correction) ───────────────────────── */
+    .pay-row.txn-payrow-tappable {
+        cursor: pointer; position: relative;
+        border-radius: 10px; transition: background .12s ease;
+    }
+    .pay-row.txn-payrow-tappable:hover   { background: #f8fafc; }
+    .pay-row.txn-payrow-tappable:active  { background: #f1f5f9; }
+    .pay-row.txn-payrow-tappable:focus-visible {
+        outline: 2px solid #3182ce; outline-offset: 2px;
+    }
+    /* Voided rows stay visible — struck through, not hidden, so the stay's
+       history is complete and a removal is never invisible. */
+    .pay-row.txn-row-voided .pay-title,
+    .pay-row.txn-row-voided .pay-amt { text-decoration: line-through; opacity: .55; }
+    .pay-row.txn-row-voided .pay-icon { opacity: .45; }
+    .pay-badge--voided { background: #fee2e2; color: #b91c1c; }
+
+    }
+
     /* ── Actionable expense row ──────────────────────────────────────────
        Rows the current user may edit or delete. The whole row is the tap
        target now that the inline pen/bin buttons are gone. */
@@ -2506,6 +2623,28 @@ function _payCacheKey(roomNumber) {
 window.invalidatePayHistoryCache = function (roomNumber) {
   delete _payCache[_payCacheKey(roomNumber)];
   _payInflight.delete(_payCacheKey(roomNumber));
+};
+
+// Drop the cached history AND immediately start refilling it, without waiting
+// for anyone to look at it.
+//
+// The problem this solves: correcting a service invalidates this cache, and
+// the checkout modal's Payment History only re-reads it when the editor
+// closes. So the operator saved a change, closed the editor, and then sat
+// watching a spinner for a round trip that could have run while they were
+// still reading the confirmation. Kicking the fetch off here means the data
+// is normally already in the cache by the time the list re-renders.
+//
+// Fire-and-forget on purpose: the caller must not block on it, and a failure
+// is harmless — the cache stays empty and the next read fetches normally.
+window.prefetchPayHistory = function (roomNumber) {
+  window.invalidatePayHistoryCache(roomNumber);
+  try {
+    const p = _startPayFetch(roomNumber);
+    if (p && typeof p.catch === "function") p.catch(() => {});
+  } catch (e) {
+    /* nothing to do — the next read will fetch */
+  }
 };
 
 // Internal — start (or reuse) a fetch. Returns the Promise so callers

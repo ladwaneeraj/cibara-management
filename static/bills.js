@@ -3800,7 +3800,7 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
     const hint = dom("bl-vt-hint");
     if (hint) {
       hint.textContent = mode === "consolidated"
-        ? "Room nights grouped — days with extras shown separately"
+        ? "Matching nights grouped — anything different shown separately"
         : "Every night itemised";
     }
   }

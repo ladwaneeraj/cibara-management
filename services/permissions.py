@@ -120,6 +120,14 @@ PERMISSIONS = frozenset(
         # never revenue/cash/UPI/room-count figures, so it's safe to unlock
         # the date range for it specifically.
         "expense.view",
+        # Marketing spend. Admin-only: it is absent from ROLE_MANAGER below,
+        # so admin's "*" wildcard is the only thing that grants it. Made a
+        # permission rather than a role check so it can be handed to a
+        # manager later without touching any call site. Enforced in
+        # routes/reports.py :: add_expense — the option being missing from
+        # the dropdown is convenience, not the control. Changing an existing
+        # expense's category is already covered by expense.manage.
+        "expense.marketing",
         # Deep-check maintenance (routes/maintenance.py). Manager runs
         # inspections and logs fixes; admin additionally verifies fixes,
         # edits the checklist template and deletes/alters records.

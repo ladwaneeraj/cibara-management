@@ -152,6 +152,30 @@ def _bill_1_night():
     }
 
 
+def _bill_ac_every_night():
+    """3 nights, AC on every night at the same rate — collapsible as one run."""
+    ac = lambda: [{"item": "AC", "quantity": 1, "unit_price": 400, "price": 400}]
+    return {
+        "id": "b93",
+        "bill_number": "CC/2026/08/00093",
+        "guest_name": "Om D Sharma", "guest_mobile": "9555789721",
+        "room": "200", "guest_count": 2,
+        "checkin_time": "2026-08-18 16:48",
+        "checkout_time": "2026-08-21 14:20",
+        "days_stayed": 3,
+        "room_price_per_night": 1200, "room_charges_total": 3600,
+        "gst_rate": 5, "gst_amount": 228.58, "total_amount": 4800,
+        "services": [], "services_total": 0, "discounts": 0,
+        "payment_cash": 0, "payment_online": 4800, "balance": 0,
+        "daily_folio": [
+            _folio_night(i + 1, room="200", rate=1200, gst_rate=5,
+                         addons=ac(), total=1600,
+                         start=f"2026-08-{18 + i:02d} 16:48")
+            for i in range(3)
+        ],
+    }
+
+
 def _section(html, cls):
     """Everything after the opening of a given block — enough to compare."""
     return html.split(cls)[1] if cls in html else ""
@@ -183,6 +207,9 @@ class TestViewsAreMoneyEquivalent(unittest.TestCase):
 
     def test_single_night(self):
         self._assert_equivalent(_bill_1_night())
+
+    def test_addon_on_every_night(self):
+        self._assert_equivalent(_bill_ac_every_night())
 
     def test_mixed_stay_with_addons_services_and_discount(self):
         b = _bill_8_nights()
@@ -220,6 +247,61 @@ class TestConsolidation(unittest.TestCase):
         # run(1-2) + day(3) + run(4-8)
         self.assertEqual(html.count("b-day-header"), 3)
         self.assertIn("Extra Bed", html)
+
+    def test_nights_with_identical_addons_collapse(self):
+        """Every night carrying the same AC line is still one run.
+
+        The old rule broke a run on ANY add-on, so a 3-night stay with AC on
+        all three nights reported collapsible=False and both modals hid the
+        Detailed/Consolidated toggle entirely.
+        """
+        b = _bill_ac_every_night()
+        html = billing._build_bill_html(b, view="consolidated")
+        self.assertEqual(html.count("b-day-header"), 1)
+        self.assertIn("3 nights", html)
+        self.assertIn("Room Charges (3 nights) Total (incl. GST)", html)
+        # AC is folded into the room rent line at the all-in nightly rate,
+        # named in the description rather than billed as its own row.
+        self.assertIn("Room Rent (incl. AC)", html)
+        self.assertIn('<td class="b-tr">3</td><td class="b-tr">1600.00</td>'
+                      '<td class="b-tr">4800.00</td>', html)
+
+    def test_detailed_still_itemises_the_addon(self):
+        """The merge is Consolidated-only. Detailed keeps every night's AC."""
+        html = billing._build_bill_html(_bill_ac_every_night(), view="detailed")
+        self.assertEqual(html.count("b-day-header"), 3)
+        self.assertEqual(html.count(">AC<"), 3)
+        self.assertNotIn("incl. AC", html)
+
+    def test_multiple_folded_addons_are_all_named(self):
+        b = _bill_ac_every_night()
+        for e in b["daily_folio"]:
+            e["addons"] = [
+                {"item": "AC", "quantity": 1, "unit_price": 400, "price": 400},
+                {"item": "Extra Bed", "quantity": 1, "unit_price": 200, "price": 200},
+            ]
+            e["day_total"] = 1800
+        b["total_amount"] = 5400
+        html = billing._build_bill_html(b, view="consolidated")
+        self.assertIn("Room Rent (incl. AC, Extra Bed)", html)
+        self.assertIn('<td class="b-tr">3</td><td class="b-tr">1800.00</td>'
+                      '<td class="b-tr">5400.00</td>', html)
+
+    def test_identical_addon_stay_is_collapsible(self):
+        self.assertTrue(
+            billing._folio_is_collapsible(_bill_ac_every_night()["daily_folio"]))
+        self.assertEqual(
+            billing._resolve_view_mode(_bill_ac_every_night()), "consolidated")
+
+    def test_differing_addon_price_breaks_the_run(self):
+        b = _bill_ac_every_night()
+        b["daily_folio"][1]["addons"] = [
+            {"item": "AC", "quantity": 1, "unit_price": 500, "price": 500}]
+        b["daily_folio"][1]["day_total"] = 1700
+        b["total_amount"] = 4900
+        html = billing._build_bill_html(b, view="consolidated")
+        # day(1) + day(2) + day(3) — no two nights share a key
+        self.assertEqual(html.count("b-day-header"), 3)
 
     def test_rate_change_breaks_the_run(self):
         b = _bill_8_nights()

@@ -662,11 +662,6 @@
       '  <button class="stf-nav-btn" id="stf-grid-next" title="Next month"' +
       (state.gridMonth >= thisMonth ? " disabled" : "") + ">&#8250;</button>" +
       (state.gridMonth === thisMonth ? "" : '  <button class="stf-today-btn" id="stf-grid-today">This month</button>') +
-      (canMark && state.gridMonth === thisMonth
-        ? '  <span style="flex:1;"></span>' +
-          '  <button class="stf-allpresent-btn" id="stf-grid-allpresent" title="Mark every unmarked staff as Full for today">' +
-          '    <i class="fas fa-check-double"></i> All present today</button>'
-        : "") +
       "</div>";
 
     if (!staff.length) {
@@ -680,7 +675,38 @@
     }
 
     // ── header ──
-    html += '<div class="stf-grid-wrap"><table class="stf-grid-table"><thead><tr>';
+    // ── Range-selection banner ───────────────────────────────────────────
+    // The grid silently changes meaning when the pay panel is open: taps on
+    // the target row pick a salary period instead of marking attendance.
+    // Nothing said so, which is the single biggest reason the flow read as
+    // confusing — the operator could not tell the grid was in a mode at all.
+    var _qpB = state.quickPay;
+    if (_qpRangeMode(_qpB) && _qpB.host === "attendance") {
+      var _qpS = state.staff.find(function (x) { return x.id === _qpB.staffId; });
+      var _qpName = _qpS ? esc(_qpS.name) : "this staff member";
+      var _qpWhat = _qpB.mode === "meals" ? "meal days" : "salary period";
+      var _qpText, _qpTone;
+      if (!_qpB.start) {
+        _qpText = "Tap the <b>first day</b> of the " + _qpWhat + " for " + _qpName + ".";
+        _qpTone = "wait";
+      } else if (_qpB.anchor) {
+        _qpText = "From <b>" + esc(_fmtDayShort(_qpB.start)) + "</b> \u2014 now tap the <b>last day</b>.";
+        _qpTone = "wait";
+      } else {
+        _qpText = "<b>" + esc(_fmtDayShort(_qpB.start)) + " \u2013 " +
+                  esc(_fmtDayShort(_qpB.end)) + "</b> selected. " +
+                  "Tap any day to start over, or confirm in the panel below.";
+        _qpTone = "done";
+      }
+      html += '<div class="stf-qp-banner ' + _qpTone + '">' +
+              '<i class="fas fa-hand-pointer"></i><span>' + _qpText + '</span>' +
+              '<button type="button" class="stf-qp-banner-x" id="stf-qp-banner-cancel">Cancel</button>' +
+              '</div>';
+    }
+
+    html += '<div class="stf-grid-wrap"><table class="stf-grid-table' +
+      (_qpRangeMode(_qpB) && _qpB.host === "attendance" ? " is-selecting" : "") +
+      '"><thead><tr>';
     html += '<th class="stf-grid-name-h">Staff</th>';
     for (var d = 1; d <= r.lastDay; d++) {
       var dstr = _dstr(state.gridMonth, d);
@@ -743,18 +769,45 @@
           '" title="' + (shift === "D" ? "Day shift" : "Night shift") + '">' +
           shift + "</span>"
         : "";
+      // While a range is being picked, the ONLY row that responds is the
+      // target's. Saying so visually is what stops the operator tapping a
+      // neighbouring row and silently marking somebody's attendance instead.
+      var _qpNow = state.quickPay;
+      var _qpLive = _qpRangeMode(_qpNow) && _qpNow.host === "attendance";
+      var _rowCls = [];
+      if (gr.pairFirst) _rowCls.push("stf-pair-first");
+      if (gr.pairSecond) _rowCls.push("stf-pair-second");
+      if (_qpLive) _rowCls.push(_qpNow.staffId === s.id ? "is-qp-target" : "is-qp-dimmed");
       html += '<tr data-sid="' + esc(s.id) + '"' +
         (shift ? ' data-shift="' + shift + '"' : "") +
-        (gr.pairFirst ? ' class="stf-pair-first"' : "") +
-        (gr.pairSecond ? ' class="stf-pair-second"' : "") + ">" +
+        (_rowCls.length ? ' class="' + _rowCls.join(" ") + '"' : "") + ">" +
         '<td class="stf-grid-name' + (nameAttrs ? " clickable" : "") + '"' +
         nameAttrs + ">" +
         '<span class="nm">' +
-        (gr.pairSecond ? shiftTag : '<span class="stf-name-text">' + esc(s.name) + '</span>' + shiftTag) + "</span>" +
-        (showActions && (s.designation || advDue)
-          ? '<span class="ds">' + esc(s.designation || "") +
-            (s.designation && advDue ? " · " : "") + advDue + "</span>"
-          : "") +
+        // Order matters: name, then the ₹ chip beside it, then the shift tag
+        // LAST so it stays hard right. The Night row's lone N is right-aligned
+        // to sit directly under that D, and a chip emitted after the tag would
+        // have taken the right edge and knocked the two badges out of column.
+        //
+        // The ₹ chip is the pay affordance — a bare name does not say "tap me
+        // to pay". The whole cell remains the hit target, so nothing about the
+        // tap area changes. Shown only to users who can actually pay: a
+        // view-only tap opens the ledger and must not look like a pay button.
+        (gr.pairSecond
+          ? shiftTag
+          : '<span class="stf-name-text">' + esc(s.name) + '</span>' +
+            (showActions && canPay
+              ? '<span class="stf-pay-chip" aria-hidden="true">&#8377;</span>' : "") +
+            shiftTag) +
+        "</span>" +
+        // Designation and outstanding advance are separate lines now. Run
+        // together as "Housekeeping · ₹7,300 adv" the money was the widest
+        // thing in a 168px cell and pushed the role into an ellipsis, and a
+        // figure that decides whether you can pay someone deserves its own
+        // line rather than a middot after a job title.
+        (showActions && s.designation
+          ? '<span class="ds">' + esc(s.designation) + "</span>" : "") +
+        (showActions && advDue ? '<span class="adv-line">' + advDue + "</span>" : "") +
         "</td>";
       for (var d2 = 1; d2 <= r.lastDay; d2++) {
         var ds = _dstr(state.gridMonth, d2);
@@ -774,9 +827,19 @@
             qp.start && qp.end && qp.start <= ds && ds <= qp.end) {
           cls.push("in-range");
         }
+        // The first tap sets start AND end to the same day, so the range
+        // highlight above was a single indistinct cell and the operator had
+        // no way to tell the tap had registered. Mark the anchor explicitly
+        // until the second tap closes the range.
+        if (_qpRangeMode(qp) && qp.staffId === s.id && qp.anchor && qp.start === ds) {
+          cls.push("is-anchor");
+        }
         var future = ds > today;
         var locked = _isPaid(s.id, ds);
         if (future) cls.push("is-future");
+        // A settled day is a flat fill, so there are no run edges to mark and
+        // no need to look at the neighbouring days. The paid-start/mid/end/solo
+        // classes and the two _isPaid lookups per locked cell went with them.
         if (locked) cls.push("is-locked");
         html += '<td class="' + cls.join(" ") + '" data-date="' + ds + '"' +
           (shift ? ' data-shift="' + shift + '"' : "") +
@@ -806,7 +869,9 @@
       '  <span><span class="dot" style="background:#fefcbf;border:1px solid #f6e05e;"></span>½ — half day</span>' +
       '  <span><span class="dot" style="background:#fed7d7;border:1px solid #feb2b2;"></span>A — absent</span>' +
       '  <span><span class="dot" style="background:#fff;border:1px solid #e2e8f0;"></span>blank — not marked</span>' +
-      "  <span>🔒 salary paid (locked)</span>" +
+      // Paid days are a colour now, not a lock glyph, so the legend swatch
+      // has to match the cell tint or the legend stops explaining the grid.
+      '  <span><span class="dot" style="background:#fff;border:1px solid #e2e8f0;border-bottom:3px solid #b9c3d4;"></span>salary paid</span>' +
       (staff.some(function (s) { return s.is_dual_shift; })
         ? "  <span>D / N — Day &amp; Night shift row, marked independently</span>"
         : "") +
@@ -863,6 +928,8 @@
         cell.addEventListener("click", function () { onCellTap(cell); });
       });
     }
+    var _qpX = document.getElementById("stf-qp-banner-cancel");
+    if (_qpX) _qpX.addEventListener("click", function () { closeQuickPay(); });
     // Tapping a staff NAME opens the pay panel (when the user can pay/give
     // advances); view-only users get the ledger instead. The old ₹ pay icon
     // at the end of each row has been removed in favour of this.
@@ -911,28 +978,13 @@
       state.gridMonth = _todayStr().slice(0, 7);
       loadGrid();
     });
-    var allBtn = document.getElementById("stf-grid-allpresent");
-    if (allBtn) allBtn.addEventListener("click", function () {
-      stfConfirm("Mark every unmarked staff as FULL day for today?", { okText: "Mark all" }).then(function (ok) {
-        if (!ok) return;
-        allBtn.disabled = true;
-        post("/staff/attendance/mark_all", { date: _todayStr() })
-          .then(function (json) {
-            (json.marked || []).forEach(function (rec) {
-              _setGridRecord(rec.staff_id, rec.date, rec.shift || null,
-                             rec.status, rec);
-            });
-            var parts = [(json.marked || []).length + " marked"];
-            if (json.already_marked) parts.push(json.already_marked + " already marked");
-            if (json.skipped_locked) parts.push(json.skipped_locked + " locked (salary paid)");
-            notify(parts.join(" · "), "success");
-            var wrap = document.querySelector("#stf-pane-attendance .stf-grid-wrap");
-            if (wrap) state.gridScroll = { left: wrap.scrollLeft, top: wrap.scrollTop };
-            renderGrid();
-          })
-          .catch(function (e) { allBtn.disabled = false; notify(e.message, "error"); });
-      });
-    });
+    // The "All present today" bulk button was removed: marking a whole team
+    // present in one tap is exactly the action nobody double-checks, and an
+    // absence recorded as a present day is a wage paid for a shift that was
+    // not worked. Attendance is now marked one cell at a time, deliberately.
+    // POST /staff/attendance/mark_all still exists server-side and is now
+    // unreachable from the UI — delete it and its "skipped_locked" branch
+    // when you are sure nothing else calls it.
   }
 
   function onCellTap(cell) {
@@ -1393,6 +1445,18 @@
 
   // Modes that pick a date range off the attendance grid / calendar.
   // "advance" is a single amount on a single date, so it is not one of them.
+  // "2026-08-14" -> "14 Aug". Banner-only: the grid columns already carry
+  // the day numbers, so the banner just needs to be unambiguous about month.
+  var _MON_SHORT = ["Jan","Feb","Mar","Apr","May","Jun",
+                    "Jul","Aug","Sep","Oct","Nov","Dec"];
+  function _fmtDayShort(ds) {
+    if (!ds) return "";
+    var b = String(ds).split("-");
+    if (b.length !== 3) return ds;
+    var mi = parseInt(b[1], 10) - 1;
+    return parseInt(b[2], 10) + " " + (_MON_SHORT[mi] || b[1]);
+  }
+
   function _qpRangeMode(qp) {
     return !!(qp && (qp.mode === "pay" || qp.mode === "meals"));
   }
@@ -1405,15 +1469,50 @@
     if (!pane) return;
     pane.querySelectorAll(".stf-grid-cell[data-date]").forEach(function (cell) {
       var tr = cell.closest("tr");
-      var inRange = !!(_qpRangeMode(qp) && tr &&
-        tr.dataset.sid === qp.staffId &&
-        qp.start && qp.end && qp.start <= cell.dataset.date &&
-        cell.dataset.date <= qp.end);
+      var mine = !!(_qpRangeMode(qp) && tr && tr.dataset.sid === qp.staffId);
+      var inRange = !!(mine && qp.start && qp.end &&
+        qp.start <= cell.dataset.date && cell.dataset.date <= qp.end);
       cell.classList.toggle("in-range", inRange);
+      // Anchor state has to be updated here too: this function runs INSTEAD
+      // of a re-render on every tap (to keep the grid's scroll position), so
+      // the class the renderer sets would otherwise go stale on the first tap.
+      cell.classList.toggle(
+        "is-anchor",
+        !!(mine && qp.anchor && qp.start === cell.dataset.date)
+      );
     });
+    _qpSyncBanner();
     pane.querySelectorAll("[data-pay]").forEach(function (cell) {
       cell.classList.toggle("on", !!(qp && cell.dataset.pay === qp.staffId));
     });
+  }
+
+  // Repaint the banner text in place. Same three states the renderer builds;
+  // kept in one function so the two cannot drift into saying different things.
+  function _qpSyncBanner() {
+    var qp = state.quickPay;
+    var el = document.querySelector("#stf-pane-attendance .stf-qp-banner");
+    if (!el) return;
+    if (!_qpRangeMode(qp) || qp.host !== "attendance") { el.remove(); return; }
+    var span = el.querySelector("span");
+    if (!span) return;
+    var st = state.staff.find(function (x) { return x.id === qp.staffId; });
+    var nm = st ? esc(st.name) : "this staff member";
+    var what = qp.mode === "meals" ? "meal days" : "salary period";
+    el.classList.remove("wait", "done");
+    if (!qp.start) {
+      span.innerHTML = "Tap the <b>first day</b> of the " + what + " for " + nm + ".";
+      el.classList.add("wait");
+    } else if (qp.anchor) {
+      span.innerHTML = "From <b>" + esc(_fmtDayShort(qp.start)) +
+                       "</b> \u2014 now tap the <b>last day</b>.";
+      el.classList.add("wait");
+    } else {
+      span.innerHTML = "<b>" + esc(_fmtDayShort(qp.start)) + " \u2013 " +
+                       esc(_fmtDayShort(qp.end)) + "</b> selected. " +
+                       "Tap any day to start over, or confirm in the panel below.";
+      el.classList.add("done");
+    }
   }
 
   // Push the chosen range into whichever date control is on screen.

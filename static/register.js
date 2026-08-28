@@ -1477,7 +1477,7 @@ tr.rp-svc-voided .rp-actions-cell { opacity:.9; }
     if (cBtn) cBtn.classList.toggle("bl-vt-active", mode === "consolidated");
     const hint = dom("reg-vt-hint");
     if (hint) hint.textContent = mode === "consolidated"
-      ? "Room nights grouped — days with extras shown separately"
+      ? "Matching nights grouped — anything different shown separately"
       : "Every night itemised";
   }
 

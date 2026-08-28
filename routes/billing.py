@@ -381,6 +381,9 @@ def get_register_data():
                 "lastShiftedAt":          room_data_item.get("lastShiftedAt"),
                 "lastShiftedFrom":        room_data_item.get("lastShiftedFrom"),
                 "lastShiftedTo":          room_data_item.get("lastShiftedTo"),
+                # Materialised per-stay event trail — the popover's primary
+                # source. The flat fields above stay for stays that predate it.
+                "stay_timeline":          room_data_item.get("stay_timeline") or [],
                 # Active stays don't have a checkout actor yet
             }
             register_entries.append(entry)
@@ -587,6 +590,8 @@ def get_register_data():
                     "lastShiftedTo":          bill_data.get("lastShiftedTo"),
                     "lastCheckoutBy":         bill_data.get("lastCheckoutBy"),
                     "lastCheckoutAt":         bill_data.get("lastCheckoutAt"),
+                    # Frozen at checkout — a completed stay's trail never moves.
+                    "stay_timeline":          bill_data.get("stay_timeline") or [],
                 }
                 register_entries.append(entry)
                 completed_count += 1
@@ -2374,26 +2379,50 @@ from config import infer_service_tax, service_tax_label as _service_tax_label  #
 # are untouched — the two views render identical money from the same folio.
 # ══════════════════════════════════════════════════════════════════════════════
 
+def _folio_addon_sig(e: dict) -> str:
+    """Order-insensitive signature of a night's add-ons.
+
+    Two nights can only merge when they carry the SAME add-ons at the same
+    unit price and quantity. Only the billed fields go into the signature —
+    ids, timestamps and applied_on_* differ on every row and would break a
+    run that is identical in every way the guest can see.
+    """
+    addons = e.get("addons")
+    if not isinstance(addons, list) or not addons:
+        return ""
+    parts = []
+    for a in addons:
+        if not isinstance(a, dict):
+            continue
+        item  = str(a.get("item") or "Service").strip().lower()
+        qty   = int(a.get("quantity", 1) or 1)
+        unit  = float(a.get("unit_price") or a.get("price", 0) or 0)
+        gross = float(a.get("price", 0) or 0)
+        parts.append(f"{item}~{qty}~{unit:.2f}~{gross:.2f}")
+    return "|".join(sorted(parts))
+
+
 def _folio_night_key(e: dict) -> str:
-    """Two nights merge only when room, GST slab and nightly rate all match."""
+    """Nights merge only when room, GST slab, nightly rate and add-ons match.
+
+    The add-on signature is part of the key rather than a hard break. A stay
+    that runs AC every night at the same rate is as consolidatable as a stay
+    with no add-ons at all: the run prints one Room Rent line and one AC
+    line. A night whose add-ons differ still falls out of the run on its own.
+    """
     return "|".join([
         str(e.get("room") or ""),
         str(float(e.get("day_gst_rate") or 0)),
         str(float(e.get("base_rate") or 0)),
+        _folio_addon_sig(e),
     ])
-
-
-def _folio_night_has_extras(e: dict) -> bool:
-    """A night with add-ons is always shown in full and breaks the run."""
-    addons = e.get("addons")
-    return isinstance(addons, list) and len(addons) > 0
 
 
 def _group_folio(folio: list) -> list:
     """folio[] -> blocks. {"kind":"run","entries":[...]} | {"kind":"day","entries":[one]}
 
-    A run of 2+ consecutive, add-on-free, identically-priced nights in the same
-    room becomes one "run" block. Everything else stays a per-day block.
+    A run of 2+ consecutive nights sharing a night key becomes one block.
+    Everything else stays a per-day block.
     """
     blocks = []
     run = []
@@ -2406,10 +2435,6 @@ def _group_folio(folio: list) -> list:
         run = []
 
     for e in folio or []:
-        if _folio_night_has_extras(e):
-            flush()
-            blocks.append({"kind": "day", "entries": [e]})
-            continue
         if run and _folio_night_key(run[0]) != _folio_night_key(e):
             flush()
         run.append(e)
@@ -2505,31 +2530,62 @@ def _render_folio_day(e: dict, b: dict) -> str:
 
 
 def _render_folio_run(entries: list, b: dict) -> str:
-    """A run of identical add-on-free nights collapsed into one room block.
+    """A run of identical nights collapsed into one room-rent line.
 
-    Qty is the night count and Rate the (shared) nightly rate, so the block
-    still foots to the same money the per-day view would print. Amounts are
-    summed from the stored per-night fields rather than recomputed.
+    Nights in a run share an add-on signature, so an add-on that is present
+    on every night is part of what the room cost that night rather than a
+    separate charge. It is folded into the Room Rent line and named in the
+    description: "Room Rent (incl. AC)", Qty 3, Rate 1600.00.
+
+    Qty is the night count and Rate the (shared) all-in nightly rate, so the
+    block foots to the same money the per-day view prints. The amount is
+    summed from the stored per-night fields rather than multiplied out.
+
+    Detailed view is untouched: it still itemises room rent and each add-on
+    on every night. This merge is Consolidated-only, which is the whole point
+    of the two views.
     """
     n     = len(entries)
     first = entries[0]
     last  = entries[n - 1]
     room  = first.get("room") or b.get("room", "")
-    base  = float(first.get("base_rate", 0) or 0)
     tot_disc = sum(float(e.get("discount_allocated", 0) or 0) for e in entries)
     tot_day  = sum(float(e.get("day_total", 0) or 0) for e in entries)
     d1 = _fmt_day_date(first.get("day_start", ""))
     d2 = _fmt_day_date(last.get("day_start", ""))
+
+    def _addon_gross(e):
+        return sum(float(a.get("price", 0) or 0)
+                   for a in (e.get("addons") or []) if isinstance(a, dict))
+
+    # All-in nightly rate. The nights share a signature, so every night's
+    # add-on total is the same; the pre-discount amount is still summed so
+    # the line foots even if one night's stored price drifted by a rupee.
+    nightly  = float(first.get("base_rate", 0) or 0) + _addon_gross(first)
+    pre_disc = sum(float(e.get("base_rate", 0) or 0) + _addon_gross(e)
+                   for e in entries)
+
+    # Name the folded add-ons, deduped, in the order they appear.
+    names, seen = [], set()
+    for a in (first.get("addons") or []):
+        if not isinstance(a, dict):
+            continue
+        nm = str(a.get("item") or "Service").strip()
+        k = nm.lower()
+        if nm and k not in seen:
+            seen.add(k)
+            names.append(nm)
+    desc = f'Room Rent (incl. {", ".join(names)})' if names else "Room Rent"
 
     out = (
         f'<tr class="b-day-header"><td colspan="4" style="text-align:center;">'
         f'Room Rent &nbsp;&mdash;&nbsp; {d1} &nbsp;to&nbsp; {d2} '
         f'&nbsp;&middot;&nbsp; {n} nights &nbsp;&middot;&nbsp; Rm {room}'
         f'</td></tr>'
-        f'<tr><td>Room Rent<br><span class="b-sac">SAC: 996311</span></td>'
+        f'<tr><td>{desc}<br><span class="b-sac">SAC: 996311</span></td>'
         f'<td class="b-tr">{n}</td>'
-        f'<td class="b-tr">{_f2(base)}</td>'
-        f'<td class="b-tr">{_f2(base * n)}</td></tr>'
+        f'<td class="b-tr">{_f2(nightly)}</td>'
+        f'<td class="b-tr">{_f2(pre_disc)}</td></tr>'
     )
 
     if tot_disc > 0:

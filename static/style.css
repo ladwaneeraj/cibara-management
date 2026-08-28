@@ -640,6 +640,64 @@ body {
   padding-top: 0.3rem;
 }
 
+/* ── Vacant-card accountability initials ──────────────────────────────────
+   Two small rings in the card's top corners: left is who cleaned, right is
+   who signed it off. One character each.
+
+   This replaced a labelled two-row block under "Vacant". Names, even first
+   names only, cost two lines of card height and still truncated on a ~100px
+   card, and the two rows pushed the room number off centre. Reduced to an
+   initial and moved into the corners, the same information costs no height
+   at all and the card body goes back to being the room number and its state.
+
+   Fixed sides, not icons, carry the meaning. At grid scale the eye learns
+   "left cleaned, right checked" once; a broom and a tick have to be re-read
+   on every card. The full name, the verb and the date are all in the title,
+   which is where anyone actually auditing will look.
+
+   Positioned against .room-card, which is already position:relative;
+   .room-content is not positioned, so these resolve past it to the card. */
+.rm-init {
+  position: absolute;
+  top: 0.85rem;
+  width: 1.15rem;
+  height: 1.15rem;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.6rem;
+  font-weight: 700;
+  line-height: 1;
+  cursor: default;
+  user-select: none;
+  z-index: 2;
+}
+
+.rm-init--l { left: 0.4rem; }
+.rm-init--r { right: 0.4rem; }
+
+/* Cleaned: present but quiet. It is a step that happened, not a state that
+   needs attention. */
+.rm-init {
+  background: #eef2f6;
+  color: var(--gray);
+}
+
+/* Signed off — the only colour in the card body, so a checked room reads at
+   a glance across a full grid. */
+.rm-init.is-ok {
+  background: var(--vacant);
+  color: #fff;
+}
+
+/* An unrecorded step stays visible but empty. A gap in the trail should look
+   like a gap, not like the feature is missing. */
+.rm-init.is-missing {
+  background: transparent;
+  border: 1px dashed #d7dee7;
+}
+
 /* New countdown timer style */
 .room-timer {
   display: flex;
@@ -5303,6 +5361,47 @@ body.incognito-mode #profile-menu-settings {
   white-space: nowrap;
   font-size: 0.55rem;
   padding: 1px 5px;
+}
+
+/* ── Actionable tiles ─────────────────────────────────────────────────────
+   Room Price and Check-in are edited by tapping the tile itself. They used to
+   carry a pencil button beside the value; in a 3-across layout that spent a
+   line of a tile with ~95px of interior, and it made the smaller of two hit
+   targets the one that did the work.
+
+   With no icon, the affordance has to come from the tile: a pointer cursor, a
+   lift on hover, and a press state. .is-actionable is added by script.js only
+   when the user actually holds the permission, so a tile that cannot be
+   edited stays visually inert rather than inviting a click that 403s. */
+#checkout-modal .stat-tile.is-actionable {
+  cursor: pointer;
+  transition: border-color .15s ease, background .15s ease,
+              transform .1s ease, box-shadow .15s ease;
+}
+
+#checkout-modal .stat-tile.is-actionable:hover {
+  background: #fff;
+  border-color: #cbd5e1;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, .07);
+}
+
+#checkout-modal .stat-tile.is-actionable:active {
+  transform: scale(.985);
+  box-shadow: none;
+}
+
+/* Keyboard users get a real focus ring — the tile is role="button". */
+#checkout-modal .stat-tile.is-actionable:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+/* Touch has no hover, so the value carries a permanent hint that the tile is
+   live: a dotted underline, which reads as "editable" without spending the
+   horizontal room an icon needs. */
+#checkout-modal .stat-tile.is-actionable .stat-value {
+  text-decoration: underline dotted rgba(100, 116, 139, .55);
+  text-underline-offset: 3px;
 }
 
 #checkout-modal .stat-edit-btn {

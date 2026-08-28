@@ -1611,6 +1611,18 @@ function showExpenseModal(type, options) {
         opt.hidden   = opt.hidden || !mayAdvance || _expenseEditMode;
         opt.disabled = opt.disabled || !mayAdvance || _expenseEditMode;
       }
+      // Marketing — admin-only, same mechanism. hidden AND disabled both
+      // matter: CibaraSelect skips disabled rows when it builds its panel,
+      // and disabled is what stops select.value being set to it
+      // programmatically. Enforced again in routes/reports.py ::
+      // add_expense, which is the control that actually holds.
+      if (opt.value === "marketing") {
+        const mayMarketing = window.CibaraAuth
+          && typeof window.CibaraAuth.userCan === "function"
+          && window.CibaraAuth.userCan("expense.marketing");
+        opt.hidden   = opt.hidden || !mayMarketing;
+        opt.disabled = opt.disabled || !mayMarketing;
+      }
     });
     // The custom dropdown renders its rows from the option list, so it has to
     // be rebuilt AFTER the hidden/disabled flags above are applied. Without
@@ -1885,6 +1897,12 @@ async function submitExpense(e) {
       // Force-include the toggles so unchecking actually clears them
       payload.has_bill = !!document.getElementById("expense-has-bill")?.checked;
       payload.has_gst  = !!document.getElementById("expense-has-gst")?.checked;
+      // Send the canonical field name. The payload's `type` key is what
+      // /add_expense expects; this endpoint's whitelist is keyed on
+      // `expense_type`, so `type` alone was dropped and a Daily → From-Account
+      // switch never persisted. The server accepts the alias too, so a cached
+      // client still works, but the request says what it means.
+      payload.expense_type = type;
       response = await apiFetch("/expense/" + encodeURIComponent(_expenseEditDocId), {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },

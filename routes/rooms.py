@@ -32,6 +32,7 @@ from services import system_alerts
 from services.gst_lock_service import is_month_locked
 from services.auth_service import requires_permission, login_required
 from services.audit_log import write_log, attribution_create, attribution_update, _safe_user
+from services import stay_timeline
 from routes.billing import auto_generate_bill_pdf
 
 rooms_bp = Blueprint('rooms', __name__)
@@ -224,6 +225,16 @@ def checkin():
                 # housekeeping cleans for the NEXT stay.
                 "lastCheckinBy": _checkin_user,
                 "lastCheckinAt": _attr.get("createdAt"),
+                # Per-stay event timeline. Seeded from whatever prep records
+                # the room already carries (the cleaning and inspection that
+                # readied it for THIS guest) plus this check-in. Everything
+                # older was cleared when the previous guest checked out, so
+                # nothing from that stay can leak in. See services/stay_timeline.
+                "stay_timeline": stay_timeline.merge(
+                    stay_timeline.prep_only(stay_timeline.read(snap.to_dict())),
+                    [stay_timeline.make_event("room.checkin", room,
+                                              at=_attr.get("createdAt"))],
+                ),
                 # Walk-in (no booking) → bookedBy is cleared.
                 "bookedBy": None,
                 "bookedAt": None,
@@ -901,6 +912,16 @@ def checkout():
                 bill_record["lastCheckoutBy"] = _bill_co_user
                 bill_record["lastCheckoutAt"] = _bill_co_now
 
+                # Freeze this stay's event timeline onto the bill, closed with
+                # the checkout itself. The room's copy is reset in the batch
+                # below, so from here the completed stay's history is immutable
+                # and the room starts accumulating prep for the next guest.
+                bill_record["stay_timeline"] = stay_timeline.merge(
+                    stay_timeline.read(room_data),
+                    [stay_timeline.make_event("room.checkout", room,
+                                              at=_bill_co_now)],
+                )
+
                 # Carry shift attribution from the room onto the bill so the
                 # room-history popover shows "Shifted A → B by" for completed
                 # (transferred) stays too. Absent on non-transferred stays.
@@ -1082,6 +1103,28 @@ def checkout():
                 # preserved on the bill doc for the register-tab popover.
                 "lastCheckoutBy":         _co_user,
                 "lastCheckoutAt":         _co_now,
+                # The stay is over and its timeline now lives on the bill.
+                # Emptying the room's copy is what guarantees the next guest's
+                # history cannot inherit this one's events.
+                "stay_timeline":          [],
+                # Same reasoning for the prep pair. cleanedBy / inspectedBy
+                # describe ONE cleaning cycle, and this one is finished: the
+                # room is dirty again the moment the guest walks out. Leaving
+                # them set is what made a vacant room show a cleaner from
+                # months ago beside today's inspector — /mark_room_ready_for_
+                # checkin stamps inspectedBy even when the cleaning step was
+                # skipped, so the two halves came from different cycles and
+                # the card read as though the room had been prepped when only
+                # half of it had. Cleared here, an unprepped room shows a gap,
+                # which is the honest answer and the whole point of the field.
+                #
+                # Safe to clear: create_bill_record already snapshotted these
+                # onto the bill from room_data, which was read before this
+                # batch, so the completed stay's history keeps them.
+                "cleanedBy":              None,
+                "cleanedAt":              None,
+                "inspectedBy":            None,
+                "inspectedAt":            None,
                 "lastCheckinBy":          None,
                 "lastCheckinAt":          None,
                 "bookedBy":               None,
@@ -1577,6 +1620,23 @@ def revert_checkout():
             # again. Always written (None when absent) so the room can never
             # inherit a profile from a different stay.
             "gst_profile":             snapshot.get("gst_profile"),
+            # Restore the prep pair that checkout cleared. The bill captured
+            # them on the way out, so an undone checkout puts the room back
+            # to describing the cleaning cycle that actually prepped this
+            # stay rather than showing a blank.
+            "cleanedBy":               bill.get("cleanedBy"),
+            "cleanedAt":               bill.get("cleanedAt"),
+            "inspectedBy":             bill.get("inspectedBy"),
+            "inspectedAt":             bill.get("inspectedAt"),
+            # The bill's copy is closed with a room.checkout record. This stay
+            # is active again, so that record is dropped rather than restored:
+            # a live stay showing its own checkout is the kind of contradiction
+            # the timeline exists to eliminate. The next real checkout appends
+            # a fresh one.
+            "stay_timeline":           [
+                _e for _e in (bill.get("stay_timeline") or [])
+                if isinstance(_e, dict) and _e.get("action") != "room.checkout"
+            ],
             # Cancel cleaning state.
             "cleaning_status":         None,
             "cleaning_start_time":     None,
@@ -3070,6 +3130,12 @@ def update_checkin_time():
             # Attribution — surfaced in the room-history popover.
             "lastCheckinTimeEditBy": _ed_user,
             "lastCheckinTimeEditAt": _ed_now,
+            # Appended rather than replaced: the flat field holds only the most
+            # recent edit, but every correction to a stay's check-in time is
+            # worth showing separately.
+            "stay_timeline": stay_timeline.append_op(
+                stay_timeline.make_event("room.checkin_time_update", room,
+                                         at=_ed_now)),
             "lastModifiedBy": _ed_user,
             "lastModifiedAt": _ed_now,
         }
@@ -3765,10 +3831,34 @@ def transfer_room():
         # popover can show "Shifted A → B by <user>" for THIS stay. Carried on
         # the room doc (active stay) and snapshotted onto the bill at checkout.
         _shift_user = (_safe_user() or {}).get("userId") or "system"
+        _shift_at   = datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S")
         new_room_data["lastShiftedBy"]   = _shift_user
-        new_room_data["lastShiftedAt"]   = datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S")
+        new_room_data["lastShiftedAt"]   = _shift_at
         new_room_data["lastShiftedFrom"] = str(old_room)
         new_room_data["lastShiftedTo"]   = str(new_room)
+
+        # ── Carry the stay's event timeline into the destination room ────────
+        # new_room_data is a copy of the OLD room's doc and is written with
+        # batch.set (a full replace), so without this the destination's own
+        # prep records would be silently overwritten and the flat lastShifted*
+        # fields would be the only trace of the move — which is exactly the
+        # mixture of stays the popover was showing.
+        #
+        # Three groups merge, chronologically:
+        #   1. the stay's history so far, on the old room
+        #   2. the destination's cleaning/inspection — the prep that readied
+        #      THIS room for THIS guest, and part of their accountability trail
+        #   3. the shift itself
+        # Anything else sitting on the destination is dropped by prep_only:
+        # a vacant room should carry nothing but prep, and a stray record
+        # there belongs to somebody who never occupied it.
+        new_room_data["stay_timeline"] = stay_timeline.merge(
+            stay_timeline.read(rooms_dict[old_room]),
+            stay_timeline.prep_only(stay_timeline.read(rooms_dict[new_room])),
+            [stay_timeline.make_event("room.transfer", new_room,
+                                      from_room=old_room, to_room=new_room,
+                                      at=_shift_at)],
+        )
 
         batch = db.batch()
 
@@ -3794,7 +3884,16 @@ def transfer_room():
             # Stay continues in the new room — release the pointer here.
             "active_bill_id": None,
             "cleaning_status": "in_progress",
-            "cleaning_start_time": datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S")
+            "cleaning_start_time": datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S"),
+            # The stay moved out with its history. Empty this room's copy so
+            # the next guest here starts from their own prep, same as checkout.
+            "stay_timeline": [],
+            # And its prep pair, for the same reason as checkout: this room
+            # was just vacated, so the cycle that cleaned it is spent.
+            "cleanedBy":     None,
+            "cleanedAt":     None,
+            "inspectedBy":   None,
+            "inspectedAt":   None,
         })
 
         # The draft bill doc stays in place, but its `room` field needs to
@@ -3907,6 +4006,153 @@ def transfer_room():
         logger.error(f"Error transferring room: {str(e)}", exc_info=True)
         return jsonify(success=False, message=f"Error transferring room: {str(e)}")
 
+@rooms_bp.route("/edit_room_price", methods=["POST"])
+@requires_permission("payment.edit")
+def edit_room_price():
+    """Correct the nightly tariff on an ACTIVE stay. Admin-gated.
+
+    The finalized-bill equivalent is /edit_bill_room_price. This is its
+    in-stay counterpart: it exists because the tariff is most often found to
+    be wrong at the checkout modal, while the guest is standing there, and
+    the only way to fix it before this was to check out at the wrong price
+    and correct the bill afterwards.
+
+    Balance arithmetic
+    ──────────────────
+    Nights already accrued at the CURRENT room's rate have to be re-priced,
+    or the correction silently under- or over-charges the guest. That count
+    is the same one /transfer_room uses:
+
+        accrued at this rate = (renewal_count + 1) - transfer_day_offset
+
+    renewal_count + 1 is the nights consumed so far (day 1 is consumed at
+    check-in); transfer_day_offset is the nights already billed at an
+    earlier room's rate and captured in guest.pre_transfer_charges. Those
+    earlier nights are NOT re-priced here — they were charged at a tariff
+    that was correct for the room the guest was actually in.
+
+    The delta moves the room balance and the global counter together, the
+    same pairing /transfer_room, /renew_rent and /shorten_stay use.
+
+    What this does NOT do
+    ─────────────────────
+    It does not touch a finalized bill, and it refuses on a room that is not
+    occupied. Nothing here recomputes GST: the per-night folio is built from
+    guest.price at checkout by config.compute_daily_folio, so correcting the
+    tariff now is enough for the slab to be picked from the corrected value.
+    """
+    try:
+        data = request.get_json(silent=True) or {}
+        room = str(data.get("room") or "").strip()
+        reason = str(data.get("reason") or "").strip()
+
+        if not room:
+            return jsonify(success=False, message="room is required"), 400
+
+        try:
+            new_price = int(data.get("room_price_per_night"))
+        except (TypeError, ValueError):
+            return jsonify(success=False,
+                           message="room_price_per_night must be a whole number"), 400
+        if new_price <= 0:
+            return jsonify(success=False, message="Price must be greater than zero"), 400
+
+        room_ref = rooms_ref.document(room)
+        snap = room_ref.get()
+        if not snap.exists:
+            return jsonify(success=False, message=f"Room {room} does not exist"), 404
+
+        room_data = snap.to_dict() or {}
+        if room_data.get("status") != "occupied":
+            return jsonify(
+                success=False,
+                message=("Room is not occupied. A finalized stay's tariff is "
+                         "corrected from the bill's Edit Price instead."),
+            ), 409
+
+        guest = dict(room_data.get("guest") or {})
+        old_price = int(guest.get("price", 0) or 0)
+        if old_price == new_price:
+            return jsonify(success=False,
+                           message="That is already the current price."), 400
+
+        # Nights charged at THIS room's rate — see the docstring.
+        renewal_count = int(room_data.get("renewal_count", 0) or 0)
+        offset = int(guest.get("transfer_day_offset", 0) or 0)
+        nights_at_rate = max(0, (renewal_count + 1) - offset)
+        delta = (new_price - old_price) * nights_at_rate
+
+        old_balance = int(room_data.get("balance", 0) or 0)
+        new_balance = old_balance + delta
+
+        _pu_user = (_safe_user() or {}).get("userId") or "system"
+        _pu_now = datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S")
+
+        guest["price"] = new_price
+
+        batch = db.batch()
+        batch.update(room_ref, {
+            "guest": guest,
+            "balance": new_balance,
+            # Attribution for the room-history popover. The timeline record
+            # carries the amounts so the trail reads "Price 600 -> 800 by X"
+            # rather than just naming an edit that happened.
+            "lastPriceEditBy": _pu_user,
+            "lastPriceEditAt": _pu_now,
+            "stay_timeline": stay_timeline.append_op(
+                stay_timeline.make_event("room.price_update", room, at=_pu_now,
+                                         old_price=old_price,
+                                         new_price=new_price,
+                                         nights=nights_at_rate)),
+            "lastModifiedBy": _pu_user,
+            "lastModifiedAt": _pu_now,
+        })
+        if delta:
+            batch.update(totals_ref.document("current_totals"),
+                         {"balance": firestore.Increment(delta)})
+
+        # Keep the draft stay doc in step so a checkout that reads it (or a
+        # register row rendered from it) does not show the superseded tariff.
+        _stay_id = room_data.get("active_bill_id")
+        if _stay_id:
+            batch.update(bills_ref.document(_stay_id),
+                         {"room_price_per_night": new_price})
+
+        batch.commit()
+        invalidate_rooms_and_totals()
+
+        write_log(
+            "room.price_update",
+            target_collection="rooms",
+            target_id=str(room),
+            before={"room_price_per_night": old_price, "balance": old_balance},
+            after={"room_price_per_night": new_price, "balance": new_balance},
+            metadata={
+                "guest": guest.get("name"),
+                "nights_repriced": nights_at_rate,
+                "balance_delta": delta,
+                "reason": reason,
+            },
+        )
+        logger.info(f"Room {room} price {old_price} -> {new_price} by {_pu_user} "
+                    f"({nights_at_rate} nights, balance delta {delta})")
+
+        return jsonify(
+            success=True,
+            message=(f"Price updated to \u20b9{new_price}."
+                     + (f" Balance adjusted by \u20b9{delta}."
+                        if delta else "")),
+            room_price_per_night=new_price,
+            balance=new_balance,
+            balance_delta=delta,
+            nights_repriced=nights_at_rate,
+        )
+
+    except Exception as e:
+        logger.error(f"edit_room_price error: {e}", exc_info=True)
+        return jsonify(success=False, message=f"Error updating price: {e}"), 500
+
+
 # ─── Two-stage cleaning workflow ────────────────────────────────────────────
 # Stage 1: housekeeping marks the room as "cleaned" (cleaning_status moves
 #          from "in_progress" → "ready_to_inspect"). The room stays in
@@ -3960,6 +4206,11 @@ def mark_room_cleaned():
             # Attribution — who marked it cleaned
             "cleanedBy":         _hk_user,
             "cleanedAt":         _hk_now,
+            # Prep record for the NEXT stay. The room's array was emptied at
+            # checkout, so this is the first entry of that stay's history.
+            "stay_timeline":     stay_timeline.append_op(
+                stay_timeline.make_event("room.cleaning.complete", room,
+                                         at=_hk_now)),
             "lastModifiedBy":    _hk_user,
             "lastModifiedAt":    _hk_now,
         })
@@ -4049,6 +4300,12 @@ def mark_room_ready_for_checkin():
                 # Attribution — who approved the room ready for the next guest
                 "inspectedBy":       _insp_user,
                 "inspectedAt":       _insp_now,
+                # Second prep record for the next stay. Appended, not replaced:
+                # a room cleaned and inspected twice while idle shows both,
+                # which is the point of an accountability trail.
+                "stay_timeline":     stay_timeline.append_op(
+                    stay_timeline.make_event("room.inspection.approve", room,
+                                             at=_insp_now)),
                 "lastModifiedBy":    _insp_user,
                 "lastModifiedAt":    _insp_now,
             })

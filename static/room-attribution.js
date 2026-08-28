@@ -184,26 +184,65 @@
     return userId;
   }
 
-  // Action key → user-facing label. Backend returns events sorted
-  // ascending (oldest first); we render in that order.
+  // Action key → user-facing label. One vocabulary, shared by the
+  // materialised timeline and the legacy flat-field fallback.
   const _ACTION_LABEL = {
-    "room.checkout":             "Checked out by",
     "room.cleaning.complete":    "Cleaned by",
     "room.inspection.approve":   "Inspected by",
     "room.checkin":              "Checked in by",
     "room.checkin_time_update":  "Check-in time edited by",
     "room.transfer":             "Shifted by",
+    "room.checkout":             "Checked out by",
+    "room.price_update":         "Price edited by",
   };
 
-  // Build the popover rows straight from a register entry's per-stay
-  // attribution fields. Each present (xBy / xAt) pair becomes one row, in
-  // lifecycle order. An absent field produces no row — so an ACTIVE stay
-  // (no lastCheckoutBy) never shows a checkout, and nothing from another
-  // stay can leak in. These fields are authoritative and stay-scoped: live
-  // room-doc values for active stays, a frozen bill snapshot for completed
-  // ones. This replaces the old audit-log + time-window reconstruction,
-  // which matched events across two different clocks and surfaced the
-  // PREVIOUS guest's check-in/checkout.
+  // ── Primary source: the materialised per-stay timeline ─────────────────
+  //
+  // `stay_timeline` is written as the stay happens (services/stay_timeline.py):
+  // one record per lifecycle action, moved across room transfers, and frozen
+  // onto the bill at checkout. It is already on the register row, so this
+  // renders with no fetch and no extra Firestore reads.
+  //
+  // Every row is labelled with the room it happened in. That matters after a
+  // transfer, where the trail legitimately spans two rooms and an unlabelled
+  // list reads like corrupted data.
+  function _buildRowsFromTimeline(timeline, currentRoom) {
+    const rows = [];
+    const multiRoom = new Set(
+      timeline.map(function (e) { return String(e.room || ""); })
+    ).size > 1;
+
+    timeline.forEach(function (e) {
+      let label = _ACTION_LABEL[e.action] || e.action || "Action";
+      if (e.action === "room.transfer" && e.from_room && e.to_room) {
+        label = "Shifted " + e.from_room + " \u2192 " + e.to_room + " by";
+      } else if (e.action === "room.price_update"
+                 && e.old_price != null && e.new_price != null) {
+        // Naming the amounts is the point of auditing a tariff change; a bare
+        // "Price edited by" tells you who to ask but not what to ask about.
+        label = "Price \u20b9" + e.old_price + " \u2192 \u20b9" + e.new_price + " by";
+      } else if (multiRoom && e.room) {
+        // Only annotate once the trail actually spans rooms — on the common
+        // single-room stay the suffix would be noise on every line.
+        label += " \u00b7 Rm " + e.room;
+      }
+      rows.push({
+        label: label,
+        name:  (e.byName && String(e.byName).trim()) || _resolveName(e.by),
+        when:  _relativeTime(e.at),
+      });
+    });
+    return rows;
+  }
+
+  // ── Fallback: the flat lastXBy / xAt fields ────────────────────────────
+  //
+  // Only reached for stays that began before stay_timeline shipped. These
+  // fields hold just the most recent occurrence of each action and the room
+  // document outlives the stay, so a transferred stay can show a mixture of
+  // occupants here. That is the defect the timeline exists to fix; this path
+  // is kept so old rows degrade to the previous behaviour instead of going
+  // blank, and it retires on its own as those stays age out.
   function _buildRowsFromEntry(info) {
     const rows = [];
     info = info || {};
@@ -211,7 +250,7 @@
       if (!who) return;
       rows.push({
         label: label,
-        name:  (typeof who === "string" && who.trim()) ? _resolveName(who) : "—",
+        name:  (typeof who === "string" && who.trim()) ? _resolveName(who) : "\u2014",
         when:  _relativeTime(when),
       });
     }
@@ -222,64 +261,30 @@
     if (info.lastShiftedBy) {
       const f = info.lastShiftedFrom, t = info.lastShiftedTo;
       add(info.lastShiftedBy, info.lastShiftedAt,
-          (f && t) ? ("Shifted " + f + " → " + t + " by") : "Shifted by");
+          (f && t) ? ("Shifted " + f + " \u2192 " + t + " by") : "Shifted by");
     }
     add(info.lastCheckoutBy,        info.lastCheckoutAt,        "Checked out by");
     return rows;
   }
 
-  // Convert an audit-log entry into the row shape the popover renderer
-  // consumes. `room.transfer` rows get an extra "from X → to Y" label
-  // pulled from the audit metadata so the chain is legible.
-  function _entryToRow(e) {
-    const userLabel =
-      (e.userName && String(e.userName).trim()) ||
-      _resolveName(e.userId) ||
-      "—";
-    let label = _ACTION_LABEL[e.action] || e.action || "Action";
-    if (e.action === "room.transfer" && e.metadata) {
-      const from = e.metadata.from_room;
-      const to   = e.metadata.to_room;
-      if (from && to) label = `Transferred ${from} → ${to} by`;
-    }
-    return {
-      label: label,
-      name:  userLabel,
-      when:  _relativeTime(e.timestamp),
-    };
+  // Pick the source for one register row. The timeline wins whenever it has
+  // anything in it; an empty array means either a legacy stay or a room that
+  // has genuinely had nothing happen to it yet, and the flat fields are the
+  // better answer in both cases.
+  function _buildRows(info) {
+    info = info || {};
+    const tl = Array.isArray(info.stay_timeline) ? info.stay_timeline : [];
+    if (tl.length) return _buildRowsFromTimeline(tl, info.room);
+    return _buildRowsFromEntry(info);
   }
 
-  // Async fetch — pulls the canonical history from the audit log scoped
-  // to a (room, time-window) tuple. Works for both active and completed
-  // stays because it doesn't rely on a bills-doc lookup; the bill row
-  // already carries everything we need.
-  //
-  // Returns [] on any error so the popover renders an "empty state"
-  // rather than getting stuck on Loading.
-  async function _fetchStayHistory(stayInfo) {
-    const room = stayInfo && stayInfo.room;
-    const checkin = stayInfo && (stayInfo.checkin_time || stayInfo.checkin);
-    if (!room || !checkin) return [];
-
-    const params = new URLSearchParams();
-    params.set("room", String(room));
-    params.set("checkin", String(checkin));
-    if (stayInfo.checkout_time) params.set("checkout", String(stayInfo.checkout_time));
-    if (stayInfo.status)        params.set("status",   String(stayInfo.status));
-
-    try {
-      const res = await fetch(
-        "/api/audit-logs/stay-history?" + params.toString(),
-        { credentials: "same-origin" }
-      );
-      if (!res.ok) return [];
-      const body = await res.json();
-      if (!body || !body.success || !Array.isArray(body.entries)) return [];
-      return body.entries;
-    } catch (_e) {
-      return [];
-    }
-  }
+  // NOTE: this popover deliberately does NOT call
+  // /api/audit-logs/stay-history. That endpoint scans 500 audit documents per
+  // room per transfer hop, so one popover open cost 500-1500 Firestore reads.
+  // It remains the right tool for an explicit audit investigation; it is the
+  // wrong price for a hover. The timeline above carries the same facts at
+  // zero read cost. The old _fetchStayHistory / _entryToRow helpers that
+  // called it were already unreachable and have been removed.
 
   // ── Popover positioning — flips above/below based on viewport edge ────
   function _positionPopover(popover, anchorRect) {
@@ -381,10 +386,9 @@
     _openPopover = popover;
     _openAnchor = anchor;
 
-    // Render the timeline synchronously from the entry's per-stay
-    // attribution fields — no audit-log fetch, no time-window guessing.
-    // This is exact and stay-scoped (see _buildRowsFromEntry).
-    _renderBody(popover, _buildRowsFromEntry(roomInfo));
+    // Rendered synchronously from data the register row already carries.
+    // No fetch, no loading state that outlives a frame (see _buildRows).
+    _renderBody(popover, _buildRows(roomInfo));
     _positionPopover(popover, anchor.getBoundingClientRect());
 
     // Outside click closes. Use capture so clicks on inner elements that
@@ -439,12 +443,9 @@
   // tab's reg-history-btn). This is now the only way the popover is
   // shown — the room-card chip was retired.
   //
-  // We always open immediately into a Loading state and let the async
-  // audit-log fetch fill in the rows. Pre-checking snapshot fields on
-  // the bill row was unreliable: rows for completed stays often miss
-  // post-checkout cleaning/inspection events because the bill doc is
-  // not updated again after finalization. The audit log is the source
-  // of truth — query it directly via the bill_id foreign key.
+  // Rows come from the register entry itself: stay_timeline when present,
+  // the legacy flat fields otherwise. Both are already loaded, so the
+  // popover paints in one frame and costs nothing to open.
   function openForButton(buttonEl, roomInfo) {
     if (!buttonEl || !roomInfo) return;
     _injectStyles();

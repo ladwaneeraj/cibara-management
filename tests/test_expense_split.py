@@ -460,3 +460,53 @@ class TestDedupeSplitGroups(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+# ── Expense-type edit: the `type` vs `expense_type` key mismatch ──────────
+#
+# /add_expense reads the Daily-vs-Report choice from `type`; PATCH
+# /expense/<id> whitelists `expense_type`. The expense form sent `type` on
+# both, so on edit the field was filtered out of the patch and new_type fell
+# through to the old value. Switching an expense from Daily to From-Account
+# looked like it saved and came back unchanged, with no error anywhere.
+#
+# routes.reports.edit_expense now aliases `type` to `expense_type` before
+# whitelisting. These pin the alias and the counter arithmetic it unblocks —
+# that arithmetic had never actually run for a type change before this fix.
+
+class TestExpenseTypeEditAlias(unittest.TestCase):
+    EDITABLE = R._EDITABLE_FIELDS
+
+    def _whitelist(self, body):
+        """Mirror edit_expense's alias-then-filter step."""
+        body = dict(body)
+        if "type" in body and "expense_type" not in body:
+            body["expense_type"] = body["type"]
+        return {k: v for k, v in body.items() if k in self.EDITABLE}
+
+    def test_legacy_type_key_survives_the_whitelist(self):
+        fields = self._whitelist({"type": "report", "amount": 1360})
+        self.assertEqual(fields.get("expense_type"), "report")
+
+    def test_bare_type_key_alone_was_the_defect(self):
+        """Without the alias the field is dropped — the original bug."""
+        dropped = {k: v for k, v in {"type": "report"}.items()
+                   if k in self.EDITABLE}
+        self.assertEqual(dropped, {})
+
+    def test_explicit_expense_type_wins_over_the_alias(self):
+        fields = self._whitelist({"type": "transaction", "expense_type": "report"})
+        self.assertEqual(fields.get("expense_type"), "report")
+
+    def test_counter_delta_for_every_type_transition(self):
+        d = R._totals_delta_for_edit
+        txn = {"amount": 1360, "expense_type": "transaction"}
+        rpt = {"amount": 1360, "expense_type": "report"}
+        # Daily → From-Account: the counter must give the cash back.
+        self.assertEqual(d(txn, 1360, "report"), -1360)
+        # From-Account → Daily: the counter must take it.
+        self.assertEqual(d(rpt, 1360, "transaction"), 1360)
+        # Daily → Daily with a new amount: just the difference.
+        self.assertEqual(d(txn, 1500, "transaction"), 140)
+        # From-Account → From-Account never touches the counter.
+        self.assertEqual(d(rpt, 1500, "report"), 0)

@@ -563,6 +563,73 @@ function closeNotification(notification) {
 
 // Function to render room cards
 
+// ── Vacant-card accountability ────────────────────────────────────────────
+// Who cleaned this room and who signed it off, on the card face rather than
+// behind the history popover: on a vacant room, "is this ready and who says
+// so" is asked while scanning the grid, not while tapping a room.
+//
+// It replaces the footer's "Available", which repeated the "Vacant" line
+// directly above it, so the card carries this without getting taller.
+//
+// Names are resolved in two passes. CibaraUsers.nameOf() reads a directory
+// that loads asynchronously and returns the raw userId when the entry is not
+// there yet, so a first paint that beats /api/user-directory would print
+// "lankesh" instead of "Lankesh K P" and never correct itself. The id is kept
+// on the element and resolveVacantNames() rewrites the labels once the
+// directory resolves.
+function vacantAccountability(info) {
+  info = info || {};
+
+  // Left corner is always the cleaner, right corner always the inspector, on
+  // every card. Fixed sides are what make this readable at grid scale: the
+  // eye learns one position rather than re-reading an icon on each card.
+  function initial(side, verb, userId, at, tone) {
+    if (!userId) {
+      // A gap has to look like a gap. An empty dashed ring says "nobody has
+      // done this yet", which is a different statement from a filled ring,
+      // and it is the honest answer for a room that reached vacant without
+      // the step being recorded — /mark_room_ready_for_checkin can stamp an
+      // inspector with no cleaner, so this pair is genuinely independent.
+      return '<span class="rm-init rm-init--' + side + ' is-missing"' +
+             ' title="' + verb + ': not recorded"></span>';
+    }
+    return '<span class="rm-init rm-init--' + side + ' ' + tone + '"' +
+             ' data-user="' + String(userId).replace(/"/g, "&quot;") + '"' +
+             ' data-verb="' + verb + '"' +
+             ' data-at="' + (at ? String(at).slice(0, 10) : "") + '"></span>';
+  }
+
+  return (
+    initial("l", "Cleaned by",   info.cleanedBy,   info.cleanedAt,   "") +
+    initial("r", "Inspected by", info.inspectedBy, info.inspectedAt, "is-ok")
+  );
+}
+
+// Fill in (or correct) every corner initial from the user directory. Safe to
+// call repeatedly and safe to call before the directory has loaded — it waits.
+function resolveVacantNames(root) {
+  const scope = root || document;
+  function paint() {
+    scope.querySelectorAll(".rm-init[data-user]").forEach(function (el) {
+      const id    = el.getAttribute("data-user");
+      const verb  = el.getAttribute("data-verb") || "";
+      const at    = el.getAttribute("data-at") || "";
+      const name = (window.CibaraUsers && window.CibaraUsers.nameOf)
+        ? window.CibaraUsers.nameOf(id)
+        : id;
+      // One character. Even a first name did not survive a ~100px card once
+      // two of them stacked; the full name and the date live in the tooltip,
+      // which is where anyone actually checking attribution will look.
+      el.textContent = String(name).trim().charAt(0).toUpperCase();
+      el.title = verb + ": " + name + (at ? " \u00b7 " + at : "");
+    });
+  }
+  paint();                                   // whatever is cached right now
+  if (window.CibaraUsers && window.CibaraUsers.ready) {
+    window.CibaraUsers.ready().then(paint);  // then the authoritative pass
+  }
+}
+
 function renderRooms() {
   if (!roomsGrid) {
     debugLog("roomsGrid element not found");
@@ -809,9 +876,7 @@ function renderRooms() {
       roomContent += `
         <div class="room-number">${roomNumber}</div>
         <div class="guest-name">Vacant</div>
-        <div class="room-footer">
-          <div>Available</div>
-        </div>
+        ${vacantAccountability(info)}
       `;
     }
 
@@ -945,6 +1010,12 @@ function renderRooms() {
   // refetch is debounced by seconds, so the room grid flipped instantly
   // while the counts sat stale until the background fetch caught up.
   if (typeof updateStats === "function") updateStats();
+
+  // Fill in the vacant-card cleaner / inspector labels. Deliberately AFTER
+  // the grid is built and deliberately not awaited: the directory may already
+  // be cached (labels appear this frame) or still in flight (they appear when
+  // it lands). Either way the grid never blocks on it.
+  if (typeof resolveVacantNames === "function") resolveVacantNames(roomsGrid);
 }
 
 // Handle cleaned button click (housekeeping → ready_to_inspect)
@@ -2167,8 +2238,7 @@ function updateCheckoutModal(roomNumber) {
   // Manager gets ONE edit per stay. Admin always sees the button (no cap).
   // Housekeeping never sees it (the button is on the checkout modal which
   // their UI doesn't reach, but we hide it defensively anyway).
-  const editCheckinBtn = document.getElementById("edit-checkin-time");
-  if (editCheckinBtn) {
+  {
     const _auth = window.CibaraAuth;
     const role = _auth && _auth.currentUser ? (_auth.currentUser() || {}).role : null;
     const editCount = parseInt(roomInfo.checkin_time_edit_count || 0, 10) || 0;
@@ -2178,10 +2248,11 @@ function updateCheckoutModal(roomNumber) {
     } else if (role === "manager") {
       canEdit = editCount < 1;   // first edit only
     }
-    editCheckinBtn.style.display = canEdit ? "" : "none";
-    editCheckinBtn.title = canEdit
-      ? "Edit check-in time"
-      : "You've already edited this once. Ask an admin if you need to change it again.";
+    _setTileAction(
+      "checkout-tile-checkin", canEdit, "Edit check-in time",
+      function () { openCheckinTimeEditor(roomNumber); },
+      "You've already edited this once. Ask an admin if you need to change it again."
+    );
   }
 
   // (The checkout-modal History icon was removed. Per-stay attribution
@@ -2193,6 +2264,16 @@ function updateCheckoutModal(roomNumber) {
   if (checkoutRoomPrice) {
     checkoutRoomPrice.textContent = "₹" + roomInfo.guest.price;
   }
+
+  // Tariff correction — admin only. The server gates on payment.edit as well;
+  // this just avoids offering a button that would come back 403. Wired per
+  // open rather than once at load because the tile is re-rendered each time
+  // and the room it refers to changes.
+  const mayEditPrice = window.CibaraAuth
+    && typeof window.CibaraAuth.userCan === "function"
+    && window.CibaraAuth.userCan("payment.edit");
+  _setTileAction("checkout-tile-price", mayEditPrice, "Edit room price",
+                 function () { startEditRoomPrice(roomNumber); });
 
   // ── Guest photo ─────────────────────────────────────────────────────────
   const guestPhotoContainer = document.getElementById("checkout-photo-container");
@@ -3467,6 +3548,240 @@ function _canEditGuestMobile() {
     ((a.isAdmin && a.isAdmin()) || (a.isManager && a.isManager()))
   );
 }
+
+// ── Clickable checkout tiles ──────────────────────────────────────────────
+// The Room Price and Check-in tiles are their own edit affordance. Each used
+// to carry a pencil button beside its value, which spent a line of a tile with
+// ~95px of interior and gave two hit targets for one action — on a phone the
+// pencil was also the smaller of the two.
+//
+// Permission still decides whether the tile does anything; when it does not,
+// the tile keeps its normal appearance and simply ignores clicks, so a
+// non-admin never sees an affordance that would only return 403.
+function _setTileAction(tileId, enabled, title, handler, disabledTitle) {
+  const tile = document.getElementById(tileId);
+  if (!tile) return;
+  tile.classList.toggle("is-actionable", !!enabled);
+  if (enabled) {
+    tile.setAttribute("role", "button");
+    tile.setAttribute("tabindex", "0");
+    tile.setAttribute("title", title);
+    tile.onclick = handler;
+    // Keyboard parity: a div acting as a button has to answer Enter and Space.
+    tile.onkeydown = function (ev) {
+      if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); handler(); }
+    };
+  } else {
+    tile.removeAttribute("role");
+    tile.removeAttribute("tabindex");
+    tile.onclick = null;
+    tile.onkeydown = null;
+    // A locked-out tile can still explain itself on hover — that is why the
+    // manager who has spent their one edit gets told so rather than finding a
+    // tile that silently does nothing.
+    if (disabledTitle) tile.setAttribute("title", disabledTitle);
+    else tile.removeAttribute("title");
+  }
+}
+
+// Opens the check-in time editor for a room, gated behind the manager-password
+// prompt on any edit after the first. Lifted out of a DOMContentLoaded click
+// listener on the old pencil so the tile can call the same flow.
+function openCheckinTimeEditor(roomNumber) {
+  if (!roomNumber || !rooms[roomNumber]) {
+    showNotification("Could not determine the room to edit.", "error");
+    return;
+  }
+  const currentCheckInTime = rooms[roomNumber].checkin_time || "";
+  const editCount = rooms[roomNumber].checkin_time_edit_count || 0;
+  const open = () => showEditTimeModal(roomNumber, currentCheckInTime);
+
+  if (editCount === 0) {
+    open();
+  } else if (typeof openMgrAccessModal === "function") {
+    openMgrAccessModal(
+      "Edit Check-in Time",
+      "This stay's check-in time has already been edited. Manager password required.",
+      "fa-clock",
+      open
+    );
+  } else {
+    open();   // dev fallback if the mgr-access modal isn't available
+  }
+}
+window.openCheckinTimeEditor = openCheckinTimeEditor;
+
+// ── Admin tariff correction on an active stay ─────────────────────────────
+// Drives the #rp-backdrop modal in index.html and POSTs /edit_room_price,
+// which re-prices the nights already accrued at this room's rate and moves
+// the balance to match.
+//
+// This was three chained window.prompt()/confirm() dialogs. They carried the
+// browser's "127.0.0.1:5000 says" chrome into an operator-facing screen, and
+// worse, they could only state the balance impact as text in a confirm the
+// operator had already committed to reading past. The modal shows that number
+// live, recomputed on every keystroke, before anything is sent.
+let _rpRoom = null;
+
+function _rpNightsAtRate(info) {
+  // The same count the server uses (see routes/rooms.py edit_room_price):
+  // nights consumed so far, minus those already billed at an earlier room's
+  // rate on a transferred stay. Duplicated here ONLY to preview the number —
+  // the server recomputes it and its answer is what gets written.
+  return Math.max(
+    0,
+    (parseInt(info.renewal_count, 10) || 0) + 1 -
+      (parseInt((info.guest || {}).transfer_day_offset, 10) || 0)
+  );
+}
+
+function _rpRenderImpact() {
+  const box = document.getElementById("rp-impact");
+  const input = document.getElementById("rp-input");
+  const info = _rpRoom ? rooms[_rpRoom] : null;
+  if (!box || !input || !info) return;
+
+  const oldPrice = parseInt((info.guest || {}).price, 10) || 0;
+  const raw = String(input.value).trim();
+  const newPrice = parseInt(raw, 10);
+
+  if (!raw || isNaN(newPrice) || newPrice <= 0) {
+    box.style.background = "#f8fafc";
+    box.style.color = "#64748b";
+    box.textContent = "Enter a price to see the balance impact.";
+    return;
+  }
+  if (newPrice === oldPrice) {
+    box.style.background = "#f8fafc";
+    box.style.color = "#64748b";
+    box.textContent = "Same as the current price \u2014 nothing will change.";
+    return;
+  }
+
+  const nights = _rpNightsAtRate(info);
+  const delta = (newPrice - oldPrice) * nights;
+  const bal = parseInt(info.balance, 10) || 0;
+  const nightWord = nights === 1 ? "night" : "nights";
+
+  if (delta === 0) {
+    box.style.background = "#f8fafc";
+    box.style.color = "#64748b";
+    box.textContent = "No nights accrued yet \u2014 the balance does not change.";
+    return;
+  }
+  const up = delta > 0;
+  box.style.background = up ? "#fef2f2" : "#f0fdf4";
+  box.style.color      = up ? "#b91c1c" : "#15803d";
+  box.innerHTML =
+    "<strong>" + nights + " " + nightWord + "</strong> already accrued at \u20b9" +
+    oldPrice + ", re-priced to \u20b9" + newPrice + ".<br>" +
+    "Balance " + (up ? "increases" : "decreases") + " by <strong>\u20b9" +
+    Math.abs(delta) + "</strong> (\u20b9" + bal + " \u2192 \u20b9" + (bal + delta) + ").";
+}
+
+function _rpClose() {
+  const bd = document.getElementById("rp-backdrop");
+  if (bd) bd.style.display = "none";
+  _rpRoom = null;
+}
+
+function startEditRoomPrice(roomNumber) {
+  const info = rooms[roomNumber];
+  if (!info || !info.guest) return;
+  const bd = document.getElementById("rp-backdrop");
+  if (!bd) return;
+
+  _rpRoom = roomNumber;
+  const oldPrice = parseInt(info.guest.price, 10) || 0;
+  const nights = _rpNightsAtRate(info);
+
+  const ctx = document.getElementById("rp-context");
+  if (ctx) {
+    ctx.innerHTML =
+      "<strong>Room " + roomNumber + "</strong> \u00b7 " +
+      (info.guest.name || "Guest") + "<br>" +
+      "Currently \u20b9" + oldPrice + " per night \u00b7 " +
+      nights + " night" + (nights === 1 ? "" : "s") + " accrued";
+  }
+
+  const input = document.getElementById("rp-input");
+  if (input) input.value = String(oldPrice);
+  const reason = document.getElementById("rp-reason");
+  if (reason) reason.value = "";
+  const msg = document.getElementById("rp-msg");
+  if (msg) msg.textContent = "";
+
+  _rpRenderImpact();
+  bd.style.display = "flex";
+  if (input) { input.focus(); input.select(); }
+}
+window.startEditRoomPrice = startEditRoomPrice;
+
+async function _rpSave() {
+  const info = _rpRoom ? rooms[_rpRoom] : null;
+  const input = document.getElementById("rp-input");
+  const msg = document.getElementById("rp-msg");
+  const saveBtn = document.getElementById("rp-save");
+  if (!info || !input) return;
+
+  const setMsg = (t) => { if (msg) msg.textContent = t || ""; };
+  const oldPrice = parseInt(info.guest.price, 10) || 0;
+  const newPrice = parseInt(String(input.value).trim(), 10);
+
+  if (isNaN(newPrice) || newPrice <= 0) { setMsg("Enter a valid price."); return; }
+  if (newPrice === oldPrice) { setMsg("That is already the current price."); return; }
+
+  const room = _rpRoom;
+  setMsg("");
+  if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = "Saving\u2026"; }
+
+  try {
+    const res = await apiFetch("/edit_room_price", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        room: String(room),
+        room_price_per_night: newPrice,
+        reason: (document.getElementById("rp-reason")?.value || "").trim(),
+      }),
+    });
+    const data = await res.json();
+    if (!data.success) { setMsg(data.message || "Could not update price."); return; }
+
+    // Reflect locally so the checkout modal behind is correct immediately,
+    // then let the background fetch reconcile with the server.
+    info.guest.price = data.room_price_per_night;
+    info.balance = data.balance;
+    _rpClose();
+    showNotification(data.message, "success");
+    if (typeof updateCheckoutModal === "function") updateCheckoutModal(room);
+    if (typeof renderRooms === "function") renderRooms();
+    if (typeof fetchData === "function") fetchData();
+  } catch (err) {
+    console.error("[Rooms] edit_room_price failed:", err);
+    setMsg("Network error \u2014 the price was not changed.");
+  } finally {
+    if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = "Update price"; }
+  }
+}
+
+// Wired once. The modal markup is static in index.html, so there is nothing
+// to re-bind when it opens.
+document.addEventListener("DOMContentLoaded", function () {
+  document.getElementById("rp-input")?.addEventListener("input", _rpRenderImpact);
+  document.getElementById("rp-cancel")?.addEventListener("click", _rpClose);
+  document.getElementById("rp-save")?.addEventListener("click", _rpSave);
+  document.getElementById("rp-backdrop")?.addEventListener("click", function (ev) {
+    if (ev.target === this) _rpClose();      // backdrop click only, not the card
+  });
+  document.addEventListener("keydown", function (ev) {
+    const bd = document.getElementById("rp-backdrop");
+    if (!bd || bd.style.display === "none") return;
+    if (ev.key === "Escape") _rpClose();
+    if (ev.key === "Enter" && document.activeElement
+        && document.activeElement.id === "rp-input") _rpSave();
+  });
+});
 
 // The mobile-edit option is offered ONLY for OTA stays (MakeMyTrip and
 // Booking.com), because those vouchers mask the guest phone. Walk-ins capture
@@ -6845,34 +7160,10 @@ document.addEventListener("DOMContentLoaded", function () {
   // First edit per stay is free; subsequent edits require the manager
   // password. The counter lives on the room doc as `checkin_time_edit_count`
   // and is incremented server-side by /update_checkin_time.
-  const editCheckinTimeBtn = document.getElementById("edit-checkin-time");
-  if (editCheckinTimeBtn) {
-    editCheckinTimeBtn.addEventListener("click", () => {
-      const roomEl     = document.getElementById("checkout-room-number");
-      const roomNumber = roomEl ? roomEl.textContent.trim() : "";
-      if (!roomNumber || !rooms[roomNumber]) {
-        showNotification("Could not determine the room to edit.", "error");
-        return;
-      }
-      const currentCheckInTime = rooms[roomNumber].checkin_time || "";
-      const editCount = rooms[roomNumber].checkin_time_edit_count || 0;
-
-      const open = () => showEditTimeModal(roomNumber, currentCheckInTime);
-
-      if (editCount === 0) {
-        open();
-      } else if (typeof openMgrAccessModal === "function") {
-        openMgrAccessModal(
-          "Edit Check-in Time",
-          "This stay's check-in time has already been edited. Manager password required.",
-          "fa-clock",
-          open
-        );
-      } else {
-        open(); // dev fallback if mgr-access modal isn't available
-      }
-    });
-  }
+  // (The check-in pencil's click listener lived here. The pencil is gone —
+  // the whole Check-in tile is the target now — and its logic moved into
+  // openCheckinTimeEditor(), which updateCheckoutModal() wires to the tile
+  // along with the same role/edit-count gate.)
 
   // ── New-checkin time icon (inside the check-in modal) ────────────────────
   // Opens the shared #edit-time-modal in callback mode. The picked value is

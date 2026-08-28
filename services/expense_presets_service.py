@@ -75,6 +75,7 @@ ALLOWED_CATEGORIES = frozenset({
     "maintenance",
     "sanitary",
     "booking_commission",
+    "marketing",
     "others",
 })
 

@@ -597,6 +597,14 @@ def browse_expenses():
         return jsonify(success=False, message=f"Error loading expenses: {str(e)}")
 
 
+# Expense categories that need a permission beyond "can reach this endpoint".
+# Add a category here and it is gated everywhere /add_expense is reachable,
+# including the split-payment branch, which runs after this check.
+_RESTRICTED_CATEGORIES = {
+    "marketing": "expense.marketing",
+}
+
+
 @reports_bp.route("/add_expense", methods=["POST"])
 def add_expense():
     """
@@ -624,6 +632,26 @@ def add_expense():
 
         # ── Build expense document ───────────────────────────────────────────
         _actor = load_current_user() or {}
+
+        # Category-level permission. The dropdown hides Marketing for
+        # non-admins, but a hidden <option> is decoration — this route accepts
+        # whatever category the client posts, so the check has to live here.
+        # Kept inline rather than as a @requires_permission decorator because
+        # the requirement is per-category, not per-route: everyone who can
+        # reach this endpoint may still file every other kind of expense.
+        if category in _RESTRICTED_CATEGORIES:
+            _perm = _RESTRICTED_CATEGORIES[category]
+            if not role_has_permission(_actor.get("role") or "", _perm):
+                logger.info(
+                    "add_expense: denied %s (%s) -> category '%s'",
+                    _actor.get("userId", "anonymous"),
+                    _actor.get("role", "none"), category,
+                )
+                return jsonify(
+                    success=False,
+                    message=f"Forbidden: missing permission '{_perm}'",
+                ), 403
+
         expense_entry = {
             "date":           date,
             "time":           time_str,
@@ -865,6 +893,21 @@ def edit_expense(doc_id):
             return jsonify(success=False, message="doc_id is required"), 400
 
         body = request.get_json(silent=True) or {}
+
+        # Legacy key alias. /add_expense reads the Daily-vs-Report choice from
+        # `type` (line ~618), and the expense form sends that same key on both
+        # create and edit. This endpoint's whitelist only knows `expense_type`,
+        # so the field was silently dropped on every PATCH: switching an
+        # expense from Daily to From-Account appeared to save, then came back
+        # unchanged, because new_type below fell through to the old value.
+        #
+        # Accepting the alias here fixes it for every client, including
+        # browsers still running a cached expense.js. The two endpoints
+        # disagreeing about the field's name is what caused this, so they are
+        # made to agree rather than adding a second name to the form.
+        if "type" in body and "expense_type" not in body:
+            body["expense_type"] = body["type"]
+
         # Restrict to the whitelisted field set
         fields = {k: v for k, v in body.items() if k in _EDITABLE_FIELDS}
         if not fields:

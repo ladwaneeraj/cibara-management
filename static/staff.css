@@ -35,6 +35,19 @@
   --stf-canvas: #f8fafc;
   --stf-primary: var(--primary, #4361ee);
   --stf-primary-soft: #eef1fd;
+  /* Paid/settled days: a flat fill on the cell, no rule, no bracket, no glyph.
+     The two earlier tints were rejected for competing with the Present/Absent
+     chips, and that risk is real, so this one is deliberately weak: a blue-grey
+     about 8% off white, from the same family as --stf-paid-line. The chips keep
+     solid pill backgrounds, so they sit on top of it rather than blending in.
+     The reason for going back to a fill: the underline read as a box drawn
+     around a range, which looked like a selection or a grouping rather than a
+     state, and consecutive periods were indistinguishable from one long one.
+     Colour says "this whole stretch is settled" in one glance without asking
+     the eye to trace an edge. Nothing else in the grid uses a fill, so it does
+     not collide with .is-today, .in-range or .is-anchor. */
+  --stf-paid-bg: #e7edf7;
+  --stf-paid-line: #b9c3d4;   /* still used by the flatpickr pay-range picker */
   --stf-primary-line: #c7d2f8;
   --stf-full-bg: #d3f2df;
   --stf-full-ink: #15803d;
@@ -294,20 +307,6 @@
   cursor: pointer;
   border: none;
 }
-.stf-allpresent-btn {
-  border: none;
-  background: #16a34a;
-  color: #fff;
-  border-radius: 9px;
-  padding: 0.48rem 0.85rem;
-  font-size: 0.78rem;
-  font-weight: 600;
-  cursor: pointer;
-  box-shadow: 0 1px 2px rgba(22, 163, 74, 0.35);
-  transition: background 0.12s;
-}
-.stf-allpresent-btn:hover { background: #15803d; }
-.stf-allpresent-btn:disabled { opacity: 0.6; cursor: wait; }
 
 /* ── Attendance grid ── */
 /* Desktop: no inner vertical scrollbar. max-height: 60vh here used to cap
@@ -425,7 +424,11 @@
   min-width: 0;
   flex: 1 1 auto;
 }
-.stf-name-text + .stf-shift-tag {
+/* The shift tag takes the right edge whether or not a ₹ chip sits between it
+   and the name. Without the second selector the chip broke the adjacency and
+   the D drifted back to the middle, out of column with the N below it. */
+.stf-name-text + .stf-shift-tag,
+.stf-pay-chip + .stf-shift-tag {
   margin-left: auto;
 }
 .stf-grid-name .ds {
@@ -436,6 +439,18 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* Outstanding advance, on its own line under the designation. It used to be
+   appended to .ds after a middot; the rupee figure is the widest token in a
+   132–168px cell, so it squeezed the role into an ellipsis. It also decides
+   whether this person can be paid, which is worth a line of its own. */
+.stf-grid-name .adv-line {
+  display: block;
+  margin-top: 1px;
+  font-size: 0.62rem;
+  line-height: 1.3;
+  white-space: nowrap;
+}
+.stf-grid-name .adv-line .advdue,
 .stf-grid-name .ds .advdue {
   color: var(--stf-danger);
   font-weight: 700;
@@ -470,13 +485,16 @@
   border-color: #ddc8f7;
 }
 
-/* The Day/Night pair of rows for one dual-shift staff member: the name
-   is printed only once, on the Day row; the Night row just carries its
-   N badge (no repeated name) so the pair reads as one person, two rows.
-   The Night row used to right-align its lone badge, leaving it stranded
-   in the far corner with nothing to connect it to the row above. Left-
-   aligning it under the name, with a small connector tick, reads instead
-   as "this person's second row" at a glance. */
+/* The Day/Night pair of rows for one dual-shift staff member: the name is
+   printed once, on the Day row; the Night row carries only its N badge so the
+   pair reads as one person over two rows.
+
+   The N now sits directly UNDER the D rather than at the opposite end of the
+   cell. Two badges for the same person on two different horizontal positions
+   read as two unrelated things; stacked in one column they read as a pair,
+   and the eye can scan the D/N column straight down the grid. The connector
+   tick is gone with it — with the badges aligned there is nothing left to
+   connect. */
 .stf-pair-first td { border-bottom: none !important; }
 .stf-pair-second .stf-grid-name {
   padding-top: 0.15rem !important;
@@ -485,16 +503,7 @@
 .stf-pair-second .stf-grid-name .nm {
   display: flex;
   align-items: center;
-}
-.stf-pair-second .stf-grid-name .nm::before {
-  content: "";
-  width: 9px;
-  height: 8px;
-  margin-right: 0.15rem;
-  border-left: 1.5px solid var(--stf-line);
-  border-bottom: 1.5px solid var(--stf-line);
-  border-bottom-left-radius: 4px;
-  flex: none;
+  justify-content: flex-end;   /* under the D, which .stf-name-text pushes right */
 }
 .stf-grid-pay-empty { cursor: default; }
 
@@ -553,18 +562,30 @@
 .stf-grid-cell.is-today { box-shadow: inset 0 0 0 1.5px var(--stf-primary-line); background: #fbfcff; }
 .stf-grid-cell.is-future { cursor: default; }
 .stf-grid-cell.is-future .m { display: none; }
-.stf-grid-cell.is-locked { cursor: not-allowed; position: relative; }
-.stf-grid-cell.is-locked::after {
-  content: "\1F512";
-  position: absolute;
-  bottom: 1px;
-  right: 2px;
-  font-size: 0.42rem;
-  opacity: 0.3;                     /* quiet by default — a whole paid month
-                                       of badges was visual noise */
-  transition: opacity 0.12s;
+/* ── Paid days ────────────────────────────────────────────────────────────
+   A settled day is filled. That is the whole treatment: no rule, no bracket,
+   no lock glyph, nothing drawn around a range.
+
+   Two things were tried before this and both failed for the same underlying
+   reason, that they asked the eye to read an EDGE. The lock glyph was 0.42rem
+   at 30% opacity, unreadable at a glance and a field of clutter across a
+   fully-paid month. The underline-with-turned-up-ends that replaced it drew
+   what looked like a box around a range, which reads as a selection or a
+   grouping rather than a state, and two settled periods back to back were
+   indistinguishable from one long one.
+
+   A fill is read as area, not edge, so a settled stretch registers without
+   being traced. The known risk with a fill, that it sits under the P/A chips
+   and competes with them, is handled by keeping the tint very weak and
+   leaving the chips as solid pills that sit on top.
+
+   Editing is blocked server-side, not here. This is the signal, not the lock:
+   see mark_all_present / skipped_locked in routes/staff.py. */
+.stf-grid-cell.is-locked {
+  cursor: not-allowed;
+  position: relative;
+  background: var(--stf-paid-bg);
 }
-.stf-grid-cell.is-locked:hover::after { opacity: 0.85; }
 
 /* Quick-pay range picker (flatpickr, id=stf-qp-range): flag days already
    paid for this staff member, same green + lock-mark language as the
@@ -668,6 +689,76 @@ td.stf-grid-name.stf-grid-foot {
   background: var(--stf-primary-soft);
   box-shadow: inset 0 -2px 0 var(--stf-primary);
 }
+
+/* The first tap sets start and end to the same day, so without this the
+   range highlight was one indistinct cell and the tap looked like it had not
+   registered. The dashed ring says "waiting for the other end". */
+.stf-grid-cell.is-anchor {
+  background: var(--stf-primary-soft);
+  box-shadow: inset 0 0 0 2px var(--stf-primary);
+  border-radius: 6px;
+}
+
+/* ── Range-selection mode ─────────────────────────────────────────────────
+   While the pay panel is open the grid quietly changes meaning: taps on the
+   target's row pick a period instead of marking attendance. Every other row
+   still marks. Dimming the rest is what stops an operator tapping a
+   neighbouring row and silently marking somebody present. */
+.stf-grid-table.is-selecting tbody tr.is-qp-dimmed { opacity: 0.4; }
+.stf-grid-table.is-selecting tbody tr.is-qp-target .stf-grid-cell:not(.is-future) {
+  cursor: pointer;
+}
+.stf-grid-table.is-selecting tbody tr.is-qp-target .stf-grid-name {
+  box-shadow: inset 3px 0 0 var(--stf-primary);
+}
+
+.stf-qp-banner {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0 0 0.5rem;
+  padding: 0.55rem 0.75rem;
+  border-radius: var(--stf-radius);
+  font-size: 0.78rem;
+  line-height: 1.4;
+  border: 1px solid var(--stf-primary-line);
+  background: var(--stf-primary-soft);
+  color: #1e293b;
+}
+.stf-qp-banner i { flex-shrink: 0; opacity: 0.6; font-size: 0.8rem; }
+.stf-qp-banner span { flex: 1; min-width: 0; }
+.stf-qp-banner.done { border-color: #a7f3d0; background: #ecfdf5; }
+.stf-qp-banner-x {
+  flex-shrink: 0;
+  border: 1px solid #e2e8f0;
+  background: #fff;
+  color: #475569;
+  border-radius: 7px;
+  padding: 0.28rem 0.6rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+/* The ₹ chip that makes a staff name look payable. Faint until the row is
+   hovered — a column of bright chips would compete with the grid itself. */
+.stf-pay-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: 5px;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 3px;
+  border-radius: 5px;
+  font-size: 0.6rem;
+  font-weight: 700;
+  color: var(--stf-primary);
+  background: var(--stf-primary-soft);
+  opacity: 0.55;
+  transition: opacity 0.12s;
+}
+.stf-grid-name.clickable:hover .stf-pay-chip { opacity: 1; }
 
 .stf-qp {
   margin-top: 0.65rem;
@@ -1493,8 +1584,7 @@ td.stf-grid-name.stf-grid-foot {
   .stf-cell-pop .opts button { padding: 0.6rem 0.8rem; font-size: 0.8rem; }
   .stf-qp-switch button { padding: 0.5rem 0.85rem; }
   .stf-ledger-item .del-btn { padding: 0.55rem 0.55rem; }
-  /* Hover is meaningless on touch — the lock badge shows faint always */
-  .stf-grid-cell.is-locked::after { opacity: 0.5; }
+
 }
 
 /* ── Phones: full-screen sheet + stacked layouts ── */
@@ -1518,25 +1608,50 @@ td.stf-grid-name.stf-grid-foot {
   .stf-tab-btn { flex: 1; padding: 0.55rem 0.3rem; font-size: 0.79rem; }
   .stf-tab-btn i { display: none; }
 
-  /* Datebar: month picker grows; All-present gets its own full row */
+  /* Datebar: month picker takes the slack left by the removed bulk button */
   .stf-datebar { gap: 0.4rem; }
   .stf-monthpick { flex: 1; min-width: 0; }
-  .stf-allpresent-btn { flex-basis: 100%; padding: 0.65rem; font-size: 0.82rem; }
 
-  /* Grid: name column narrower, height fills the phone screen */
+  /* Grid: the name column is the whole mobile problem. At 104-124px plus
+     38px day cells, a 390px screen showed the name and about seven days, so
+     reading a month meant scrolling sideways four times.
+
+     The role and the outstanding-advance line are what forced that width,
+     and neither is needed while marking attendance — both are one tap away
+     in the staff row's own panel. Dropping them on phones takes the column
+     to 72px and, with 34px day cells, the visible window from ~7.5 days to
+     ~9.4 on a 390px screen. That is a full week plus its edges in one view.
+     Going tighter would hit the chip: the P/A pill is 24px, so anything
+     under ~30px cells starts crowding it.
+
+     Kept: the name itself, the ₹ chip and the D/N shift tag. The tag has to
+     stay or the two rows of a dual-shift person are indistinguishable. */
   .stf-grid-name-h, .stf-grid-name {
-    min-width: 104px;
-    max-width: 124px;
-    padding: 0.35rem 0.55rem !important;
+    min-width: 72px;
+    max-width: 92px;
+    padding: 0.3rem 0.35rem !important;
   }
-  /* The advance-due amount must never truncate to "₹2…" — wrap the
-     designation line instead of ellipsizing it. Rows grow a little. */
-  .stf-grid-name .ds {
-    white-space: normal;
-    overflow: visible;
-    text-overflow: clip;
-    line-height: 1.35;
+  .stf-grid-name .ds,
+  .stf-grid-name .adv-line { display: none; }
+  .stf-grid-name .nm { font-size: 0.72rem; }
+  .stf-grid-name .stf-name-text {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
+  .stf-shift-tag {
+    min-width: 15px;
+    height: 15px;
+    margin-left: 0.2rem;
+    font-size: 0.55rem;
+  }
+
+  /* Day cells: 34px still clears the 24px chip with room either side, and
+     buys two more visible days. The 44px row height from the coarse-pointer
+     block above is untouched, so the tap target stays 34x44. */
+  .stf-grid-table thead th { min-width: 34px; }
+  .stf-grid-cell { min-width: 34px; }
+  .stf-grid-table thead th small { font-size: 0.5rem; }
   /* Phone: the grid gets a bounded height AND its own vertical scroll, so a
      long staff list can be scrolled down to the last names. The base rule
      sets overflow-y:hidden (desktop sizes to content); on phones the

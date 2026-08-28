@@ -118,13 +118,36 @@ window.populateCheckoutDocView = async function (mobile) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 let _checkoutMobile = '';
+// True once the checkout upload button + file input have been wired up for
+// _checkoutMobile. Guards against re-wiring (and wiping staged photos) on
+// every background refresh - see initCheckoutDocAttach below.
+let _checkoutDocWired = false;
 // 'checkin' = normal flow (upload on submit), 'checkout' = upload immediately on Done
 let _docCameraContext = 'checkin';
 
 window.initCheckoutDocAttach = function(mobile) {
-  // Discard any pending photos from a previous checkout session
+  const digits = (mobile || '').replace(/\D/g, '');
+
+  // updateCheckoutModal() re-runs on EVERY background fetchData() refresh
+  // while the checkout modal is open (it re-syncs the balance). This
+  // function used to unconditionally discard the pending photos and
+  // re-clone the buttons, so any refresh landing between "pick a photo"
+  // and "Save to guest" silently threw the operator's photos away - the
+  // upload option looked broken, especially for managers, who sit in this
+  // modal adding services and taking payments (each of which triggers a
+  // refresh) before saving the ID.
+  //
+  // Only reset when this is a genuinely NEW guest. Re-syncs for the same
+  // guest are a no-op: the staged photos and their listeners survive.
+  if (_checkoutDocWired && _checkoutMobile === digits) {
+    _renderCheckoutPendingStrip();
+    return;
+  }
+
+  // Different guest (or first open) - discard whatever was staged before.
   _discardCheckoutPending();
-  _checkoutMobile = (mobile || '').replace(/\D/g, '');
+  _checkoutMobile = digits;
+  _checkoutDocWired = true;
 
   // Re-wire the header camera button each time the modal opens.
   // Clone to strip any previously attached listeners.
@@ -366,6 +389,14 @@ async function _commitCheckoutPending() {
     _checkoutUploadLock = false;
     if (uploadBtn) { uploadBtn.disabled = false; uploadBtn.innerHTML = '<i class="fas fa-cloud-upload-alt"></i> Save to guest'; }
   }
+}
+
+/** End the checkout staging session (modal closed): drop staged photos and
+ *  un-arm the wiring guard so the next open re-binds cleanly. */
+function _endCheckoutDocSession() {
+  _discardCheckoutPending();
+  _checkoutDocWired = false;
+  _checkoutMobile   = '';
 }
 
 /** Discard all pending checkout blobs without uploading. */
@@ -910,6 +941,18 @@ function initDocCamera() {
   // Checkout pending-upload strip buttons
   document.getElementById('checkout-pending-upload-btn')?.addEventListener('click', _commitCheckoutPending);
   document.getElementById('checkout-pending-discard-btn')?.addEventListener('click', _discardCheckoutPending);
+
+  // Closing the checkout modal ends the staging session. initCheckoutDocAttach
+  // deliberately does NOT reset on every call any more (background refreshes
+  // used to wipe staged photos mid-upload), so the reset happens here instead
+  // - once, on an actual close - and keeps the shared _docCapturedBlobs array
+  // from leaking checkout photos into the next check-in.
+  document.querySelectorAll('#checkout-modal .close-btn').forEach(btn => {
+    btn.addEventListener('click', _endCheckoutDocSession);
+  });
+  document.getElementById('checkout-modal')?.addEventListener('click', e => {
+    if (e.target === document.getElementById('checkout-modal')) _endCheckoutDocSession();
+  });
 
   // View-photos buttons
   document.getElementById('checkout-doc-view-btn')?.addEventListener('click', () => {

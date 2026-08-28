@@ -1,25 +1,45 @@
 /* ──────────────────────────────────────────────────────────────────────────
- * Deep-check maintenance UI.
+ * Deep Check — inspection rounds, issues, history, analytics, checklist.
  *
  * Backed by routes/maintenance.py. Managers run inspection rounds and mark
  * issues fixed; admins additionally verify fixes, edit the checklist
  * template and delete records (all enforced server-side — the checks here
  * are UX only).
  *
- * The whole modal is built dynamically (same approach as room-cleaning.js)
+ * UI shape (2026 redesign)
+ * ------------------------
+ * This is no longer a dialog. It is a full-screen workspace that becomes a
+ * centred app panel from 900px up:
+ *   • phone  → full screen, thumb-reachable bottom nav, sticky sub-headers,
+ *              sticky submit bar, 44px+ tap targets everywhere
+ *   • laptop → 1080px panel, pill tabs at the top
+ *
+ * The whole surface is built dynamically (same approach as room-cleaning.js)
  * so index.html only carries the quick-action entry + this script tag.
  * Loaded with `defer` after auth.js, permissions.js and script.js.
+ *
+ * Style is deliberately ES5 (var / function, no template literals) to match
+ * the rest of the bundle and the old WebViews this PWA is installed into.
  * ──────────────────────────────────────────────────────────────────────── */
 
 (function () {
   "use strict";
 
   var SEVERITIES = ["low", "medium", "high"];
+  var SEV_LABEL = { low: "Low", medium: "Medium", high: "High" };
   var CATEGORIES = ["electrical", "appliances", "washroom", "furniture", "general"];
   var CAT_LABELS = {
     electrical: "⚡ Electrical", appliances: "📺 Appliances",
     washroom: "🚿 Washroom", furniture: "🛏️ Furniture", general: "🧱 General",
   };
+
+  var TABS = [
+    { id: "dashboard", label: "Rooms", icon: "fa-th-large" },
+    { id: "issues", label: "Issues", icon: "fa-exclamation-triangle" },
+    { id: "history", label: "History", icon: "fa-history" },
+    { id: "analytics", label: "Analytics", icon: "fa-chart-bar" },
+    { id: "checklist", label: "Checklist", icon: "fa-tasks", adminOnly: true },
+  ];
 
   var state = {
     checklist: [],
@@ -31,9 +51,12 @@
     issues: [],
     issueFilter: "open",
     issueTrade: "all",   // trade/category filter in the Issues tab
+    roomFilter: "all",   // all | pending | issues | done  (dashboard grid)
+    roomQuery: "",       // room-number search (dashboard grid)
     analytics: null,
     inspectRoom: null,   // room currently being inspected
     inspectDraft: {},    // item_id -> {status, severity, note}
+    tab: "dashboard",
   };
 
   // ── helpers ─────────────────────────────────────────────────────────────
@@ -107,6 +130,26 @@
     });
   }
 
+  function el(id) { return document.getElementById(id); }
+  function pane(name) { return el("dc-pane-" + name); }
+
+  function skeleton(n, tall) {
+    var out = '<div class="dc-loading">';
+    for (var i = 0; i < (n || 3); i++) {
+      out += '<div class="dc-skel' + (tall ? " tall" : "") + '"></div>';
+    }
+    return out + "</div>";
+  }
+
+  function emptyState(icon, title, body, actionHtml) {
+    return '<div class="dc-empty">' +
+      '<span class="dc-empty-ico">' + icon + "</span>" +
+      '<span class="dc-empty-title">' + esc(title) + "</span>" +
+      (body ? "<span>" + esc(body) + "</span>" : "") +
+      (actionHtml || "") +
+      "</div>";
+  }
+
   // ── unsaved-inspection drafts (localStorage, survives reload/close) ────
   var DRAFT_MAX_AGE_MS = 48 * 3600 * 1000;
 
@@ -154,56 +197,94 @@
     });
   }
 
-  // ── modal shell ─────────────────────────────────────────────────────────
+  // ── shell ───────────────────────────────────────────────────────────────
 
-  function ensureModal() {
-    if (document.getElementById("maintenance-modal")) return;
-    var tabs =
-      '<button class="mnt-tab-btn active" data-mtab="dashboard">Dashboard</button>' +
-      '<button class="mnt-tab-btn" data-mtab="issues">Issues</button>' +
-      '<button class="mnt-tab-btn" data-mtab="history">History</button>' +
-      '<button class="mnt-tab-btn" data-mtab="analytics">Analytics</button>' +
-      (isAdmin()
-        ? '<button class="mnt-tab-btn" data-mtab="checklist">Checklist</button>'
-        : "");
+  function visibleTabs() {
+    return TABS.filter(function (t) { return !t.adminOnly || isAdmin(); });
+  }
+
+  function ensureShell() {
+    if (el("maintenance-modal")) return;
+
+    var tabs = visibleTabs();
+    var tabHtml = tabs.map(function (t) {
+      return '<button class="dc-tab' + (t.id === "dashboard" ? " active" : "") +
+        '" data-mtab="' + t.id + '" type="button">' + esc(t.label) + "</button>";
+    }).join("");
+    var navHtml = tabs.map(function (t) {
+      return '<button class="dc-nav-btn' + (t.id === "dashboard" ? " active" : "") +
+        '" data-mtab="' + t.id + '" type="button">' +
+        '<i class="fas ' + t.icon + '"></i><span>' + esc(t.label) + "</span></button>";
+    }).join("");
+    var paneHtml = ["dashboard", "inspect", "issues", "history", "analytics", "checklist"]
+      .map(function (p) {
+        return '<section class="dc-pane' + (p === "dashboard" ? " active" : "") +
+          '" id="dc-pane-' + p + '"></section>';
+      }).join("");
+
     var html =
-      '<div class="modal-backdrop" id="maintenance-modal">' +
-      '  <div class="modal-content">' +
-      '    <div class="modal-header">' +
-      '      <h2>🔧 Deep Check</h2>' +
-      '      <button class="close-btn" aria-label="Close">&times;</button>' +
-      "    </div>" +
-      '    <div class="mnt-tabs">' + tabs + "</div>" +
-      '    <div class="modal-body">' +
-      '      <div class="mnt-tab-pane active" id="mnt-pane-dashboard"></div>' +
-      '      <div class="mnt-tab-pane" id="mnt-pane-inspect"></div>' +
-      '      <div class="mnt-tab-pane" id="mnt-pane-issues"></div>' +
-      '      <div class="mnt-tab-pane" id="mnt-pane-history"></div>' +
-      '      <div class="mnt-tab-pane" id="mnt-pane-analytics"></div>' +
-      '      <div class="mnt-tab-pane" id="mnt-pane-checklist"></div>' +
-      "    </div>" +
+      '<div id="maintenance-modal" data-modal-surface role="dialog" aria-modal="true" aria-label="Deep Check">' +
+      '  <div class="dc-panel" id="dc-panel">' +
+      '    <header class="dc-head">' +
+      '      <div class="dc-head-mark"><i class="fas fa-tools"></i></div>' +
+      '      <div class="dc-head-txt">' +
+      '        <h2 class="dc-title">Deep Check</h2>' +
+      '        <span class="dc-sub" id="dc-subtitle">Room inspection rounds</span>' +
+      "      </div>" +
+      '      <button class="dc-iconbtn" id="dc-refresh" type="button" title="Refresh" aria-label="Refresh"><i class="fas fa-sync-alt"></i></button>' +
+      '      <button class="dc-iconbtn dc-close close-btn" type="button" aria-label="Close">&times;</button>' +
+      "    </header>" +
+      '    <nav class="dc-tabs" id="dc-tabs">' + tabHtml + "</nav>" +
+      '    <div class="dc-body" id="dc-body">' + paneHtml + "</div>" +
+      '    <nav class="dc-nav" id="dc-nav">' + navHtml + "</nav>" +
       "  </div>" +
       "</div>";
+
     document.body.insertAdjacentHTML("beforeend", html);
 
-    var modal = document.getElementById("maintenance-modal");
-    modal.querySelector(".close-btn").addEventListener("click", closeModal);
-    modal.addEventListener("click", function (e) {
-      if (e.target === modal) closeModal();
+    var modal = el("maintenance-modal");
+    modal.querySelector(".dc-close").addEventListener("click", closeModal);
+    el("dc-refresh").addEventListener("click", function () {
+      var btn = el("dc-refresh");
+      btn.classList.add("spin");
+      setTimeout(function () { btn.classList.remove("spin"); }, 900);
+      hardRefresh();
     });
-    modal.querySelectorAll(".mnt-tab-btn").forEach(function (btn) {
+    modal.querySelectorAll("[data-mtab]").forEach(function (btn) {
       btn.addEventListener("click", function () { switchTab(btn.dataset.mtab); });
+    });
+
+    document.addEventListener("keydown", function (e) {
+      if (e.key !== "Escape") return;
+      var m = el("maintenance-modal");
+      if (m && m.classList.contains("show")) closeModal();
     });
   }
 
+  function setSubtitle(text) {
+    var s = el("dc-subtitle");
+    if (s) s.textContent = text;
+  }
+
+  function setFocusMode(on) {
+    var p = el("dc-panel");
+    if (p) p.classList.toggle("dc-focus", !!on);
+  }
+
   function switchTab(tab) {
-    var modal = document.getElementById("maintenance-modal");
-    modal.querySelectorAll(".mnt-tab-btn").forEach(function (b) {
+    state.tab = tab;
+    setFocusMode(false);
+    var modal = el("maintenance-modal");
+    if (!modal) return;
+    modal.querySelectorAll("[data-mtab]").forEach(function (b) {
       b.classList.toggle("active", b.dataset.mtab === tab);
     });
-    modal.querySelectorAll(".mnt-tab-pane").forEach(function (p) {
-      p.classList.toggle("active", p.id === "mnt-pane-" + tab);
+    modal.querySelectorAll(".dc-pane").forEach(function (p) {
+      p.classList.toggle("active", p.id === "dc-pane-" + tab);
     });
+    var body = el("dc-body");
+    if (body) body.scrollTop = 0;
+
     if (tab === "issues") loadIssues();
     if (tab === "history") loadHistory();
     if (tab === "analytics") loadAnalytics();
@@ -211,25 +292,40 @@
     if (tab === "dashboard") loadOverview();
   }
 
+  // Header refresh — drop the caches for the tab in view and re-fetch.
+  function hardRefresh() {
+    if (state.tab === "dashboard") { state._overviewLoaded = false; loadOverview(); }
+    else if (state.tab === "issues") { state._issuesLoaded = false; loadIssues(); }
+    else if (state.tab === "history") { state._rounds = null; loadHistory(); }
+    else if (state.tab === "analytics") { state.analytics = null; loadAnalytics(); }
+    else if (state.tab === "checklist") renderChecklistEditor();
+  }
+
+  var _prevBodyOverflow = "";
+
   function openModal() {
-    ensureModal();
-    document.getElementById("maintenance-modal").classList.add("show");
+    ensureShell();
+    el("maintenance-modal").classList.add("show");
+    _prevBodyOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
     switchTab("dashboard");
   }
+
   function closeModal() {
-    var m = document.getElementById("maintenance-modal");
+    var m = el("maintenance-modal");
     if (m) m.classList.remove("show");
+    document.body.style.overflow = _prevBodyOverflow || "";
   }
 
   // ── dashboard ───────────────────────────────────────────────────────────
 
   function loadOverview() {
-    var pane = document.getElementById("mnt-pane-dashboard");
+    var p = pane("dashboard");
     // Stale-while-revalidate: paint instantly from the last payload,
     // refresh silently in the background.
     var hasCache = !!state._overviewLoaded;
     if (hasCache) renderDashboard();
-    else pane.innerHTML = '<div class="mnt-empty">Loading…</div>';
+    else p.innerHTML = skeleton(1, true) + skeleton(3);
     api("/maintenance/overview")
       .then(function (json) {
         state.checklist = json.checklist || [];
@@ -245,24 +341,31 @@
       })
       .catch(function (e) {
         if (hasCache) notify(e.message, "error");
-        else pane.innerHTML = '<div class="mnt-empty">' + esc(e.message) + "</div>";
+        else p.innerHTML = emptyState("⚠️", "Couldn't load Deep Check", e.message);
       });
   }
 
+  function roomState(r) {
+    if (!r.inspected) return "pending";
+    if (r.high_open > 0) return "critical";
+    if (r.open_issues > 0) return "issues";
+    return "ok";
+  }
+
   function renderDashboard() {
-    var pane = document.getElementById("mnt-pane-dashboard");
-    var html = "";
+    var p = pane("dashboard");
 
     if (!state.openRound) {
-      html +=
-        '<div class="mnt-round-box" id="mnt-start-box">' +
-        "  <span>No deep-check round is open.</span>" +
-        (can("maintenance.inspect")
-          ? '<button class="action-btn btn-primary" id="mnt-start-round">Start New Round</button>'
-          : "") +
+      setSubtitle("No round open");
+      p.innerHTML =
+        '<div id="dc-start-box">' +
+        emptyState("🗓️", "No deep-check round is open",
+          "Start a round to inspect rooms and track what needs fixing.",
+          can("maintenance.inspect")
+            ? '<button class="dc-btn dc-btn-primary" id="mnt-start-round" type="button">Start new round</button>'
+            : "") +
         "</div>";
-      pane.innerHTML = html;
-      var startBtn = document.getElementById("mnt-start-round");
+      var startBtn = el("mnt-start-round");
       if (startBtn) startBtn.addEventListener("click", renderStartForm);
       return;
     }
@@ -278,47 +381,136 @@
       highCount += r.high_open;
     });
 
-    html +=
-      '<div class="mnt-round-box">' +
-      '  <span class="mnt-round-name">' + esc(state.openRound.name) + "</span>" +
-      '  <div class="mnt-progress"><div class="mnt-progress-fill" style="width:' + pct + '%"></div></div>' +
-      "  <span><b>" + cov.inspected + "</b>/" + cov.total + " rooms</span>" +
+    setSubtitle(esc(state.openRound.name) + " · " + cov.inspected + "/" + cov.total + " rooms");
+
+    // Progress ring — r=27 → circumference ≈ 169.6
+    var C = 169.6;
+    var dash = (C * pct / 100).toFixed(1) + " " + C;
+
+    var html =
+      '<div class="dc-hero">' +
+      '  <div class="dc-ring">' +
+      '    <svg viewBox="0 0 62 62" aria-hidden="true">' +
+      '      <circle class="dc-ring-bg" cx="31" cy="31" r="27"></circle>' +
+      '      <circle class="dc-ring-fg" cx="31" cy="31" r="27" stroke-dasharray="' + dash + '"></circle>' +
+      "    </svg>" +
+      '    <span class="dc-ring-val">' + pct + "%</span>" +
+      "  </div>" +
+      '  <div class="dc-hero-main">' +
+      '    <div class="dc-hero-eyebrow">Active round</div>' +
+      '    <div class="dc-hero-title">' + esc(state.openRound.name) + "</div>" +
+      '    <div class="dc-hero-meta">' + cov.inspected + " of " + cov.total +
+      " rooms inspected · started " + fmtDate(state.openRound.created_at) + "</div>" +
+      "  </div>" +
       (can("maintenance.inspect")
-        ? '<button class="action-btn btn-secondary" id="mnt-close-round">Close Round</button>'
+        ? '<div class="dc-hero-actions"><button class="dc-btn dc-btn-sm" id="mnt-close-round" type="button">Close round</button></div>'
         : "") +
       "</div>";
 
     html +=
-      '<div class="mnt-cards">' +
-      '  <div class="mnt-card ' + (openCount ? "warn" : "good") + '"><div class="mnt-card-num">' + openCount + '</div><div class="mnt-card-lbl">Open issues</div></div>' +
-      '  <div class="mnt-card ' + (highCount ? "bad" : "good") + '"><div class="mnt-card-num">' + highCount + '</div><div class="mnt-card-lbl">High severity</div></div>' +
-      '  <div class="mnt-card"><div class="mnt-card-num">' + fixedCount + '</div><div class="mnt-card-lbl">Awaiting verify</div></div>' +
-      '  <div class="mnt-card"><div class="mnt-card-num">' + pct + '%</div><div class="mnt-card-lbl">Coverage</div></div>' +
+      '<div class="dc-kpis">' +
+      '  <div class="dc-kpi ' + (openCount ? "warn" : "good") + '"><div class="dc-kpi-num">' + openCount + '</div><div class="dc-kpi-lbl">Open issues</div></div>' +
+      '  <div class="dc-kpi ' + (highCount ? "bad" : "good") + '"><div class="dc-kpi-num">' + highCount + '</div><div class="dc-kpi-lbl">High severity</div></div>' +
+      '  <div class="dc-kpi"><div class="dc-kpi-num">' + fixedCount + '</div><div class="dc-kpi-lbl">To verify</div></div>' +
+      '  <div class="dc-kpi"><div class="dc-kpi-num">' + (cov.total - cov.inspected) + '</div><div class="dc-kpi-lbl">Rooms left</div></div>' +
       "</div>";
 
-    html += '<div class="mnt-section-title">Rooms — tap to inspect / re-inspect</div>';
-    html += '<div class="mnt-room-grid">';
+    var counts = { all: st.rooms.length, pending: 0, issues: 0, done: 0 };
     st.rooms.forEach(function (r) {
-      var cls = "pending", sub = "pending";
-      if (r.inspected) {
-        if (r.high_open > 0) { cls = "critical"; sub = r.open_issues + " open ⚠"; }
-        else if (r.open_issues > 0) { cls = "issues"; sub = r.open_issues + " open"; }
-        else { cls = "ok"; sub = (r.score != null ? r.score + "%" : "done"); }
-      }
-      html +=
-        '<div class="mnt-room-cell ' + cls + '" data-room="' + esc(r.room) +
-        '" title="' + esc((r.category || "") +
-          (r.inspected_by ? " · by " + r.inspected_by : "")) + '">' +
-        '  <div class="mnt-room-no">' + esc(r.room) + "</div>" +
-        '  <div class="mnt-room-sub">' + esc(sub) + "</div>" +
-        "</div>";
+      var s = roomState(r);
+      if (s === "pending") counts.pending++;
+      else if (s === "ok") counts.done++;
+      else counts.issues++;
     });
-    html += "</div>";
-    pane.innerHTML = html;
 
-    var closeBtn = document.getElementById("mnt-close-round");
+    var FILTERS = [["all", "All"], ["pending", "Pending"], ["issues", "Needs work"], ["done", "Clear"]];
+    html +=
+      '<div class="dc-section"><h3>Rooms</h3><span>tap a room to inspect or review</span></div>' +
+      '<div class="dc-toolbar">' +
+      '  <div class="dc-search">' +
+      '    <i class="fas fa-search"></i>' +
+      '    <input type="search" class="form-control" id="dc-room-search" inputmode="numeric"' +
+      '      placeholder="Find room…" value="' + esc(state.roomQuery) + '" aria-label="Find room" />' +
+      "  </div>" +
+      '  <div class="dc-chips">' +
+      FILTERS.map(function (f) {
+        return '<button class="dc-chip' + (state.roomFilter === f[0] ? " active" : "") +
+          '" data-rfilter="' + f[0] + '" type="button">' + f[1] +
+          "<small>" + counts[f[0]] + "</small></button>";
+      }).join("") +
+      "  </div>" +
+      "</div>" +
+      '<div class="dc-grid" id="dc-room-grid"></div>' +
+      '<div class="dc-legend">' +
+      '  <span><i class="lg-pending"></i>Not inspected</span>' +
+      '  <span><i class="lg-ok"></i>Clear</span>' +
+      '  <span><i class="lg-issues"></i>Open issues</span>' +
+      '  <span><i class="lg-critical"></i>High severity</span>' +
+      "</div>";
+
+    p.innerHTML = html;
+
+    var closeBtn = el("mnt-close-round");
     if (closeBtn) closeBtn.addEventListener("click", closeRound);
-    pane.querySelectorAll(".mnt-room-cell").forEach(function (cell) {
+
+    p.querySelectorAll("[data-rfilter]").forEach(function (chip) {
+      chip.addEventListener("click", function () {
+        state.roomFilter = chip.dataset.rfilter;
+        p.querySelectorAll("[data-rfilter]").forEach(function (c) {
+          c.classList.toggle("active", c.dataset.rfilter === state.roomFilter);
+        });
+        renderRoomGrid();
+      });
+    });
+
+    var search = el("dc-room-search");
+    if (search) {
+      search.addEventListener("input", function () {
+        state.roomQuery = this.value.trim();
+        renderRoomGrid();
+      });
+    }
+
+    renderRoomGrid();
+  }
+
+  // Grid re-renders on its own so typing in the search box never loses focus.
+  function renderRoomGrid() {
+    var grid = el("dc-room-grid");
+    if (!grid) return;
+    var st = state.status || { rooms: [] };
+    var q = state.roomQuery.toLowerCase();
+
+    var rows = st.rooms.filter(function (r) {
+      var s = roomState(r);
+      if (state.roomFilter === "pending" && s !== "pending") return false;
+      if (state.roomFilter === "done" && s !== "ok") return false;
+      if (state.roomFilter === "issues" && s !== "issues" && s !== "critical") return false;
+      if (q && String(r.room).toLowerCase().indexOf(q) === -1) return false;
+      return true;
+    });
+
+    if (!rows.length) {
+      grid.innerHTML = '<div class="dc-empty" style="grid-column:1/-1">' +
+        (q ? "No room matches “" + esc(state.roomQuery) + "”" : "Nothing in this filter") +
+        "</div>";
+      return;
+    }
+
+    grid.innerHTML = rows.map(function (r) {
+      var s = roomState(r);
+      var tag = "pending";
+      if (s === "critical") tag = r.open_issues + " open ⚠";
+      else if (s === "issues") tag = r.open_issues + " open";
+      else if (s === "ok") tag = (r.score != null ? r.score + "%" : "done");
+      return '<button type="button" class="dc-room ' + s + '" data-room="' + esc(r.room) +
+        '" title="' + esc((r.category || "") + (r.inspected_by ? " · by " + r.inspected_by : "")) + '">' +
+        '<span class="dc-room-no">' + esc(r.room) + "</span>" +
+        '<span class="dc-room-tag">' + esc(tag) + "</span>" +
+        "</button>";
+    }).join("");
+
+    grid.querySelectorAll(".dc-room").forEach(function (cell) {
       cell.addEventListener("click", function () {
         var room = cell.dataset.room;
         if (cell.classList.contains("pending")) {
@@ -330,8 +522,7 @@
         } else {
           // Already inspected — show the read-only record (who/when/results);
           // re-inspection is offered from inside the viewer.
-          renderInspectionView(state.openRound, room,
-            document.getElementById("mnt-pane-dashboard"), loadOverview);
+          renderInspectionView(state.openRound, room, pane("dashboard"), loadOverview);
         }
       });
     });
@@ -341,38 +532,47 @@
   // blocked in some installed-PWA / WebView contexts, which made the button
   // appear dead.
   function renderStartForm() {
-    var box = document.getElementById("mnt-start-box");
+    var box = el("dc-start-box");
     if (!box) return;
     var def = "Deep Check " + new Date().toLocaleDateString("en-IN", {
       month: "long", year: "numeric",
     });
     box.innerHTML =
-      '<input type="text" class="form-control" id="mnt-round-name" maxlength="80"' +
-      ' value="' + esc(def) + '" style="flex:1;min-width:150px" />' +
-      '<button class="action-btn btn-success" id="mnt-round-go">Start</button>' +
-      '<button class="action-btn btn-secondary" id="mnt-round-cancel">Cancel</button>';
-    document.getElementById("mnt-round-go").addEventListener("click", function () {
-      var name = document.getElementById("mnt-round-name").value;
+      '<div class="dc-card">' +
+      '  <div class="dc-section" style="margin-top:0"><h3>Start a new round</h3></div>' +
+      '  <div class="dc-startform">' +
+      '    <input type="text" class="form-control" id="mnt-round-name" maxlength="80" value="' + esc(def) + '" />' +
+      '    <button class="dc-btn dc-btn-success" id="mnt-round-go" type="button">Start</button>' +
+      '    <button class="dc-btn dc-btn-ghost" id="mnt-round-cancel" type="button">Cancel</button>' +
+      "  </div>" +
+      "</div>";
+    el("mnt-round-go").addEventListener("click", function () {
+      var name = el("mnt-round-name").value;
       post("/maintenance/rounds/start", { name: name })
         .then(function () { notify("Round started", "success"); loadOverview(); })
         .catch(function (e) { notify(e.message, "error"); });
     });
-    document.getElementById("mnt-round-cancel").addEventListener("click", renderDashboard);
-    document.getElementById("mnt-round-name").focus();
+    el("mnt-round-cancel").addEventListener("click", renderDashboard);
+    el("mnt-round-name").focus();
   }
 
   // Two-step confirm on the button itself instead of window.confirm().
   function closeRound() {
-    var btn = document.getElementById("mnt-close-round");
+    var btn = el("mnt-close-round");
     if (!btn) return;
     if (btn.dataset.armed !== "1") {
       btn.dataset.armed = "1";
+      btn.classList.add("armed");
       var cov = state.status ? state.status.coverage : null;
       btn.textContent = cov && cov.inspected < cov.total
-        ? "End early? Only " + cov.inspected + "/" + cov.total + " done — tap to confirm"
-        : "Confirm close?";
+        ? "Only " + cov.inspected + "/" + cov.total + " done — tap to confirm"
+        : "Tap again to close";
       setTimeout(function () {
-        if (btn.isConnected) { btn.dataset.armed = ""; btn.textContent = "Close Round"; }
+        if (btn.isConnected) {
+          btn.dataset.armed = "";
+          btn.classList.remove("armed");
+          btn.textContent = "Close round";
+        }
       }, 4000);
       return;
     }
@@ -402,75 +602,106 @@
       .catch(function () { applyDraftOverlay(); renderInspectForm(); });
   }
 
+  function decidedCount() {
+    return state.inspectItems.filter(function (it) {
+      var d = state.inspectDraft[it.id];
+      return d && (d.status === "ok" || d.status === "issue");
+    }).length;
+  }
+
+  function refreshInspectProgress() {
+    var s = el("dc-inspect-progress");
+    if (!s) return;
+    var done = decidedCount();
+    var total = state.inspectItems.length;
+    s.textContent = (state.roomCats[state.inspectRoom] || "room") +
+      " · " + done + " of " + total + " checked";
+  }
+
   function renderInspectForm() {
-    var pane = document.getElementById("mnt-pane-inspect");
+    var p = pane("inspect");
     var room = state.inspectRoom;
-    var roomCat = state.roomCats[room] || "other";
     state.inspectItems = itemsForRoom(room);
 
     var html =
-      '<div class="mnt-round-box">' +
-      '  <button class="action-btn btn-secondary" id="mnt-inspect-back">← Back</button>' +
-      '  <span class="mnt-round-name">Room ' + esc(room) +
-      '    <small style="font-weight:400;color:#718096">(' + esc(roomCat) + ")</small>" +
-      "  </span>" +
-      '  <button class="action-btn btn-secondary" id="mnt-all-ok">All OK ✓</button>' +
-      "</div>";
-
-    // Items render in the admin's chosen order (Checklist tab ▲▼) —
-    // no department grouping. The category still routes issues to the
-    // right worker in the Issues tab.
-    state.inspectItems.forEach(function (it) {
-      var d = state.inspectDraft[it.id] || {};
-      var isOk = d.status === "ok";
-      var isIssue = d.status === "issue";
-      html +=
-        '<div class="mnt-check-row" data-item="' + esc(it.id) + '">' +
-        '  <span class="mnt-check-label">' + esc(it.icon || "") + " " + esc(it.label) + "</span>" +
-        '  <span class="mnt-seg">' +
-        '    <button type="button" class="mnt-ok-btn' + (isOk ? " sel-ok" : "") + '">OK</button>' +
-        '    <button type="button" class="mnt-issue-btn' + (isIssue ? " sel-issue" : "") + '">Problem</button>' +
-        "  </span>" +
-        '  <div class="mnt-issue-detail" style="display:' + (isIssue ? "flex" : "none") + '">' +
-        '    <select class="form-control mnt-sev">' +
-        SEVERITIES.map(function (s) {
-          return '<option value="' + s + '"' + ((d.severity || "medium") === s ? " selected" : "") + ">" +
-            s.charAt(0).toUpperCase() + s.slice(1) + "</option>";
-        }).join("") +
-        "    </select>" +
-        '    <input type="text" class="form-control mnt-note" maxlength="300" ' +
-        '      placeholder="What’s wrong? (e.g. remote missing)" value="' + esc(d.note || "") + '" />' +
-        "  </div>" +
-        "</div>";
-    });
-
-    if (!state.inspectItems.length) {
-      html += '<div class="mnt-empty">Checklist is empty — an admin needs to add items in the Checklist tab first.</div>';
-    }
-
-    html +=
-      '<div style="display:flex;gap:0.5rem;margin-top:1rem">' +
-      '  <button class="action-btn btn-secondary" id="mnt-inspect-cancel" style="flex:1">Cancel</button>' +
+      '<div class="dc-subhead">' +
+      '  <button class="dc-iconbtn" id="mnt-inspect-back" type="button" aria-label="Back"><i class="fas fa-arrow-left"></i></button>' +
+      '  <div class="dc-subhead-txt">' +
+      '    <div class="dc-subhead-title">Room ' + esc(room) + "</div>" +
+      '    <div class="dc-subhead-sub" id="dc-inspect-progress"></div>' +
+      "  </div>" +
       (state.inspectItems.length
-        ? '<button class="action-btn btn-success" id="mnt-inspect-submit" style="flex:2">Submit Inspection</button>'
+        ? '  <button class="dc-btn dc-btn-soft dc-btn-sm" id="mnt-all-ok" type="button">All OK</button>'
         : "") +
       "</div>";
 
-    pane.innerHTML = html;
+    // Items render in the admin's chosen order (Checklist tab drag handle) —
+    // no department grouping. The category still routes issues to the
+    // right worker in the Issues tab.
+    if (!state.inspectItems.length) {
+      html += emptyState("📋", "Checklist is empty",
+        "An admin needs to add items in the Checklist tab first.");
+    } else {
+      html += '<div class="dc-checklist">';
+      state.inspectItems.forEach(function (it) {
+        var d = state.inspectDraft[it.id] || {};
+        var isOk = d.status === "ok";
+        var isIssue = d.status === "issue";
+        var sev = d.severity || "medium";
+        html +=
+          '<div class="dc-item' + (isOk ? " is-ok" : "") + (isIssue ? " is-issue" : "") +
+          '" data-item="' + esc(it.id) + '">' +
+          '  <div class="dc-item-top">' +
+          '    <span class="dc-item-ico">' + esc(it.icon || "•") + "</span>" +
+          '    <span class="dc-item-label">' + esc(it.label) + "</span>" +
+          '    <span class="dc-seg">' +
+          '      <button type="button" class="dc-ok-btn' + (isOk ? " sel-ok" : "") + '">OK</button>' +
+          '      <button type="button" class="dc-issue-btn' + (isIssue ? " sel-issue" : "") + '">Problem</button>' +
+          "    </span>" +
+          "  </div>" +
+          '  <div class="dc-item-detail">' +
+          '    <div class="dc-sevs">' +
+          SEVERITIES.map(function (s) {
+            return '<button type="button" class="dc-sev' + (sev === s ? " active" : "") +
+              '" data-sev="' + s + '">' + SEV_LABEL[s] + "</button>";
+          }).join("") +
+          "    </div>" +
+          '    <input type="text" class="form-control dc-note" maxlength="300"' +
+          '      placeholder="What’s wrong? (e.g. remote missing)" value="' + esc(d.note || "") + '" />' +
+          "  </div>" +
+          "</div>";
+      });
+      html += "</div>";
+    }
 
-    // Show the hidden inspect pane
-    var modal = document.getElementById("maintenance-modal");
-    modal.querySelectorAll(".mnt-tab-pane").forEach(function (p) {
-      p.classList.toggle("active", p.id === "mnt-pane-inspect");
+    html +=
+      '<div class="dc-actionbar">' +
+      '  <button class="dc-btn dc-btn-ghost" id="mnt-inspect-cancel" type="button">Cancel</button>' +
+      (state.inspectItems.length
+        ? '  <button class="dc-btn dc-btn-success wide" id="mnt-inspect-submit" type="button">Submit inspection</button>'
+        : "") +
+      "</div>";
+
+    p.innerHTML = html;
+
+    // Show the inspect pane — it is a focused sub-flow, not a tab.
+    var modal = el("maintenance-modal");
+    modal.querySelectorAll(".dc-pane").forEach(function (x) {
+      x.classList.toggle("active", x.id === "dc-pane-inspect");
     });
-    modal.querySelectorAll(".mnt-tab-btn").forEach(function (b) {
-      b.classList.remove("active");
-    });
+    modal.querySelectorAll("[data-mtab]").forEach(function (b) { b.classList.remove("active"); });
+    setFocusMode(true);
+    setSubtitle("Inspecting room " + room);
+    var body = el("dc-body");
+    if (body) body.scrollTop = 0;
+    refreshInspectProgress();
 
     function backToDashboard() { switchTab("dashboard"); }
-    document.getElementById("mnt-inspect-back").addEventListener("click", backToDashboard);
-    document.getElementById("mnt-inspect-cancel").addEventListener("click", backToDashboard);
-    document.getElementById("mnt-all-ok").addEventListener("click", function () {
+    el("mnt-inspect-back").addEventListener("click", backToDashboard);
+    el("mnt-inspect-cancel").addEventListener("click", backToDashboard);
+
+    var allOk = el("mnt-all-ok");
+    if (allOk) allOk.addEventListener("click", function () {
       state.inspectItems.forEach(function (it) {
         state.inspectDraft[it.id] = { status: "ok", severity: "medium", note: "" };
       });
@@ -478,37 +709,48 @@
       renderInspectForm();
     });
 
-    pane.querySelectorAll(".mnt-check-row").forEach(function (row) {
+    p.querySelectorAll(".dc-item").forEach(function (row) {
       var id = row.dataset.item;
       function draft() {
         return (state.inspectDraft[id] =
           state.inspectDraft[id] || { status: null, severity: "medium", note: "" });
       }
-      row.querySelector(".mnt-ok-btn").addEventListener("click", function () {
+      row.querySelector(".dc-ok-btn").addEventListener("click", function () {
         draft().status = "ok";
-        row.querySelector(".mnt-ok-btn").classList.add("sel-ok");
-        row.querySelector(".mnt-issue-btn").classList.remove("sel-issue");
-        row.querySelector(".mnt-issue-detail").style.display = "none";
+        row.classList.add("is-ok");
+        row.classList.remove("is-issue");
+        row.querySelector(".dc-ok-btn").classList.add("sel-ok");
+        row.querySelector(".dc-issue-btn").classList.remove("sel-issue");
         saveDraft();
+        refreshInspectProgress();
       });
-      row.querySelector(".mnt-issue-btn").addEventListener("click", function () {
+      row.querySelector(".dc-issue-btn").addEventListener("click", function () {
         draft().status = "issue";
-        row.querySelector(".mnt-issue-btn").classList.add("sel-issue");
-        row.querySelector(".mnt-ok-btn").classList.remove("sel-ok");
-        row.querySelector(".mnt-issue-detail").style.display = "flex";
+        row.classList.add("is-issue");
+        row.classList.remove("is-ok");
+        row.querySelector(".dc-issue-btn").classList.add("sel-issue");
+        row.querySelector(".dc-ok-btn").classList.remove("sel-ok");
         saveDraft();
+        refreshInspectProgress();
+        var note = row.querySelector(".dc-note");
+        if (note) note.focus();
       });
-      row.querySelector(".mnt-sev").addEventListener("change", function (e) {
-        draft().severity = e.target.value;
-        saveDraft();
+      row.querySelectorAll(".dc-sev").forEach(function (sevBtn) {
+        sevBtn.addEventListener("click", function () {
+          draft().severity = sevBtn.dataset.sev;
+          row.querySelectorAll(".dc-sev").forEach(function (b) {
+            b.classList.toggle("active", b === sevBtn);
+          });
+          saveDraft();
+        });
       });
-      row.querySelector(".mnt-note").addEventListener("input", function (e) {
+      row.querySelector(".dc-note").addEventListener("input", function (e) {
         draft().note = e.target.value;
         saveDraft();
       });
     });
 
-    var submitBtn = document.getElementById("mnt-inspect-submit");
+    var submitBtn = el("mnt-inspect-submit");
     if (submitBtn) submitBtn.addEventListener("click", submitInspection);
   }
 
@@ -519,6 +761,9 @@
     });
     if (missing.length) {
       notify("Please mark every item — " + missing.length + " unchecked (or use All OK first)", "error");
+      // Take the operator straight to the first unmarked item.
+      var first = pane("inspect").querySelector('[data-item="' + missing[0].id + '"]');
+      if (first && first.scrollIntoView) first.scrollIntoView({ block: "center", behavior: "smooth" });
       return;
     }
     var items = state.inspectItems.map(function (it) {
@@ -529,8 +774,9 @@
         note: d.status === "issue" ? d.note : "",
       };
     });
-    var btn = document.getElementById("mnt-inspect-submit");
+    var btn = el("mnt-inspect-submit");
     btn.disabled = true;
+    btn.textContent = "Submitting…";
     post("/maintenance/inspect", {
       round_id: state.openRound.id, room: state.inspectRoom, items: items,
     })
@@ -542,9 +788,14 @@
           json.inspection.score + "%" + (n ? ", " + n + " issue(s) logged" : ""),
           n ? "info" : "success"
         );
+        state._issuesLoaded = false;   // issue list is stale now
         switchTab("dashboard");
       })
-      .catch(function (e) { notify(e.message, "error"); btn.disabled = false; });
+      .catch(function (e) {
+        notify(e.message, "error");
+        btn.disabled = false;
+        btn.textContent = "Submit inspection";
+      });
   }
 
   // ── issues ──────────────────────────────────────────────────────────────
@@ -556,13 +807,13 @@
     appliances: "📺 Appliances",
     general:    "🧱 General",
   };
-  var STATUS_LABEL = { open: "OPEN", fixed: "TO VERIFY", verified: "DONE" };
+  var STATUS_LABEL = { open: "Open", fixed: "To verify", verified: "Done" };
 
   function loadIssues() {
-    var pane = document.getElementById("mnt-pane-issues");
+    var p = pane("issues");
     var hasCache = !!state._issuesLoaded;
     if (hasCache) renderIssues();
-    else pane.innerHTML = '<div class="mnt-empty">Loading…</div>';
+    else p.innerHTML = skeleton(4);
     api("/maintenance/issues")
       .then(function (json) {
         state.issues = json.issues || [];
@@ -571,7 +822,7 @@
       })
       .catch(function (e) {
         if (hasCache) notify(e.message, "error");
-        else pane.innerHTML = '<div class="mnt-empty">' + esc(e.message) + "</div>";
+        else p.innerHTML = emptyState("⚠️", "Couldn't load issues", e.message);
       });
   }
 
@@ -600,11 +851,11 @@
       parts.push('✅ <b>' + esc((iss.verified_by || {}).name || "?") + "</b> " +
         fmtWhen(iss.verified_at));
     }
-    return parts.join('<span class="mnt-who-sep">→</span>');
+    return parts.join('<span class="dc-who-sep">→</span>');
   }
 
   function renderIssues() {
-    var pane = document.getElementById("mnt-pane-issues");
+    var p = pane("issues");
     var all = state.issues;
 
     function nStatus(s) {
@@ -612,27 +863,30 @@
       return all.filter(function (i) { return i.status === s; }).length;
     }
 
+    setSubtitle(nStatus("open") + " open · " + nStatus("fixed") + " awaiting verification");
+
     var html =
-      '<div class="mnt-issues-bar">' +
-      '  <select class="form-control" id="mnt-trade-sel">' +
+      '<div class="dc-issuebar">' +
+      '  <select class="form-control" id="mnt-trade-sel" aria-label="Filter by worker">' +
       '    <option value="all">👷 All workers</option>' +
       CATEGORIES.map(function (c) {
         return '<option value="' + c + '"' + (state.issueTrade === c ? " selected" : "") +
           ">" + TRADES[c] + "</option>";
       }).join("") +
       "  </select>" +
-      '  <div class="mnt-status-seg">' +
+      '  <div class="dc-scroller">' +
       [["open", "Open"], ["fixed", "To verify"], ["verified", "Done"], ["all", "All"]]
         .map(function (c) {
-          return '<button class="' + (state.issueFilter === c[0] ? "active" : "") +
-            '" data-filter="' + c[0] + '">' + c[1] + " " + nStatus(c[0]) + "</button>";
+          return '<button type="button" class="dc-chip' +
+            (state.issueFilter === c[0] ? " active" : "") +
+            '" data-filter="' + c[0] + '">' + c[1] + "<small>" + nStatus(c[0]) + "</small></button>";
         }).join("") +
       "  </div>" +
       (can("maintenance.inspect")
-        ? '<button class="action-btn btn-primary" id="mnt-log-issue" style="padding:0.3rem 0.7rem">＋ Log</button>'
+        ? '  <button class="dc-btn dc-btn-primary dc-btn-sm" id="mnt-log-issue" type="button">＋ Log</button>'
         : "") +
       "</div>" +
-      '<div id="mnt-log-issue-form" style="display:none"></div>';
+      '<div class="dc-logform" id="mnt-log-issue-form"></div>';
 
     var visible = all.filter(function (i) {
       if (state.issueFilter !== "all" && i.status !== state.issueFilter) return false;
@@ -645,61 +899,64 @@
     });
 
     if (!visible.length) {
-      html += '<div class="mnt-empty">Nothing here 🎉</div>';
+      html += emptyState("🎉", "Nothing here", "No issues match this filter.");
     } else {
-      html += '<div class="mnt-ilist">';
+      html += '<div class="dc-issues">';
       visible.forEach(function (iss) {
         var trade = TRADES[iss.category] ? iss.category : "general";
+        var acts = "";
+        if (iss.status === "open" && can("maintenance.issue.fix")) {
+          acts += '<button type="button" class="dc-act fix dc-qfix">✓ Mark fixed</button>';
+        }
+        if (iss.status === "fixed" && can("maintenance.issue.verify")) {
+          acts += '<button type="button" class="dc-act fix dc-qverify">✓✓ Verify</button>';
+        }
+        if ((iss.status === "fixed" || iss.status === "verified") && can("maintenance.issue.verify")) {
+          acts += '<button type="button" class="dc-act warn dc-qreopen">↩ Reopen</button>';
+        }
+        if (can("maintenance.manage")) {
+          acts += '<button type="button" class="dc-act del dc-qdel' +
+            (acts ? " dc-act-ml" : "") + '" title="Delete">🗑</button>';
+        }
+
         html +=
-          '<div class="mnt-irow" data-issue="' + esc(iss.id) + '">' +
-          '  <div class="mnt-irow-line">' +
-          '    <span class="mnt-dot sev-' + esc(iss.severity || "low") + '" title="' + esc(iss.severity) + '"></span>' +
-          '    <span class="mnt-irow-room">' + esc(iss.room) + "</span>" +
-          '    <span class="mnt-irow-label">' + esc(iss.item_label) +
-          '      <small>' + TRADES[trade] + "</small>" +
-          (iss.description
-            ? '<span class="mnt-irow-note">' + esc(iss.description) + "</span>"
-            : "") +
-          "    </span>" +
-          '    <span class="mnt-irow-status st-' + esc(iss.status) + '">' +
+          '<article class="dc-issue sev-' + esc(iss.severity || "low") + '" data-issue="' + esc(iss.id) + '">' +
+          '  <div class="dc-issue-head">' +
+          '    <span class="dc-roompill">' + esc(iss.room) + "</span>" +
+          '    <div class="dc-issue-main">' +
+          '      <div class="dc-issue-title">' + esc(iss.item_label) +
+          '        <span class="dc-issue-trade">' + TRADES[trade] + "</span>" +
+          "      </div>" +
+          (iss.description ? '<p class="dc-issue-note">' + esc(iss.description) + "</p>" : "") +
+          "    </div>" +
+          '    <span class="dc-status st-' + esc(iss.status) + '">' +
           (STATUS_LABEL[iss.status] || iss.status) + "</span>" +
-          (iss.status === "open" && can("maintenance.issue.fix")
-            ? '<button class="mnt-irow-btn fix mnt-qfix" title="Mark fixed">✓</button>'
-            : "") +
-          (iss.status === "fixed" && can("maintenance.issue.verify")
-            ? '<button class="mnt-irow-btn fix mnt-qverify" title="Verify fix">✓✓</button>'
-            : "") +
-          ((iss.status === "fixed" || iss.status === "verified") && can("maintenance.issue.verify")
-            ? '<button class="mnt-irow-btn warn mnt-qreopen" title="Reopen">↩</button>'
-            : "") +
-          (can("maintenance.manage")
-            ? '<button class="mnt-irow-btn del mnt-qdel" title="Delete">🗑</button>'
-            : "") +
           "  </div>" +
-          '  <div class="mnt-irow-who">' + whoLine(iss) + "</div>" +
-          "</div>";
+          '  <div class="dc-issue-who">' + whoLine(iss) + "</div>" +
+          (acts ? '<div class="dc-issue-acts">' + acts + "</div>" : "") +
+          "</article>";
       });
       html += "</div>";
     }
-    pane.innerHTML = html;
+    p.innerHTML = html;
 
-    document.getElementById("mnt-trade-sel").addEventListener("change", function (e) {
+    el("mnt-trade-sel").addEventListener("change", function (e) {
       state.issueTrade = e.target.value;
       renderIssues();
     });
-    pane.querySelectorAll(".mnt-status-seg button").forEach(function (btn) {
+    p.querySelectorAll("[data-filter]").forEach(function (btn) {
       btn.addEventListener("click", function () {
         state.issueFilter = btn.dataset.filter;
         renderIssues();
       });
     });
-    var logBtn = document.getElementById("mnt-log-issue");
+    var logBtn = el("mnt-log-issue");
     if (logBtn) logBtn.addEventListener("click", toggleLogIssueForm);
 
-    pane.querySelectorAll(".mnt-irow").forEach(function (row) {
+    p.querySelectorAll(".dc-issue").forEach(function (row) {
       var id = row.dataset.issue;
 
-      var qfix = row.querySelector(".mnt-qfix");
+      var qfix = row.querySelector(".dc-qfix");
       if (qfix) qfix.addEventListener("click", function () {
         qfix.disabled = true;
         post("/maintenance/issues/" + id + "/fix", { note: "", cost: null })
@@ -707,7 +964,7 @@
           .catch(function (err) { notify(err.message, "error"); qfix.disabled = false; });
       });
 
-      var qverify = row.querySelector(".mnt-qverify");
+      var qverify = row.querySelector(".dc-qverify");
       if (qverify) qverify.addEventListener("click", function () {
         qverify.disabled = true;
         post("/maintenance/issues/" + id + "/verify")
@@ -715,7 +972,7 @@
           .catch(function (err) { notify(err.message, "error"); qverify.disabled = false; });
       });
 
-      var qreopen = row.querySelector(".mnt-qreopen");
+      var qreopen = row.querySelector(".dc-qreopen");
       if (qreopen) qreopen.addEventListener("click", function () {
         qreopen.disabled = true;
         post("/maintenance/issues/" + id + "/reopen", { reason: "" })
@@ -723,19 +980,17 @@
           .catch(function (err) { notify(err.message, "error"); qreopen.disabled = false; });
       });
 
-      var qdel = row.querySelector(".mnt-qdel");
+      var qdel = row.querySelector(".dc-qdel");
       if (qdel) qdel.addEventListener("click", function () {
         if (qdel.dataset.armed !== "1") {
           qdel.dataset.armed = "1";
           qdel.classList.add("armed");
-          qdel.textContent = "?";
-          qdel.title = "Tap again to delete";
+          qdel.textContent = "Tap to confirm";
           setTimeout(function () {
             if (qdel.isConnected) {
               qdel.dataset.armed = "";
               qdel.classList.remove("armed");
               qdel.textContent = "🗑";
-              qdel.title = "Delete";
             }
           }, 3000);
           return;
@@ -753,38 +1008,36 @@
   }
 
   function toggleLogIssueForm() {
-    var box = document.getElementById("mnt-log-issue-form");
-    if (box.style.display !== "none") { box.style.display = "none"; return; }
+    var box = el("mnt-log-issue-form");
+    if (box.classList.contains("show")) { box.classList.remove("show"); return; }
     var roomOpts = roomNumbers().map(function (r) {
       return '<option value="' + esc(r) + '">' + esc(r) + "</option>";
     }).join("");
     box.innerHTML =
-      '<div class="mnt-form-grid">' +
-      '  <select class="form-control" id="mnt-new-room"><option value="">Room…</option>' + roomOpts + "</select>" +
-      '  <input type="text" class="form-control" id="mnt-new-item" maxlength="80" placeholder="What is broken? (e.g. Kettle)" />' +
-      '  <select class="form-control" id="mnt-new-sev">' +
+      '<select class="form-control" id="mnt-new-room" aria-label="Room"><option value="">Room…</option>' + roomOpts + "</select>" +
+      '<input type="text" class="form-control" id="mnt-new-item" maxlength="80" placeholder="What is broken? (e.g. Kettle)" />' +
+      '<select class="form-control" id="mnt-new-sev" aria-label="Severity">' +
       SEVERITIES.map(function (s) {
-        return '<option value="' + s + '"' + (s === "medium" ? " selected" : "") + ">" + s + "</option>";
+        return '<option value="' + s + '"' + (s === "medium" ? " selected" : "") + ">" + SEV_LABEL[s] + "</option>";
       }).join("") +
-      "  </select>" +
-      '  <select class="form-control" id="mnt-new-cat">' +
+      "</select>" +
+      '<select class="form-control" id="mnt-new-cat" aria-label="Worker">' +
       CATEGORIES.map(function (c) {
         return '<option value="' + c + '">' + (TRADES[c] || c) + "</option>";
       }).join("") +
-      "  </select>" +
-      '  <input type="text" class="form-control" id="mnt-new-desc" maxlength="300" placeholder="Details (optional)" style="flex:2" />' +
-      '  <button class="action-btn btn-primary" id="mnt-new-save">Log</button>' +
-      "</div>";
-    box.style.display = "block";
-    document.getElementById("mnt-new-save").addEventListener("click", function () {
-      var room = document.getElementById("mnt-new-room").value;
+      "</select>" +
+      '<input type="text" class="form-control wide" id="mnt-new-desc" maxlength="300" placeholder="Details (optional)" />' +
+      '<button class="dc-btn dc-btn-primary dc-btn-block wide" id="mnt-new-save" type="button">Log issue</button>';
+    box.classList.add("show");
+    el("mnt-new-save").addEventListener("click", function () {
+      var room = el("mnt-new-room").value;
       if (!room) { notify("Pick a room", "error"); return; }
       post("/maintenance/issues", {
         room: room,
-        item_label: document.getElementById("mnt-new-item").value,
-        severity: document.getElementById("mnt-new-sev").value,
-        category: document.getElementById("mnt-new-cat").value,
-        description: document.getElementById("mnt-new-desc").value,
+        item_label: el("mnt-new-item").value,
+        severity: el("mnt-new-sev").value,
+        category: el("mnt-new-cat").value,
+        description: el("mnt-new-desc").value,
       })
         .then(function (json) {
           state.issues.unshift(json.issue);   // in-place, no refetch
@@ -794,56 +1047,58 @@
     });
   }
 
-
   // ── analytics ───────────────────────────────────────────────────────────
 
   function loadAnalytics() {
-    var pane = document.getElementById("mnt-pane-analytics");
+    var p = pane("analytics");
     if (state.analytics) renderAnalytics();
-    else pane.innerHTML = '<div class="mnt-empty">Crunching…</div>';
+    else p.innerHTML = skeleton(2, true);
     api("/maintenance/analytics")
       .then(function (json) { state.analytics = json.analytics; renderAnalytics(); })
       .catch(function (e) {
         if (state.analytics) notify(e.message, "error");
-        else pane.innerHTML = '<div class="mnt-empty">' + esc(e.message) + "</div>";
+        else p.innerHTML = emptyState("⚠️", "Couldn't load analytics", e.message);
       });
   }
 
   function bars(rows, getLabel, getCount) {
     var max = rows.reduce(function (m, r) { return Math.max(m, getCount(r)); }, 0) || 1;
-    return rows.map(function (r) {
+    return '<div class="dc-bars">' + rows.map(function (r) {
       var c = getCount(r);
       return (
-        '<div class="mnt-bar-row">' +
-        '  <span class="mnt-bar-label" title="' + esc(getLabel(r)) + '">' + esc(getLabel(r)) + "</span>" +
-        '  <span class="mnt-bar-track"><span class="mnt-bar-fill" style="width:' +
+        '<div class="dc-bar">' +
+        '  <span class="dc-bar-label" title="' + esc(getLabel(r)) + '">' + esc(getLabel(r)) + "</span>" +
+        '  <span class="dc-bar-track"><span class="dc-bar-fill" style="width:' +
         Math.round((100 * c) / max) + '%"></span></span>' +
-        '  <span class="mnt-bar-count">' + c + "</span>" +
+        '  <span class="dc-bar-count">' + c + "</span>" +
         "</div>"
       );
-    }).join("");
+    }).join("") + "</div>";
   }
 
   function renderAnalytics() {
     var a = state.analytics;
-    var pane = document.getElementById("mnt-pane-analytics");
-    if (!a) { pane.innerHTML = '<div class="mnt-empty">No data</div>'; return; }
+    var p = pane("analytics");
+    if (!a) { p.innerHTML = emptyState("📊", "No data yet", ""); return; }
+
+    setSubtitle("All-time maintenance analytics");
 
     var html =
-      '<div class="mnt-cards">' +
-      '  <div class="mnt-card ' + (a.counts.open ? "warn" : "good") + '"><div class="mnt-card-num">' + a.counts.open + '</div><div class="mnt-card-lbl">Open</div></div>' +
-      '  <div class="mnt-card"><div class="mnt-card-num">' + a.counts.fixed + '</div><div class="mnt-card-lbl">Awaiting verify</div></div>' +
-      '  <div class="mnt-card good"><div class="mnt-card-num">' + a.counts.verified + '</div><div class="mnt-card-lbl">Verified</div></div>' +
-      '  <div class="mnt-card"><div class="mnt-card-num">' + (a.avg_fix_hours != null ? a.avg_fix_hours + "h" : "—") + '</div><div class="mnt-card-lbl">Avg fix time</div></div>' +
-      '  <div class="mnt-card"><div class="mnt-card-num">₹' + (a.total_cost || 0) + '</div><div class="mnt-card-lbl">Repair spend</div></div>' +
-      '  <div class="mnt-card"><div class="mnt-card-num">' + a.total_inspections + '</div><div class="mnt-card-lbl">Inspections</div></div>' +
+      '<div class="dc-kpis dc-kpis-6">' +
+      '  <div class="dc-kpi ' + (a.counts.open ? "warn" : "good") + '"><div class="dc-kpi-num">' + a.counts.open + '</div><div class="dc-kpi-lbl">Open</div></div>' +
+      '  <div class="dc-kpi"><div class="dc-kpi-num">' + a.counts.fixed + '</div><div class="dc-kpi-lbl">To verify</div></div>' +
+      '  <div class="dc-kpi good"><div class="dc-kpi-num">' + a.counts.verified + '</div><div class="dc-kpi-lbl">Verified</div></div>' +
+      '  <div class="dc-kpi"><div class="dc-kpi-num">' + (a.avg_fix_hours != null ? a.avg_fix_hours + "h" : "—") + '</div><div class="dc-kpi-lbl">Avg fix time</div></div>' +
+      '  <div class="dc-kpi"><div class="dc-kpi-num">₹' +
+      Number(a.total_cost || 0).toLocaleString("en-IN") + '</div><div class="dc-kpi-lbl">Repair spend</div></div>' +
+      '  <div class="dc-kpi"><div class="dc-kpi-num">' + a.total_inspections + '</div><div class="dc-kpi-lbl">Inspections</div></div>' +
       "</div>";
 
     var problemRooms = a.rooms
       .filter(function (r) { return r.total_issues > 0; })
       .sort(function (x, y) { return y.total_issues - x.total_issues; })
       .slice(0, 10);
-    html += '<div class="mnt-section-title">Rooms with most issues</div>';
+    html += '<div class="dc-section"><h3>Rooms with most issues</h3><span>top 10</span></div>';
     html += problemRooms.length
       ? bars(problemRooms,
           function (r) {
@@ -851,38 +1106,39 @@
               (r.last_score != null ? " · " + r.last_score + "%" : "");
           },
           function (r) { return r.total_issues; })
-      : '<div class="mnt-empty">No issues recorded yet</div>';
+      : emptyState("✅", "No issues recorded yet", "");
 
-    html += '<div class="mnt-section-title">Most-failing items</div>';
+    html += '<div class="dc-section"><h3>Most-failing items</h3></div>';
     html += (a.top_failing_items || []).length
       ? bars(a.top_failing_items,
           function (r) { return r.label; },
           function (r) { return r.count; })
-      : '<div class="mnt-empty">No failures recorded yet</div>';
+      : emptyState("✅", "No failures recorded yet", "");
 
     var cats = Object.keys(a.category_breakdown || {}).map(function (k) {
       return { label: CAT_LABELS[k] || k, count: a.category_breakdown[k] };
     }).sort(function (x, y) { return y.count - x.count; });
-    html += '<div class="mnt-section-title">Failures by category</div>';
+    html += '<div class="dc-section"><h3>Failures by category</h3></div>';
     html += cats.length
       ? bars(cats, function (r) { return r.label; }, function (r) { return r.count; })
-      : '<div class="mnt-empty">Nothing yet</div>';
+      : emptyState("✅", "Nothing yet", "");
 
-    pane.innerHTML = html;
+    p.innerHTML = html;
   }
 
   // ── checklist editor (admin) ────────────────────────────────────────────
 
   function renderChecklistEditor() {
-    var pane = document.getElementById("mnt-pane-checklist");
-    pane.innerHTML = '<div class="mnt-empty">Loading…</div>';
+    var p = pane("checklist");
+    p.innerHTML = skeleton(4);
+    setSubtitle("Checklist template");
     api("/maintenance/checklist?all=1")
       .then(function (json) {
         state.categories = json.categories || state.categories;
         drawEditor(json.items || []);
       })
       .catch(function (e) {
-        pane.innerHTML = '<div class="mnt-empty">' + esc(e.message) + "</div>";
+        p.innerHTML = emptyState("⚠️", "Couldn't load the checklist", e.message);
       });
 
     function scopeSummary(cats) {
@@ -892,51 +1148,58 @@
 
     function drawEditor(items) {
       var html =
-        '<div class="mnt-section-title">Checklist template — items appear in this order during inspection (use ▲▼ to move)</div>';
+        '<div class="dc-section" style="margin-top:0.25rem"><h3>Checklist template</h3>' +
+        "<span>items appear in this order during inspection — drag ⠿ to reorder</span></div>";
       if (!items.length) {
-        html += '<div class="mnt-empty">No checklist items yet — tap ＋ Add item to create your first one.</div>';
+        html += emptyState("📋", "No checklist items yet",
+          "Tap “Add item” below to create your first one.");
       }
+      html += '<div class="dc-tpl">';
       items.forEach(function (it, i) {
         var cats = it.room_categories || ["all"];
         html +=
-          '<div class="mnt-tpl-row' + (it.active ? "" : " inactive") + '" data-idx="' + i +
+          '<div class="dc-tpl-row' + (it.active ? "" : " inactive") + '" data-idx="' + i +
           '" data-cats="' + esc(JSON.stringify(cats)) + '">' +
-          '  <span class="mnt-tpl-btn mnt-tpl-drag" title="Drag to reorder">⠿</span>' +
-          '  <input type="text" class="form-control mnt-tpl-icon" value="' + esc(it.icon || "") + '" title="Icon" />' +
-          '  <input type="text" class="form-control mnt-tpl-label" maxlength="80" value="' + esc(it.label) + '" />' +
-          '  <select class="form-control mnt-tpl-cat">' +
+          '  <button type="button" class="dc-tpl-drag" title="Drag to reorder" aria-label="Reorder">⠿</button>' +
+          '  <input type="text" class="form-control dc-tpl-icon" value="' + esc(it.icon || "") + '" title="Icon" aria-label="Icon" />' +
+          '  <input type="text" class="form-control dc-tpl-label" maxlength="80" value="' + esc(it.label) + '" placeholder="Item name" aria-label="Item name" />' +
+          '  <div class="dc-tpl-meta">' +
+          '    <select class="form-control dc-tpl-cat" aria-label="Worker">' +
           CATEGORIES.map(function (c) {
-            return '<option value="' + c + '"' + (it.category === c ? " selected" : "") + ">" + c + "</option>";
+            return '<option value="' + c + '"' + (it.category === c ? " selected" : "") + ">" + (TRADES[c] || c) + "</option>";
           }).join("") +
-          "  </select>" +
-          '  <button class="mnt-tpl-btn mnt-tpl-scope" title="Which room categories this applies to">' +
+          "    </select>" +
+          '    <button type="button" class="dc-tplbtn dc-tpl-scope" title="Which room categories this applies to">' +
           scopeSummary(cats) + "</button>" +
-          '  <button class="mnt-tpl-btn mnt-tpl-toggle" title="Enable/disable">' + (it.active ? "🟢" : "⚪") + "</button>" +
-          '  <button class="mnt-tpl-btn mnt-tpl-del" title="Remove">🗑</button>' +
-          '  <div class="mnt-tpl-cats" style="display:none">' +
-          '    <span class="mnt-chip mnt-cat-chip' + (cats.indexOf("all") !== -1 ? " active" : "") +
+          '    <button type="button" class="dc-tplbtn dc-tpl-toggle" title="Enable/disable">' +
+          (it.active ? "🟢 On" : "⚪ Off") + "</button>" +
+          '    <button type="button" class="dc-tplbtn dc-tpl-del" title="Remove">🗑</button>' +
+          "  </div>" +
+          '  <div class="dc-tpl-cats">' +
+          '    <span class="dc-chip dc-cat-chip' + (cats.indexOf("all") !== -1 ? " active" : "") +
           '" data-cat="all">All rooms</span>' +
           state.categories.map(function (c) {
-            return '<span class="mnt-chip mnt-cat-chip' +
+            return '<span class="dc-chip dc-cat-chip' +
               (cats.indexOf(c) !== -1 ? " active" : "") + '" data-cat="' + esc(c) + '">' +
               esc(c) + "</span>";
           }).join("") +
           "  </div>" +
           "</div>";
       });
+      html += "</div>";
       html +=
-        '<div class="mnt-tpl-actions">' +
-        '  <button class="action-btn btn-secondary" id="mnt-tpl-add">＋ Add item</button>' +
+        '<div class="dc-actionbar">' +
+        '  <button class="dc-btn dc-btn-ghost" id="mnt-tpl-add" type="button">＋ Add item</button>' +
         (items.length
-          ? '<button class="action-btn btn-secondary" id="mnt-tpl-clear">Clear all</button>'
+          ? '  <button class="dc-btn dc-btn-ghost" id="mnt-tpl-clear" type="button">Clear all</button>'
           : "") +
-        '  <button class="action-btn btn-primary" id="mnt-tpl-save">Save Checklist</button>' +
+        '  <button class="dc-btn dc-btn-primary wide" id="mnt-tpl-save" type="button">Save checklist</button>' +
         "</div>";
-      pane.innerHTML = html;
+      p.innerHTML = html;
 
       function collect() {
         return Array.prototype.map.call(
-          pane.querySelectorAll(".mnt-tpl-row"),
+          p.querySelectorAll(".dc-tpl-row"),
           function (row, i) {
             var src = items[Number(row.dataset.idx)] || {};
             var cats;
@@ -944,9 +1207,9 @@
             catch (_) { cats = ["all"]; }
             return {
               id: src.id,
-              icon: row.querySelector(".mnt-tpl-icon").value,
-              label: row.querySelector(".mnt-tpl-label").value,
-              category: row.querySelector(".mnt-tpl-cat").value,
+              icon: row.querySelector(".dc-tpl-icon").value,
+              label: row.querySelector(".dc-tpl-label").value,
+              category: row.querySelector(".dc-tpl-cat").value,
               active: !row.classList.contains("inactive"),
               order: i,
               room_categories: cats,
@@ -955,13 +1218,13 @@
         );
       }
 
-      pane.querySelectorAll(".mnt-tpl-row").forEach(function (row) {
-        var scopeBtn = row.querySelector(".mnt-tpl-scope");
-        var chipBox = row.querySelector(".mnt-tpl-cats");
+      p.querySelectorAll(".dc-tpl-row").forEach(function (row) {
+        var scopeBtn = row.querySelector(".dc-tpl-scope");
+        var chipBox = row.querySelector(".dc-tpl-cats");
         scopeBtn.addEventListener("click", function () {
-          chipBox.style.display = chipBox.style.display === "none" ? "flex" : "none";
+          chipBox.classList.toggle("show");
         });
-        chipBox.querySelectorAll(".mnt-cat-chip").forEach(function (chip) {
+        chipBox.querySelectorAll(".dc-cat-chip").forEach(function (chip) {
           chip.addEventListener("click", function () {
             var cats;
             try { cats = JSON.parse(row.dataset.cats || '["all"]'); }
@@ -976,21 +1239,21 @@
               if (!cats.length) cats = ["all"];
             }
             row.dataset.cats = JSON.stringify(cats);
-            chipBox.querySelectorAll(".mnt-cat-chip").forEach(function (ch) {
+            chipBox.querySelectorAll(".dc-cat-chip").forEach(function (ch) {
               ch.classList.toggle("active", cats.indexOf(ch.dataset.cat) !== -1);
             });
             scopeBtn.innerHTML = scopeSummary(cats);
           });
         });
-        row.querySelector(".mnt-tpl-toggle").addEventListener("click", function () {
+        row.querySelector(".dc-tpl-toggle").addEventListener("click", function () {
           items = collect();
-          items[Array.prototype.indexOf.call(pane.querySelectorAll(".mnt-tpl-row"), row)].active =
+          items[Array.prototype.indexOf.call(p.querySelectorAll(".dc-tpl-row"), row)].active =
             row.classList.contains("inactive"); // flipping
           drawEditor(items);
         });
-        row.querySelector(".mnt-tpl-del").addEventListener("click", function () {
+        row.querySelector(".dc-tpl-del").addEventListener("click", function () {
           items = collect();
-          items.splice(Array.prototype.indexOf.call(pane.querySelectorAll(".mnt-tpl-row"), row), 1);
+          items.splice(Array.prototype.indexOf.call(p.querySelectorAll(".dc-tpl-row"), row), 1);
           drawEditor(items);
         });
       });
@@ -1009,8 +1272,8 @@
         items = collect();
         drawEditor(items);
       }
-      pane.querySelectorAll(".mnt-tpl-row").forEach(function (row) {
-        var handle = row.querySelector(".mnt-tpl-drag");
+      p.querySelectorAll(".dc-tpl-row").forEach(function (row) {
+        var handle = row.querySelector(".dc-tpl-drag");
 
         handle.addEventListener("mousedown", function () { row.draggable = true; });
         row.addEventListener("dragstart", function (e) {
@@ -1038,8 +1301,8 @@
           if (!dragRow) return;
           e.preventDefault();
           var t = e.touches[0];
-          var el = document.elementFromPoint(t.clientX, t.clientY);
-          var target = el && el.closest ? el.closest(".mnt-tpl-row") : null;
+          var elem = document.elementFromPoint(t.clientX, t.clientY);
+          var target = elem && elem.closest ? elem.closest(".dc-tpl-row") : null;
           if (!target || target === dragRow) return;
           var rect = target.getBoundingClientRect();
           var after = t.clientY > rect.top + rect.height / 2;
@@ -1048,7 +1311,7 @@
         handle.addEventListener("touchend", settleDrag);
       });
 
-      var clearBtn = document.getElementById("mnt-tpl-clear");
+      var clearBtn = el("mnt-tpl-clear");
       if (clearBtn) clearBtn.addEventListener("click", function () {
         if (clearBtn.dataset.armed !== "1") {
           clearBtn.dataset.armed = "1";
@@ -1061,15 +1324,15 @@
           }, 3000);
           return;
         }
-        drawEditor([]);   // still needs Save Checklist to persist
+        drawEditor([]);   // still needs Save checklist to persist
       });
-      document.getElementById("mnt-tpl-add").addEventListener("click", function () {
+      el("mnt-tpl-add").addEventListener("click", function () {
         items = collect();
         items.push({ id: null, icon: "", label: "", category: "general",
                      active: true, room_categories: ["all"] });
         drawEditor(items);
       });
-      document.getElementById("mnt-tpl-save").addEventListener("click", function () {
+      el("mnt-tpl-save").addEventListener("click", function () {
         var payload = collect().filter(function (it) { return it.label.trim(); });
         post("/maintenance/checklist", { items: payload })   // empty list allowed
           .then(function () { notify("Checklist saved", "success"); renderChecklistEditor(); })
@@ -1081,9 +1344,9 @@
   // ── history (rounds → per-room inspectors → inspection record) ─────────
 
   function loadHistory() {
-    var pane = document.getElementById("mnt-pane-history");
+    var p = pane("history");
     if (state._rounds) renderHistory(state._rounds);
-    else pane.innerHTML = '<div class="mnt-empty">Loading…</div>';
+    else p.innerHTML = skeleton(3);
     api("/maintenance/rounds")
       .then(function (json) {
         state._rounds = json.rounds || [];
@@ -1091,37 +1354,44 @@
       })
       .catch(function (e) {
         if (state._rounds) notify(e.message, "error");
-        else pane.innerHTML = '<div class="mnt-empty">' + esc(e.message) + "</div>";
+        else p.innerHTML = emptyState("⚠️", "Couldn't load history", e.message);
       });
   }
 
   function renderHistory(rounds) {
-    var pane = document.getElementById("mnt-pane-history");
+    var p = pane("history");
+    setSubtitle(rounds.length + " inspection round" + (rounds.length === 1 ? "" : "s"));
     if (!rounds.length) {
-      pane.innerHTML = '<div class="mnt-empty">No inspection rounds yet</div>';
+      p.innerHTML = emptyState("🗂️", "No inspection rounds yet",
+        "Rounds you close will be archived here.");
       return;
     }
-    var html = '<div class="mnt-section-title">Inspection rounds</div>';
+    var html = '<div class="dc-section" style="margin-top:0.25rem"><h3>Inspection rounds</h3>' +
+      "<span>tap for the per-room record</span></div>";
+    html += '<div class="dc-rounds">';
     rounds.forEach(function (r) {
       html +=
-        '<div class="mnt-issue-card mnt-round-card" data-round="' + esc(r.id) + '">' +
-        '  <div class="mnt-issue-head">' +
-        '    <span class="mnt-issue-title">' + esc(r.name) + "</span>" +
-        '    <span class="mnt-badge ' + (r.status === "open" ? "st-fixed" : "st-verified") + '">' +
+        '<div class="dc-round" data-round="' + esc(r.id) + '">' +
+        '  <div class="dc-round-main">' +
+        '    <div class="dc-round-name">' + esc(r.name) +
+        '      <span class="dc-pill ' + (r.status === "open" ? "warnp" : "ok") + '">' +
         (r.status === "open" ? "in progress" : "closed") + "</span>" +
-        "  </div>" +
-        '  <div class="mnt-issue-meta">' +
+        "    </div>" +
+        '    <div class="dc-round-meta">' +
         "Started " + fmtDate(r.created_at) + " by " + esc((r.created_by || {}).name || "?") +
         (r.status === "closed"
           ? " · Ended " + fmtDate(r.closed_at) + " by " + esc((r.closed_by || {}).name || "?")
           : "") +
-        " · " + r.rooms_inspected + "/" + r.rooms_total + " rooms · " +
+        "<br>" + r.rooms_inspected + "/" + r.rooms_total + " rooms · " +
         r.issues_found + " issue(s) found" +
+        "    </div>" +
         "  </div>" +
+        '  <span class="dc-round-chev"><i class="fas fa-chevron-right"></i></span>' +
         "</div>";
     });
-    pane.innerHTML = html;
-    pane.querySelectorAll(".mnt-round-card").forEach(function (card) {
+    html += "</div>";
+    p.innerHTML = html;
+    p.querySelectorAll(".dc-round").forEach(function (card) {
       card.addEventListener("click", function () {
         for (var i = 0; i < rounds.length; i++) {
           if (rounds[i].id === card.dataset.round) { renderRoundDetail(rounds[i]); return; }
@@ -1131,106 +1401,113 @@
   }
 
   function renderRoundDetail(rnd) {
-    var pane = document.getElementById("mnt-pane-history");
-    pane.innerHTML = '<div class="mnt-empty">Loading…</div>';
+    var p = pane("history");
+    p.innerHTML = skeleton(4);
     api("/maintenance/rounds/" + rnd.id + "/status")
       .then(function (json) {
         var rooms = (json.rooms || []).filter(function (r) { return r.inspected; });
         var html =
-          '<div class="mnt-round-box">' +
-          '  <button class="action-btn btn-secondary" id="mnt-hist-back">← Back</button>' +
-          '  <span class="mnt-round-name">' + esc(rnd.name) + "</span>" +
-          '  <span style="font-size:0.78rem;color:#4a5568">' +
-          fmtDate(rnd.created_at) + " → " +
-          (rnd.status === "closed" ? fmtDate(rnd.closed_at) : "ongoing") +
-          "  </span>" +
+          '<div class="dc-subhead">' +
+          '  <button class="dc-iconbtn" id="mnt-hist-back" type="button" aria-label="Back"><i class="fas fa-arrow-left"></i></button>' +
+          '  <div class="dc-subhead-txt">' +
+          '    <div class="dc-subhead-title">' + esc(rnd.name) + "</div>" +
+          '    <div class="dc-subhead-sub">' + fmtDate(rnd.created_at) + " → " +
+          (rnd.status === "closed" ? fmtDate(rnd.closed_at) : "ongoing") + "</div>" +
+          "  </div>" +
           "</div>";
         if (!rooms.length) {
-          html += '<div class="mnt-empty">No rooms were inspected in this round</div>';
+          html += emptyState("🚪", "No rooms were inspected in this round", "");
         } else {
-          html += '<div class="mnt-section-title">Inspected rooms — tap for the full record</div>';
+          html += '<div class="dc-section" style="margin-top:0.25rem"><h3>Inspected rooms</h3>' +
+            "<span>tap for the full record</span></div>";
+          html += '<div class="dc-rows">';
           rooms.forEach(function (r) {
             html +=
-              '<div class="mnt-hist-row" data-room="' + esc(r.room) + '">' +
+              '<div class="dc-row" data-room="' + esc(r.room) + '">' +
               "  <b>Room " + esc(r.room) + "</b>" +
-              '  <span class="mnt-badge sev">' + (r.score != null ? r.score + "%" : "—") + "</span>" +
+              '  <span class="dc-pill ' + (r.issue_count ? "warnp" : "ok") + '">' +
+              (r.score != null ? r.score + "%" : "—") + "</span>" +
               "  <span>" + r.issue_count + " issue(s)</span>" +
-              '  <span class="mnt-hist-by">' + esc(r.inspected_by || "?") +
+              '  <span class="dc-row-by">' + esc(r.inspected_by || "?") +
               " · " + fmtWhen(r.inspected_at) + "</span>" +
               "</div>";
           });
+          html += "</div>";
         }
-        pane.innerHTML = html;
-        document.getElementById("mnt-hist-back").addEventListener("click", loadHistory);
-        pane.querySelectorAll(".mnt-hist-row").forEach(function (row) {
+        p.innerHTML = html;
+        el("mnt-hist-back").addEventListener("click", loadHistory);
+        p.querySelectorAll(".dc-row").forEach(function (row) {
           row.addEventListener("click", function () {
-            renderInspectionView(rnd, row.dataset.room, pane, function () {
+            renderInspectionView(rnd, row.dataset.room, p, function () {
               renderRoundDetail(rnd);
             });
           });
         });
       })
       .catch(function (e) {
-        pane.innerHTML = '<div class="mnt-empty">' + esc(e.message) + "</div>";
+        p.innerHTML = emptyState("⚠️", "Couldn't load this round", e.message);
       });
   }
 
   // Read-only inspection record: who, when, item-by-item results.
   // Used from History and from the dashboard grid (inspected rooms).
-  function renderInspectionView(rnd, room, pane, onBack) {
-    pane.innerHTML = '<div class="mnt-empty">Loading…</div>';
+  function renderInspectionView(rnd, room, target, onBack) {
+    target.innerHTML = skeleton(4);
     api("/maintenance/inspections/" + rnd.id + "/" + encodeURIComponent(room))
       .then(function (json) {
         var ins = json.inspection;
         if (!ins) {
-          pane.innerHTML = '<div class="mnt-empty">No inspection record found</div>';
+          target.innerHTML = emptyState("🔍", "No inspection record found", "");
           return;
         }
         var canRe = rnd.status === "open" && state.openRound &&
           state.openRound.id === rnd.id && can("maintenance.inspect");
         var html =
-          '<div class="mnt-round-box">' +
-          '  <button class="action-btn btn-secondary" id="mnt-view-back">← Back</button>' +
-          '  <span class="mnt-round-name">Room ' + esc(room) +
-          (ins.score != null ? ' — ' + ins.score + "%" : "") + "</span>" +
+          '<div class="dc-subhead">' +
+          '  <button class="dc-iconbtn" id="mnt-view-back" type="button" aria-label="Back"><i class="fas fa-arrow-left"></i></button>' +
+          '  <div class="dc-subhead-txt">' +
+          '    <div class="dc-subhead-title">Room ' + esc(room) +
+          (ins.score != null ? " — " + ins.score + "%" : "") + "</div>" +
+          '    <div class="dc-subhead-sub">' +
+          esc((ins.inspected_by || {}).name || "?") + " · " + fmtWhen(ins.inspected_at) +
+          " · " + (ins.ok_count || 0) + " OK / " + (ins.issue_count || 0) + " problem(s)</div>" +
+          "  </div>" +
           (canRe
-            ? '<button class="action-btn btn-primary" id="mnt-view-reinspect">Re-inspect</button>'
+            ? '  <button class="dc-btn dc-btn-primary dc-btn-sm" id="mnt-view-reinspect" type="button">Re-inspect</button>'
             : "") +
           "</div>" +
-          '<div class="mnt-issue-meta" style="margin:0.5rem 0 0.25rem">Inspected by <b>' +
-          esc((ins.inspected_by || {}).name || "?") + "</b> · " +
-          fmtWhen(ins.inspected_at) + " · " + (ins.ok_count || 0) + " OK / " +
-          (ins.issue_count || 0) + " problem(s)</div>";
+          '<div class="dc-record">';
         (ins.items || []).forEach(function (it) {
           html +=
-            '<div class="mnt-check-row">' +
-            '  <span class="mnt-check-label">' + esc(it.label) + "</span>" +
+            '<div class="dc-record-row">' +
+            '  <span class="dc-record-label">' + esc(it.label) + "</span>" +
             (it.status === "ok"
-              ? '<span class="mnt-badge st-verified">OK</span>'
-              : '<span class="mnt-badge st-open">' + esc(it.severity || "issue") + "</span>" +
-                (it.note
-                  ? '<span style="font-size:0.8rem;color:#718096">' + esc(it.note) + "</span>"
-                  : "")) +
+              ? '<span class="dc-pill ok">OK</span>'
+              : '<span class="dc-pill bad">' + esc(SEV_LABEL[it.severity] || it.severity || "issue") + "</span>" +
+                (it.note ? '<span class="dc-record-note">' + esc(it.note) + "</span>" : "")) +
             "</div>";
         });
-        pane.innerHTML = html;
-        document.getElementById("mnt-view-back").addEventListener("click", onBack);
-        var re = document.getElementById("mnt-view-reinspect");
+        html += "</div>";
+        target.innerHTML = html;
+        el("mnt-view-back").addEventListener("click", onBack);
+        var re = el("mnt-view-reinspect");
         if (re) re.addEventListener("click", function () { openInspectForm(room); });
       })
       .catch(function (e) {
-        pane.innerHTML = '<div class="mnt-empty">' + esc(e.message) + "</div>";
+        target.innerHTML = emptyState("⚠️", "Couldn't load the record", e.message);
       });
   }
 
   // ── bootstrap ───────────────────────────────────────────────────────────
 
   function bind() {
-    var btn = document.getElementById("quick-maintenance-btn");
+    var btn = el("quick-maintenance-btn");
     if (btn) {
       btn.addEventListener("click", function () {
         var menu = document.querySelector(".quick-action-menu");
         if (menu) menu.classList.remove("show");
+        var dd = el("rooms-filter-more-dropdown");
+        if (dd) dd.classList.remove("show");
         openModal();
       });
     }

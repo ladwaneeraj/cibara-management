@@ -564,70 +564,112 @@ function closeNotification(notification) {
 // Function to render room cards
 
 // ── Vacant-card accountability ────────────────────────────────────────────
-// Who cleaned this room and who signed it off, on the card face rather than
-// behind the history popover: on a vacant room, "is this ready and who says
-// so" is asked while scanning the grid, not while tapping a room.
+// Who cleaned this room and who signed it off, for the CURRENT prep cycle
+// only, as two quiet initials in the card's top corners: left is the cleaner,
+// right (teal) is the inspector. A step nobody marked in this cycle shows
+// nothing at all, so an unprepped room reads as empty rather than as broken.
 //
-// It replaces the footer's "Available", which repeated the "Vacant" line
-// directly above it, so the card carries this without getting taller.
+// Source is the room's `stay_timeline`, NOT the flat cleanedBy / inspectedBy
+// fields. Those two hold only the most recent value of each action and the
+// room document outlives the cycle, so a room whose last release predates the
+// clearing logic still carries a cleaner from weeks earlier — and because
+// /mark_room_ready_for_checkin stamps an inspector even when the cleaning step
+// was skipped, the two halves could come from different cycles entirely. The
+// card then read as though the room had been prepped when only half of it had.
 //
-// Names are resolved in two passes. CibaraUsers.nameOf() reads a directory
-// that loads asynchronously and returns the raw userId when the entry is not
-// there yet, so a first paint that beats /api/user-directory would print
-// "lankesh" instead of "Lankesh K P" and never correct itself. The id is kept
-// on the element and resolveVacantNames() rewrites the labels once the
-// directory resolves.
+// stay_timeline is emptied at checkout and at transfer (services/stay_timeline.py)
+// and only appended to afterwards, so whatever prep records it holds belong to
+// the cycle in progress and to nothing before it.
+//
+// Names come from the event's own `byName`, captured when the action happened.
+// That renders in one pass — no users-directory lookup, and no second pass to
+// correct a raw userId that beat the directory to the screen.
+const RM_CLEAN_ACTION   = "room.cleaning.complete";
+const RM_INSPECT_ACTION = "room.inspection.approve";
+
+function _rmEsc(v) {
+  return String(v == null ? "" : v)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+// Latest record for one action in the current cycle. The array is
+// append-ordered, but a retried write can leave two records for the same
+// action, so pick by timestamp rather than trusting position.
+function _rmPrepEvent(info, action) {
+  const timeline = Array.isArray((info || {}).stay_timeline) ? info.stay_timeline : [];
+  let best = null;
+  timeline.forEach(function (e) {
+    if (!e || e.action !== action) return;
+    if (!best || String(e.at || "") > String(best.at || "")) best = e;
+  });
+  return best;
+}
+
+// One character, in caps. Two staff sharing a first initial therefore share
+// a mark — Neeraj and Nikhil both read "N". That is a deliberate trade: the
+// card is a scanning aid, and a ~90px card holding a room number between two
+// corners cannot carry more without crowding it. The disambiguation lives one
+// long-press away, on the room details view, which spells out the full name
+// and the timestamp (see vacantPrepRows) and is the only route to them on a
+// phone, where there is no hover.
+function _rmInitials(name) {
+  const first = String(name || "").trim().charAt(0);
+  return first ? first.toUpperCase() : "?";
+}
+
+function _rmName(ev) {
+  return String((ev && (ev.byName || ev.by)) || "").trim();
+}
+
 function vacantAccountability(info) {
   info = info || {};
 
-  // Left corner is always the cleaner, right corner always the inspector, on
-  // every card. Fixed sides are what make this readable at grid scale: the
-  // eye learns one position rather than re-reading an icon on each card.
-  function initial(side, verb, userId, at, tone) {
-    if (!userId) {
-      // A gap has to look like a gap. An empty dashed ring says "nobody has
-      // done this yet", which is a different statement from a filled ring,
-      // and it is the honest answer for a room that reached vacant without
-      // the step being recorded — /mark_room_ready_for_checkin can stamp an
-      // inspector with no cleaner, so this pair is genuinely independent.
-      return '<span class="rm-init rm-init--' + side + ' is-missing"' +
-             ' title="' + verb + ': not recorded"></span>';
-    }
-    return '<span class="rm-init rm-init--' + side + ' ' + tone + '"' +
-             ' data-user="' + String(userId).replace(/"/g, "&quot;") + '"' +
-             ' data-verb="' + verb + '"' +
-             ' data-at="' + (at ? String(at).slice(0, 10) : "") + '"></span>';
+  // Fixed sides are what make this readable at grid scale: the eye learns one
+  // position rather than re-reading an icon on each card.
+  function mark(side, verb, ev) {
+    if (!ev) return "";               // not done in this cycle → show nothing
+    const name = _rmName(ev) || "\u2014";
+    const when = ev.at ? String(ev.at).slice(0, 10) : "";
+    return '<span class="rm-init rm-init--' + side + '" title="' +
+           _rmEsc(verb + ": " + name + (when ? " \u00b7 " + when : "")) + '">' +
+           _rmEsc(_rmInitials(name)) + "</span>";
   }
 
   return (
-    initial("l", "Cleaned by",   info.cleanedBy,   info.cleanedAt,   "") +
-    initial("r", "Inspected by", info.inspectedBy, info.inspectedAt, "is-ok")
+    mark("l", "Cleaned by",   _rmPrepEvent(info, RM_CLEAN_ACTION)) +
+    mark("r", "Inspected by", _rmPrepEvent(info, RM_INSPECT_ACTION))
   );
 }
 
-// Fill in (or correct) every corner initial from the user directory. Safe to
-// call repeatedly and safe to call before the directory has loaded — it waits.
-function resolveVacantNames(root) {
-  const scope = root || document;
-  function paint() {
-    scope.querySelectorAll(".rm-init[data-user]").forEach(function (el) {
-      const id    = el.getAttribute("data-user");
-      const verb  = el.getAttribute("data-verb") || "";
-      const at    = el.getAttribute("data-at") || "";
-      const name = (window.CibaraUsers && window.CibaraUsers.nameOf)
-        ? window.CibaraUsers.nameOf(id)
-        : id;
-      // One character. Even a first name did not survive a ~100px card once
-      // two of them stacked; the full name and the date live in the tooltip,
-      // which is where anyone actually checking attribution will look.
-      el.textContent = String(name).trim().charAt(0).toUpperCase();
-      el.title = verb + ": " + name + (at ? " \u00b7 " + at : "");
+// Full prep attribution for the room-details view. The card can only afford
+// two characters per person; this is where the whole name and the timestamp
+// live, and it is the only route to them on a phone, where there is no hover.
+function vacantPrepRows(info) {
+  function fmt(at) {
+    if (!at) return "";
+    const d = new Date(String(at).replace(" ", "T"));
+    if (isNaN(d.getTime())) return String(at);
+    return d.toLocaleString("en-IN", {
+      day: "numeric", month: "short", hour: "2-digit", minute: "2-digit",
     });
   }
-  paint();                                   // whatever is cached right now
-  if (window.CibaraUsers && window.CibaraUsers.ready) {
-    window.CibaraUsers.ready().then(paint);  // then the authoritative pass
+  function row(label, ev) {
+    const name = ev ? (_rmName(ev) || "\u2014") : "";
+    return `
+          <div class="summary-row">
+            <div class="summary-label">${label}</div>
+            <div class="summary-value">${
+              ev
+                ? `${_rmEsc(name)}<span style="color:var(--gray);font-weight:400"> \u00b7 ${_rmEsc(fmt(ev.at))}</span>`
+                : '<span style="color:var(--gray);font-weight:400">Not recorded</span>'
+            }</div>
+          </div>`;
   }
+  return (
+    row("Cleaned by",   _rmPrepEvent(info, RM_CLEAN_ACTION)) +
+    row("Inspected by", _rmPrepEvent(info, RM_INSPECT_ACTION))
+  );
 }
 
 function renderRooms() {
@@ -872,10 +914,21 @@ function renderRooms() {
         roomContent += `</div>`;
       }
     } else {
-      // For vacant rooms
+      // For vacant rooms.
+      // The "Available" footer is load-bearing for LAYOUT, not just for
+      // information: without it a vacant card is ~16px shorter than an
+      // occupied one, and since grid rows size to their tallest card, an
+      // all-vacant row visibly collapsed against its neighbours. Keep the
+      // row here even if its wording changes.
+      //
+      // The accountability rings are absolutely positioned in the card's top
+      // corners, so they cost no height and do not disturb the row above.
       roomContent += `
         <div class="room-number">${roomNumber}</div>
         <div class="guest-name">Vacant</div>
+        <div class="room-footer">
+          <div>Available</div>
+        </div>
         ${vacantAccountability(info)}
       `;
     }
@@ -1010,12 +1063,6 @@ function renderRooms() {
   // refetch is debounced by seconds, so the room grid flipped instantly
   // while the counts sat stale until the background fetch caught up.
   if (typeof updateStats === "function") updateStats();
-
-  // Fill in the vacant-card cleaner / inspector labels. Deliberately AFTER
-  // the grid is built and deliberately not awaited: the directory may already
-  // be cached (labels appear this frame) or still in flight (they appear when
-  // it lands). Either way the grid never blocks on it.
-  if (typeof resolveVacantNames === "function") resolveVacantNames(roomsGrid);
 }
 
 // Handle cleaned button click (housekeeping → ready_to_inspect)
@@ -4032,7 +4079,7 @@ function showRoomDetailsModal(roomNumber) {
             <div class="summary-value">${
               roomNumber.startsWith("2") ? "Second Floor" : "First Floor"
             }</div>
-          </div>
+          </div>${vacantPrepRows(info)}
         </div>
       `;
     } else if (info.status === "occupied" && info.guest) {

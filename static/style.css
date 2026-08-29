@@ -640,63 +640,41 @@ body {
   padding-top: 0.3rem;
 }
 
-/* ── Vacant-card accountability initials ──────────────────────────────────
-   Two small rings in the card's top corners: left is who cleaned, right is
-   who signed it off. One character each.
+/* ── Vacant-card prep initials ───────────────────────────────────────────
+   Two small letters in the card's top corners: left is who cleaned, right
+   (teal) is who signed it off. Two characters, not one, so two staff sharing
+   a first initial stay distinguishable; the full name and timestamp are in
+   the title and in the room-details view.
 
-   This replaced a labelled two-row block under "Vacant". Names, even first
-   names only, cost two lines of card height and still truncated on a ~100px
-   card, and the two rows pushed the room number off centre. Reduced to an
-   initial and moved into the corners, the same information costs no height
-   at all and the card body goes back to being the room number and its state.
+   Deliberately unadorned. An earlier version drew each one as a filled or
+   dashed ring, which gave a secondary fact the same visual weight as the room
+   number and turned a 47-room grid into 94 circles — and the dashed "not
+   recorded" ring read as a loading skeleton rather than as information. An
+   unmarked step now renders nothing at all, so an unprepped room looks empty
+   instead of broken.
 
-   Fixed sides, not icons, carry the meaning. At grid scale the eye learns
-   "left cleaned, right checked" once; a broom and a tick have to be re-read
-   on every card. The full name, the verb and the date are all in the title,
-   which is where anyone actually auditing will look.
+   Absolutely positioned on purpose: they must cost the card NO height. An
+   earlier version paid for them by deleting the "Available" footer, which made
+   vacant cards ~16px shorter than occupied ones and left all-vacant grid rows
+   visibly collapsed. Both now coexist.
 
    Positioned against .room-card, which is already position:relative;
    .room-content is not positioned, so these resolve past it to the card. */
 .rm-init {
   position: absolute;
-  top: 0.85rem;
-  width: 1.15rem;
-  height: 1.15rem;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 0.6rem;
-  font-weight: 700;
+  top: 0.72rem;
+  font-size: 0.58rem;
+  font-weight: 800;
+  letter-spacing: 0.02em;
   line-height: 1;
+  color: #c2cad6;
   cursor: default;
   user-select: none;
   z-index: 2;
 }
 
-.rm-init--l { left: 0.4rem; }
-.rm-init--r { right: 0.4rem; }
-
-/* Cleaned: present but quiet. It is a step that happened, not a state that
-   needs attention. */
-.rm-init {
-  background: #eef2f6;
-  color: var(--gray);
-}
-
-/* Signed off — the only colour in the card body, so a checked room reads at
-   a glance across a full grid. */
-.rm-init.is-ok {
-  background: var(--vacant);
-  color: #fff;
-}
-
-/* An unrecorded step stays visible but empty. A gap in the trail should look
-   like a gap, not like the feature is missing. */
-.rm-init.is-missing {
-  background: transparent;
-  border: 1px dashed #d7dee7;
-}
+.rm-init--l { left: 0.42rem; }
+.rm-init--r { right: 0.42rem; color: #4bb3a1; }
 
 /* New countdown timer style */
 .room-timer {

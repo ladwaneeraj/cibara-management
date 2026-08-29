@@ -686,6 +686,21 @@ def checkout():
                                         "active_bill_id": None,
                                         "last_bill_id": active_bill_id,
                                         "cleaning_status": "in_progress",
+                                        # This releases the room, so it owes
+                                        # the same reset as the normal
+                                        # checkout path. Without it the room
+                                        # carries the finished stay's timeline
+                                        # and prep pair into the next cycle,
+                                        # and the grid's cleaned-by /
+                                        # inspected-by rings show whoever
+                                        # prepped it for the guest who just
+                                        # left. The bill already holds this
+                                        # stay's copy.
+                                        "stay_timeline": [],
+                                        "cleanedBy":     None,
+                                        "cleanedAt":     None,
+                                        "inspectedBy":   None,
+                                        "inspectedAt":   None,
                                     })
                                     invalidate_rooms_and_totals()
                                     logger.warning(

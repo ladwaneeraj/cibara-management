@@ -544,7 +544,7 @@
 .stf-grid-foot:last-child {
   border-right: none;
 }
-.stf-grid-cell:hover:not(.is-future):not(.is-locked) { background: var(--stf-primary-soft); }
+.stf-grid-cell:hover:not(.is-future):not(.is-locked):not(.is-frozen) { background: var(--stf-primary-soft); }
 .stf-grid-cell .m {
   display: inline-flex;
   align-items: center;
@@ -585,6 +585,20 @@
   cursor: not-allowed;
   position: relative;
   background: var(--stf-paid-bg);
+}
+
+/* A day that was marked on an earlier day and has since closed. Not the
+   same thing as .is-locked (salary settled, green): the money hasn't moved,
+   the record has simply stopped being editable, so this stays neutral and
+   only removes the affordance. Deliberately quiet — most of the grid will
+   carry this state, and shouting it would drown out the paid days, which
+   are the ones worth spotting. The mark itself keeps its normal colour;
+   only the cell dims. */
+.stf-grid-cell.is-frozen {
+  cursor: not-allowed;
+}
+.stf-grid-cell.is-frozen .m {
+  opacity: 0.72;
 }
 
 /* Quick-pay range picker (flatpickr, id=stf-qp-range): flag days already

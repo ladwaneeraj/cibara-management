@@ -848,6 +848,19 @@ def convert_booking_to_checkin():
         
         remaining_payment = int(booking_data.get("remaining_payment", 0))
         payment_method = booking_data.get("payment_method", "cash")
+
+        # "balance" = Pay Later, same contract as /checkin: nothing is
+        # tendered at check-in and the whole outstanding amount rides on the
+        # room. Rejecting instead of silently zeroing keeps the drawer honest
+        # - a client that posts both an amount and "Later" is confused about
+        # which of the two the operator meant.
+        if payment_method == "balance" and remaining_payment > 0:
+            return jsonify(
+                success=False,
+                message="Cannot use 'Pay Later' with an amount paid. "
+                        "Please select Cash or Online.",
+            )
+
         balance_after_payment = booking["balance"] - remaining_payment
         
         current_date = datetime.now(IST).strftime("%Y-%m-%d")
@@ -1262,7 +1275,11 @@ def convert_booking_to_checkin():
         else:
             payment_service.write_payment_with_stay(stay_id, {
                 "room": room_number, "name": booking["guest_name"],
-                "amount": 0, "method": "already_paid",
+                # "pay_later" = operator chose Later; "already_paid" = the
+                # booking advance already covered it. Same distinction
+                # /checkin draws, and transaction-tracking.js renders both.
+                "amount": 0,
+                "method": "pay_later" if payment_method == "balance" else "already_paid",
                 "type": "booking_conversion",
                 "date": current_date, "time": current_time,
                 "serial_number": serial_number, "booking_id": booking_id,

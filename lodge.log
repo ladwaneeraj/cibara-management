@@ -86501,3 +86501,953 @@ TypeError: unsupported operand type(s) for -: 'NoneType' and 'int'
 2026-08-29 11:09:50,294 - werkzeug - INFO - 127.0.0.1 - - [29/Aug/2026 11:09:50] "GET /static/staff.css?v=1787906099 HTTP/1.1" 200 -
 2026-08-29 11:09:50,307 - werkzeug - INFO - 127.0.0.1 - - [29/Aug/2026 11:09:50] "GET /static/settle-later.css HTTP/1.1" 200 -
 2026-08-29 11:10:11,869 - werkzeug - INFO - 127.0.0.1 - - [29/Aug/2026 11:10:11] "GET /static/icons/favicon-32.png HTTP/1.1" 200 -
+2026-08-29 11:15:18,583 - werkzeug - INFO - 127.0.0.1 - - [29/Aug/2026 11:15:18] "GET /get_transaction_metadata HTTP/1.1" 200 -
+2026-08-29 11:15:18,646 - werkzeug - INFO - 127.0.0.1 - - [29/Aug/2026 11:15:18] "GET /get_upcoming_bookings HTTP/1.1" 200 -
+2026-08-29 11:15:18,954 - config - INFO - [PERF] parallel fetch (rooms+totals+payments+expenses): 2.436s, 11 payment docs, 0 expense docs
+2026-08-29 11:15:18,956 - config - INFO - [PERF] /get_data TOTAL: 2.442s
+2026-08-29 11:15:18,961 - werkzeug - INFO - 127.0.0.1 - - [29/Aug/2026 11:15:18] "GET /get_data HTTP/1.1" 200 -
+2026-08-29 11:20:30,280 - werkzeug - INFO - 127.0.0.1 - - [29/Aug/2026 11:20:30] "POST /batch_check_customer_docs HTTP/1.1" 200 -
+2026-08-29 11:20:30,961 - werkzeug - INFO - 127.0.0.1 - - [29/Aug/2026 11:20:30] "GET /get_transaction_metadata HTTP/1.1" 200 -
+2026-08-29 11:20:32,647 - werkzeug - INFO - 127.0.0.1 - - [29/Aug/2026 11:20:32] "GET /get_upcoming_bookings HTTP/1.1" 200 -
+2026-08-29 11:20:34,183 - config - INFO - [PERF] parallel fetch (rooms+totals+payments+expenses): 1.573s, 12 payment docs, 0 expense docs
+2026-08-29 11:20:34,184 - config - INFO - [PERF] /get_data TOTAL: 1.574s
+2026-08-29 11:20:34,190 - werkzeug - INFO - 127.0.0.1 - - [29/Aug/2026 11:20:34] "GET /get_data HTTP/1.1" 200 -
+2026-08-29 11:20:40,586 - werkzeug - INFO - 127.0.0.1 - - [29/Aug/2026 11:20:40] "POST /batch_check_customer_docs HTTP/1.1" 200 -
+2026-08-29 11:20:42,941 - config - INFO - [PERF] /get_data served from cache
+2026-08-29 11:20:42,942 - werkzeug - INFO - 127.0.0.1 - - [29/Aug/2026 11:20:42] "GET /get_transaction_metadata HTTP/1.1" 200 -
+2026-08-29 11:20:42,943 - werkzeug - INFO - 127.0.0.1 - - [29/Aug/2026 11:20:42] "GET /get_data HTTP/1.1" 200 -
+2026-08-29 11:20:44,189 - werkzeug - INFO - 127.0.0.1 - - [29/Aug/2026 11:20:44] "GET /get_upcoming_bookings HTTP/1.1" 200 -
+2026-08-29 11:26:03,062 - werkzeug - INFO - 127.0.0.1 - - [29/Aug/2026 11:26:03] "GET /get_transaction_metadata HTTP/1.1" 200 -
+2026-08-29 11:26:03,146 - werkzeug - INFO - 127.0.0.1 - - [29/Aug/2026 11:26:03] "GET /get_upcoming_bookings HTTP/1.1" 200 -
+2026-08-29 11:26:03,750 - config - INFO - [PERF] parallel fetch (rooms+totals+payments+expenses): 2.880s, 13 payment docs, 0 expense docs
+2026-08-29 11:26:03,751 - config - INFO - [PERF] /get_data TOTAL: 2.881s
+2026-08-29 11:26:03,754 - werkzeug - INFO - 127.0.0.1 - - [29/Aug/2026 11:26:03] "GET /get_data HTTP/1.1" 200 -
+2026-08-29 11:35:46,843 - werkzeug - INFO - 127.0.0.1 - - [29/Aug/2026 11:35:46] "GET /get_transaction_metadata HTTP/1.1" 200 -
+2026-08-29 11:35:46,929 - werkzeug - INFO - 127.0.0.1 - - [29/Aug/2026 11:35:46] "GET /get_upcoming_bookings HTTP/1.1" 200 -
+2026-08-29 11:35:47,447 - config - INFO - [PERF] parallel fetch (rooms+totals+payments+expenses): 2.829s, 14 payment docs, 0 expense docs
+2026-08-29 11:35:47,448 - config - INFO - [PERF] /get_data TOTAL: 2.830s
+2026-08-29 11:35:47,452 - werkzeug - INFO - 127.0.0.1 - - [29/Aug/2026 11:35:47] "GET /get_data HTTP/1.1" 200 -
+2026-08-29 12:09:53,119 - werkzeug - INFO - 127.0.0.1 - - [29/Aug/2026 12:09:53] "GET / HTTP/1.1" 200 -
+2026-08-29 12:09:53,381 - config - WARNING - require_auth: dev-mode GET without auth allowed
+2026-08-29 12:09:53,400 - werkzeug - INFO - 127.0.0.1 - - [29/Aug/2026 12:09:53] "[33mGET /.well-known/appspecific/com.chrome.devtools.json HTTP/1.1[0m" 404 -
+2026-08-29 12:09:53,415 - werkzeug - INFO - 127.0.0.1 - - [29/Aug/2026 12:09:53] "GET /firebase-config.js HTTP/1.1" 200 -
+2026-08-29 12:09:53,600 - werkzeug - INFO - 127.0.0.1 - - [29/Aug/2026 12:09:53] "GET /static/laundry.css HTTP/1.1" 200 -
+2026-08-29 12:09:53,614 - werkzeug - INFO - 127.0.0.1 - - [29/Aug/2026 12:09:53] "GET /static/staff.css?v=1787906099 HTTP/1.1" 200 -
+2026-08-29 12:09:53,618 - werkzeug - INFO - 127.0.0.1 - - [29/Aug/2026 12:09:53] "GET /static/booking.css?v=1785758972 HTTP/1.1" 200 -
+2026-08-29 12:09:53,627 - werkzeug - INFO - 127.0.0.1 - - [29/Aug/2026 12:09:53] "GET /static/style.css?v=1787981227 HTTP/1.1" 200 -
+2026-08-29 12:09:53,639 - werkzeug - INFO - 127.0.0.1 - - [29/Aug/2026 12:09:53] "GET /static/banking.css HTTP/1.1" 200 -
+2026-08-29 12:09:53,665 - werkzeug - INFO - 127.0.0.1 - - [29/Aug/2026 12:09:53] "[36mGET /manifest.webmanifest HTTP/1.1[0m" 304 -
+2026-08-29 12:09:53,675 - werkzeug - INFO - 127.0.0.1 - - [29/Aug/2026 12:09:53] "GET /static/maintenance.css HTTP/1.1" 200 -
+2026-08-29 12:09:53,694 - werkzeug - INFO - 127.0.0.1 - - [29/Aug/2026 12:09:53] "GET /static/daily-insights.css?v=1784106826 HTTP/1.1" 200 -
+2026-08-29 12:09:53,714 - werkzeug - INFO - 127.0.0.1 - - [29/Aug/2026 12:09:53] "GET /static/settle-later.css HTTP/1.1" 200 -
+2026-08-29 12:09:53,851 - werkzeug - INFO - 127.0.0.1 - - [29/Aug/2026 12:09:53] "GET /static/user-directory.js HTTP/1.1" 200 -
+2026-08-29 12:09:53,859 - werkzeug - INFO - 127.0.0.1 - - [29/Aug/2026 12:09:53] "GET /static/room-attribution.js HTTP/1.1" 200 -
+2026-08-29 12:09:53,868 - werkzeug - INFO - 127.0.0.1 - - [29/Aug/2026 12:09:53] "GET /static/auth.js HTTP/1.1" 200 -
+2026-08-29 12:09:53,892 - werkzeug - INFO - 127.0.0.1 - - [29/Aug/2026 12:09:53] "GET /static/permissions.js HTTP/1.1" 200 -
+2026-08-29 12:09:53,898 - werkzeug - INFO - 127.0.0.1 - - [29/Aug/2026 12:09:53] "GET /firebase-config.js HTTP/1.1" 200 -
+2026-08-29 12:09:53,977 - werkzeug - INFO - 127.0.0.1 - - [29/Aug/2026 12:09:53] "GET /static/manual-bill.js?v=1785851417 HTTP/1.1" 200 -
+2026-08-29 12:09:54,140 - werkzeug - INFO - 127.0.0.1 - - [29/Aug/2026 12:09:54] "GET /static/attribution.js HTTP/1.1" 200 -
+2026-08-29 12:09:54,199 - werkzeug - INFO - 127.0.0.1 - - [29/Aug/2026 12:09:54] "GET /static/register.js?v=1787556156 HTTP/1.1" 200 -
+2026-08-29 12:09:54,206 - werkzeug - INFO - 127.0.0.1 - - [29/Aug/2026 12:09:54] "GET /static/google_sync.js HTTP/1.1" 200 -
+2026-08-29 12:09:54,278 - werkzeug - INFO - 127.0.0.1 - - [29/Aug/2026 12:09:54] "GET /static/bills.js?v=1787556155 HTTP/1.1" 200 -
+2026-08-29 12:09:54,359 - werkzeug - INFO - 127.0.0.1 - - [29/Aug/2026 12:09:54] "GET /static/banking.js HTTP/1.1" 200 -
+2026-08-29 12:09:54,405 - werkzeug - INFO - 127.0.0.1 - - [29/Aug/2026 12:09:54] "GET /static/optimistic.js?v=1782475801 HTTP/1.1" 200 -
+2026-08-29 12:09:54,508 - werkzeug - INFO - 127.0.0.1 - - [29/Aug/2026 12:09:54] "GET /static/script.js?v=1787981410 HTTP/1.1" 200 -
+2026-08-29 12:09:54,753 - werkzeug - INFO - 127.0.0.1 - - [29/Aug/2026 12:09:54] "GET /static/google_sync.js HTTP/1.1" 200 -
+2026-08-29 12:09:54,996 - werkzeug - INFO - 127.0.0.1 - - [29/Aug/2026 12:09:54] "GET /static/shift.js HTTP/1.1" 200 -
+2026-08-29 12:09:55,033 - werkzeug - INFO - 127.0.0.1 - - [29/Aug/2026 12:09:55] "GET /static/modal-back.js?v=1786347465 HTTP/1.1" 200 -
+2026-08-29 12:09:55,048 - werkzeug - INFO - 127.0.0.1 - - [29/Aug/2026 12:09:55] "GET /static/analytics.js HTTP/1.1" 200 -
+2026-08-29 12:09:55,088 - werkzeug - INFO - 127.0.0.1 - - [29/Aug/2026 12:09:55] "GET /static/expense-presets-admin.js HTTP/1.1" 200 -
+2026-08-29 12:09:55,089 - werkzeug - INFO - 127.0.0.1 - - [29/Aug/2026 12:09:55] "GET /static/nice-select.js?v=1786433402 HTTP/1.1" 200 -
+2026-08-29 12:09:55,139 - werkzeug - INFO - 127.0.0.1 - - [29/Aug/2026 12:09:55] "GET /static/doc-scan.js?v=1786347466 HTTP/1.1" 200 -
+2026-08-29 12:09:55,144 - werkzeug - INFO - 127.0.0.1 - - [29/Aug/2026 12:09:55] "GET /static/expense.js?v=1787905721 HTTP/1.1" 200 -
+2026-08-29 12:09:55,204 - werkzeug - INFO - 127.0.0.1 - - [29/Aug/2026 12:09:55] "GET /static/settle-later.js HTTP/1.1" 200 -
+2026-08-29 12:09:55,209 - werkzeug - INFO - 127.0.0.1 - - [29/Aug/2026 12:09:55] "GET /static/settle-later-fix.js HTTP/1.1" 200 -
+2026-08-29 12:09:55,212 - werkzeug - INFO - 127.0.0.1 - - [29/Aug/2026 12:09:55] "GET /static/room-cleaning.js HTTP/1.1" 200 -
+2026-08-29 12:09:55,252 - config - WARNING - require_auth: dev-mode GET without auth allowed
+2026-08-29 12:09:55,254 - config - WARNING - require_auth: dev-mode GET without auth allowed
+2026-08-29 12:09:55,292 - config - WARNING - require_auth: dev-mode GET without auth allowed
+2026-08-29 12:09:55,352 - werkzeug - INFO - 127.0.0.1 - - [29/Aug/2026 12:09:55] "GET /static/booking.js?v=1785758237 HTTP/1.1" 200 -
+2026-08-29 12:09:55,356 - werkzeug - INFO - 127.0.0.1 - - [29/Aug/2026 12:09:55] "GET /static/transaction-tracking.js?v=1787307804 HTTP/1.1" 200 -
+2026-08-29 12:09:55,385 - werkzeug - INFO - 127.0.0.1 - - [29/Aug/2026 12:09:55] "GET /static/customer-docs.js?v=1787916231 HTTP/1.1" 200 -
+2026-08-29 12:09:55,476 - werkzeug - INFO - 127.0.0.1 - - [29/Aug/2026 12:09:55] "GET /static/customer-manager.js?v=1781336331 HTTP/1.1" 200 -
+2026-08-29 12:09:55,494 - werkzeug - INFO - 127.0.0.1 - - [29/Aug/2026 12:09:55] "GET /static/laundry.js HTTP/1.1" 200 -
+2026-08-29 12:09:55,510 - werkzeug - INFO - 127.0.0.1 - - [29/Aug/2026 12:09:55] "[36mGET /static/icons/icon-192.png HTTP/1.1[0m" 304 -
+2026-08-29 12:09:55,517 - werkzeug - INFO - 127.0.0.1 - - [29/Aug/2026 12:09:55] "GET /static/maintenance.js?v=1787916699 HTTP/1.1" 200 -
+2026-08-29 12:09:55,522 - werkzeug - INFO - 127.0.0.1 - - [29/Aug/2026 12:09:55] "[36mGET /static/icons/favicon-32.png HTTP/1.1[0m" 304 -
+2026-08-29 12:09:55,543 - werkzeug - INFO - 127.0.0.1 - - [29/Aug/2026 12:09:55] "GET /static/staff.js?v=1787905902 HTTP/1.1" 200 -
+2026-08-29 12:09:55,580 - werkzeug - INFO - 127.0.0.1 - - [29/Aug/2026 12:09:55] "GET /static/housekeeping-mode.js HTTP/1.1" 200 -
+2026-08-29 12:09:55,605 - werkzeug - INFO - 127.0.0.1 - - [29/Aug/2026 12:09:55] "GET /static/admin-users.js HTTP/1.1" 200 -
+2026-08-29 12:09:55,632 - werkzeug - INFO - 127.0.0.1 - - [29/Aug/2026 12:09:55] "GET /static/daily-insights.js?v=1784108873 HTTP/1.1" 200 -
+2026-08-29 12:09:55,746 - werkzeug - INFO - 127.0.0.1 - - [29/Aug/2026 12:09:55] "GET /get_transaction_metadata HTTP/1.1" 200 -
+2026-08-29 12:09:56,983 - werkzeug - INFO - 127.0.0.1 - - [29/Aug/2026 12:09:56] "GET /get_upcoming_bookings HTTP/1.1" 200 -
+2026-08-29 12:09:57,389 - config - INFO - [PERF] parallel fetch (rooms+totals+payments+expenses): 2.131s, 16 payment docs, 0 expense docs
+2026-08-29 12:09:57,391 - config - INFO - [PERF] /get_data TOTAL: 2.133s
+2026-08-29 12:09:57,397 - werkzeug - INFO - 127.0.0.1 - - [29/Aug/2026 12:09:57] "GET /get_data HTTP/1.1" 200 -
+2026-08-29 12:10:01,624 - werkzeug - INFO - 127.0.0.1 - - [29/Aug/2026 12:10:01] "GET /api/user-directory HTTP/1.1" 200 -
+2026-08-29 12:10:01,658 - werkzeug - INFO - 127.0.0.1 - - [29/Aug/2026 12:10:01] "GET /api/auth/me HTTP/1.1" 200 -
+2026-08-29 12:10:03,263 - werkzeug - INFO - 127.0.0.1 - - [29/Aug/2026 12:10:03] "GET /sw.js HTTP/1.1" 200 -
+2026-08-29 12:10:26,530 - config - INFO - [PERF] /get_data served from cache
+2026-08-29 12:10:26,532 - werkzeug - INFO - 127.0.0.1 - - [29/Aug/2026 12:10:26] "GET /get_data HTTP/1.1" 200 -
+2026-08-29 12:10:26,866 - werkzeug - INFO - 127.0.0.1 - - [29/Aug/2026 12:10:26] "GET /get_transaction_metadata HTTP/1.1" 200 -
+2026-08-29 12:10:28,598 - werkzeug - INFO - 127.0.0.1 - - [29/Aug/2026 12:10:28] "GET /get_upcoming_bookings HTTP/1.1" 200 -
+2026-08-30 12:07:55,159 - config - INFO - Firebase initialised — env=PROD project='cibara-software-61512' bucket='cibara-software-61512.firebasestorage.app' source=file:cibara-software-Prod.json
+2026-08-30 12:07:55,161 - services.payment_service - INFO - PaymentService initialised (payments collection)
+2026-08-30 12:07:55,161 - services.customer_service - INFO - CustomerService initialised (customers collection)
+2026-08-30 12:07:55,161 - services.pdf_service - INFO - PdfService initialised (bills collection)
+2026-08-30 12:07:55,161 - services.expense_service - INFO - ExpenseService initialised (expenses collection)
+2026-08-30 12:07:55,161 - services.expense_presets_service - INFO - ExpensePresetsService initialised (expense_presets collection)
+2026-08-30 12:07:55,161 - services.ocr_service - INFO - OCR: GEMINI_API_KEY not set — OCR disabled
+2026-08-30 12:07:55,162 - services.bills_service - INFO - BillsService initialised (bills collection)
+2026-08-30 12:07:55,187 - services.banking.counters - INFO - Banking.counters initialised
+2026-08-30 12:07:55,187 - services.banking.bill_events - INFO - Banking.bill_events initialised
+2026-08-30 12:07:55,187 - services.banking.bank_accounts - INFO - Banking.bank_accounts initialised
+2026-08-30 12:07:55,187 - services.banking.cash_receipts - INFO - Banking.cash_receipts initialised
+2026-08-30 12:07:55,187 - services.banking.cash_deposits - INFO - Banking.cash_deposits initialised
+2026-08-30 12:07:55,187 - services.banking.cash_adjustments - INFO - Banking.cash_adjustments initialised
+2026-08-30 12:07:55,188 - services.banking.validators - INFO - Banking.validators initialised
+2026-08-30 12:07:55,188 - services.banking - INFO - Banking package initialised
+2026-08-30 12:07:55,190 - config - INFO - Checking Firebase data structure...
+2026-08-30 12:07:55,555 - config - WARNING - [WARN] Env var API_KEY not set - running in dev mode for this feature
+2026-08-30 12:07:55,705 - config - INFO - Checking Firebase data structure...
+2026-08-30 12:07:55,781 - werkzeug - INFO - [31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:5000
+ * Running on http://192.168.1.38:5000
+2026-08-30 12:07:55,781 - werkzeug - INFO - [33mPress CTRL+C to quit[0m
+2026-08-30 12:08:08,835 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 12:08:08] "GET / HTTP/1.1" 200 -
+2026-08-30 12:08:08,960 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 12:08:08] "GET /static/auth.js HTTP/1.1" 200 -
+2026-08-30 12:08:08,971 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 12:08:08] "GET /firebase-config.js HTTP/1.1" 200 -
+2026-08-30 12:08:08,990 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 12:08:08] "GET /static/user-directory.js HTTP/1.1" 200 -
+2026-08-30 12:08:08,990 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 12:08:08] "GET /static/permissions.js HTTP/1.1" 200 -
+2026-08-30 12:08:08,991 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 12:08:08] "GET /static/attribution.js HTTP/1.1" 200 -
+2026-08-30 12:08:08,995 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 12:08:08] "[36mGET /manifest.webmanifest HTTP/1.1[0m" 304 -
+2026-08-30 12:08:08,995 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 12:08:08] "GET /static/booking.css?v=1785758972 HTTP/1.1" 200 -
+2026-08-30 12:08:08,995 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 12:08:08] "GET /static/laundry.css HTTP/1.1" 200 -
+2026-08-30 12:08:08,998 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 12:08:08] "GET /static/style.css?v=1787981227 HTTP/1.1" 200 -
+2026-08-30 12:08:09,016 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 12:08:09] "GET /static/banking.css HTTP/1.1" 200 -
+2026-08-30 12:08:09,026 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 12:08:09] "GET /static/daily-insights.css?v=1784106826 HTTP/1.1" 200 -
+2026-08-30 12:08:09,027 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 12:08:09] "GET /static/maintenance.css HTTP/1.1" 200 -
+2026-08-30 12:08:09,033 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 12:08:09] "GET /static/settle-later.css HTTP/1.1" 200 -
+2026-08-30 12:08:09,041 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 12:08:09] "GET /static/staff.css?v=1787906099 HTTP/1.1" 200 -
+2026-08-30 12:08:09,051 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 12:08:09] "GET /static/google_sync.js HTTP/1.1" 200 -
+2026-08-30 12:08:09,054 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 12:08:09] "GET /static/room-attribution.js HTTP/1.1" 200 -
+2026-08-30 12:08:09,126 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 12:08:09] "GET /static/manual-bill.js?v=1785851417 HTTP/1.1" 200 -
+2026-08-30 12:08:09,128 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 12:08:09] "GET /static/optimistic.js?v=1782475801 HTTP/1.1" 200 -
+2026-08-30 12:08:09,129 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 12:08:09] "GET /static/banking.js HTTP/1.1" 200 -
+2026-08-30 12:08:09,134 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 12:08:09] "GET /static/booking.js?v=1788071732 HTTP/1.1" 200 -
+2026-08-30 12:08:09,138 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 12:08:09] "GET /static/register.js?v=1787556156 HTTP/1.1" 200 -
+2026-08-30 12:08:09,143 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 12:08:09] "GET /static/script.js?v=1787981410 HTTP/1.1" 200 -
+2026-08-30 12:08:09,153 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 12:08:09] "GET /static/shift.js HTTP/1.1" 200 -
+2026-08-30 12:08:09,157 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 12:08:09] "GET /static/analytics.js HTTP/1.1" 200 -
+2026-08-30 12:08:09,160 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 12:08:09] "GET /static/bills.js?v=1787556155 HTTP/1.1" 200 -
+2026-08-30 12:08:09,173 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 12:08:09] "GET /static/modal-back.js?v=1786347465 HTTP/1.1" 200 -
+2026-08-30 12:08:09,194 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 12:08:09] "GET /static/expense-presets-admin.js HTTP/1.1" 200 -
+2026-08-30 12:08:09,195 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 12:08:09] "GET /static/nice-select.js?v=1786433402 HTTP/1.1" 200 -
+2026-08-30 12:08:09,195 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 12:08:09] "GET /static/doc-scan.js?v=1786347466 HTTP/1.1" 200 -
+2026-08-30 12:08:09,202 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 12:08:09] "GET /static/settle-later.js HTTP/1.1" 200 -
+2026-08-30 12:08:09,214 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 12:08:09] "GET /static/settle-later-fix.js HTTP/1.1" 200 -
+2026-08-30 12:08:09,230 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 12:08:09] "GET /static/room-cleaning.js HTTP/1.1" 200 -
+2026-08-30 12:08:09,231 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 12:08:09] "GET /static/customer-docs.js?v=1787916231 HTTP/1.1" 200 -
+2026-08-30 12:08:09,232 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 12:08:09] "GET /static/expense.js?v=1787905721 HTTP/1.1" 200 -
+2026-08-30 12:08:09,239 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 12:08:09] "GET /static/transaction-tracking.js?v=1787307804 HTTP/1.1" 200 -
+2026-08-30 12:08:09,247 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 12:08:09] "GET /static/customer-manager.js?v=1781336331 HTTP/1.1" 200 -
+2026-08-30 12:08:09,249 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 12:08:09] "GET /static/laundry.js HTTP/1.1" 200 -
+2026-08-30 12:08:09,263 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 12:08:09] "GET /static/maintenance.js?v=1787916699 HTTP/1.1" 200 -
+2026-08-30 12:08:09,276 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 12:08:09] "GET /static/daily-insights.js?v=1784108873 HTTP/1.1" 200 -
+2026-08-30 12:08:09,279 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 12:08:09] "GET /static/staff.js?v=1787905902 HTTP/1.1" 200 -
+2026-08-30 12:08:09,289 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 12:08:09] "GET /static/housekeeping-mode.js HTTP/1.1" 200 -
+2026-08-30 12:08:09,291 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 12:08:09] "GET /static/admin-users.js HTTP/1.1" 200 -
+2026-08-30 12:08:09,578 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 12:08:09] "GET /firebase-config.js HTTP/1.1" 200 -
+2026-08-30 12:08:09,588 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 12:08:09] "GET /static/google_sync.js HTTP/1.1" 200 -
+2026-08-30 12:08:09,678 - config - WARNING - require_auth: dev-mode GET without auth allowed
+2026-08-30 12:08:09,678 - config - WARNING - require_auth: dev-mode GET without auth allowed
+2026-08-30 12:08:09,679 - config - WARNING - require_auth: dev-mode GET without auth allowed
+2026-08-30 12:08:09,814 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 12:08:09] "[36mGET /static/icons/icon-192.png HTTP/1.1[0m" 304 -
+2026-08-30 12:08:10,087 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 12:08:10] "GET /get_transaction_metadata HTTP/1.1" 200 -
+2026-08-30 12:08:11,498 - config - INFO - [PERF] parallel fetch (rooms+totals+payments+expenses): 1.818s, 12 payment docs, 4 expense docs
+2026-08-30 12:08:11,499 - config - INFO - [PERF] /get_data TOTAL: 1.819s
+2026-08-30 12:08:11,502 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 12:08:11] "GET /get_data HTTP/1.1" 200 -
+2026-08-30 12:08:11,532 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 12:08:11] "GET /get_upcoming_bookings HTTP/1.1" 200 -
+2026-08-30 12:08:14,784 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 12:08:14] "GET /api/user-directory HTTP/1.1" 200 -
+2026-08-30 12:08:16,397 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 12:08:16] "GET /sw.js HTTP/1.1" 200 -
+2026-08-30 12:08:16,662 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 12:08:16] "GET /api/auth/me HTTP/1.1" 200 -
+2026-08-30 12:10:52,985 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 12:10:52] "GET /get_bookings HTTP/1.1" 200 -
+2026-08-30 12:16:31,420 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 12:16:31] "POST /batch_check_customer_docs HTTP/1.1" 200 -
+2026-08-30 12:22:42,799 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 12:22:42] "GET /get_bookings HTTP/1.1" 200 -
+2026-08-30 13:05:05,821 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:05:05] "GET /get_upcoming_bookings HTTP/1.1" 200 -
+2026-08-30 13:05:07,100 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:05:07] "GET /get_transaction_metadata HTTP/1.1" 200 -
+2026-08-30 13:05:07,129 - config - INFO - [PERF] parallel fetch (rooms+totals+payments+expenses): 1.667s, 12 payment docs, 4 expense docs
+2026-08-30 13:05:07,133 - config - INFO - [PERF] /get_data TOTAL: 1.672s
+2026-08-30 13:05:07,170 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:05:07] "GET /get_data HTTP/1.1" 200 -
+2026-08-30 13:05:21,666 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:05:21] "GET /get_bookings HTTP/1.1" 200 -
+2026-08-30 13:09:56,307 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:09:56] "GET / HTTP/1.1" 200 -
+2026-08-30 13:09:56,598 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:09:56] "GET /firebase-config.js HTTP/1.1" 200 -
+2026-08-30 13:09:56,643 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:09:56] "GET /static/user-directory.js HTTP/1.1" 200 -
+2026-08-30 13:09:56,646 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:09:56] "GET /static/permissions.js HTTP/1.1" 200 -
+2026-08-30 13:09:56,648 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:09:56] "GET /static/auth.js HTTP/1.1" 200 -
+2026-08-30 13:09:56,649 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:09:56] "GET /static/booking.css?v=1785758972 HTTP/1.1" 200 -
+2026-08-30 13:09:56,652 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:09:56] "GET /static/laundry.css HTTP/1.1" 200 -
+2026-08-30 13:09:56,656 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:09:56] "GET /static/style.css?v=1787981227 HTTP/1.1" 200 -
+2026-08-30 13:09:56,661 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:09:56] "GET /static/banking.css HTTP/1.1" 200 -
+2026-08-30 13:09:56,722 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:09:56] "GET /static/maintenance.css HTTP/1.1" 200 -
+2026-08-30 13:09:56,731 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:09:56] "GET /static/daily-insights.css?v=1784106826 HTTP/1.1" 200 -
+2026-08-30 13:09:56,732 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:09:56] "GET /static/staff.css?v=1787906099 HTTP/1.1" 200 -
+2026-08-30 13:09:56,735 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:09:56] "GET /static/settle-later.css HTTP/1.1" 200 -
+2026-08-30 13:09:56,742 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:09:56] "GET /static/attribution.js HTTP/1.1" 200 -
+2026-08-30 13:09:56,743 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:09:56] "GET /static/room-attribution.js HTTP/1.1" 200 -
+2026-08-30 13:09:56,758 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:09:56] "GET /manifest.webmanifest HTTP/1.1" 200 -
+2026-08-30 13:09:56,760 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:09:56] "GET /static/google_sync.js HTTP/1.1" 200 -
+2026-08-30 13:09:56,990 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:09:56] "GET /static/optimistic.js?v=1782475801 HTTP/1.1" 200 -
+2026-08-30 13:09:56,991 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:09:56] "GET /static/manual-bill.js?v=1785851417 HTTP/1.1" 200 -
+2026-08-30 13:09:56,995 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:09:56] "GET /static/banking.js HTTP/1.1" 200 -
+2026-08-30 13:09:57,008 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:09:57] "GET /static/bills.js?v=1787556155 HTTP/1.1" 200 -
+2026-08-30 13:09:57,009 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:09:57] "GET /static/script.js?v=1787981410 HTTP/1.1" 200 -
+2026-08-30 13:09:57,014 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:09:57] "GET /static/register.js?v=1787556156 HTTP/1.1" 200 -
+2026-08-30 13:09:57,028 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:09:57] "GET /static/shift.js HTTP/1.1" 200 -
+2026-08-30 13:09:57,033 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:09:57] "GET /static/analytics.js HTTP/1.1" 200 -
+2026-08-30 13:09:57,037 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:09:57] "GET /static/modal-back.js?v=1786347465 HTTP/1.1" 200 -
+2026-08-30 13:09:57,083 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:09:57] "GET /static/nice-select.js?v=1786433402 HTTP/1.1" 200 -
+2026-08-30 13:09:57,083 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:09:57] "GET /static/doc-scan.js?v=1786347466 HTTP/1.1" 200 -
+2026-08-30 13:09:57,086 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:09:57] "GET /static/expense-presets-admin.js HTTP/1.1" 200 -
+2026-08-30 13:09:57,086 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:09:57] "GET /static/expense.js?v=1787905721 HTTP/1.1" 200 -
+2026-08-30 13:09:57,100 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:09:57] "GET /static/settle-later.js HTTP/1.1" 200 -
+2026-08-30 13:09:57,106 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:09:57] "GET /static/booking.js?v=1788071732 HTTP/1.1" 200 -
+2026-08-30 13:09:57,120 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:09:57] "GET /static/settle-later-fix.js HTTP/1.1" 200 -
+2026-08-30 13:09:57,143 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:09:57] "GET /static/room-cleaning.js HTTP/1.1" 200 -
+2026-08-30 13:09:57,149 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:09:57] "GET /static/customer-manager.js?v=1781336331 HTTP/1.1" 200 -
+2026-08-30 13:09:57,150 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:09:57] "GET /static/customer-docs.js?v=1787916231 HTTP/1.1" 200 -
+2026-08-30 13:09:57,153 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:09:57] "GET /static/transaction-tracking.js?v=1787307804 HTTP/1.1" 200 -
+2026-08-30 13:09:57,175 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:09:57] "GET /static/laundry.js HTTP/1.1" 200 -
+2026-08-30 13:09:57,188 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:09:57] "GET /static/maintenance.js?v=1787916699 HTTP/1.1" 200 -
+2026-08-30 13:09:57,197 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:09:57] "GET /static/daily-insights.js?v=1784108873 HTTP/1.1" 200 -
+2026-08-30 13:09:57,201 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:09:57] "GET /static/housekeeping-mode.js HTTP/1.1" 200 -
+2026-08-30 13:09:57,206 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:09:57] "GET /static/staff.js?v=1787905902 HTTP/1.1" 200 -
+2026-08-30 13:09:57,216 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:09:57] "GET /static/admin-users.js HTTP/1.1" 200 -
+2026-08-30 13:09:57,284 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:09:57] "GET /firebase-config.js HTTP/1.1" 200 -
+2026-08-30 13:09:57,665 - config - WARNING - require_auth: dev-mode GET without auth allowed
+2026-08-30 13:09:57,666 - config - WARNING - require_auth: dev-mode GET without auth allowed
+2026-08-30 13:09:57,667 - config - WARNING - require_auth: dev-mode GET without auth allowed
+2026-08-30 13:09:57,826 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:09:57] "GET /static/icons/favicon-32.png HTTP/1.1" 200 -
+2026-08-30 13:09:57,831 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:09:57] "[36mGET /static/icons/icon-192.png HTTP/1.1[0m" 304 -
+2026-08-30 13:09:57,997 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:09:57] "GET /get_transaction_metadata HTTP/1.1" 200 -
+2026-08-30 13:09:59,001 - config - WARNING - verify_token: clock skew detected — server is 2s behind Firebase. Sleeping and retrying. Please run 'w32tm /resync' (Windows) or 'sudo ntpdate -s pool.ntp.org' (Linux) to sync the system clock and avoid this delay.
+2026-08-30 13:09:59,263 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:09:59] "GET /get_upcoming_bookings HTTP/1.1" 200 -
+2026-08-30 13:09:59,690 - config - INFO - [PERF] parallel fetch (rooms+totals+payments+expenses): 2.023s, 12 payment docs, 4 expense docs
+2026-08-30 13:09:59,690 - config - INFO - [PERF] /get_data TOTAL: 2.023s
+2026-08-30 13:09:59,694 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:09:59] "GET /get_data HTTP/1.1" 200 -
+2026-08-30 13:10:02,940 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:10:02] "GET /api/auth/me HTTP/1.1" 200 -
+2026-08-30 13:10:03,462 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:10:03] "GET /api/user-directory HTTP/1.1" 200 -
+2026-08-30 13:10:07,983 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:10:07] "GET / HTTP/1.1" 200 -
+2026-08-30 13:10:08,058 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:10:08] "GET /firebase-config.js HTTP/1.1" 200 -
+2026-08-30 13:10:08,077 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:10:08] "GET /static/permissions.js HTTP/1.1" 200 -
+2026-08-30 13:10:08,079 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:10:08] "GET /static/user-directory.js HTTP/1.1" 200 -
+2026-08-30 13:10:08,080 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:10:08] "GET /static/auth.js HTTP/1.1" 200 -
+2026-08-30 13:10:08,082 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:10:08] "GET /static/booking.css?v=1785758972 HTTP/1.1" 200 -
+2026-08-30 13:10:08,086 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:10:08] "GET /static/laundry.css HTTP/1.1" 200 -
+2026-08-30 13:10:08,092 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:10:08] "GET /static/style.css?v=1787981227 HTTP/1.1" 200 -
+2026-08-30 13:10:08,114 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:10:08] "GET /static/banking.css HTTP/1.1" 200 -
+2026-08-30 13:10:08,117 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:10:08] "GET /static/daily-insights.css?v=1784106826 HTTP/1.1" 200 -
+2026-08-30 13:10:08,119 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:10:08] "GET /static/maintenance.css HTTP/1.1" 200 -
+2026-08-30 13:10:08,121 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:10:08] "GET /static/settle-later.css HTTP/1.1" 200 -
+2026-08-30 13:10:08,123 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:10:08] "GET /static/staff.css?v=1787906099 HTTP/1.1" 200 -
+2026-08-30 13:10:08,127 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:10:08] "GET /static/attribution.js HTTP/1.1" 200 -
+2026-08-30 13:10:08,154 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:10:08] "GET /static/room-attribution.js HTTP/1.1" 200 -
+2026-08-30 13:10:08,163 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:10:08] "GET /static/google_sync.js HTTP/1.1" 200 -
+2026-08-30 13:10:08,164 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:10:08] "GET /manifest.webmanifest HTTP/1.1" 200 -
+2026-08-30 13:10:08,219 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:10:08] "GET /static/manual-bill.js?v=1785851417 HTTP/1.1" 200 -
+2026-08-30 13:10:08,228 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:10:08] "GET /static/register.js?v=1787556156 HTTP/1.1" 200 -
+2026-08-30 13:10:08,235 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:10:08] "GET /static/optimistic.js?v=1782475801 HTTP/1.1" 200 -
+2026-08-30 13:10:08,237 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:10:08] "GET /static/banking.js HTTP/1.1" 200 -
+2026-08-30 13:10:08,244 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:10:08] "GET /static/shift.js HTTP/1.1" 200 -
+2026-08-30 13:10:08,255 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:10:08] "GET /static/bills.js?v=1787556155 HTTP/1.1" 200 -
+2026-08-30 13:10:08,257 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:10:08] "GET /static/script.js?v=1787981410 HTTP/1.1" 200 -
+2026-08-30 13:10:08,270 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:10:08] "GET /static/modal-back.js?v=1786347465 HTTP/1.1" 200 -
+2026-08-30 13:10:08,272 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:10:08] "GET /static/analytics.js HTTP/1.1" 200 -
+2026-08-30 13:10:08,289 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:10:08] "GET /static/doc-scan.js?v=1786347466 HTTP/1.1" 200 -
+2026-08-30 13:10:08,297 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:10:08] "GET /static/nice-select.js?v=1786433402 HTTP/1.1" 200 -
+2026-08-30 13:10:08,394 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:10:08] "GET /firebase-config.js HTTP/1.1" 200 -
+2026-08-30 13:10:08,408 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:10:08] "GET /static/expense-presets-admin.js HTTP/1.1" 200 -
+2026-08-30 13:10:08,410 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:10:08] "GET /static/expense.js?v=1787905721 HTTP/1.1" 200 -
+2026-08-30 13:10:08,414 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:10:08] "GET /static/booking.js?v=1788071732 HTTP/1.1" 200 -
+2026-08-30 13:10:08,490 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:10:08] "GET /static/settle-later.js HTTP/1.1" 200 -
+2026-08-30 13:10:08,492 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:10:08] "GET /static/settle-later-fix.js HTTP/1.1" 200 -
+2026-08-30 13:10:08,500 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:10:08] "GET /static/transaction-tracking.js?v=1787307804 HTTP/1.1" 200 -
+2026-08-30 13:10:08,510 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:10:08] "GET /static/room-cleaning.js HTTP/1.1" 200 -
+2026-08-30 13:10:08,510 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:10:08] "GET /static/customer-docs.js?v=1787916231 HTTP/1.1" 200 -
+2026-08-30 13:10:08,524 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:10:08] "GET /static/customer-manager.js?v=1781336331 HTTP/1.1" 200 -
+2026-08-30 13:10:08,546 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:10:08] "GET /static/laundry.js HTTP/1.1" 200 -
+2026-08-30 13:10:08,547 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:10:08] "GET /static/maintenance.js?v=1787916699 HTTP/1.1" 200 -
+2026-08-30 13:10:08,561 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:10:08] "GET /static/housekeeping-mode.js HTTP/1.1" 200 -
+2026-08-30 13:10:08,563 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:10:08] "GET /static/daily-insights.js?v=1784108873 HTTP/1.1" 200 -
+2026-08-30 13:10:08,571 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:10:08] "GET /static/admin-users.js HTTP/1.1" 200 -
+2026-08-30 13:10:08,573 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:10:08] "GET /static/staff.js?v=1787905902 HTTP/1.1" 200 -
+2026-08-30 13:10:08,672 - config - WARNING - require_auth: dev-mode GET without auth allowed
+2026-08-30 13:10:08,673 - config - WARNING - require_auth: dev-mode GET without auth allowed
+2026-08-30 13:10:08,674 - config - WARNING - require_auth: dev-mode GET without auth allowed
+2026-08-30 13:10:08,676 - config - INFO - [PERF] /get_data served from cache
+2026-08-30 13:10:08,679 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:10:08] "GET /get_data HTTP/1.1" 200 -
+2026-08-30 13:10:08,751 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:10:08] "GET /static/icons/favicon-32.png HTTP/1.1" 200 -
+2026-08-30 13:10:08,753 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:10:08] "[36mGET /static/icons/icon-192.png HTTP/1.1[0m" 304 -
+2026-08-30 13:10:09,247 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:10:09] "GET /get_transaction_metadata HTTP/1.1" 200 -
+2026-08-30 13:10:10,276 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:10:10] "GET /get_upcoming_bookings HTTP/1.1" 200 -
+2026-08-30 13:10:11,438 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:10:11] "GET /api/user-directory HTTP/1.1" 200 -
+2026-08-30 13:10:11,588 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:10:11] "GET /api/auth/me HTTP/1.1" 200 -
+2026-08-30 13:28:03,593 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:28:03] "GET /get_transaction_metadata HTTP/1.1" 200 -
+2026-08-30 13:28:03,637 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:28:03] "GET /get_upcoming_bookings HTTP/1.1" 200 -
+2026-08-30 13:28:04,100 - config - INFO - [PERF] parallel fetch (rooms+totals+payments+expenses): 2.235s, 13 payment docs, 4 expense docs
+2026-08-30 13:28:04,101 - config - INFO - [PERF] /get_data TOTAL: 2.236s
+2026-08-30 13:28:04,107 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:28:04] "GET /get_data HTTP/1.1" 200 -
+2026-08-30 13:28:44,869 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:28:44] "GET /get_upcoming_bookings HTTP/1.1" 200 -
+2026-08-30 13:28:45,958 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:28:45] "GET /get_transaction_metadata HTTP/1.1" 200 -
+2026-08-30 13:28:46,457 - config - INFO - [PERF] parallel fetch (rooms+totals+payments+expenses): 2.188s, 14 payment docs, 4 expense docs
+2026-08-30 13:28:46,457 - config - INFO - [PERF] /get_data TOTAL: 2.188s
+2026-08-30 13:28:46,464 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:28:46] "GET /get_data HTTP/1.1" 200 -
+2026-08-30 13:29:32,247 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:29:32] "GET / HTTP/1.1" 200 -
+2026-08-30 13:29:32,332 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:29:32] "GET /firebase-config.js HTTP/1.1" 200 -
+2026-08-30 13:29:32,360 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:29:32] "GET /static/permissions.js HTTP/1.1" 200 -
+2026-08-30 13:29:32,367 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:29:32] "GET /static/user-directory.js HTTP/1.1" 200 -
+2026-08-30 13:29:32,367 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:29:32] "GET /static/auth.js HTTP/1.1" 200 -
+2026-08-30 13:29:32,374 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:29:32] "GET /static/attribution.js HTTP/1.1" 200 -
+2026-08-30 13:29:32,382 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:29:32] "GET /static/booking.css?v=1785758972 HTTP/1.1" 200 -
+2026-08-30 13:29:32,383 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:29:32] "GET /static/laundry.css HTTP/1.1" 200 -
+2026-08-30 13:29:32,385 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:29:32] "GET /static/style.css?v=1787981227 HTTP/1.1" 200 -
+2026-08-30 13:29:32,406 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:29:32] "GET /static/banking.css HTTP/1.1" 200 -
+2026-08-30 13:29:32,430 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:29:32] "GET /static/maintenance.css HTTP/1.1" 200 -
+2026-08-30 13:29:32,433 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:29:32] "GET /static/daily-insights.css?v=1784106826 HTTP/1.1" 200 -
+2026-08-30 13:29:32,434 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:29:32] "GET /static/settle-later.css HTTP/1.1" 200 -
+2026-08-30 13:29:32,438 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:29:32] "GET /static/staff.css?v=1788076075 HTTP/1.1" 200 -
+2026-08-30 13:29:32,443 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:29:32] "GET /static/room-attribution.js HTTP/1.1" 200 -
+2026-08-30 13:29:32,452 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:29:32] "GET /static/google_sync.js HTTP/1.1" 200 -
+2026-08-30 13:29:32,544 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:29:32] "GET /manifest.webmanifest HTTP/1.1" 200 -
+2026-08-30 13:29:32,660 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:29:32] "GET /static/manual-bill.js?v=1785851417 HTTP/1.1" 200 -
+2026-08-30 13:29:32,662 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:29:32] "GET /static/banking.js HTTP/1.1" 200 -
+2026-08-30 13:29:32,669 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:29:32] "GET /static/register.js?v=1787556156 HTTP/1.1" 200 -
+2026-08-30 13:29:32,670 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:29:32] "GET /static/bills.js?v=1787556155 HTTP/1.1" 200 -
+2026-08-30 13:29:32,676 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:29:32] "GET /static/optimistic.js?v=1782475801 HTTP/1.1" 200 -
+2026-08-30 13:29:32,700 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:29:32] "GET /static/shift.js HTTP/1.1" 200 -
+2026-08-30 13:29:32,703 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:29:32] "GET /static/script.js?v=1787981410 HTTP/1.1" 200 -
+2026-08-30 13:29:32,736 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:29:32] "GET /firebase-config.js HTTP/1.1" 200 -
+2026-08-30 13:29:32,753 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:29:32] "GET /static/analytics.js HTTP/1.1" 200 -
+2026-08-30 13:29:32,782 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:29:32] "GET /static/modal-back.js?v=1786347465 HTTP/1.1" 200 -
+2026-08-30 13:29:32,790 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:29:32] "GET /static/nice-select.js?v=1786433402 HTTP/1.1" 200 -
+2026-08-30 13:29:32,803 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:29:32] "GET /static/doc-scan.js?v=1786347466 HTTP/1.1" 200 -
+2026-08-30 13:29:32,823 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:29:32] "GET /static/expense.js?v=1787905721 HTTP/1.1" 200 -
+2026-08-30 13:29:32,834 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:29:32] "GET /static/expense-presets-admin.js HTTP/1.1" 200 -
+2026-08-30 13:29:32,897 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:29:32] "GET /static/settle-later.js HTTP/1.1" 200 -
+2026-08-30 13:29:32,900 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:29:32] "GET /static/booking.js?v=1788071732 HTTP/1.1" 200 -
+2026-08-30 13:29:32,943 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:29:32] "GET /static/settle-later-fix.js HTTP/1.1" 200 -
+2026-08-30 13:29:32,961 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:29:32] "GET /static/room-cleaning.js HTTP/1.1" 200 -
+2026-08-30 13:29:32,962 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:29:32] "GET /static/transaction-tracking.js?v=1787307804 HTTP/1.1" 200 -
+2026-08-30 13:29:32,981 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:29:32] "GET /static/customer-docs.js?v=1787916231 HTTP/1.1" 200 -
+2026-08-30 13:29:32,986 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:29:32] "GET /static/customer-manager.js?v=1781336331 HTTP/1.1" 200 -
+2026-08-30 13:29:33,002 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:29:33] "GET /static/laundry.js HTTP/1.1" 200 -
+2026-08-30 13:29:33,004 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:29:33] "GET /static/maintenance.js?v=1787916699 HTTP/1.1" 200 -
+2026-08-30 13:29:33,193 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:29:33] "GET /static/daily-insights.js?v=1784108873 HTTP/1.1" 200 -
+2026-08-30 13:29:33,195 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:29:33] "GET /static/staff.js?v=1788076065 HTTP/1.1" 200 -
+2026-08-30 13:29:33,208 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:29:33] "GET /static/housekeeping-mode.js HTTP/1.1" 200 -
+2026-08-30 13:29:33,227 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:29:33] "GET /static/admin-users.js HTTP/1.1" 200 -
+2026-08-30 13:29:33,626 - config - WARNING - require_auth: dev-mode GET without auth allowed
+2026-08-30 13:29:33,630 - config - WARNING - require_auth: dev-mode GET without auth allowed
+2026-08-30 13:29:33,636 - config - WARNING - require_auth: dev-mode GET without auth allowed
+2026-08-30 13:29:33,720 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:29:33] "[36mGET /static/icons/icon-192.png HTTP/1.1[0m" 304 -
+2026-08-30 13:29:33,722 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:29:33] "GET /static/icons/favicon-32.png HTTP/1.1" 200 -
+2026-08-30 13:29:35,155 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:29:35] "GET /get_transaction_metadata HTTP/1.1" 200 -
+2026-08-30 13:29:35,211 - config - INFO - [PERF] parallel fetch (rooms+totals+payments+expenses): 1.583s, 14 payment docs, 4 expense docs
+2026-08-30 13:29:35,211 - config - INFO - [PERF] /get_data TOTAL: 1.583s
+2026-08-30 13:29:35,215 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:29:35] "GET /get_data HTTP/1.1" 200 -
+2026-08-30 13:29:35,288 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:29:35] "GET /get_upcoming_bookings HTTP/1.1" 200 -
+2026-08-30 13:29:36,426 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:29:36] "GET /api/auth/me HTTP/1.1" 200 -
+2026-08-30 13:29:36,428 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:29:36] "GET /api/user-directory HTTP/1.1" 200 -
+2026-08-30 13:29:50,567 - config - INFO - Firebase initialised — env=PROD project='cibara-software-61512' bucket='cibara-software-61512.firebasestorage.app' source=file:cibara-software-Prod.json
+2026-08-30 13:29:50,568 - services.payment_service - INFO - PaymentService initialised (payments collection)
+2026-08-30 13:29:50,568 - services.customer_service - INFO - CustomerService initialised (customers collection)
+2026-08-30 13:29:50,569 - services.pdf_service - INFO - PdfService initialised (bills collection)
+2026-08-30 13:29:50,569 - services.expense_service - INFO - ExpenseService initialised (expenses collection)
+2026-08-30 13:29:50,569 - services.expense_presets_service - INFO - ExpensePresetsService initialised (expense_presets collection)
+2026-08-30 13:29:50,570 - services.ocr_service - INFO - OCR: GEMINI_API_KEY not set — OCR disabled
+2026-08-30 13:29:50,570 - services.bills_service - INFO - BillsService initialised (bills collection)
+2026-08-30 13:29:50,604 - services.banking.counters - INFO - Banking.counters initialised
+2026-08-30 13:29:50,605 - services.banking.bill_events - INFO - Banking.bill_events initialised
+2026-08-30 13:29:50,605 - services.banking.bank_accounts - INFO - Banking.bank_accounts initialised
+2026-08-30 13:29:50,605 - services.banking.cash_receipts - INFO - Banking.cash_receipts initialised
+2026-08-30 13:29:50,606 - services.banking.cash_deposits - INFO - Banking.cash_deposits initialised
+2026-08-30 13:29:50,606 - services.banking.cash_adjustments - INFO - Banking.cash_adjustments initialised
+2026-08-30 13:29:50,607 - services.banking.validators - INFO - Banking.validators initialised
+2026-08-30 13:29:50,607 - services.banking - INFO - Banking package initialised
+2026-08-30 13:29:50,614 - config - INFO - Checking Firebase data structure...
+2026-08-30 13:29:50,882 - config - WARNING - [WARN] Env var API_KEY not set - running in dev mode for this feature
+2026-08-30 13:29:51,018 - config - INFO - Checking Firebase data structure...
+2026-08-30 13:29:51,032 - werkzeug - INFO - [31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:5000
+ * Running on http://192.168.1.38:5000
+2026-08-30 13:29:51,032 - werkzeug - INFO - [33mPress CTRL+C to quit[0m
+2026-08-30 13:29:56,762 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:29:56] "GET / HTTP/1.1" 200 -
+2026-08-30 13:29:56,838 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:29:56] "GET /firebase-config.js HTTP/1.1" 200 -
+2026-08-30 13:29:56,852 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:29:56] "GET /static/user-directory.js HTTP/1.1" 200 -
+2026-08-30 13:29:56,852 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:29:56] "GET /static/permissions.js HTTP/1.1" 200 -
+2026-08-30 13:29:56,855 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:29:56] "GET /static/auth.js HTTP/1.1" 200 -
+2026-08-30 13:29:56,856 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:29:56] "GET /static/attribution.js HTTP/1.1" 200 -
+2026-08-30 13:29:56,860 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:29:56] "GET /static/booking.css?v=1785758972 HTTP/1.1" 200 -
+2026-08-30 13:29:56,866 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:29:56] "GET /static/style.css?v=1787981227 HTTP/1.1" 200 -
+2026-08-30 13:29:56,886 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:29:56] "GET /static/laundry.css HTTP/1.1" 200 -
+2026-08-30 13:29:56,887 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:29:56] "GET /static/banking.css HTTP/1.1" 200 -
+2026-08-30 13:29:56,890 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:29:56] "GET /static/maintenance.css HTTP/1.1" 200 -
+2026-08-30 13:29:56,901 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:29:56] "GET /static/daily-insights.css?v=1784106826 HTTP/1.1" 200 -
+2026-08-30 13:29:56,908 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:29:56] "GET /static/settle-later.css HTTP/1.1" 200 -
+2026-08-30 13:29:56,908 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:29:56] "GET /static/staff.css?v=1788076075 HTTP/1.1" 200 -
+2026-08-30 13:29:56,917 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:29:56] "GET /static/room-attribution.js HTTP/1.1" 200 -
+2026-08-30 13:29:56,918 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:29:56] "GET /static/google_sync.js HTTP/1.1" 200 -
+2026-08-30 13:29:56,978 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:29:56] "GET /manifest.webmanifest HTTP/1.1" 200 -
+2026-08-30 13:29:57,051 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:29:57] "GET /static/manual-bill.js?v=1785851417 HTTP/1.1" 200 -
+2026-08-30 13:29:57,052 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:29:57] "GET /static/optimistic.js?v=1782475801 HTTP/1.1" 200 -
+2026-08-30 13:29:57,055 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:29:57] "GET /static/banking.js HTTP/1.1" 200 -
+2026-08-30 13:29:57,063 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:29:57] "GET /static/register.js?v=1787556156 HTTP/1.1" 200 -
+2026-08-30 13:29:57,067 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:29:57] "GET /static/script.js?v=1787981410 HTTP/1.1" 200 -
+2026-08-30 13:29:57,067 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:29:57] "GET /static/bills.js?v=1787556155 HTTP/1.1" 200 -
+2026-08-30 13:29:57,079 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:29:57] "GET /static/shift.js HTTP/1.1" 200 -
+2026-08-30 13:29:57,104 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:29:57] "GET /firebase-config.js HTTP/1.1" 200 -
+2026-08-30 13:29:57,345 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:29:57] "GET /static/modal-back.js?v=1786347465 HTTP/1.1" 200 -
+2026-08-30 13:29:57,347 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:29:57] "GET /static/analytics.js HTTP/1.1" 200 -
+2026-08-30 13:29:57,365 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:29:57] "GET /static/nice-select.js?v=1786433402 HTTP/1.1" 200 -
+2026-08-30 13:29:57,368 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:29:57] "GET /static/doc-scan.js?v=1786347466 HTTP/1.1" 200 -
+2026-08-30 13:29:57,383 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:29:57] "GET /static/expense-presets-admin.js HTTP/1.1" 200 -
+2026-08-30 13:29:57,384 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:29:57] "GET /static/expense.js?v=1787905721 HTTP/1.1" 200 -
+2026-08-30 13:29:57,402 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:29:57] "GET /static/booking.js?v=1788071732 HTTP/1.1" 200 -
+2026-08-30 13:29:57,405 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:29:57] "GET /static/settle-later.js HTTP/1.1" 200 -
+2026-08-30 13:29:57,425 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:29:57] "GET /static/settle-later-fix.js HTTP/1.1" 200 -
+2026-08-30 13:29:57,434 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:29:57] "GET /static/transaction-tracking.js?v=1787307804 HTTP/1.1" 200 -
+2026-08-30 13:29:57,441 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:29:57] "GET /static/room-cleaning.js HTTP/1.1" 200 -
+2026-08-30 13:29:57,457 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:29:57] "GET /static/customer-docs.js?v=1787916231 HTTP/1.1" 200 -
+2026-08-30 13:29:57,457 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:29:57] "GET /static/customer-manager.js?v=1781336331 HTTP/1.1" 200 -
+2026-08-30 13:29:57,478 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:29:57] "GET /static/laundry.js HTTP/1.1" 200 -
+2026-08-30 13:29:57,479 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:29:57] "GET /static/maintenance.js?v=1787916699 HTTP/1.1" 200 -
+2026-08-30 13:29:57,498 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:29:57] "GET /static/daily-insights.js?v=1784108873 HTTP/1.1" 200 -
+2026-08-30 13:29:57,501 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:29:57] "GET /static/staff.js?v=1788076065 HTTP/1.1" 200 -
+2026-08-30 13:29:57,512 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:29:57] "GET /static/housekeeping-mode.js HTTP/1.1" 200 -
+2026-08-30 13:29:57,518 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:29:57] "GET /static/admin-users.js HTTP/1.1" 200 -
+2026-08-30 13:29:57,547 - config - WARNING - require_auth: dev-mode GET without auth allowed
+2026-08-30 13:29:57,552 - config - WARNING - require_auth: dev-mode GET without auth allowed
+2026-08-30 13:29:57,556 - config - WARNING - require_auth: dev-mode GET without auth allowed
+2026-08-30 13:29:57,608 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:29:57] "GET /static/icons/favicon-32.png HTTP/1.1" 200 -
+2026-08-30 13:29:57,609 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:29:57] "[36mGET /static/icons/icon-192.png HTTP/1.1[0m" 304 -
+2026-08-30 13:29:59,323 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:29:59] "GET /get_transaction_metadata HTTP/1.1" 200 -
+2026-08-30 13:29:59,361 - config - INFO - [PERF] parallel fetch (rooms+totals+payments+expenses): 1.814s, 14 payment docs, 4 expense docs
+2026-08-30 13:29:59,363 - config - INFO - [PERF] /get_data TOTAL: 1.816s
+2026-08-30 13:29:59,366 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:29:59] "GET /get_data HTTP/1.1" 200 -
+2026-08-30 13:29:59,372 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:29:59] "GET /get_upcoming_bookings HTTP/1.1" 200 -
+2026-08-30 13:30:04,614 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:30:04] "GET /api/user-directory HTTP/1.1" 200 -
+2026-08-30 13:30:04,992 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:30:04] "GET /api/auth/me HTTP/1.1" 200 -
+2026-08-30 13:30:10,164 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:30:10] "GET /api/users HTTP/1.1" 200 -
+2026-08-30 13:30:15,338 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:30:15] "GET /login HTTP/1.1" 200 -
+2026-08-30 13:30:15,440 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:30:15] "GET /firebase-config.js HTTP/1.1" 200 -
+2026-08-30 13:30:15,445 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:30:15] "GET /static/login.css HTTP/1.1" 200 -
+2026-08-30 13:30:15,447 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:30:15] "[36mGET /manifest.webmanifest HTTP/1.1[0m" 304 -
+2026-08-30 13:30:15,451 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:30:15] "GET /static/login.js HTTP/1.1" 200 -
+2026-08-30 13:30:16,280 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:30:16] "[36mGET /static/icons/icon-192.png HTTP/1.1[0m" 304 -
+2026-08-30 13:30:17,652 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:30:17] "GET /sw.js HTTP/1.1" 200 -
+2026-08-30 13:30:23,847 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:30:23] "GET / HTTP/1.1" 200 -
+2026-08-30 13:30:23,935 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:30:23] "GET /firebase-config.js HTTP/1.1" 200 -
+2026-08-30 13:30:23,956 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:30:23] "GET /static/attribution.js HTTP/1.1" 200 -
+2026-08-30 13:30:23,958 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:30:23] "GET /static/laundry.css HTTP/1.1" 200 -
+2026-08-30 13:30:23,958 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:30:23] "GET /static/staff.css?v=1788076075 HTTP/1.1" 200 -
+2026-08-30 13:30:23,959 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:30:23] "[36mGET /manifest.webmanifest HTTP/1.1[0m" 304 -
+2026-08-30 13:30:23,961 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:30:23] "GET /static/room-attribution.js HTTP/1.1" 200 -
+2026-08-30 13:30:23,962 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:30:23] "GET /static/permissions.js HTTP/1.1" 200 -
+2026-08-30 13:30:23,962 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:30:23] "GET /static/auth.js HTTP/1.1" 200 -
+2026-08-30 13:30:24,016 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:30:24] "GET /static/style.css?v=1787981227 HTTP/1.1" 200 -
+2026-08-30 13:30:24,060 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:30:24] "GET /static/booking.css?v=1785758972 HTTP/1.1" 200 -
+2026-08-30 13:30:24,066 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:30:24] "GET /static/banking.css HTTP/1.1" 200 -
+2026-08-30 13:30:24,073 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:30:24] "GET /static/daily-insights.css?v=1784106826 HTTP/1.1" 200 -
+2026-08-30 13:30:24,074 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:30:24] "GET /static/maintenance.css HTTP/1.1" 200 -
+2026-08-30 13:30:24,082 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:30:24] "GET /static/settle-later.css HTTP/1.1" 200 -
+2026-08-30 13:30:24,086 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:30:24] "GET /static/user-directory.js HTTP/1.1" 200 -
+2026-08-30 13:30:24,142 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:30:24] "GET /static/google_sync.js HTTP/1.1" 200 -
+2026-08-30 13:30:24,162 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:30:24] "GET /static/shift.js HTTP/1.1" 200 -
+2026-08-30 13:30:24,165 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:30:24] "GET /static/manual-bill.js?v=1785851417 HTTP/1.1" 200 -
+2026-08-30 13:30:24,177 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:30:24] "GET /static/expense.js?v=1787905721 HTTP/1.1" 200 -
+2026-08-30 13:30:24,186 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:30:24] "GET /static/optimistic.js?v=1782475801 HTTP/1.1" 200 -
+2026-08-30 13:30:24,192 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:30:24] "GET /static/bills.js?v=1787556155 HTTP/1.1" 200 -
+2026-08-30 13:30:24,204 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:30:24] "GET /static/script.js?v=1787981410 HTTP/1.1" 200 -
+2026-08-30 13:30:24,213 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:30:24] "GET /static/staff.js?v=1788076065 HTTP/1.1" 200 -
+2026-08-30 13:30:24,215 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:30:24] "GET /static/banking.js HTTP/1.1" 200 -
+2026-08-30 13:30:24,218 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:30:24] "GET /static/nice-select.js?v=1786433402 HTTP/1.1" 200 -
+2026-08-30 13:30:24,236 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:30:24] "GET /static/doc-scan.js?v=1786347466 HTTP/1.1" 200 -
+2026-08-30 13:30:24,248 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:30:24] "GET /static/expense-presets-admin.js HTTP/1.1" 200 -
+2026-08-30 13:30:24,282 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:30:24] "GET /static/settle-later.js HTTP/1.1" 200 -
+2026-08-30 13:30:24,285 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:30:24] "GET /static/settle-later-fix.js HTTP/1.1" 200 -
+2026-08-30 13:30:24,299 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:30:24] "GET /static/analytics.js HTTP/1.1" 200 -
+2026-08-30 13:30:24,307 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:30:24] "GET /static/register.js?v=1787556156 HTTP/1.1" 200 -
+2026-08-30 13:30:24,318 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:30:24] "GET /static/booking.js?v=1788071732 HTTP/1.1" 200 -
+2026-08-30 13:30:24,323 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:30:24] "GET /firebase-config.js HTTP/1.1" 200 -
+2026-08-30 13:30:24,330 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:30:24] "GET /static/modal-back.js?v=1786347465 HTTP/1.1" 200 -
+2026-08-30 13:30:24,352 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:30:24] "GET /static/room-cleaning.js HTTP/1.1" 200 -
+2026-08-30 13:30:24,353 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:30:24] "GET /static/transaction-tracking.js?v=1787307804 HTTP/1.1" 200 -
+2026-08-30 13:30:24,378 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:30:24] "GET /static/customer-manager.js?v=1781336331 HTTP/1.1" 200 -
+2026-08-30 13:30:24,381 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:30:24] "GET /static/customer-docs.js?v=1787916231 HTTP/1.1" 200 -
+2026-08-30 13:30:24,391 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:30:24] "GET /static/maintenance.js?v=1787916699 HTTP/1.1" 200 -
+2026-08-30 13:30:24,402 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:30:24] "GET /static/google_sync.js HTTP/1.1" 200 -
+2026-08-30 13:30:24,405 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:30:24] "GET /static/daily-insights.js?v=1784108873 HTTP/1.1" 200 -
+2026-08-30 13:30:24,418 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:30:24] "GET /static/housekeeping-mode.js HTTP/1.1" 200 -
+2026-08-30 13:30:24,420 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:30:24] "GET /static/laundry.js HTTP/1.1" 200 -
+2026-08-30 13:30:24,436 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:30:24] "GET /static/admin-users.js HTTP/1.1" 200 -
+2026-08-30 13:30:24,599 - config - WARNING - require_auth: dev-mode GET without auth allowed
+2026-08-30 13:30:24,600 - config - WARNING - require_auth: dev-mode GET without auth allowed
+2026-08-30 13:30:24,600 - config - INFO - [PERF] /get_data served from cache
+2026-08-30 13:30:24,602 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:30:24] "GET /get_data HTTP/1.1" 200 -
+2026-08-30 13:30:24,604 - config - WARNING - require_auth: dev-mode GET without auth allowed
+2026-08-30 13:30:24,687 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:30:24] "[36mGET /static/icons/icon-192.png HTTP/1.1[0m" 304 -
+2026-08-30 13:30:25,166 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:30:25] "GET /get_transaction_metadata HTTP/1.1" 200 -
+2026-08-30 13:30:26,353 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:30:26] "GET /get_upcoming_bookings HTTP/1.1" 200 -
+2026-08-30 13:30:27,540 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:30:27] "GET /api/auth/me HTTP/1.1" 200 -
+2026-08-30 13:30:29,302 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:30:29] "GET /sw.js HTTP/1.1" 200 -
+2026-08-30 13:30:32,597 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:30:32] "GET /api/user-directory HTTP/1.1" 200 -
+2026-08-30 13:30:48,342 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:30:48] "GET /staff/attendance?start=2026-08-01&end=2026-08-31 HTTP/1.1" 200 -
+2026-08-30 13:30:48,754 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:30:48] "GET /staff/list HTTP/1.1" 200 -
+2026-08-30 13:31:02,170 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:31:02] "[31m[1mPOST /staff/attendance/mark HTTP/1.1[0m" 409 -
+2026-08-30 13:31:02,680 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:31:02] "[31m[1mPOST /staff/attendance/mark HTTP/1.1[0m" 409 -
+2026-08-30 13:31:12,732 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:31:12] "[31m[1mPOST /staff/attendance/mark HTTP/1.1[0m" 409 -
+2026-08-30 13:34:48,160 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:34:48] "GET / HTTP/1.1" 200 -
+2026-08-30 13:34:48,270 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:34:48] "GET /firebase-config.js HTTP/1.1" 200 -
+2026-08-30 13:34:48,293 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:34:48] "GET /static/banking.css HTTP/1.1" 200 -
+2026-08-30 13:34:48,295 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:34:48] "GET /static/maintenance.css HTTP/1.1" 200 -
+2026-08-30 13:34:48,297 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:34:48] "GET /static/laundry.css HTTP/1.1" 200 -
+2026-08-30 13:34:48,299 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:34:48] "GET /static/booking.css?v=1785758972 HTTP/1.1" 200 -
+2026-08-30 13:34:48,307 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:34:48] "GET /static/staff.css?v=1788076937 HTTP/1.1" 200 -
+2026-08-30 13:34:48,313 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:34:48] "GET /static/daily-insights.css?v=1784106826 HTTP/1.1" 200 -
+2026-08-30 13:34:48,326 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:34:48] "GET /static/style.css?v=1787981227 HTTP/1.1" 200 -
+2026-08-30 13:34:48,328 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:34:48] "GET /static/settle-later.css HTTP/1.1" 200 -
+2026-08-30 13:34:48,349 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:34:48] "GET /static/permissions.js HTTP/1.1" 200 -
+2026-08-30 13:34:48,358 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:34:48] "GET /static/user-directory.js HTTP/1.1" 200 -
+2026-08-30 13:34:48,359 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:34:48] "GET /static/auth.js HTTP/1.1" 200 -
+2026-08-30 13:34:48,367 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:34:48] "GET /static/attribution.js HTTP/1.1" 200 -
+2026-08-30 13:34:48,379 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:34:48] "GET /static/room-attribution.js HTTP/1.1" 200 -
+2026-08-30 13:34:48,383 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:34:48] "GET /static/google_sync.js HTTP/1.1" 200 -
+2026-08-30 13:34:48,396 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:34:48] "GET /manifest.webmanifest HTTP/1.1" 200 -
+2026-08-30 13:34:48,532 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:34:48] "GET /static/manual-bill.js?v=1785851417 HTTP/1.1" 200 -
+2026-08-30 13:34:48,532 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:34:48] "GET /static/optimistic.js?v=1782475801 HTTP/1.1" 200 -
+2026-08-30 13:34:48,537 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:34:48] "GET /static/banking.js HTTP/1.1" 200 -
+2026-08-30 13:34:48,542 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:34:48] "GET /static/register.js?v=1787556156 HTTP/1.1" 200 -
+2026-08-30 13:34:48,548 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:34:48] "GET /static/bills.js?v=1787556155 HTTP/1.1" 200 -
+2026-08-30 13:34:48,548 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:34:48] "GET /static/script.js?v=1787981410 HTTP/1.1" 200 -
+2026-08-30 13:34:48,555 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:34:48] "GET /static/shift.js HTTP/1.1" 200 -
+2026-08-30 13:34:48,565 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:34:48] "GET /static/analytics.js HTTP/1.1" 200 -
+2026-08-30 13:34:48,577 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:34:48] "GET /static/modal-back.js?v=1786347465 HTTP/1.1" 200 -
+2026-08-30 13:34:48,597 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:34:48] "GET /static/nice-select.js?v=1786433402 HTTP/1.1" 200 -
+2026-08-30 13:34:48,600 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:34:48] "GET /static/doc-scan.js?v=1786347466 HTTP/1.1" 200 -
+2026-08-30 13:34:48,646 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:34:48] "GET /static/expense-presets-admin.js HTTP/1.1" 200 -
+2026-08-30 13:34:48,653 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:34:48] "GET /static/expense.js?v=1787905721 HTTP/1.1" 200 -
+2026-08-30 13:34:48,658 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:34:48] "GET /static/booking.js?v=1788071732 HTTP/1.1" 200 -
+2026-08-30 13:34:48,675 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:34:48] "GET /static/settle-later.js HTTP/1.1" 200 -
+2026-08-30 13:34:48,679 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:34:48] "GET /static/settle-later-fix.js HTTP/1.1" 200 -
+2026-08-30 13:34:48,686 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:34:48] "GET /static/transaction-tracking.js?v=1787307804 HTTP/1.1" 200 -
+2026-08-30 13:34:48,704 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:34:48] "GET /firebase-config.js HTTP/1.1" 200 -
+2026-08-30 13:34:48,727 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:34:48] "GET /static/room-cleaning.js HTTP/1.1" 200 -
+2026-08-30 13:34:48,744 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:34:48] "GET /static/customer-docs.js?v=1787916231 HTTP/1.1" 200 -
+2026-08-30 13:34:48,751 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:34:48] "GET /static/customer-manager.js?v=1781336331 HTTP/1.1" 200 -
+2026-08-30 13:34:48,757 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:34:48] "GET /static/laundry.js HTTP/1.1" 200 -
+2026-08-30 13:34:48,763 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:34:48] "GET /static/maintenance.js?v=1787916699 HTTP/1.1" 200 -
+2026-08-30 13:34:48,769 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:34:48] "GET /static/staff.js?v=1788076065 HTTP/1.1" 200 -
+2026-08-30 13:34:48,778 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:34:48] "GET /static/housekeeping-mode.js HTTP/1.1" 200 -
+2026-08-30 13:34:48,779 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:34:48] "GET /static/daily-insights.js?v=1784108873 HTTP/1.1" 200 -
+2026-08-30 13:34:48,785 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:34:48] "GET /static/admin-users.js HTTP/1.1" 200 -
+2026-08-30 13:34:49,014 - config - WARNING - require_auth: dev-mode GET without auth allowed
+2026-08-30 13:34:49,014 - config - WARNING - require_auth: dev-mode GET without auth allowed
+2026-08-30 13:34:49,016 - config - WARNING - require_auth: dev-mode GET without auth allowed
+2026-08-30 13:34:49,103 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:34:49] "[36mGET /static/icons/icon-192.png HTTP/1.1[0m" 304 -
+2026-08-30 13:34:49,103 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:34:49] "GET /static/icons/favicon-32.png HTTP/1.1" 200 -
+2026-08-30 13:34:49,479 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:34:49] "GET /get_transaction_metadata HTTP/1.1" 200 -
+2026-08-30 13:34:50,793 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:34:50] "GET /get_upcoming_bookings HTTP/1.1" 200 -
+2026-08-30 13:34:51,073 - config - INFO - [PERF] parallel fetch (rooms+totals+payments+expenses): 2.057s, 14 payment docs, 4 expense docs
+2026-08-30 13:34:51,073 - config - INFO - [PERF] /get_data TOTAL: 2.057s
+2026-08-30 13:34:51,077 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:34:51] "GET /get_data HTTP/1.1" 200 -
+2026-08-30 13:34:54,137 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:34:54] "GET /api/user-directory HTTP/1.1" 200 -
+2026-08-30 13:34:54,145 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:34:54] "GET /api/auth/me HTTP/1.1" 200 -
+2026-08-30 13:35:00,111 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:35:00] "GET /staff/attendance?start=2026-08-01&end=2026-08-31 HTTP/1.1" 200 -
+2026-08-30 13:35:00,636 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:35:00] "GET /staff/list HTTP/1.1" 200 -
+2026-08-30 13:35:12,650 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:35:12] "POST /staff/attendance/mark HTTP/1.1" 200 -
+2026-08-30 13:35:17,239 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:35:17] "POST /staff/attendance/mark HTTP/1.1" 200 -
+2026-08-30 13:36:20,068 - config - INFO - Firebase initialised — env=PROD project='cibara-software-61512' bucket='cibara-software-61512.firebasestorage.app' source=file:cibara-software-Prod.json
+2026-08-30 13:36:20,068 - services.payment_service - INFO - PaymentService initialised (payments collection)
+2026-08-30 13:36:20,069 - services.customer_service - INFO - CustomerService initialised (customers collection)
+2026-08-30 13:36:20,069 - services.pdf_service - INFO - PdfService initialised (bills collection)
+2026-08-30 13:36:20,069 - services.expense_service - INFO - ExpenseService initialised (expenses collection)
+2026-08-30 13:36:20,070 - services.expense_presets_service - INFO - ExpensePresetsService initialised (expense_presets collection)
+2026-08-30 13:36:20,070 - services.ocr_service - INFO - OCR: GEMINI_API_KEY not set — OCR disabled
+2026-08-30 13:36:20,070 - services.bills_service - INFO - BillsService initialised (bills collection)
+2026-08-30 13:36:20,102 - services.banking.counters - INFO - Banking.counters initialised
+2026-08-30 13:36:20,102 - services.banking.bill_events - INFO - Banking.bill_events initialised
+2026-08-30 13:36:20,103 - services.banking.bank_accounts - INFO - Banking.bank_accounts initialised
+2026-08-30 13:36:20,103 - services.banking.cash_receipts - INFO - Banking.cash_receipts initialised
+2026-08-30 13:36:20,104 - services.banking.cash_deposits - INFO - Banking.cash_deposits initialised
+2026-08-30 13:36:20,104 - services.banking.cash_adjustments - INFO - Banking.cash_adjustments initialised
+2026-08-30 13:36:20,104 - services.banking.validators - INFO - Banking.validators initialised
+2026-08-30 13:36:20,105 - services.banking - INFO - Banking package initialised
+2026-08-30 13:36:20,108 - config - INFO - Checking Firebase data structure...
+2026-08-30 13:36:20,289 - config - WARNING - [WARN] Env var API_KEY not set - running in dev mode for this feature
+2026-08-30 13:36:20,421 - config - INFO - Checking Firebase data structure...
+2026-08-30 13:36:20,440 - werkzeug - INFO - [31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:5000
+ * Running on http://192.168.1.38:5000
+2026-08-30 13:36:20,440 - werkzeug - INFO - [33mPress CTRL+C to quit[0m
+2026-08-30 13:36:48,188 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:36:48] "GET / HTTP/1.1" 200 -
+2026-08-30 13:36:48,319 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:36:48] "GET /firebase-config.js HTTP/1.1" 200 -
+2026-08-30 13:36:48,329 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:36:48] "GET /static/permissions.js HTTP/1.1" 200 -
+2026-08-30 13:36:48,329 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:36:48] "GET /static/auth.js HTTP/1.1" 200 -
+2026-08-30 13:36:48,330 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:36:48] "GET /static/user-directory.js HTTP/1.1" 200 -
+2026-08-30 13:36:48,337 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:36:48] "GET /static/attribution.js HTTP/1.1" 200 -
+2026-08-30 13:36:48,342 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:36:48] "GET /static/room-attribution.js HTTP/1.1" 200 -
+2026-08-30 13:36:48,364 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:36:48] "GET /static/booking.css?v=1785758972 HTTP/1.1" 200 -
+2026-08-30 13:36:48,368 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:36:48] "GET /static/style.css?v=1787981227 HTTP/1.1" 200 -
+2026-08-30 13:36:48,372 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:36:48] "GET /static/banking.css HTTP/1.1" 200 -
+2026-08-30 13:36:48,374 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:36:48] "GET /static/laundry.css HTTP/1.1" 200 -
+2026-08-30 13:36:48,382 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:36:48] "GET /static/maintenance.css HTTP/1.1" 200 -
+2026-08-30 13:36:48,385 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:36:48] "GET /static/daily-insights.css?v=1784106826 HTTP/1.1" 200 -
+2026-08-30 13:36:48,390 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:36:48] "GET /static/staff.css?v=1788076937 HTTP/1.1" 200 -
+2026-08-30 13:36:48,403 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:36:48] "GET /static/settle-later.css HTTP/1.1" 200 -
+2026-08-30 13:36:48,405 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:36:48] "GET /static/google_sync.js HTTP/1.1" 200 -
+2026-08-30 13:36:48,420 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:36:48] "GET /manifest.webmanifest HTTP/1.1" 200 -
+2026-08-30 13:36:48,558 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:36:48] "GET /static/optimistic.js?v=1782475801 HTTP/1.1" 200 -
+2026-08-30 13:36:48,559 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:36:48] "GET /static/manual-bill.js?v=1785851417 HTTP/1.1" 200 -
+2026-08-30 13:36:48,562 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:36:48] "GET /static/banking.js HTTP/1.1" 200 -
+2026-08-30 13:36:48,566 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:36:48] "GET /static/register.js?v=1787556156 HTTP/1.1" 200 -
+2026-08-30 13:36:48,571 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:36:48] "GET /static/bills.js?v=1787556155 HTTP/1.1" 200 -
+2026-08-30 13:36:48,572 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:36:48] "GET /static/script.js?v=1787981410 HTTP/1.1" 200 -
+2026-08-30 13:36:48,587 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:36:48] "GET /static/shift.js HTTP/1.1" 200 -
+2026-08-30 13:36:48,600 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:36:48] "GET /static/analytics.js HTTP/1.1" 200 -
+2026-08-30 13:36:48,606 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:36:48] "GET /static/modal-back.js?v=1786347465 HTTP/1.1" 200 -
+2026-08-30 13:36:48,628 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:36:48] "GET /static/nice-select.js?v=1786433402 HTTP/1.1" 200 -
+2026-08-30 13:36:48,639 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:36:48] "GET /static/doc-scan.js?v=1786347466 HTTP/1.1" 200 -
+2026-08-30 13:36:48,680 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:36:48] "GET /static/expense.js?v=1787905721 HTTP/1.1" 200 -
+2026-08-30 13:36:48,686 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:36:48] "GET /static/expense-presets-admin.js HTTP/1.1" 200 -
+2026-08-30 13:36:48,698 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:36:48] "GET /static/settle-later-fix.js HTTP/1.1" 200 -
+2026-08-30 13:36:48,700 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:36:48] "GET /static/settle-later.js HTTP/1.1" 200 -
+2026-08-30 13:36:48,707 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:36:48] "GET /firebase-config.js HTTP/1.1" 200 -
+2026-08-30 13:36:48,718 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:36:48] "GET /static/transaction-tracking.js?v=1787307804 HTTP/1.1" 200 -
+2026-08-30 13:36:48,720 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:36:48] "GET /static/booking.js?v=1788071732 HTTP/1.1" 200 -
+2026-08-30 13:36:48,741 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:36:48] "GET /static/room-cleaning.js HTTP/1.1" 200 -
+2026-08-30 13:36:48,743 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:36:48] "GET /static/customer-docs.js?v=1787916231 HTTP/1.1" 200 -
+2026-08-30 13:36:48,747 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:36:48] "GET /static/customer-manager.js?v=1781336331 HTTP/1.1" 200 -
+2026-08-30 13:36:48,750 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:36:48] "GET /static/laundry.js HTTP/1.1" 200 -
+2026-08-30 13:36:48,773 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:36:48] "GET /static/maintenance.js?v=1787916699 HTTP/1.1" 200 -
+2026-08-30 13:36:48,775 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:36:48] "GET /static/staff.js?v=1788076065 HTTP/1.1" 200 -
+2026-08-30 13:36:48,781 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:36:48] "GET /static/daily-insights.js?v=1784108873 HTTP/1.1" 200 -
+2026-08-30 13:36:48,785 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:36:48] "GET /static/housekeeping-mode.js HTTP/1.1" 200 -
+2026-08-30 13:36:48,791 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:36:48] "GET /static/admin-users.js HTTP/1.1" 200 -
+2026-08-30 13:36:50,208 - config - WARNING - require_auth: dev-mode GET without auth allowed
+2026-08-30 13:36:50,209 - config - WARNING - require_auth: dev-mode GET without auth allowed
+2026-08-30 13:36:50,210 - config - WARNING - require_auth: dev-mode GET without auth allowed
+2026-08-30 13:36:50,272 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:36:50] "GET /static/icons/favicon-32.png HTTP/1.1" 200 -
+2026-08-30 13:36:50,275 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:36:50] "[36mGET /static/icons/icon-192.png HTTP/1.1[0m" 304 -
+2026-08-30 13:36:50,767 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:36:50] "POST /staff/attendance/mark HTTP/1.1" 200 -
+2026-08-30 13:36:50,839 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:36:50] "GET /get_transaction_metadata HTTP/1.1" 200 -
+2026-08-30 13:36:52,104 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:36:52] "GET /get_upcoming_bookings HTTP/1.1" 200 -
+2026-08-30 13:36:52,874 - config - INFO - [PERF] parallel fetch (rooms+totals+payments+expenses): 2.662s, 14 payment docs, 4 expense docs
+2026-08-30 13:36:52,874 - config - INFO - [PERF] /get_data TOTAL: 2.663s
+2026-08-30 13:36:52,877 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:36:52] "GET /get_data HTTP/1.1" 200 -
+2026-08-30 13:36:53,302 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:36:53] "POST /staff/attendance/mark HTTP/1.1" 200 -
+2026-08-30 13:36:55,760 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:36:55] "GET /api/auth/me HTTP/1.1" 200 -
+2026-08-30 13:36:55,769 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:36:55] "GET /api/user-directory HTTP/1.1" 200 -
+2026-08-30 13:36:59,239 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:36:59] "GET /staff/list HTTP/1.1" 200 -
+2026-08-30 13:36:59,804 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:36:59] "GET /staff/attendance?start=2026-08-01&end=2026-08-31 HTTP/1.1" 200 -
+2026-08-30 13:37:10,062 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:37:10] "[31m[1mPOST /staff/attendance/mark HTTP/1.1[0m" 409 -
+2026-08-30 13:39:39,917 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:39:39] "GET / HTTP/1.1" 200 -
+2026-08-30 13:39:40,014 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:39:40] "GET /firebase-config.js HTTP/1.1" 200 -
+2026-08-30 13:39:40,020 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:39:40] "GET /static/permissions.js HTTP/1.1" 200 -
+2026-08-30 13:39:40,026 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:39:40] "GET /static/user-directory.js HTTP/1.1" 200 -
+2026-08-30 13:39:40,027 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:39:40] "GET /static/auth.js HTTP/1.1" 200 -
+2026-08-30 13:39:40,036 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:39:40] "GET /static/attribution.js HTTP/1.1" 200 -
+2026-08-30 13:39:40,043 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:39:40] "GET /static/booking.css?v=1785758972 HTTP/1.1" 200 -
+2026-08-30 13:39:40,044 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:39:40] "GET /static/style.css?v=1787981227 HTTP/1.1" 200 -
+2026-08-30 13:39:40,069 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:39:40] "GET /static/maintenance.css HTTP/1.1" 200 -
+2026-08-30 13:39:40,071 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:39:40] "GET /static/laundry.css HTTP/1.1" 200 -
+2026-08-30 13:39:40,075 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:39:40] "GET /static/banking.css HTTP/1.1" 200 -
+2026-08-30 13:39:40,085 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:39:40] "GET /static/daily-insights.css?v=1784106826 HTTP/1.1" 200 -
+2026-08-30 13:39:40,089 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:39:40] "GET /static/staff.css?v=1788076937 HTTP/1.1" 200 -
+2026-08-30 13:39:40,092 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:39:40] "GET /static/settle-later.css HTTP/1.1" 200 -
+2026-08-30 13:39:40,107 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:39:40] "GET / HTTP/1.1" 200 -
+2026-08-30 13:39:40,121 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:39:40] "GET /static/room-attribution.js HTTP/1.1" 200 -
+2026-08-30 13:39:40,122 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:39:40] "GET /static/google_sync.js HTTP/1.1" 200 -
+2026-08-30 13:39:40,200 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:39:40] "GET /firebase-config.js HTTP/1.1" 200 -
+2026-08-30 13:39:40,222 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:39:40] "GET /static/permissions.js HTTP/1.1" 200 -
+2026-08-30 13:39:40,223 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:39:40] "GET /static/attribution.js HTTP/1.1" 200 -
+2026-08-30 13:39:40,225 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:39:40] "GET /static/user-directory.js HTTP/1.1" 200 -
+2026-08-30 13:39:40,225 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:39:40] "GET /static/room-attribution.js HTTP/1.1" 200 -
+2026-08-30 13:39:40,225 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:39:40] "GET /static/auth.js HTTP/1.1" 200 -
+2026-08-30 13:39:40,233 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:39:40] "GET /static/style.css?v=1787981227 HTTP/1.1" 200 -
+2026-08-30 13:39:40,243 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:39:40] "GET /static/booking.css?v=1785758972 HTTP/1.1" 200 -
+2026-08-30 13:39:40,260 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:39:40] "GET /static/laundry.css HTTP/1.1" 200 -
+2026-08-30 13:39:40,261 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:39:40] "GET /static/banking.css HTTP/1.1" 200 -
+2026-08-30 13:39:40,266 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:39:40] "GET /static/maintenance.css HTTP/1.1" 200 -
+2026-08-30 13:39:40,269 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:39:40] "GET /static/daily-insights.css?v=1784106826 HTTP/1.1" 200 -
+2026-08-30 13:39:40,271 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:39:40] "GET /static/staff.css?v=1788076937 HTTP/1.1" 200 -
+2026-08-30 13:39:40,276 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:39:40] "GET /static/settle-later.css HTTP/1.1" 200 -
+2026-08-30 13:39:40,287 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:39:40] "GET /static/google_sync.js HTTP/1.1" 200 -
+2026-08-30 13:39:40,301 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:39:40] "GET /manifest.webmanifest HTTP/1.1" 200 -
+2026-08-30 13:39:40,349 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:39:40] "GET /static/optimistic.js?v=1782475801 HTTP/1.1" 200 -
+2026-08-30 13:39:40,350 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:39:40] "GET /static/manual-bill.js?v=1785851417 HTTP/1.1" 200 -
+2026-08-30 13:39:40,351 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:39:40] "GET /static/banking.js HTTP/1.1" 200 -
+2026-08-30 13:39:40,358 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:39:40] "GET /static/register.js?v=1787556156 HTTP/1.1" 200 -
+2026-08-30 13:39:40,359 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:39:40] "GET /static/bills.js?v=1787556155 HTTP/1.1" 200 -
+2026-08-30 13:39:40,374 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:39:40] "GET /static/script.js?v=1787981410 HTTP/1.1" 200 -
+2026-08-30 13:39:40,383 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:39:40] "GET /static/shift.js HTTP/1.1" 200 -
+2026-08-30 13:39:40,428 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:39:40] "GET /static/analytics.js HTTP/1.1" 200 -
+2026-08-30 13:39:40,457 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:39:40] "GET /static/modal-back.js?v=1786347465 HTTP/1.1" 200 -
+2026-08-30 13:39:40,475 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:39:40] "GET /firebase-config.js HTTP/1.1" 200 -
+2026-08-30 13:39:40,500 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:39:40] "GET /static/expense-presets-admin.js HTTP/1.1" 200 -
+2026-08-30 13:39:40,501 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:39:40] "GET /static/doc-scan.js?v=1786347466 HTTP/1.1" 200 -
+2026-08-30 13:39:40,503 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:39:40] "GET /static/nice-select.js?v=1786433402 HTTP/1.1" 200 -
+2026-08-30 13:39:40,512 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:39:40] "GET /static/expense.js?v=1787905721 HTTP/1.1" 200 -
+2026-08-30 13:39:40,532 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:39:40] "GET /static/booking.js?v=1788071732 HTTP/1.1" 200 -
+2026-08-30 13:39:40,547 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:39:40] "GET /static/settle-later.js HTTP/1.1" 200 -
+2026-08-30 13:39:40,548 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:39:40] "GET /static/settle-later-fix.js HTTP/1.1" 200 -
+2026-08-30 13:39:40,568 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:39:40] "GET /static/customer-docs.js?v=1787916231 HTTP/1.1" 200 -
+2026-08-30 13:39:40,569 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:39:40] "GET /static/room-cleaning.js HTTP/1.1" 200 -
+2026-08-30 13:39:40,570 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:39:40] "GET /static/transaction-tracking.js?v=1787307804 HTTP/1.1" 200 -
+2026-08-30 13:39:40,595 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:39:40] "GET /static/customer-manager.js?v=1781336331 HTTP/1.1" 200 -
+2026-08-30 13:39:40,627 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:39:40] "GET /static/laundry.js HTTP/1.1" 200 -
+2026-08-30 13:39:40,704 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:39:40] "GET /static/maintenance.js?v=1787916699 HTTP/1.1" 200 -
+2026-08-30 13:39:40,737 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:39:40] "GET /static/staff.js?v=1788077345 HTTP/1.1" 200 -
+2026-08-30 13:39:40,754 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:39:40] "GET /static/housekeeping-mode.js HTTP/1.1" 200 -
+2026-08-30 13:39:40,765 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:39:40] "GET /static/daily-insights.js?v=1784108873 HTTP/1.1" 200 -
+2026-08-30 13:39:40,766 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:39:40] "GET /static/admin-users.js HTTP/1.1" 200 -
+2026-08-30 13:39:40,892 - config - WARNING - require_auth: dev-mode GET without auth allowed
+2026-08-30 13:39:40,896 - config - WARNING - require_auth: dev-mode GET without auth allowed
+2026-08-30 13:39:40,901 - config - WARNING - require_auth: dev-mode GET without auth allowed
+2026-08-30 13:39:40,985 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:39:40] "GET /static/icons/favicon-32.png HTTP/1.1" 200 -
+2026-08-30 13:39:40,997 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:39:40] "[36mGET /static/icons/icon-192.png HTTP/1.1[0m" 304 -
+2026-08-30 13:39:41,691 - config - WARNING - verify_token: clock skew detected — server is 2s behind Firebase. Sleeping and retrying. Please run 'w32tm /resync' (Windows) or 'sudo ntpdate -s pool.ntp.org' (Linux) to sync the system clock and avoid this delay.
+2026-08-30 13:39:41,692 - config - WARNING - verify_token: clock skew detected — server is 2s behind Firebase. Sleeping and retrying. Please run 'w32tm /resync' (Windows) or 'sudo ntpdate -s pool.ntp.org' (Linux) to sync the system clock and avoid this delay.
+2026-08-30 13:39:42,390 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:39:42] "GET /get_transaction_metadata HTTP/1.1" 200 -
+2026-08-30 13:39:42,468 - config - INFO - [PERF] parallel fetch (rooms+totals+payments+expenses): 1.574s, 14 payment docs, 4 expense docs
+2026-08-30 13:39:42,469 - config - INFO - [PERF] /get_data TOTAL: 1.575s
+2026-08-30 13:39:42,473 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:39:42] "GET /get_data HTTP/1.1" 200 -
+2026-08-30 13:39:42,512 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:39:42] "GET /get_upcoming_bookings HTTP/1.1" 200 -
+2026-08-30 13:39:44,701 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:39:44] "GET /api/user-directory HTTP/1.1" 200 -
+2026-08-30 13:39:47,496 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:39:47] "GET /api/auth/me HTTP/1.1" 200 -
+2026-08-30 13:39:48,316 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:39:48] "GET /staff/list HTTP/1.1" 200 -
+2026-08-30 13:39:49,325 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:39:49] "GET /staff/attendance?start=2026-08-01&end=2026-08-31 HTTP/1.1" 200 -
+2026-08-30 13:40:05,498 - config - INFO - Firebase initialised — env=PROD project='cibara-software-61512' bucket='cibara-software-61512.firebasestorage.app' source=file:cibara-software-Prod.json
+2026-08-30 13:40:05,500 - services.payment_service - INFO - PaymentService initialised (payments collection)
+2026-08-30 13:40:05,500 - services.customer_service - INFO - CustomerService initialised (customers collection)
+2026-08-30 13:40:05,500 - services.pdf_service - INFO - PdfService initialised (bills collection)
+2026-08-30 13:40:05,500 - services.expense_service - INFO - ExpenseService initialised (expenses collection)
+2026-08-30 13:40:05,501 - services.expense_presets_service - INFO - ExpensePresetsService initialised (expense_presets collection)
+2026-08-30 13:40:05,501 - services.ocr_service - INFO - OCR: GEMINI_API_KEY not set — OCR disabled
+2026-08-30 13:40:05,501 - services.bills_service - INFO - BillsService initialised (bills collection)
+2026-08-30 13:40:05,531 - services.banking.counters - INFO - Banking.counters initialised
+2026-08-30 13:40:05,532 - services.banking.bill_events - INFO - Banking.bill_events initialised
+2026-08-30 13:40:05,532 - services.banking.bank_accounts - INFO - Banking.bank_accounts initialised
+2026-08-30 13:40:05,532 - services.banking.cash_receipts - INFO - Banking.cash_receipts initialised
+2026-08-30 13:40:05,533 - services.banking.cash_deposits - INFO - Banking.cash_deposits initialised
+2026-08-30 13:40:05,533 - services.banking.cash_adjustments - INFO - Banking.cash_adjustments initialised
+2026-08-30 13:40:05,533 - services.banking.validators - INFO - Banking.validators initialised
+2026-08-30 13:40:05,534 - services.banking - INFO - Banking package initialised
+2026-08-30 13:40:05,537 - config - INFO - Checking Firebase data structure...
+2026-08-30 13:40:05,719 - config - WARNING - [WARN] Env var API_KEY not set - running in dev mode for this feature
+2026-08-30 13:40:05,861 - config - INFO - Checking Firebase data structure...
+2026-08-30 13:40:05,875 - werkzeug - INFO - [31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:5000
+ * Running on http://192.168.1.38:5000
+2026-08-30 13:40:05,876 - werkzeug - INFO - [33mPress CTRL+C to quit[0m
+2026-08-30 13:40:30,408 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:30] "GET / HTTP/1.1" 200 -
+2026-08-30 13:40:30,492 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:30] "GET /firebase-config.js HTTP/1.1" 200 -
+2026-08-30 13:40:30,499 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:30] "GET /static/permissions.js HTTP/1.1" 200 -
+2026-08-30 13:40:30,515 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:30] "GET /static/user-directory.js HTTP/1.1" 200 -
+2026-08-30 13:40:30,517 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:30] "GET /static/attribution.js HTTP/1.1" 200 -
+2026-08-30 13:40:30,519 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:30] "GET /static/auth.js HTTP/1.1" 200 -
+2026-08-30 13:40:30,522 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:30] "GET /static/booking.css?v=1785758972 HTTP/1.1" 200 -
+2026-08-30 13:40:30,525 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:30] "GET /static/laundry.css HTTP/1.1" 200 -
+2026-08-30 13:40:30,532 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:30] "GET /static/style.css?v=1787981227 HTTP/1.1" 200 -
+2026-08-30 13:40:30,546 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:30] "GET /static/banking.css HTTP/1.1" 200 -
+2026-08-30 13:40:30,549 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:30] "GET /static/maintenance.css HTTP/1.1" 200 -
+2026-08-30 13:40:30,553 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:30] "GET /static/staff.css?v=1788076937 HTTP/1.1" 200 -
+2026-08-30 13:40:30,559 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:30] "GET /static/daily-insights.css?v=1784106826 HTTP/1.1" 200 -
+2026-08-30 13:40:30,566 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:30] "GET /static/settle-later.css HTTP/1.1" 200 -
+2026-08-30 13:40:30,570 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:30] "GET /static/room-attribution.js HTTP/1.1" 200 -
+2026-08-30 13:40:30,586 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:30] "GET /static/google_sync.js HTTP/1.1" 200 -
+2026-08-30 13:40:30,586 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:30] "GET /manifest.webmanifest HTTP/1.1" 200 -
+2026-08-30 13:40:30,668 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:30] "GET /static/optimistic.js?v=1782475801 HTTP/1.1" 200 -
+2026-08-30 13:40:30,669 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:30] "GET /static/manual-bill.js?v=1785851417 HTTP/1.1" 200 -
+2026-08-30 13:40:30,671 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:30] "GET /static/banking.js HTTP/1.1" 200 -
+2026-08-30 13:40:30,677 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:30] "GET /static/register.js?v=1787556156 HTTP/1.1" 200 -
+2026-08-30 13:40:30,681 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:30] "GET /static/script.js?v=1787981410 HTTP/1.1" 200 -
+2026-08-30 13:40:30,682 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:30] "GET /static/bills.js?v=1787556155 HTTP/1.1" 200 -
+2026-08-30 13:40:30,692 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:30] "GET /static/shift.js HTTP/1.1" 200 -
+2026-08-30 13:40:30,694 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:30] "GET /static/analytics.js HTTP/1.1" 200 -
+2026-08-30 13:40:30,720 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:30] "GET /static/modal-back.js?v=1786347465 HTTP/1.1" 200 -
+2026-08-30 13:40:30,746 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:30] "GET /static/nice-select.js?v=1786433402 HTTP/1.1" 200 -
+2026-08-30 13:40:30,746 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:30] "GET /static/doc-scan.js?v=1786347466 HTTP/1.1" 200 -
+2026-08-30 13:40:30,753 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:30] "GET /static/expense.js?v=1787905721 HTTP/1.1" 200 -
+2026-08-30 13:40:30,775 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:30] "GET /static/expense-presets-admin.js HTTP/1.1" 200 -
+2026-08-30 13:40:30,785 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:30] "GET /static/booking.js?v=1788071732 HTTP/1.1" 200 -
+2026-08-30 13:40:30,811 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:30] "GET /firebase-config.js HTTP/1.1" 200 -
+2026-08-30 13:40:30,817 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:30] "GET /static/settle-later.js HTTP/1.1" 200 -
+2026-08-30 13:40:30,832 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:30] "GET /static/settle-later-fix.js HTTP/1.1" 200 -
+2026-08-30 13:40:30,836 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:30] "GET /static/transaction-tracking.js?v=1787307804 HTTP/1.1" 200 -
+2026-08-30 13:40:30,844 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:30] "GET /static/room-cleaning.js HTTP/1.1" 200 -
+2026-08-30 13:40:30,848 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:30] "GET /static/customer-docs.js?v=1787916231 HTTP/1.1" 200 -
+2026-08-30 13:40:30,853 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:30] "GET /static/customer-manager.js?v=1781336331 HTTP/1.1" 200 -
+2026-08-30 13:40:30,856 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:30] "GET /static/laundry.js HTTP/1.1" 200 -
+2026-08-30 13:40:30,885 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:30] "GET /static/maintenance.js?v=1787916699 HTTP/1.1" 200 -
+2026-08-30 13:40:30,888 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:30] "GET /static/staff.js?v=1788077345 HTTP/1.1" 200 -
+2026-08-30 13:40:30,895 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:30] "GET /static/daily-insights.js?v=1784108873 HTTP/1.1" 200 -
+2026-08-30 13:40:30,896 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:30] "GET /static/housekeeping-mode.js HTTP/1.1" 200 -
+2026-08-30 13:40:30,899 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:30] "GET /static/admin-users.js HTTP/1.1" 200 -
+2026-08-30 13:40:31,134 - config - WARNING - require_auth: dev-mode GET without auth allowed
+2026-08-30 13:40:31,135 - config - WARNING - require_auth: dev-mode GET without auth allowed
+2026-08-30 13:40:31,135 - config - WARNING - require_auth: dev-mode GET without auth allowed
+2026-08-30 13:40:31,213 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:31] "[36mGET /static/icons/icon-192.png HTTP/1.1[0m" 304 -
+2026-08-30 13:40:31,213 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:31] "GET /static/icons/favicon-32.png HTTP/1.1" 200 -
+2026-08-30 13:40:31,590 - config - WARNING - require_auth: dev-mode GET without auth allowed
+2026-08-30 13:40:31,592 - config - WARNING - require_auth: dev-mode GET without auth allowed
+2026-08-30 13:40:31,593 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:31] "[31m[1mGET /staff/list HTTP/1.1[0m" 401 -
+2026-08-30 13:40:31,594 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:31] "[31m[1mGET /staff/attendance?start=2026-08-01&end=2026-08-31 HTTP/1.1[0m" 401 -
+2026-08-30 13:40:31,649 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:31] "GET /login HTTP/1.1" 200 -
+2026-08-30 13:40:31,733 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:31] "GET /static/login.css HTTP/1.1" 200 -
+2026-08-30 13:40:31,736 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:31] "GET /firebase-config.js HTTP/1.1" 200 -
+2026-08-30 13:40:31,740 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:31] "GET /static/login.js HTTP/1.1" 200 -
+2026-08-30 13:40:31,744 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:31] "[36mGET /manifest.webmanifest HTTP/1.1[0m" 304 -
+2026-08-30 13:40:31,838 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:31] "[36mGET /static/icons/icon-192.png HTTP/1.1[0m" 304 -
+2026-08-30 13:40:32,320 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:32] "GET / HTTP/1.1" 200 -
+2026-08-30 13:40:32,404 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:32] "GET /firebase-config.js HTTP/1.1" 200 -
+2026-08-30 13:40:32,406 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:32] "GET /static/permissions.js HTTP/1.1" 200 -
+2026-08-30 13:40:32,437 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:32] "GET /static/auth.js HTTP/1.1" 200 -
+2026-08-30 13:40:32,438 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:32] "GET /static/attribution.js HTTP/1.1" 200 -
+2026-08-30 13:40:32,440 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:32] "GET /static/user-directory.js HTTP/1.1" 200 -
+2026-08-30 13:40:32,441 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:32] "GET /static/staff.css?v=1788076937 HTTP/1.1" 200 -
+2026-08-30 13:40:32,449 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:32] "[36mGET /manifest.webmanifest HTTP/1.1[0m" 304 -
+2026-08-30 13:40:32,454 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:32] "GET /static/style.css?v=1787981227 HTTP/1.1" 200 -
+2026-08-30 13:40:32,455 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:32] "GET /static/room-attribution.js HTTP/1.1" 200 -
+2026-08-30 13:40:32,486 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:32] "GET /static/booking.css?v=1785758972 HTTP/1.1" 200 -
+2026-08-30 13:40:32,490 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:32] "GET /static/laundry.css HTTP/1.1" 200 -
+2026-08-30 13:40:32,553 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:32] "GET /static/banking.css HTTP/1.1" 200 -
+2026-08-30 13:40:32,565 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:32] "GET /static/daily-insights.css?v=1784106826 HTTP/1.1" 200 -
+2026-08-30 13:40:32,600 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:32] "GET /static/settle-later.css HTTP/1.1" 200 -
+2026-08-30 13:40:32,603 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:32] "GET /static/maintenance.css HTTP/1.1" 200 -
+2026-08-30 13:40:32,607 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:32] "GET /static/google_sync.js HTTP/1.1" 200 -
+2026-08-30 13:40:32,620 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:32] "GET /static/manual-bill.js?v=1785851417 HTTP/1.1" 200 -
+2026-08-30 13:40:32,629 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:32] "GET /get_transaction_metadata HTTP/1.1" 200 -
+2026-08-30 13:40:32,653 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:32] "GET /static/bills.js?v=1787556155 HTTP/1.1" 200 -
+2026-08-30 13:40:32,655 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:32] "GET /static/script.js?v=1787981410 HTTP/1.1" 200 -
+2026-08-30 13:40:32,670 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:32] "GET /static/modal-back.js?v=1786347465 HTTP/1.1" 200 -
+2026-08-30 13:40:32,688 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:32] "GET /static/analytics.js HTTP/1.1" 200 -
+2026-08-30 13:40:32,694 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:32] "GET /static/nice-select.js?v=1786433402 HTTP/1.1" 200 -
+2026-08-30 13:40:32,697 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:32] "GET /firebase-config.js HTTP/1.1" 200 -
+2026-08-30 13:40:32,718 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:32] "GET /static/expense.js?v=1787905721 HTTP/1.1" 200 -
+2026-08-30 13:40:32,727 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:32] "GET /static/expense-presets-admin.js HTTP/1.1" 200 -
+2026-08-30 13:40:32,745 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:32] "GET /static/staff.js?v=1788077345 HTTP/1.1" 200 -
+2026-08-30 13:40:32,763 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:32] "GET /static/doc-scan.js?v=1786347466 HTTP/1.1" 200 -
+2026-08-30 13:40:32,773 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:32] "GET /static/settle-later.js HTTP/1.1" 200 -
+2026-08-30 13:40:32,786 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:32] "GET /static/register.js?v=1787556156 HTTP/1.1" 200 -
+2026-08-30 13:40:32,797 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:32] "GET /static/booking.js?v=1788071732 HTTP/1.1" 200 -
+2026-08-30 13:40:32,806 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:32] "GET /static/settle-later-fix.js HTTP/1.1" 200 -
+2026-08-30 13:40:32,815 - config - INFO - [PERF] parallel fetch (rooms+totals+payments+expenses): 1.680s, 14 payment docs, 4 expense docs
+2026-08-30 13:40:32,816 - config - INFO - [PERF] /get_data TOTAL: 1.681s
+2026-08-30 13:40:32,829 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:32] "GET /static/room-cleaning.js HTTP/1.1" 200 -
+2026-08-30 13:40:32,830 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:32] "GET /get_data HTTP/1.1" 200 -
+2026-08-30 13:40:32,847 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:32] "GET /static/google_sync.js HTTP/1.1" 200 -
+2026-08-30 13:40:32,850 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:32] "GET /static/customer-manager.js?v=1781336331 HTTP/1.1" 200 -
+2026-08-30 13:40:32,853 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:32] "GET /static/customer-docs.js?v=1787916231 HTTP/1.1" 200 -
+2026-08-30 13:40:32,869 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:32] "GET /static/transaction-tracking.js?v=1787307804 HTTP/1.1" 200 -
+2026-08-30 13:40:32,887 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:32] "GET /get_upcoming_bookings HTTP/1.1" 200 -
+2026-08-30 13:40:32,891 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:32] "GET /static/housekeeping-mode.js HTTP/1.1" 200 -
+2026-08-30 13:40:32,900 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:32] "GET /static/laundry.js HTTP/1.1" 200 -
+2026-08-30 13:40:32,903 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:32] "GET /static/maintenance.js?v=1787916699 HTTP/1.1" 200 -
+2026-08-30 13:40:32,906 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:32] "GET /static/admin-users.js HTTP/1.1" 200 -
+2026-08-30 13:40:32,913 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:32] "GET /static/optimistic.js?v=1782475801 HTTP/1.1" 200 -
+2026-08-30 13:40:32,921 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:32] "GET /static/banking.js HTTP/1.1" 200 -
+2026-08-30 13:40:32,922 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:32] "GET /static/shift.js HTTP/1.1" 200 -
+2026-08-30 13:40:32,940 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:32] "GET /static/daily-insights.js?v=1784108873 HTTP/1.1" 200 -
+2026-08-30 13:40:33,034 - config - WARNING - require_auth: dev-mode GET without auth allowed
+2026-08-30 13:40:33,035 - config - WARNING - require_auth: dev-mode GET without auth allowed
+2026-08-30 13:40:33,035 - config - WARNING - require_auth: dev-mode GET without auth allowed
+2026-08-30 13:40:33,038 - config - INFO - [PERF] /get_data served from cache
+2026-08-30 13:40:33,039 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:33] "GET /get_data HTTP/1.1" 200 -
+2026-08-30 13:40:33,148 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:33] "[36mGET /static/icons/icon-192.png HTTP/1.1[0m" 304 -
+2026-08-30 13:40:33,166 - config - WARNING - require_auth: dev-mode GET without auth allowed
+2026-08-30 13:40:33,168 - config - WARNING - require_auth: dev-mode GET without auth allowed
+2026-08-30 13:40:33,168 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:33] "[31m[1mGET /staff/list HTTP/1.1[0m" 401 -
+2026-08-30 13:40:33,169 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:33] "[31m[1mGET /staff/attendance?start=2026-08-01&end=2026-08-31 HTTP/1.1[0m" 401 -
+2026-08-30 13:40:33,391 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:33] "GET /get_transaction_metadata HTTP/1.1" 200 -
+2026-08-30 13:40:34,655 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:34] "GET /get_upcoming_bookings HTTP/1.1" 200 -
+2026-08-30 13:40:39,866 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:39] "GET /api/user-directory HTTP/1.1" 200 -
+2026-08-30 13:40:40,148 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:40] "GET /api/auth/me HTTP/1.1" 200 -
+2026-08-30 13:40:40,693 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:40] "GET /laundry/logs?month=2026-08 HTTP/1.1" 200 -
+2026-08-30 13:40:40,976 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:40] "GET /laundry/locks?month=2026-08 HTTP/1.1" 200 -
+2026-08-30 13:40:41,427 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:41] "GET /staff/list HTTP/1.1" 200 -
+2026-08-30 13:40:41,904 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:41] "GET /laundry/settings HTTP/1.1" 200 -
+2026-08-30 13:40:42,304 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:42] "GET /staff/attendance?start=2026-08-01&end=2026-08-31 HTTP/1.1" 200 -
+2026-08-30 13:40:43,587 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:43] "GET /sw.js HTTP/1.1" 200 -
+2026-08-30 13:40:49,112 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:40:49] "[31m[1mPOST /staff/attendance/mark HTTP/1.1[0m" 409 -
+2026-08-30 13:44:21,825 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:44:21] "GET / HTTP/1.1" 200 -
+2026-08-30 13:44:21,918 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:44:21] "GET /firebase-config.js HTTP/1.1" 200 -
+2026-08-30 13:44:21,939 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:44:21] "GET /static/permissions.js HTTP/1.1" 200 -
+2026-08-30 13:44:21,941 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:44:21] "GET /static/maintenance.css HTTP/1.1" 200 -
+2026-08-30 13:44:21,941 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:44:21] "GET /static/banking.css HTTP/1.1" 200 -
+2026-08-30 13:44:21,941 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:44:21] "GET /static/laundry.css HTTP/1.1" 200 -
+2026-08-30 13:44:21,942 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:44:21] "GET /static/booking.css?v=1785758972 HTTP/1.1" 200 -
+2026-08-30 13:44:21,949 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:44:21] "GET /static/style.css?v=1787981227 HTTP/1.1" 200 -
+2026-08-30 13:44:21,961 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:44:21] "GET /static/staff.css?v=1788076937 HTTP/1.1" 200 -
+2026-08-30 13:44:21,975 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:44:21] "GET /static/daily-insights.css?v=1784106826 HTTP/1.1" 200 -
+2026-08-30 13:44:21,979 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:44:21] "GET /static/settle-later.css HTTP/1.1" 200 -
+2026-08-30 13:44:21,980 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:44:21] "GET /static/auth.js HTTP/1.1" 200 -
+2026-08-30 13:44:21,983 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:44:21] "GET /static/user-directory.js HTTP/1.1" 200 -
+2026-08-30 13:44:21,987 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:44:21] "GET /static/attribution.js HTTP/1.1" 200 -
+2026-08-30 13:44:22,007 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:44:22] "GET /static/google_sync.js HTTP/1.1" 200 -
+2026-08-30 13:44:22,008 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:44:22] "GET /static/room-attribution.js HTTP/1.1" 200 -
+2026-08-30 13:44:22,013 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:44:22] "GET /manifest.webmanifest HTTP/1.1" 200 -
+2026-08-30 13:44:22,602 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:44:22] "GET /static/optimistic.js?v=1782475801 HTTP/1.1" 200 -
+2026-08-30 13:44:22,602 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:44:22] "GET /static/manual-bill.js?v=1785851417 HTTP/1.1" 200 -
+2026-08-30 13:44:22,604 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:44:22] "GET /static/banking.js HTTP/1.1" 200 -
+2026-08-30 13:44:22,612 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:44:22] "GET /static/script.js?v=1787981410 HTTP/1.1" 200 -
+2026-08-30 13:44:22,614 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:44:22] "GET /static/register.js?v=1787556156 HTTP/1.1" 200 -
+2026-08-30 13:44:22,619 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:44:22] "GET /static/bills.js?v=1787556155 HTTP/1.1" 200 -
+2026-08-30 13:44:22,624 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:44:22] "GET /static/shift.js HTTP/1.1" 200 -
+2026-08-30 13:44:22,630 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:44:22] "GET /static/analytics.js HTTP/1.1" 200 -
+2026-08-30 13:44:22,649 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:44:22] "GET /static/modal-back.js?v=1786347465 HTTP/1.1" 200 -
+2026-08-30 13:44:22,671 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:44:22] "GET /static/nice-select.js?v=1786433402 HTTP/1.1" 200 -
+2026-08-30 13:44:22,702 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:44:22] "GET /static/expense-presets-admin.js HTTP/1.1" 200 -
+2026-08-30 13:44:22,702 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:44:22] "GET /static/doc-scan.js?v=1786347466 HTTP/1.1" 200 -
+2026-08-30 13:44:22,704 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:44:22] "GET /static/expense.js?v=1787905721 HTTP/1.1" 200 -
+2026-08-30 13:44:22,718 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:44:22] "GET /static/settle-later.js HTTP/1.1" 200 -
+2026-08-30 13:44:22,722 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:44:22] "GET /static/booking.js?v=1788071732 HTTP/1.1" 200 -
+2026-08-30 13:44:22,727 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:44:22] "GET /static/settle-later-fix.js HTTP/1.1" 200 -
+2026-08-30 13:44:22,741 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:44:22] "GET /firebase-config.js HTTP/1.1" 200 -
+2026-08-30 13:44:22,755 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:44:22] "GET /static/room-cleaning.js HTTP/1.1" 200 -
+2026-08-30 13:44:22,759 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:44:22] "GET /static/customer-docs.js?v=1787916231 HTTP/1.1" 200 -
+2026-08-30 13:44:22,761 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:44:22] "GET /static/transaction-tracking.js?v=1787307804 HTTP/1.1" 200 -
+2026-08-30 13:44:22,782 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:44:22] "GET /static/customer-manager.js?v=1781336331 HTTP/1.1" 200 -
+2026-08-30 13:44:22,784 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:44:22] "GET /static/laundry.js HTTP/1.1" 200 -
+2026-08-30 13:44:22,788 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:44:22] "GET /static/maintenance.js?v=1787916699 HTTP/1.1" 200 -
+2026-08-30 13:44:22,803 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:44:22] "GET /static/staff.js?v=1788077527 HTTP/1.1" 200 -
+2026-08-30 13:44:22,824 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:44:22] "GET /static/housekeeping-mode.js HTTP/1.1" 200 -
+2026-08-30 13:44:22,825 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:44:22] "GET /static/daily-insights.js?v=1784108873 HTTP/1.1" 200 -
+2026-08-30 13:44:22,827 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:44:22] "GET /static/admin-users.js HTTP/1.1" 200 -
+2026-08-30 13:44:23,192 - config - WARNING - require_auth: dev-mode GET without auth allowed
+2026-08-30 13:44:23,193 - config - WARNING - require_auth: dev-mode GET without auth allowed
+2026-08-30 13:44:23,194 - config - WARNING - require_auth: dev-mode GET without auth allowed
+2026-08-30 13:44:23,270 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:44:23] "GET /static/icons/favicon-32.png HTTP/1.1" 200 -
+2026-08-30 13:44:23,271 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:44:23] "[36mGET /static/icons/icon-192.png HTTP/1.1[0m" 304 -
+2026-08-30 13:44:23,536 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:44:23] "GET /get_transaction_metadata HTTP/1.1" 200 -
+2026-08-30 13:44:23,679 - config - WARNING - require_auth: dev-mode GET without auth allowed
+2026-08-30 13:44:23,681 - config - WARNING - require_auth: dev-mode GET without auth allowed
+2026-08-30 13:44:23,682 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:44:23] "[31m[1mGET /staff/list HTTP/1.1[0m" 401 -
+2026-08-30 13:44:23,682 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:44:23] "[31m[1mGET /staff/attendance?start=2026-08-01&end=2026-08-31 HTTP/1.1[0m" 401 -
+2026-08-30 13:44:23,968 - config - WARNING - verify_token: clock skew detected — server is 2s behind Firebase. Sleeping and retrying. Please run 'w32tm /resync' (Windows) or 'sudo ntpdate -s pool.ntp.org' (Linux) to sync the system clock and avoid this delay.
+2026-08-30 13:44:23,970 - config - WARNING - verify_token: clock skew detected — server is 2s behind Firebase. Sleeping and retrying. Please run 'w32tm /resync' (Windows) or 'sudo ntpdate -s pool.ntp.org' (Linux) to sync the system clock and avoid this delay.
+2026-08-30 13:44:24,825 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:44:24] "GET /get_upcoming_bookings HTTP/1.1" 200 -
+2026-08-30 13:44:25,226 - config - INFO - [PERF] parallel fetch (rooms+totals+payments+expenses): 2.031s, 14 payment docs, 4 expense docs
+2026-08-30 13:44:25,227 - config - INFO - [PERF] /get_data TOTAL: 2.032s
+2026-08-30 13:44:25,232 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:44:25] "GET /get_data HTTP/1.1" 200 -
+2026-08-30 13:44:27,074 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:44:27] "GET /api/user-directory HTTP/1.1" 200 -
+2026-08-30 13:44:29,193 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:44:29] "GET /staff/list HTTP/1.1" 200 -
+2026-08-30 13:44:29,688 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:44:29] "GET /api/auth/me HTTP/1.1" 200 -
+2026-08-30 13:44:30,459 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:44:30] "GET /staff/attendance?start=2026-08-01&end=2026-08-31 HTTP/1.1" 200 -
+2026-08-30 13:44:39,638 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:44:39] "POST /staff/attendance/mark HTTP/1.1" 200 -
+2026-08-30 13:44:45,343 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:44:45] "POST /staff/attendance/mark HTTP/1.1" 200 -
+2026-08-30 13:44:45,736 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:44:45] "POST /staff/attendance/mark HTTP/1.1" 200 -
+2026-08-30 13:44:45,783 - werkzeug - INFO - 127.0.0.1 - - [30/Aug/2026 13:44:45] "POST /staff/attendance/mark HTTP/1.1" 200 -

@@ -310,8 +310,53 @@ def _attendance_doc_id(staff_id: str, date: str, shift: Optional[str]) -> str:
             else "{}__{}".format(staff_id, date))
 
 
+def _first_marked_ist_date(rec: dict) -> Optional[str]:
+    """
+    The IST calendar date on which this record was FIRST entered.
+
+    `marked_at` is rewritten on every change, so an edited record would
+    otherwise look freshly marked and stay editable forever. history[0] is
+    the oldest superseded version, and its `marked_at` is the original
+    entry's timestamp — that is the day that counts.
+    """
+    hist = rec.get("history") or []
+    stamp = (hist[0].get("marked_at") if hist else None) or rec.get("marked_at")
+    if not stamp:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(stamp).replace("Z", "+00:00"))
+    except Exception:
+        return None
+    if dt.tzinfo is None:                       # legacy naive stamps are UTC
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(IST).strftime("%Y-%m-%d")
+
+
+def attendance_frozen(rec: Optional[dict]) -> bool:
+    """
+    True when this record may no longer be CHANGED.
+
+    The rule: a mark is editable only on the IST calendar day it was first
+    entered. Marking the 29th on the 29th leaves it editable that day and
+    frozen from the 30th. Back-filling the 29th on the 30th is a first
+    entry, not a change, so it is allowed and then stays correctable for the
+    rest of the 30th, freezing on the 31st. Creating a record for a day
+    nobody marked is therefore never blocked by this — only rewriting one.
+
+    Records written before this rule existed (or carrying an unreadable
+    timestamp) fall back to their own `date`: a past day is frozen, today is
+    still open. Erring towards frozen is deliberate; the alternative is a
+    silent bypass for exactly the oldest records.
+    """
+    if not rec:
+        return False
+    day = _first_marked_ist_date(rec) or rec.get("date")
+    return bool(day) and day != _ist_today()
+
+
 def mark_attendance(staff_id: str, date: str, status: str,
-                    user: Optional[dict], shift: Optional[str] = None) -> dict:
+                    user: Optional[dict], shift: Optional[str] = None,
+                    allow_amend: bool = False) -> dict:
     """
     Idempotently set (or clear) one staff member's attendance for a date.
     status: "full" | "half" | "absent" | "clear".
@@ -320,9 +365,13 @@ def mark_attendance(staff_id: str, date: str, status: str,
     records per day), and must be omitted/None for everyone else (they
     keep the original single record-per-day scheme).
 
+    allow_amend: caller holds staff.attendance.amend (admin). Lets them
+    change a record that is already frozen; see attendance_frozen().
+
     Guards: staff must exist & be active, date must be valid and not in
-    the future, and the date must not fall inside an already-paid salary
-    period (paid history must stay immutable).
+    the future, the date must not fall inside an already-paid salary
+    period (paid history must stay immutable), and an existing record may
+    only be changed on the day it was entered.
     """
     staff = get_staff(staff_id)
     if not staff:
@@ -358,6 +407,21 @@ def mark_attendance(staff_id: str, date: str, status: str,
                 paid.get("period_start"), paid.get("period_end")))
 
     doc_id = _attendance_doc_id(staff_id, date, shift)
+    prev_snap = _att_ref().document(doc_id).get()
+    prev = ((prev_snap.to_dict() or {})
+            if getattr(prev_snap, "exists", False) else None)
+
+    # Past days are write-once. Creating a record for a day nobody marked is
+    # always allowed — that is the back-fill case, and it is how a missed
+    # staff member gets recorded at all. CHANGING (or clearing) one after the
+    # day it was entered is not, because payroll is computed from these rows.
+    # Checked before the delete branch too: clearing a day is a change.
+    if prev is not None and not allow_amend and attendance_frozen(prev):
+        raise ValueError(
+            "Attendance for {} was entered on {} and can no longer be "
+            "changed. Ask an admin to amend it.".format(
+                date, _first_marked_ist_date(prev) or date))
+
     if status == "clear":
         _att_ref().document(doc_id).delete()
         return {"staff_id": staff_id, "date": date, "shift": shift,
@@ -376,9 +440,7 @@ def mark_attendance(staff_id: str, date: str, status: str,
     # (last 10 changes). Settles "I was present that day" disputes.
     # Limitation: clearing a day deletes the doc, so its history goes with
     # it — the app-level write_log in routes/staff.py still records the op.
-    prev_snap = _att_ref().document(doc_id).get()
-    if getattr(prev_snap, "exists", False):
-        prev = prev_snap.to_dict() or {}
+    if prev:
         if prev.get("status") and prev.get("status") != status:
             doc["history"] = (prev.get("history") or [])[-9:] + [{
                 "status": prev.get("status"),

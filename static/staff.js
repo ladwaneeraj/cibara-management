@@ -388,10 +388,17 @@
   // Compress a server attendance record into what the chooser popover
   // shows: who set the current mark, when, and (if it was changed) what
   // it was before and who set that.
+  //
+  // This projection is the ONLY per-cell record the grid keeps, so anything
+  // the UI needs off a record has to be copied here explicitly. `frozen` was
+  // missed on the first pass, which made _isFrozen() always false: every tap
+  // on a closed day reached the server and bounced back as a 409 toast —
+  // exactly the notification the lock was supposed to make unnecessary.
   function _attMeta(a) {
     var m = {
       by: (a.marked_by && a.marked_by.name) || "",
       at: a.marked_at || "",
+      frozen: !!a.frozen,
     };
     var h = a.history;
     if (h && h.length) {
@@ -525,6 +532,19 @@
       return p.start && p.end && p.start <= d && d <= p.end &&
         (p.excluded || []).indexOf(d) === -1;
     });
+  }
+
+  /* A mark is editable only on the day it was ENTERED, so history can't be
+     rewritten after the fact. The server decides (staff_service.py ::
+     attendance_frozen) and stamps `frozen` on each record for the calling
+     user — an admin holding staff.attendance.amend never sees it set. This
+     is presentation only: /staff/attendance/mark re-checks and returns 409.
+
+     A day with no record is never frozen, which is the point — a missed
+     staff member can still be back-filled later. Only rewriting is closed. */
+  function _isFrozen(sid, d, shift) {
+    var meta = _gridGetMeta(sid, d, shift);
+    return !!(meta && meta.frozen);
   }
 
   // ── gridData/gridMeta accessors — the cell value is a plain status
@@ -836,14 +856,21 @@
         }
         var future = ds > today;
         var locked = _isPaid(s.id, ds);
+        // Distinct from is-locked: a settled day is green (salary paid), a
+        // closed day is just no longer editable. Same "don't tap me" cursor,
+        // different reason, different tooltip.
+        var frozen = !locked && _isFrozen(s.id, ds, shift);
         if (future) cls.push("is-future");
+        if (frozen) cls.push("is-frozen");
         // A settled day is a flat fill, so there are no run edges to mark and
         // no need to look at the neighbouring days. The paid-start/mid/end/solo
         // classes and the two _isPaid lookups per locked cell went with them.
         if (locked) cls.push("is-locked");
         html += '<td class="' + cls.join(" ") + '" data-date="' + ds + '"' +
           (shift ? ' data-shift="' + shift + '"' : "") +
-          (locked ? ' title="Salary paid for this day — locked"' : "") + ">" +
+          (locked ? ' title="Salary paid for this day — locked"'
+                  : frozen ? ' title="Marked on an earlier day — closed for edits"'
+                  : "") + ">" +
           (st ? '<span class="m">' + CELL_LABEL[st] + "</span>" : "") + "</td>";
       }
       html += '<td class="stf-grid-total">' + fmtDays(worked) + "</td>" +
@@ -1025,6 +1052,13 @@
       return;
     }
 
+    // Closed day: swallow the tap silently. No toast. The cell already says
+    // so passively — not-allowed cursor, no hover highlight, dimmed mark,
+    // tooltip on the cell — and a manager scanning a month will brush past
+    // dozens of these, so an error toast per tap would be pure noise for a
+    // state the grid is already showing.
+    if (_isFrozen(sid, d, shift)) return;
+
     var prev = _gridGetStatus(sid, d, shift);
 
     if (!prev || (prev === "absent" && _isAutoMarked(sid, d, shift))) {
@@ -1090,6 +1124,7 @@
     if (!twin) return;
     if (_gridGetStatus(sid, d, twin)) return;    // already marked — leave it
     if (_isPaid(sid, d)) return;                 // locked by a salary payout
+    if (_isFrozen(sid, d, twin)) return;         // day closed — see _isFrozen
 
     _gridSetStatus(sid, d, twin, "absent");
     _autoMarked[_autoKey(sid, d, twin)] = true;
@@ -1170,6 +1205,16 @@
     }).catch(function (e) {
       _gridSetStatus(sid, d, shift, prev);
       keepScroll();
+      // A day can close underneath an open grid — left open across midnight,
+      // or a stale cached bundle. The server is right and the cell simply
+      // isn't editable, which is not an error worth a toast: adopt the
+      // server's verdict, lock the cell, repaint, say nothing.
+      if (/can no longer be changed/i.test(e.message || "")) {
+        var _m = _gridGetMeta(sid, d, shift);
+        if (_m) _m.frozen = true;
+        renderGrid();
+        return;
+      }
       renderGrid();
       notify(e.message, "error");
     });

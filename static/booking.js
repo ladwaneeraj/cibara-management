@@ -2341,6 +2341,10 @@ function showConvertBookingModal(bookingId) {
     if (remainingPayment) {
       remainingPayment.max = booking.balance;
       remainingPayment.value = booking.balance > 0 ? booking.balance : 0;
+      // Clear any "Later" lock left over from a previous open of this modal.
+      remainingPayment.readOnly = false;
+      remainingPayment.style.opacity = "";
+      delete remainingPayment.dataset.prevValue;
     }
 
     // Reset payment method to cash
@@ -2377,20 +2381,47 @@ function initializeConvertBookingForm() {
         this.classList.add("active");
         const paymentMethod = this.dataset.payment;
         document.getElementById("convert-payment-method").value = paymentMethod;
+
+        // "Later" collects nothing now - the whole balance rides on the room,
+        // exactly as it does for a walk-in check-in. Zero the field and lock
+        // it so the number on screen always matches what gets posted.
+        const amtInput = document.getElementById("convert-remaining-payment");
+        if (amtInput) {
+          if (paymentMethod === "balance") {
+            amtInput.dataset.prevValue = amtInput.value;
+            amtInput.value = 0;
+            amtInput.readOnly = true;
+            amtInput.style.opacity = "0.6";
+          } else if (amtInput.readOnly) {
+            amtInput.readOnly = false;
+            amtInput.style.opacity = "";
+            amtInput.value = amtInput.dataset.prevValue || amtInput.max || 0;
+          }
+        }
       });
     });
 
-  // Form submission
-  form.addEventListener("submit", async function (event) {
+  // ── Form submission - optimistic ─────────────────────────────────────
+  // The room card flips to occupied and the modal closes IMMEDIATELY; the
+  // POST runs in the background through optimistic.js's per-room FIFO queue
+  // and the card is rolled back with a loud error if the server refuses.
+  // Same pattern as the walk-in check-in in script.js. A double submit is
+  // additionally impossible server-side: convert_booking_to_checkin rejects
+  // a room that is no longer vacant.
+  form.addEventListener("submit", function (event) {
     event.preventDefault();
 
     const bookingId = document.getElementById("convert-booking-id").value;
-    const remainingPayment = parseInt(
-      document.getElementById("convert-remaining-payment").value || 0,
-    );
     const paymentMethod = document.getElementById(
       "convert-payment-method",
     ).value;
+    // "balance" = Pay Later. Nothing is collected at check-in.
+    const remainingPayment =
+      paymentMethod === "balance"
+        ? 0
+        : parseInt(
+            document.getElementById("convert-remaining-payment").value || 0,
+          );
 
     // Validation
     if (!bookingId) {
@@ -2409,7 +2440,6 @@ function initializeConvertBookingForm() {
       return;
     }
 
-    // Disable submit button
     const submitBtn = event.target.querySelector("button[type=submit]");
     if (!submitBtn) return;
 
@@ -2418,68 +2448,241 @@ function initializeConvertBookingForm() {
     submitBtn.innerHTML =
       '<span class="loader" style="width: 20px; height: 20px;"></span> Processing...';
 
-    try {
-      const response = await apiFetch("/convert_booking_to_checkin", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          booking_id: bookingId,
-          remaining_payment: remainingPayment,
-          payment_method: paymentMethod,
-        }),
-      });
+    const roomNumber = booking.room;
+    const modal = document.getElementById("convert-booking-modal");
+    const _body = {
+      booking_id: bookingId,
+      remaining_payment: remainingPayment,
+      payment_method: paymentMethod,
+    };
 
-      if (!response.ok) {
-        throw new Error(`Server responded with status: ${response.status}`);
+    // ── Predicted post-conversion room state ───────────────────────────
+    // Mirrors routes/bookings.py :: convert_booking_to_checkin. It exists
+    // only to paint the card in the same frame as the click;
+    // debouncedFetchData() re-hydrates from the server moments later and
+    // overwrites anything guessed wrong here. No money decision is made
+    // from these numbers.
+    const _predict = () => {
+      let nights = 1;
+      const _ci = new Date(booking.check_in_date);
+      const _co = new Date(booking.check_out_date);
+      const _d = Math.round((_co - _ci) / 86400000);
+      if (Number.isFinite(_d) && _d > 0) nights = _d;
+
+      const total = parseInt(booking.total_amount || 0) || 0;
+      const stored = parseInt(booking.rate_per_night || 0) || 0;
+      // Per-night price = whole-stay total / nights (the server's rule).
+      let price = total;
+      if (total > 0 && nights > 0) price = Math.round(total / nights);
+      else if (stored > 0) price = stored;
+
+      const isOta = isOtaPrepaid(booking.booking_source);
+      const paid = (parseInt(booking.paid_amount || 0) || 0) + remainingPayment;
+
+      return {
+        price: price,
+        // OTA/MMT stays are prepaid in full: zero balance, all nights charged.
+        balance: isOta ? 0 : price - paid,
+        renewalCount: isOta ? Math.max(nights - 1, 0) : 0,
+        payment: isOta ? "ota" : paymentMethod,
+      };
+    };
+
+    // Patch local state + repaint. Returns a snapshot for rollback.
+    const _applyPatch = () => {
+      const roomsMap = window.rooms || {};
+      const snap = {
+        room: roomsMap[roomNumber] ? { ...roomsMap[roomNumber] } : null,
+        bookingStatus: booking.status,
+        upcoming: (window.upcomingBookings || {})[roomNumber] || null,
+      };
+
+      const p = _predict();
+      const now = new Date();
+      const p2 = (n) => String(n).padStart(2, "0");
+      const nowStr =
+        `${now.getFullYear()}-${p2(now.getMonth() + 1)}-` +
+        `${p2(now.getDate())} ${p2(now.getHours())}:${p2(now.getMinutes())}`;
+
+      const patch = {
+        status: "occupied",
+        guest: {
+          name: booking.guest_name,
+          mobile: booking.guest_mobile,
+          price: p.price,
+          guests: booking.guest_count,
+          payment: p.payment,
+          balance: p.balance,
+          isAC: !!booking.is_ac,
+        },
+        balance: p.balance,
+        checkin_time: nowStr,
+        add_ons: [],
+        renewal_count: p.renewalCount,
+        booking_source: booking.booking_source || "normal",
+        gst_profile: null,
+      };
+      if (
+        window.CibaraState &&
+        typeof window.CibaraState.patchRoom === "function"
+      ) {
+        window.CibaraState.patchRoom(roomNumber, patch);
+      } else if (roomsMap[roomNumber]) {
+        window.rooms[roomNumber] = Object.assign({}, roomsMap[roomNumber], patch);
       }
 
-      const result = await response.json();
+      // The arrival dot belongs to a booking that has now arrived.
+      if (window.upcomingBookings) delete window.upcomingBookings[roomNumber];
 
-      if (result.success) {
-        // Assign serial number for booking check-in
-        if (typeof transactionTracker !== "undefined" && transactionTracker) {
-          const serialNumber = transactionTracker.processCheckin(
-            booking.room,
-            null,
-            true,
-          );
-          console.log(
-            `Assigned serial number ${serialNumber} to booking check-in for room ${booking.room}`,
-          );
-        }
+      booking.status = "checked_in";
 
-        // Close modal and refresh data
-        const convertModal = document.getElementById("convert-booking-modal");
-        if (convertModal) {
-          convertModal.classList.remove("show");
-        }
+      if (typeof renderRooms === "function") renderRooms();
+      if (typeof updateStats === "function") updateStats();
+      renderBookings();
 
-        // Reset form
-        event.target.reset();
+      return snap;
+    };
 
-        // Show success notification
-        showNotification(
-          result.message || "Booking converted to check-in successfully!",
-          "success",
+    const _restore = (snap) => {
+      const before = (snap && snap.room) || {};
+      // Explicit key-by-key undo. patchRoom MERGES, and a vacant room doc
+      // simply has no `guest` key - so replaying the snapshot alone would
+      // leave the guest we invented in place and the card would stay looking
+      // occupied after a failed write. Every key _applyPatch() writes must
+      // be named here.
+      const undo = {
+        status: before.status || "vacant",
+        guest: before.guest || null,
+        balance: before.balance || 0,
+        checkin_time: before.checkin_time || null,
+        add_ons: before.add_ons || [],
+        renewal_count: before.renewal_count || 0,
+        booking_source: before.booking_source || "normal",
+        gst_profile: before.gst_profile || null,
+      };
+      if (
+        window.CibaraState &&
+        typeof window.CibaraState.patchRoom === "function"
+      ) {
+        window.CibaraState.patchRoom(roomNumber, undo);
+      } else if (window.rooms && window.rooms[roomNumber]) {
+        window.rooms[roomNumber] = Object.assign(
+          {},
+          window.rooms[roomNumber],
+          undo,
         );
+      }
+      if (snap && snap.upcoming && window.upcomingBookings) {
+        window.upcomingBookings[roomNumber] = snap.upcoming;
+      }
+      if (snap) booking.status = snap.bookingStatus;
+      if (typeof renderRooms === "function") renderRooms();
+      if (typeof updateStats === "function") updateStats();
+      renderBookings();
+    };
 
-        // Refresh bookings and rooms
+    const _onSuccess = (result) => {
+      // Serial number for the register view.
+      if (typeof transactionTracker !== "undefined" && transactionTracker) {
+        try {
+          transactionTracker.processCheckin(roomNumber, null, true);
+        } catch (e) {
+          console.error("serial assignment failed:", e);
+        }
+      }
+      let message =
+        result.message || "Booking converted to check-in successfully!";
+      if (result.serial_number) message += ` (Serial #${result.serial_number})`;
+      showNotification(message, "success");
+
+      // Authoritative background hydrate - corrects any predicted value.
+      fetchBookings();
+      debouncedFetchData();
+    };
+
+    // Defensive fallback: if optimistic.js failed to load, use the old
+    // await-then-paint flow so check-in never becomes impossible.
+    if (typeof window.optimisticWrite !== "function") {
+      (async () => {
+        try {
+          const response = await apiFetch("/convert_booking_to_checkin", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(_body),
+          });
+          if (!response.ok) {
+            throw new Error(`Server responded with status: ${response.status}`);
+          }
+          const result = await response.json();
+          if (result.success) {
+            if (modal) modal.classList.remove("show");
+            form.reset();
+            _applyPatch();
+            _onSuccess(result);
+            window.dispatchEvent(
+              new CustomEvent("cibaraRoomUpdate", {
+                detail: { type: "checkin_conversion" },
+              }),
+            );
+          } else {
+            showNotification(
+              result.message || "Error converting booking",
+              "error",
+            );
+          }
+        } catch (error) {
+          console.error("Error converting booking:", error);
+          showNotification(
+            `Error converting booking: ${error.message}`,
+            "error",
+          );
+        } finally {
+          submitBtn.disabled = false;
+          submitBtn.innerHTML = originalContent;
+        }
+      })();
+      return;
+    }
+
+    window.optimisticWrite({
+      key: roomNumber,
+      label: "check-in",
+      apply() {
+        if (modal) modal.classList.remove("show");
+        form.reset();
+        submitBtn.disabled = false;
+        submitBtn.innerHTML = originalContent;
+        const snap = _applyPatch();
+        window.dispatchEvent(
+          new CustomEvent("cibaraRoomUpdate", {
+            detail: { type: "checkin_conversion" },
+          }),
+        );
+        return snap;
+      },
+      rollback(snap) {
+        _restore(snap);
+        window.dispatchEvent(
+          new CustomEvent("cibaraRoomUpdate", {
+            detail: { type: "checkin_conversion" },
+          }),
+        );
+      },
+      request(opId) {
+        return apiFetch("/convert_booking_to_checkin", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(Object.assign({}, _body, { op_id: opId })),
+        });
+      },
+      onSuccess: _onSuccess,
+      onError() {
+        // The room is vacant again and the booking is back in the list;
+        // re-sync from the server so nothing local is left guessing.
         fetchBookings();
         debouncedFetchData();
-
-        // Notify register & bills modules to refresh live
-        window.dispatchEvent(new CustomEvent("cibaraRoomUpdate", { detail: { type: "checkin_conversion" } }));
-      } else {
-        showNotification(result.message || "Error converting booking", "error");
-      }
-    } catch (error) {
-      console.error("Error converting booking:", error);
-      showNotification(`Error converting booking: ${error.message}`, "error");
-    } finally {
-      // Re-enable submit button
-      submitBtn.disabled = false;
-      submitBtn.innerHTML = originalContent;
-    }
+      },
+    });
   });
 }
 

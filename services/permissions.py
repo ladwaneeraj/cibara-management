@@ -142,6 +142,11 @@ PERMISSIONS = frozenset(
         # advances, salary payouts and their ₹ figures — is admin-only.
         "staff.view",                    # staff list + attendance (no ₹)
         "staff.attendance.mark",         # mark full / half / absent
+        "staff.attendance.amend",        # admin-only (wildcard) — CHANGE a
+                                         # mark after the day it was entered.
+                                         # Managers may still back-fill a day
+                                         # nobody marked; they just can't
+                                         # rewrite settled history.
         "staff.manage",                  # admin-only — add/edit staff, wages,
                                          # and REVERSING advances/salaries
         "staff.payroll.view",            # see ₹ figures (manager + admin)

@@ -514,8 +514,24 @@
       /* ── Upcoming Booking Indicator Dot ── */
       .booking-indicator-dot {
         position: absolute;
-        top: 7px;
-        right: 7px;
+        /* Centred, NOT top-right: the right corner belongs to the
+           "inspected by" initial (.rm-init--r in style.css) and the two
+           overlapped. Centring keeps it clear of both corner initials, so
+           neither has to move.
+
+           Vertically it is centred on those initials rather than parked on
+           the status strip. Derivation, measured in Chromium rather than
+           guessed, so it can be re-checked if either rule changes:
+             .rm-init  top 11.52px, height 9.28px  -> centre 16.16px
+             this dot  height 10px (box-sizing is border-box app-wide, so the
+                       2px border is INSIDE the 10px, not added to it)
+             top = 16.16 - 5 = 11.16px ~= 0.70rem
+           Both are measured from the card's top edge; the card is the
+           positioning context for both rules. */
+        top: 0.7rem;
+        left: 50%;
+        transform: translateX(-50%);
+        right: auto;
         width: 10px;
         height: 10px;
         border-radius: 50%;
@@ -5885,6 +5901,19 @@
                 data-payment="online"
               >
                 <i class="fas fa-mobile-alt"></i> Online
+              </button>
+              <!-- Pay Later. Same contract as the walk-in check-in modal:
+                   the payment method is recorded as balance, nothing is
+                   collected now, and the whole outstanding amount rides on
+                   the room. booking.js zeroes and locks the amount field
+                   while this is selected; the server rejects an amount sent
+                   alongside it. -->
+              <button
+                type="button"
+                class="payment-btn balance"
+                data-payment="balance"
+              >
+                <i class="fas fa-clock"></i> Later
               </button>
             </div>
             <input type="hidden" id="convert-payment-method" value="cash" />

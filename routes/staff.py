@@ -6,6 +6,9 @@ enforced here via @requires_permission; see services/permissions.py:
 
     staff.view             manager + admin   staff list & attendance (no ₹)
     staff.attendance.mark  manager + admin   mark full / half / absent
+    staff.attendance.amend admin             change a mark AFTER the day it
+                                             was entered (managers may still
+                                             back-fill a day nobody marked)
     staff.manage           admin             add/edit staff, wages, REVERSALS
     staff.payroll.view     manager + admin   wages, advances, salary figures
     staff.advance.give     manager + admin   record advances
@@ -40,6 +43,20 @@ def _can_pay_from_account() -> bool:
         from services.permissions import role_has_permission
         user = getattr(g, "current_user", None) or {}
         return role_has_permission(user.get("role", ""), "staff.pay.account")
+    except Exception:
+        return False
+
+
+def _can_amend_attendance() -> bool:
+    """Server-side history gate: only roles with staff.attendance.amend
+    (admin) may CHANGE an attendance mark after the day it was entered.
+    Managers can still back-fill a day nobody marked — see
+    services/staff_service.py::attendance_frozen for the exact rule."""
+    try:
+        from services.permissions import role_has_permission
+        user = getattr(g, "current_user", None) or {}
+        return role_has_permission(user.get("role", ""),
+                                   "staff.attendance.amend")
     except Exception:
         return False
 
@@ -140,6 +157,13 @@ def get_attendance():
         if request.args.get("staff_id"):
             sid = request.args["staff_id"]
             locks = {sid: locks.get(sid, [])}
+        # Per-record freeze flag so the grid can show a locked cell instead
+        # of letting the operator tap it and collect a 409. Computed for the
+        # CALLING user: an admin (staff.attendance.amend) sees nothing frozen.
+        # This is a UI hint only — mark_attendance re-checks server-side.
+        _amend = _can_amend_attendance()
+        for rec in records:
+            rec["frozen"] = (not _amend) and svc.attendance_frozen(rec)
         return jsonify(success=True, attendance=records, paid_periods=locks)
     except Exception as e:
         logger.exception("staff/attendance GET failed")
@@ -157,7 +181,8 @@ def mark_attendance():
         shift = (data.get("shift") or "").strip().upper() or None
         rec = svc.mark_attendance(
             data.get("staff_id", ""), str(data.get("date", "")).strip(),
-            data.get("status", ""), g.current_user, shift=shift)
+            data.get("status", ""), g.current_user, shift=shift,
+            allow_amend=_can_amend_attendance())
         write_log("staff.attendance.mark",
                   target_collection="staff_attendance",
                   target_id="{}__{}{}".format(
@@ -166,7 +191,11 @@ def mark_attendance():
                   metadata={"status": data.get("status"), "shift": shift})
         return jsonify(success=True, record=rec)
     except ValueError as ve:
-        return _fail(ve, 409 if "already paid" in str(ve) else 400)
+        # 409 = the write is well-formed but conflicts with settled history
+        # (paid salary period, or a day that has already closed).
+        _msg = str(ve)
+        _conflict = "already paid" in _msg or "can no longer be changed" in _msg
+        return _fail(ve, 409 if _conflict else 400)
     except Exception as e:
         logger.exception("staff/attendance/mark failed")
         return _fail(e, 500)

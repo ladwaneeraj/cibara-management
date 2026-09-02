@@ -3992,7 +3992,7 @@ tr.rp-svc-voided .rp-actions-cell { opacity:.9; }
               </div>
               ` : `<span class="rp-edit-refund-note">Refund — amount locked</span>`}
               <div class="rp-edit-actions">
-                <button class="rp-save-btn"        onclick="_rpSave('${p.id}')">Save</button>
+                <button class="rp-save-btn"        onclick="_rpmSave('${p.id}')">Save</button>
                 <button class="rp-cancel-edit-btn" onclick="_rpCancelEdit()">Cancel</button>
               </div>
             </div>
@@ -4050,7 +4050,7 @@ tr.rp-svc-voided .rp-actions-cell { opacity:.9; }
     _renderPaymentsTable(dom("rp-content"));
   };
 
-  window._rpSave = async function(payId) {
+  window._rpmSave = async function(payId) {
     const dtInput     = dom(`rp-edit-datetime-${payId}`);
     const modeInput   = dom(`rp-edit-mode-${payId}`);
     const amountInput = dom(`rp-edit-amount-${payId}`);

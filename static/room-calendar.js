@@ -52,6 +52,7 @@
     visible: 3,            // days per screen by default; 7 / 14 via the toolbar
     loadingBookings: false,
     lastMarkup: "",        // last rendered grid, so unchanged data is a no-op
+    lastToolbar: "",       // same idea for the toolbar in the search row
   };
 
   // ── Small helpers ────────────────────────────────────────────────────────
@@ -377,7 +378,6 @@
 
   function renderToolbar(visible) {
     return (
-      '<div class="rc-toolbar">' +
       '<div class="rc-nav">' +
       '<button type="button" class="rc-btn" data-rc="prev" aria-label="Earlier"><i class="fas fa-chevron-left"></i></button>' +
       '<button type="button" class="rc-btn rc-btn--today" data-rc="today">Today</button>' +
@@ -392,8 +392,7 @@
           n + "d</button>"
         );
       }).join("") +
-      '<button type="button" class="rc-btn" data-rc="refresh" aria-label="Refresh bookings" title="Refresh bookings"><i class="fas fa-sync-alt"></i></button>' +
-      "</div>" +
+      '<button type="button" class="rc-btn rc-btn--refresh" data-rc="refresh" aria-label="Refresh bookings" title="Refresh bookings"><i class="fas fa-sync-alt"></i></button>' +
       "</div>"
     );
   }
@@ -424,8 +423,14 @@
     });
     const nowLine = renderNowLine(viewStart, totalMs, now);
 
+    const slot = el("rooms-calendar-toolbar");
+    const toolbar = renderToolbar(state.visible);
+    if (slot && toolbar !== state.lastToolbar) {
+      slot.innerHTML = toolbar;
+      state.lastToolbar = toolbar;
+    }
+
     const markup =
-      renderToolbar(state.visible) +
       (roomNames.length
         ? '<div class="rc-scroll"><div class="rc-grid" style="--rc-days:' + days + '">' +
           '<div class="rc-header">' + renderHeader(viewStart, days, today) + "</div>" +
@@ -517,8 +522,8 @@
   }
 
   function updateRangeLabel() {
-    const host = container();
-    const label = host && host.querySelector(".rc-range");
+    const slot = el("rooms-calendar-toolbar");
+    const label = slot && slot.querySelector(".rc-range");
     if (!label) return;
     const first = firstVisibleIndex();
     const a = addDays(state.start, first);
@@ -804,8 +809,10 @@
     const grid = el("rooms-grid");
     const cal = container();
     const tab = el("rooms-tab");
+    const slot = el("rooms-calendar-toolbar");
     if (grid) grid.classList.toggle("hidden", view === "calendar");
     if (cal) cal.classList.toggle("hidden", view !== "calendar");
+    if (slot) slot.classList.toggle("hidden", view !== "calendar");
     // The Vacant/Occupied/Balances chips only shape the grid. In calendar
     // mode room-calendar.css hides them and keeps the "more" (⋮) button
     // pinned to the right edge, so its dropdown still opens on-screen.
@@ -823,6 +830,7 @@
 
     if (view === "calendar") {
       state.lastMarkup = "";
+      state.lastToolbar = "";
       render();
       scrollToDay(0, false);
       refreshBookings();
@@ -845,6 +853,8 @@
     });
     host.addEventListener("click", onCalendarClick);
     host.addEventListener("keydown", onCalendarKey);
+    const slot = el("rooms-calendar-toolbar");
+    if (slot) slot.addEventListener("click", onCalendarClick);
 
     // Column width follows the box width (rotation, window resize).
     let resizeTimer = 0;

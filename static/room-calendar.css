@@ -91,7 +91,16 @@
    to the grid, so both go; the view switch and ⋮ keep their places. */
 #rooms-tab.rooms-tab--calendar .filter-row { display: none; }
 #rooms-tab.rooms-tab--calendar .rooms-search-row .search-input { display: none; }
-#rooms-tab.rooms-tab--calendar .rooms-search-row .filter-more { margin-left: auto; }
+/* The calendar toolbar takes the search box's slot and its flex share, so
+   the view switch and ⋮ stay exactly where they are in grid mode. */
+.rc-toolbar-slot {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.4rem;
+}
 
 @media (max-width: 480px) {
   .rooms-view-btn span { display: none; }
@@ -99,17 +108,7 @@
   #rooms-tab .rooms-search-row .search-input { padding: 0 0.75rem; font-size: 0.88rem; }
 }
 
-/* ── Toolbar ────────────────────────────────────────────────────────────── */
-.rooms-calendar { margin-top: 0.2rem; }
-
-.rc-toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 0.4rem;
-  margin-bottom: 0.5rem;
-}
+/* ── Toolbar (rendered into .rc-toolbar-slot in the search row) ────────── */
 .rc-nav, .rc-days {
   display: inline-flex;
   align-items: center;
@@ -431,8 +430,17 @@
   .rc-scroll { min-height: 160px; border-radius: 10px; }
   .rc-grid { padding-bottom: 6px; }
   .rc-toolbar { gap: 0.3rem; }
-  .rc-btn { height: 36px; min-width: 38px; padding: 0 0.5rem; }
+  /* Everything must fit one 360px-wide row beside the switch and ⋮:
+     32px-wide buttons, no refresh (the data is live anyway), no label. */
+  .rc-btn { height: 36px; min-width: 32px; padding: 0 0.4rem; font-size: 0.74rem; }
+  .rc-btn--today { padding: 0 0.55rem; }
+  .rc-nav, .rc-days { gap: 0.2rem; }
+  .rc-toolbar-slot { gap: 0.3rem; }
+  .rc-btn--refresh { display: none; }
   .rc-range { display: none; }
+  #rooms-tab.rooms-tab--calendar .rooms-search-row { gap: 0.3rem; }
+  #rooms-tab.rooms-tab--calendar .rooms-view-btn { padding: 0 0.55rem; }
+  #rooms-tab.rooms-tab--calendar .rooms-search-row .filter-more-btn { width: 36px; height: 36px; }
   .rc-room { padding-left: 0.45rem; }
   .rc-room-num { font-size: 0.82rem; }
   .rc-room-state { font-size: 0.54rem; }

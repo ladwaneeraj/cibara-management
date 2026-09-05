@@ -1174,6 +1174,11 @@
               placeholder="Search room or guest..."
               aria-label="Search rooms or guests"
             />
+            <!-- Calendar toolbar slot: in calendar mode the search box hides
+                 and room-calendar.js renders its prev / Today / next and
+                 3d / 7d / 14d controls here, so the switch and ⋮ keep their
+                 places on the right in both views. -->
+            <div class="rc-toolbar-slot hidden" id="rooms-calendar-toolbar"></div>
             <!-- Grid / Calendar switch. The grid is the existing room-card
                  wall (#rooms-grid); the calendar is a day-by-day timeline of
                  live stays and confirmed bookings (#rooms-calendar, rendered

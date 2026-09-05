@@ -133,7 +133,7 @@
 .rc-btn:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
 .rc-btn.active,
 .rc-btn--today { background: var(--primary); border-color: var(--primary); color: #fff; }
-/* 7d / 14d / 30d as one segmented pill. */
+/* 3d / 7d / 14d as one segmented pill. */
 .rc-days .rc-btn--days { border-radius: 0; margin-left: -1px; }
 .rc-days .rc-btn--days:first-child { border-radius: 10px 0 0 10px; margin-left: 0; }
 .rc-days .rc-btn--days:nth-last-child(2) { border-radius: 0 10px 10px 0; }
@@ -436,7 +436,16 @@
 /* ── Phones ─────────────────────────────────────────────────────────────── */
 @media (max-width: 576px) {
   :root { --rc-room-w: 68px; --rc-col-w: 60px; --rc-row-h: 46px; }
-  .rc-scroll { max-height: calc(100dvh - 215px); border-radius: 10px; }
+  /* The fixed bottom nav (~64px) and the floating quick-action button sit
+     over the page, so the scroll box stops well above them and the block
+     gets bottom padding so the last row and the legend can scroll clear. */
+  .rc-scroll {
+    max-height: calc(100dvh - 300px);
+    min-height: 220px;
+    border-radius: 10px;
+  }
+  .rc-grid { padding-bottom: 6px; }
+  .rooms-calendar { padding-bottom: calc(96px + env(safe-area-inset-bottom, 0px)); }
   .rc-toolbar { gap: 0.3rem; }
   .rc-btn { height: 36px; min-width: 38px; padding: 0 0.5rem; }
   .rc-range { display: none; }

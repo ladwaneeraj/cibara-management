@@ -36,7 +36,7 @@
 
   const DAY_MS = 24 * 60 * 60 * 1000;
   const STORAGE_KEY = "cibara.roomsView";
-  const RANGE_OPTIONS = [7, 14, 30];
+  const RANGE_OPTIONS = [3, 7, 14];
   const DEFAULT_BOOKING_TIME = "12:00"; // mirrors /get_upcoming_bookings
   const STATUS_LABEL = { vacant: "Vacant", occupied: "Occupied", cleaning: "Cleaning", unknown: "No room" };
   const BOOKING_SKIP_STATUSES = new Set([
@@ -47,7 +47,7 @@
   const state = {
     view: "grid",          // "grid" | "calendar"
     start: startOfDay(new Date()),
-    days: 7,               // one week by default; 14 / 30 via the toolbar
+    days: 3,               // today + 2 by default; 7 / 14 via the toolbar
     loadingBookings: false,
     lastMarkup: "",        // last rendered grid, so unchanged data is a no-op
   };

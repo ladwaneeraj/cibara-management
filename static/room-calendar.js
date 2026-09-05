@@ -398,23 +398,6 @@
     );
   }
 
-  function renderLegend() {
-    const item = function (cls, text) {
-      return "<span><i class=\"rc-swatch rc-swatch--" + cls + "\"></i>" + text + "</span>";
-    };
-    return (
-      '<div class="rc-legend">' +
-      item("vacant", "Vacant") +
-      item("occupied", "Occupied (in house)") +
-      item("cleaning", "Cleaning (tap to mark)") +
-      item("booking", "Booking (arriving)") +
-      item("overdue", "Renewal due") +
-      item("clash", "Overlap (needs attention)") +
-      item("now", "Now") +
-      "</div>"
-    );
-  }
-
   // Called on every live room push (renderRooms), on the minute tick and on
   // navigation. Rebuilding the DOM each time reset the scroll position and
   // yanked the page to the top, so this diffs first: if nothing but the
@@ -450,7 +433,6 @@
           '<div class="rc-now-layer"></div>' +
           "</div></div>"
         : '<div class="empty-state"><i class="fas fa-bed fa-3x"></i><p>No rooms yet</p></div>') +
-      renderLegend() +
       (state.loadingBookings ? '<div class="rc-status">Loading bookings…</div>' : "");
 
     const nowLayer = host.querySelector(".rc-now-layer");
@@ -504,10 +486,26 @@
     const grid = scroller && scroller.querySelector(".rc-grid");
     const roomCell = grid && grid.querySelector(".rc-room, .rc-corner");
     if (!grid || !roomCell) return;
+    fitHeight(scroller);
     const avail = scroller.clientWidth - roomCell.getBoundingClientRect().width;
     if (avail <= 0) return;
     const col = Math.max(MIN_COL_PX, Math.floor(avail / state.visible));
     grid.style.setProperty("--rc-col-w", col + "px");
+  }
+
+  // Give the scroll box every pixel between its own top edge and the fixed
+  // bottom nav, measured live, so as many room rows as possible are on
+  // screen whatever the phone or header height.
+  function fitHeight(scroller) {
+    const top = scroller.getBoundingClientRect().top;
+    const nav = document.querySelector(".bottom-nav");
+    const navH = nav && getComputedStyle(nav).position === "fixed"
+      ? nav.getBoundingClientRect().height : 0;
+    const h = Math.floor(window.innerHeight - top - navH - 8);
+    if (h > 160) {
+      scroller.style.height = h + "px";
+      scroller.style.maxHeight = "none";   // override the CSS fallback cap
+    }
   }
 
   // First day column currently at the left edge of the scroll box.

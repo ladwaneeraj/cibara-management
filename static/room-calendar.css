@@ -87,8 +87,11 @@
   height: 40px;
   font-size: 1rem;
 }
-/* Calendar mode: the Vacant/Occupied/Balances chips only apply to the grid. */
+/* Calendar mode: search and the Vacant/Occupied/Balances chips only apply
+   to the grid, so both go; the view switch and ⋮ keep their places. */
 #rooms-tab.rooms-tab--calendar .filter-row { display: none; }
+#rooms-tab.rooms-tab--calendar .rooms-search-row .search-input { display: none; }
+#rooms-tab.rooms-tab--calendar .rooms-search-row .filter-more { margin-left: auto; }
 
 @media (max-width: 480px) {
   .rooms-view-btn span { display: none; }
@@ -148,7 +151,9 @@
 /* ── Scroll area + grid ─────────────────────────────────────────────────── */
 .rc-scroll {
   overflow: auto;
-  max-height: calc(100dvh - 250px);
+  /* height is set live by room-calendar.js (fitHeight); this is the fallback */
+  max-height: calc(100dvh - 220px);
+  scrollbar-width: thin;
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
   scroll-snap-type: x mandatory;
@@ -157,6 +162,11 @@
   border: 1px solid var(--rc-line);
   border-radius: var(--border-radius);
   box-shadow: var(--shadow-sm);
+}
+/* Touch screens swipe; the scrollbar only steals a row's worth of height. */
+@media (pointer: coarse) {
+  .rc-scroll { scrollbar-width: none; }
+  .rc-scroll::-webkit-scrollbar { display: none; }
 }
 .rc-grid {
   position: relative;
@@ -347,29 +357,6 @@
   background: var(--rc-now);
 }
 
-/* ── Legend / status ────────────────────────────────────────────────────── */
-.rc-legend {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.4rem 1rem;
-  margin-top: 0.5rem;
-  font-size: 0.72rem;
-  color: var(--gray);
-}
-.rc-legend span { display: inline-flex; align-items: center; gap: 0.35rem; }
-.rc-swatch {
-  display: inline-block;
-  width: 18px; height: 10px;
-  border-radius: 5px;
-  border-left: 3px solid;
-}
-.rc-swatch--vacant   { background: var(--rc-vacant-bg);   border-color: var(--rc-vacant); }
-.rc-swatch--occupied { background: var(--rc-occupied-bg); border-color: var(--rc-occupied); }
-.rc-swatch--cleaning { background: var(--rc-cleaning-bg); border-color: var(--rc-cleaning); }
-.rc-swatch--booking  { background: var(--rc-booking-bg);  border-color: var(--rc-booking); }
-.rc-swatch--overdue  { background: repeating-linear-gradient(45deg, var(--rc-occupied) 0 4px, var(--rc-overdue-dark) 4px 8px); border-color: var(--rc-overdue-dark); }
-.rc-swatch--clash    { background: #fff; border: 2px dashed var(--rc-now); border-radius: 5px; }
-.rc-swatch--now      { width: 2px; border: 0; background: var(--rc-now); height: 12px; }
 .rc-status { font-size: 0.72rem; color: var(--gray); margin-top: 0.3rem; }
 
 /* ── Same-day action menu (check in now / book for later) ──────────────── */
@@ -441,13 +428,8 @@
   /* The fixed bottom nav (~64px) and the floating quick-action button sit
      over the page, so the scroll box stops well above them and the block
      gets bottom padding so the last row and the legend can scroll clear. */
-  .rc-scroll {
-    max-height: calc(100dvh - 300px);
-    min-height: 220px;
-    border-radius: 10px;
-  }
+  .rc-scroll { min-height: 160px; border-radius: 10px; }
   .rc-grid { padding-bottom: 6px; }
-  .rooms-calendar { padding-bottom: calc(96px + env(safe-area-inset-bottom, 0px)); }
   .rc-toolbar { gap: 0.3rem; }
   .rc-btn { height: 36px; min-width: 38px; padding: 0 0.5rem; }
   .rc-range { display: none; }
@@ -456,7 +438,6 @@
   .rc-room-state { font-size: 0.54rem; }
   .rc-bar { padding: 0 0.3rem; font-size: 0.68rem; top: 8px; bottom: 8px; }
   .rc-bar-time { display: none; }
-  .rc-legend { gap: 0.3rem 0.7rem; font-size: 0.68rem; }
 }
 
 @media (prefers-reduced-motion: reduce) {

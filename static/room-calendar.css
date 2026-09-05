@@ -1,0 +1,453 @@
+/* ──────────────────────────────────────────────────────────────────────────
+ * Rooms tab — Calendar view (see static/room-calendar.js)
+ *
+ * Layout: one CSS grid. Column 1 is the sticky room label, the rest are day
+ * columns. Each row's bars sit in an absolutely-positioned overlay that spans
+ * the day columns, so a bar's left/width in % maps straight onto clock time.
+ * ────────────────────────────────────────────────────────────────────────── */
+
+:root {
+  --rc-room-w: 92px;
+  --rc-col-w: 88px;
+  --rc-row-h: 48px;
+  /* Same palette as the room grid (style.css): teal vacant, red occupied,
+     orange cleaning, blue for an upcoming booking (the card's arrival dot). */
+  --rc-vacant: var(--vacant, #2ec4b6);
+  --rc-occupied: var(--occupied, #e63946);
+  --rc-cleaning: var(--cleaning, #ff9f1c);
+  --rc-booking: #2196f3;
+  --rc-occupied-bg: #fde3e6;
+  --rc-booking-bg: #dcecfd;
+  --rc-vacant-bg: #e3f7f5;
+  --rc-cleaning-bg: #fff0dc;
+  /* Modern browsers derive the tints from the grid colours themselves, so a
+     palette change in style.css carries through; the hex values above are
+     the fallback for anything older. */
+  --rc-occupied-bg: color-mix(in srgb, var(--rc-occupied) 14%, white);
+  --rc-booking-bg:  color-mix(in srgb, var(--rc-booking) 16%, white);
+  --rc-vacant-bg:   color-mix(in srgb, var(--rc-vacant) 14%, white);
+  --rc-cleaning-bg: color-mix(in srgb, var(--rc-cleaning) 16%, white);
+  --rc-overdue-dark: #9b1622;
+  --rc-now: #212529;
+  --rc-line: #e7e9ef;
+  --rc-today-bg: #f1f6ff;
+}
+
+/* ── Top row: search + Grid/Calendar switch + ⋮ menu ───────────────────── */
+/* One compact 40px-tall row in both views. On phones the switch drops its
+   labels and the ⋮ menu keeps its right-edge anchor, so its dropdown always
+   opens inward. */
+#rooms-tab .rooms-search-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-bottom: 0.6rem;
+}
+#rooms-tab .rooms-search-row .search-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 40px;
+  padding: 0 0.9rem;
+  font-size: 0.92rem;
+  border-radius: 20px;
+}
+.rooms-view-toggle {
+  display: inline-flex;
+  flex-shrink: 0;
+  height: 40px;
+  box-sizing: border-box;
+  background: #fff;
+  border: 1px solid #ddd;
+  border-radius: 20px;
+  padding: 3px;
+}
+.rooms-view-btn {
+  border: 0;
+  background: transparent;
+  border-radius: 16px;
+  padding: 0 0.75rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--gray);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  transition: background 0.2s, color 0.2s;
+  -webkit-tap-highlight-color: transparent;
+}
+.rooms-view-btn.active {
+  background: var(--primary);
+  color: #fff;
+}
+/* ⋮ menu button matches the row height in every viewport (style.css grows
+   it to 42px on desktop; this row wants one consistent size). */
+#rooms-tab .rooms-search-row .filter-more-btn {
+  width: 40px;
+  height: 40px;
+  font-size: 1rem;
+}
+/* Calendar mode: the Vacant/Occupied/Balances chips only apply to the grid. */
+#rooms-tab.rooms-tab--calendar .filter-row { display: none; }
+
+@media (max-width: 480px) {
+  .rooms-view-btn span { display: none; }
+  .rooms-view-btn { padding: 0 0.7rem; font-size: 0.9rem; }
+  #rooms-tab .rooms-search-row .search-input { padding: 0 0.75rem; font-size: 0.88rem; }
+}
+
+/* ── Toolbar ────────────────────────────────────────────────────────────── */
+.rooms-calendar { margin-top: 0.2rem; }
+
+.rc-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-bottom: 0.5rem;
+}
+.rc-nav, .rc-days {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+.rc-btn {
+  min-width: 36px;
+  height: 34px;
+  padding: 0 0.6rem;
+  background: #fff;
+  border: 1px solid #ddd;
+  border-radius: 10px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: #333;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  -webkit-tap-highlight-color: transparent;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+.rc-btn:hover { border-color: var(--primary); color: var(--primary); }
+.rc-btn:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.rc-btn.active,
+.rc-btn--today { background: var(--primary); border-color: var(--primary); color: #fff; }
+/* 7d / 14d / 30d as one segmented pill. */
+.rc-days .rc-btn--days { border-radius: 0; margin-left: -1px; }
+.rc-days .rc-btn--days:first-child { border-radius: 10px 0 0 10px; margin-left: 0; }
+.rc-days .rc-btn--days:nth-last-child(2) { border-radius: 0 10px 10px 0; }
+.rc-days .rc-btn--days.active { position: relative; z-index: 1; }
+.rc-range {
+  font-size: 0.8rem;
+  color: var(--gray);
+  margin-left: 0.3rem;
+  white-space: nowrap;
+}
+
+/* ── Scroll area + grid ─────────────────────────────────────────────────── */
+.rc-scroll {
+  overflow: auto;
+  max-height: calc(100dvh - 250px);
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  scroll-snap-type: x proximity;
+  scroll-padding-left: var(--rc-room-w);
+  background: #fff;
+  border: 1px solid var(--rc-line);
+  border-radius: var(--border-radius);
+  box-shadow: var(--shadow-sm);
+}
+.rc-grid {
+  position: relative;
+  display: grid;
+  grid-template-columns: var(--rc-room-w) repeat(var(--rc-days), minmax(var(--rc-col-w), 1fr));
+  min-width: max-content;
+}
+.rc-header, .rc-row { display: contents; }
+
+/* Header cells: sticky to the top of the scroll area. */
+.rc-corner, .rc-day {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  background: #fafbfd;
+  border-bottom: 1px solid var(--rc-line);
+  border-right: 1px solid var(--rc-line);
+  font-size: 0.72rem;
+  padding: 0.35rem 0.4rem;
+  text-align: center;
+  line-height: 1.2;
+}
+.rc-corner {
+  left: 0;
+  z-index: 4;
+  text-align: left;
+  color: var(--gray);
+  font-weight: 600;
+}
+.rc-day { scroll-snap-align: start; }
+.rc-day-dow { display: block; color: var(--gray); text-transform: uppercase; font-size: 0.62rem; }
+.rc-day-num { font-weight: 700; font-size: 0.95rem; }
+.rc-day-mon { margin-left: 3px; color: var(--gray); font-size: 0.65rem; }
+.rc-day--weekend { background: #f6f7fa; }
+.rc-day--today { background: var(--rc-today-bg); color: var(--primary); }
+.rc-day--today .rc-day-dow { color: var(--primary); }
+
+/* Room label column: sticky to the left. Colour stripe + status word mirror
+   the grid card's coloured top bar, so a room reads the same in both views. */
+.rc-room {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  height: var(--rc-row-h);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 0 0.5rem 0 0.6rem;
+  background: #fff;
+  border-left: 5px solid #cfd3db;
+  border-right: 1px solid var(--rc-line);
+  border-bottom: 1px solid var(--rc-line);
+  line-height: 1.15;
+}
+.rc-room-num { font-weight: 700; font-size: 0.88rem; }
+.rc-room-state {
+  font-size: 0.62rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--gray);
+}
+.rc-room--vacant   { border-left-color: var(--rc-vacant);   background: var(--rc-vacant-bg); }
+.rc-room--occupied { border-left-color: var(--rc-occupied); background: var(--rc-occupied-bg); }
+.rc-room--cleaning { border-left-color: var(--rc-cleaning); background: var(--rc-cleaning-bg); }
+.rc-room--vacant   .rc-room-state { color: #158f83; }
+.rc-room--occupied .rc-room-state { color: #b3202c; }
+.rc-room--cleaning .rc-room-state { color: #b86a00; }
+/* Cleaner / inspector initials for the current prep cycle: plain letters in
+   the cell's top-right, grey for the cleaner, teal for the inspector, the
+   same treatment as the grid card's corner marks. */
+.rc-inits {
+  position: absolute;
+  right: 5px;
+  top: 4px;
+  display: flex;
+  gap: 3px;
+  font-size: 0.56rem;
+  font-weight: 800;
+  line-height: 1;
+  letter-spacing: 0.02em;
+}
+.rc-init { color: #8a94a6; }
+.rc-init--r { color: #4bb3a1; }
+.rc-room { cursor: pointer; }
+.rc-room-clash {
+  position: absolute;
+  top: 4px; right: 4px;
+  width: 14px; height: 14px; border-radius: 50%;
+  background: var(--rc-now); color: #fff;
+  font-size: 0.6rem; font-weight: 800; line-height: 14px;
+  text-align: center;
+}
+
+/* Day cells behind the bars (click target for a new booking). */
+.rc-track {
+  position: relative;
+  height: var(--rc-row-h);
+  border-bottom: 1px solid var(--rc-line);
+}
+.rc-cells {
+  position: absolute; inset: 0;
+  display: grid;
+  grid-template-columns: repeat(var(--rc-days), 1fr);
+}
+.rc-cell {
+  border-right: 1px solid var(--rc-line);
+  cursor: pointer;
+}
+.rc-cell--today { background: var(--rc-today-bg); }
+.rc-cell:hover { background: #eef2fb; }
+
+/* ── Bars ───────────────────────────────────────────────────────────────── */
+.rc-bar {
+  position: absolute;
+  top: 7px;
+  bottom: 7px;
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0 0.45rem;
+  border-radius: 14px;
+  border-left: 4px solid;
+  font-size: 0.74rem;
+  overflow: hidden;
+  white-space: nowrap;
+  cursor: pointer;
+  box-sizing: border-box;
+  z-index: 1;
+  transition: box-shadow 0.15s, transform 0.15s;
+}
+.rc-bar:hover, .rc-bar:focus-visible {
+  box-shadow: var(--shadow-md);
+  z-index: 2;
+  outline: none;
+}
+.rc-bar-label { flex: 0 1 auto; min-width: 0; font-weight: 600; overflow: hidden; text-overflow: ellipsis; }
+.rc-bar-time  { color: rgba(0, 0, 0, 0.55); font-size: 0.66rem; flex-shrink: 0; }
+/* On a narrow bar the guest name matters more than the clock time. Browsers
+   without container queries simply keep the time and let the name truncate. */
+.rc-bar { container-type: inline-size; }
+@container (max-width: 130px) { .rc-bar-time { display: none; } }
+
+.rc-bar--stay    { background: var(--rc-occupied-bg); border-color: var(--rc-occupied); color: #8a1c26; }
+.rc-bar--cleaning { background: var(--rc-cleaning-bg); border-color: var(--rc-cleaning); color: #8a4b00; }
+.rc-bar--booking { background: var(--rc-booking-bg);  border-color: var(--rc-booking);  color: #0d47a1; }
+.rc-bar--overdue {
+  background: repeating-linear-gradient(45deg, var(--rc-occupied) 0 6px, var(--rc-overdue-dark) 6px 12px);
+  border-color: var(--rc-overdue-dark);
+  color: #fff;
+  border-radius: 0 14px 14px 0;
+}
+.rc-bar--overdue .rc-bar-time { color: rgba(255, 255, 255, 0.85); }
+/* Overdue tail starts exactly where the stay ends: flatten that edge. */
+.rc-bar--stay + .rc-bar--overdue { border-left-width: 0; }
+/* Overlap: a dark dashed ring reads on both the red stay and the blue booking. */
+.rc-bar--clash { outline: 2px dashed var(--rc-now); outline-offset: -2px; }
+.rc-bar-warn { color: var(--rc-now); flex-shrink: 0; }
+
+/* Bars continuing beyond the visible range lose the rounded end on that side. */
+.rc-bar--cut-l { border-top-left-radius: 0; border-bottom-left-radius: 0; }
+.rc-bar--cut-r { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+
+/* ── "Now" line ─────────────────────────────────────────────────────────── */
+.rc-now-layer {
+  position: absolute;
+  top: 0; bottom: 0;
+  left: var(--rc-room-w);
+  right: 0;
+  pointer-events: none;
+  z-index: 2;
+}
+.rc-now {
+  position: absolute;
+  top: 0; bottom: 0;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--rc-now);
+}
+.rc-now::before {
+  content: "";
+  position: absolute;
+  top: 0; left: -4px;
+  width: 10px; height: 10px;
+  border-radius: 50%;
+  background: var(--rc-now);
+}
+
+/* ── Legend / status ────────────────────────────────────────────────────── */
+.rc-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 1rem;
+  margin-top: 0.5rem;
+  font-size: 0.72rem;
+  color: var(--gray);
+}
+.rc-legend span { display: inline-flex; align-items: center; gap: 0.35rem; }
+.rc-swatch {
+  display: inline-block;
+  width: 18px; height: 10px;
+  border-radius: 5px;
+  border-left: 3px solid;
+}
+.rc-swatch--vacant   { background: var(--rc-vacant-bg);   border-color: var(--rc-vacant); }
+.rc-swatch--occupied { background: var(--rc-occupied-bg); border-color: var(--rc-occupied); }
+.rc-swatch--cleaning { background: var(--rc-cleaning-bg); border-color: var(--rc-cleaning); }
+.rc-swatch--booking  { background: var(--rc-booking-bg);  border-color: var(--rc-booking); }
+.rc-swatch--overdue  { background: repeating-linear-gradient(45deg, var(--rc-occupied) 0 4px, var(--rc-overdue-dark) 4px 8px); border-color: var(--rc-overdue-dark); }
+.rc-swatch--clash    { background: #fff; border: 2px dashed var(--rc-now); border-radius: 5px; }
+.rc-swatch--now      { width: 2px; border: 0; background: var(--rc-now); height: 12px; }
+.rc-status { font-size: 0.72rem; color: var(--gray); margin-top: 0.3rem; }
+
+/* ── Same-day action menu (check in now / book for later) ──────────────── */
+.rooms-calendar { position: relative; }
+.rc-menu {
+  position: absolute;
+  z-index: 20;
+  width: 240px;
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  box-shadow: 0 12px 32px rgba(15, 23, 42, 0.18);
+  padding: 0.35rem;
+}
+.rc-menu-title {
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: var(--gray);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 0.4rem 0.6rem 0.25rem;
+}
+.rc-menu-item {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 22px 1fr;
+  align-items: center;
+  column-gap: 0.5rem;
+  text-align: left;
+  border: 0;
+  background: transparent;
+  border-radius: 8px;
+  padding: 0.6rem 0.6rem;
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: #1e293b;
+  cursor: pointer;
+  min-height: 44px;
+}
+.rc-menu-item i { color: var(--primary); text-align: center; }
+.rc-menu-item small {
+  grid-column: 2;
+  font-size: 0.7rem;
+  font-weight: 500;
+  color: var(--gray);
+}
+.rc-menu-item:hover, .rc-menu-item:focus-visible { background: #f1f5f9; outline: none; }
+.rc-menu-item[disabled] { cursor: not-allowed; color: #94a3b8; }
+@media (max-width: 576px) {
+  /* Bottom sheet: easier to reach with a thumb than a tiny anchored popover. */
+  .rc-menu {
+    position: fixed;
+    top: auto !important;
+    left: 0 !important;
+    right: 0;
+    bottom: 0;
+    width: auto;
+    border-radius: 16px 16px 0 0;
+    padding: 0.5rem 0.75rem calc(0.75rem + env(safe-area-inset-bottom));
+    box-shadow: 0 -8px 32px rgba(15, 23, 42, 0.25);
+  }
+  .rc-menu-item { min-height: 50px; font-size: 0.95rem; }
+  .rc-inits { right: 3px; top: 3px; font-size: 0.5rem; }
+}
+
+/* ── Phones ─────────────────────────────────────────────────────────────── */
+@media (max-width: 576px) {
+  :root { --rc-room-w: 68px; --rc-col-w: 60px; --rc-row-h: 46px; }
+  .rc-scroll { max-height: calc(100dvh - 215px); border-radius: 10px; }
+  .rc-toolbar { gap: 0.3rem; }
+  .rc-btn { height: 36px; min-width: 38px; padding: 0 0.5rem; }
+  .rc-range { display: none; }
+  .rc-room { padding-left: 0.45rem; }
+  .rc-room-num { font-size: 0.82rem; }
+  .rc-room-state { font-size: 0.54rem; }
+  .rc-bar { padding: 0 0.3rem; font-size: 0.68rem; top: 8px; bottom: 8px; }
+  .rc-bar-time { display: none; }
+  .rc-legend { gap: 0.3rem 0.7rem; font-size: 0.68rem; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rooms-view-btn, .rc-btn, .rc-bar { transition: none; }
+}

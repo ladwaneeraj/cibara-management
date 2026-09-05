@@ -44,6 +44,7 @@
     />
     <link rel="stylesheet" href="{{ asset_url('style.css') }}" />
     <link rel="stylesheet" href="{{ asset_url('booking.css') }}" />
+    <link rel="stylesheet" href="{{ asset_url('room-calendar.css') }}" />
     <link rel="stylesheet" href="/static/laundry.css" />
     <link rel="stylesheet" href="/static/banking.css" />
     <link rel="stylesheet" href="/static/maintenance.css" />
@@ -1165,7 +1166,7 @@
         <!-- Rooms Tab Content -->
         <div class="tab-content active" id="rooms-tab">
           <!-- Search -->
-          <div class="search-container">
+          <div class="search-container rooms-search-row">
             <input
               type="text"
               id="room-search"
@@ -1173,41 +1174,22 @@
               placeholder="Search room or guest..."
               aria-label="Search rooms or guests"
             />
-          </div>
-
-          <!-- Filters -->
-          <div class="filter-row">
-            <div class="filter-container">
-              <button class="filter-btn active" data-filter="all" data-hide-roles="housekeeping">
-                <span class="filter-label-full">All</span><span class="filter-label-short">A</span>
+            <!-- Grid / Calendar switch. The grid is the existing room-card
+                 wall (#rooms-grid); the calendar is a day-by-day timeline of
+                 live stays and confirmed bookings (#rooms-calendar, rendered
+                 by static/room-calendar.js). Filters and search apply to the
+                 grid only; the calendar always shows every room. -->
+            <div class="rooms-view-toggle" role="group" aria-label="Rooms view">
+              <button type="button" class="rooms-view-btn active" data-view="grid" aria-pressed="true">
+                <i class="fas fa-th-large"></i><span>Grid</span>
               </button>
-              <button class="filter-btn filter-btn-vacant" data-filter="vacant" data-hide-roles="housekeeping">
-                <span class="filter-label-full">Vacant&nbsp;</span><span class="filter-label-short">V&nbsp;</span><span id="count-filter-vacant">0</span>
-              </button>
-              <button class="filter-btn filter-btn-occupied" data-filter="occupied" data-hide-roles="housekeeping">
-                <span class="filter-label-full">Occupied&nbsp;</span><span class="filter-label-short">O&nbsp;</span><span id="count-filter-occupied">0</span>
-              </button>
-              <button class="filter-btn filter-btn-cleaning" data-filter="cleaning">
-                <span class="filter-label-full">Cleaning&nbsp;</span><span class="filter-label-short">C&nbsp;</span><span id="count-filter-cleaning">0</span>
-              </button>
-              <button
-                class="filter-btn filter-btn-balances"
-                data-filter="balances"
-                data-hide-roles="housekeeping"
-              >
-                <span
-                  ><span class="filter-label-full">Balances&nbsp;</span><span class="filter-label-short">B&nbsp;</span><span id="count-filter-balances">0</span></span
-                >
-                <span
-                  class="filter-balance-amount"
-                  id="amount-filter-balances"
-                ></span>
+              <button type="button" class="rooms-view-btn" data-view="calendar" aria-pressed="false">
+                <i class="fas fa-calendar-alt"></i><span>Calendar</span>
               </button>
             </div>
-
-            <!-- "More" dropdown — Deep Check / Pending Payments / Banking,
-                 moved here out of the floating Quick Actions button so
-                 they're reachable straight from the filter bar. Same
+            <!-- "More" dropdown — Deep Check / Pending Payments / Banking.
+                 Lives in the top row beside the Grid/Calendar switch so it
+                 is reachable in both views. Same
                  element IDs as before, so maintenance.js / the settlements
                  + banking handlers wire up unchanged regardless of DOM
                  parent. Laundry and Staff live in the floating Quick
@@ -1242,6 +1224,38 @@
             </div>
           </div>
 
+          <!-- Filters -->
+          <div class="filter-row">
+            <div class="filter-container">
+              <button class="filter-btn active" data-filter="all" data-hide-roles="housekeeping">
+                <span class="filter-label-full">All</span><span class="filter-label-short">A</span>
+              </button>
+              <button class="filter-btn filter-btn-vacant" data-filter="vacant" data-hide-roles="housekeeping">
+                <span class="filter-label-full">Vacant&nbsp;</span><span class="filter-label-short">V&nbsp;</span><span id="count-filter-vacant">0</span>
+              </button>
+              <button class="filter-btn filter-btn-occupied" data-filter="occupied" data-hide-roles="housekeeping">
+                <span class="filter-label-full">Occupied&nbsp;</span><span class="filter-label-short">O&nbsp;</span><span id="count-filter-occupied">0</span>
+              </button>
+              <button class="filter-btn filter-btn-cleaning" data-filter="cleaning">
+                <span class="filter-label-full">Cleaning&nbsp;</span><span class="filter-label-short">C&nbsp;</span><span id="count-filter-cleaning">0</span>
+              </button>
+              <button
+                class="filter-btn filter-btn-balances"
+                data-filter="balances"
+                data-hide-roles="housekeeping"
+              >
+                <span
+                  ><span class="filter-label-full">Balances&nbsp;</span><span class="filter-label-short">B&nbsp;</span><span id="count-filter-balances">0</span></span
+                >
+                <span
+                  class="filter-balance-amount"
+                  id="amount-filter-balances"
+                ></span>
+              </button>
+            </div>
+
+          </div>
+
           <!-- Rooms Grid -->
           <div class="rooms-grid" id="rooms-grid">
             <!-- Rooms will be dynamically populated here -->
@@ -1250,6 +1264,10 @@
               <p>Loading rooms...</p>
             </div>
           </div>
+
+          <!-- Rooms Calendar (timeline). Hidden until the Calendar view is
+               picked; fully rendered by static/room-calendar.js. -->
+          <div class="rooms-calendar hidden" id="rooms-calendar" aria-live="polite"></div>
 
           <!-- Daily Insights — admin-only operations analytics rendered
                inline below the cleaning cards while the "Cleaning" filter is
@@ -6324,6 +6342,9 @@
     <script defer src="{{ asset_url('expense.js') }}"></script>
     <script defer src="/static/expense-presets-admin.js"></script>
     <script defer src="{{ asset_url('booking.js') }}"></script>
+    <!-- Rooms tab Calendar view (timeline of stays + bookings). Loads after
+         script.js and booking.js because it reuses their modals and data. -->
+    <script defer src="{{ asset_url('room-calendar.js') }}"></script>
     <script defer src="/static/settle-later.js"></script>
     <script defer src="/static/settle-later-fix.js"></script>
     <!-- revenue-protection.js removed — revenue visibility is now governed by

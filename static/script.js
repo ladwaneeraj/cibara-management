@@ -1063,6 +1063,10 @@ function renderRooms() {
   // refetch is debounced by seconds, so the room grid flipped instantly
   // while the counts sat stale until the background fetch caught up.
   if (typeof updateStats === "function") updateStats();
+
+  // Calendar view (static/room-calendar.js) draws from the same `rooms`
+  // map; nudge it so both views stay in step with every live update.
+  if (window.RoomCalendar) window.RoomCalendar.onRoomsChanged();
 }
 
 // Handle cleaned button click (housekeeping → ready_to_inspect)

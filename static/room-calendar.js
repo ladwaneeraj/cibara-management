@@ -36,7 +36,9 @@
 
   const DAY_MS = 24 * 60 * 60 * 1000;
   const STORAGE_KEY = "cibara.roomsView";
-  const RANGE_OPTIONS = [3, 7, 14];
+  const RANGE_OPTIONS = [3, 7, 14];  // days that fit on screen at once (zoom)
+  const WINDOW_DAYS = 30;            // days actually drawn; swipe to see them
+  const MIN_COL_PX = 44;             // never squeeze a day column below this
   const DEFAULT_BOOKING_TIME = "12:00"; // mirrors /get_upcoming_bookings
   const STATUS_LABEL = { vacant: "Vacant", occupied: "Occupied", cleaning: "Cleaning", unknown: "No room" };
   const BOOKING_SKIP_STATUSES = new Set([
@@ -47,7 +49,7 @@
   const state = {
     view: "grid",          // "grid" | "calendar"
     start: startOfDay(new Date()),
-    days: 3,               // today + 2 by default; 7 / 14 via the toolbar
+    visible: 3,            // days per screen by default; 7 / 14 via the toolbar
     loadingBookings: false,
     lastMarkup: "",        // last rendered grid, so unchanged data is a no-op
   };
@@ -373,25 +375,20 @@
     );
   }
 
-  function renderToolbar(viewStart, days) {
-    const end = addDays(viewStart, days - 1);
-    const rangeLabel =
-      viewStart.toLocaleDateString("en-IN", { day: "numeric", month: "short" }) +
-      " – " +
-      end.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
+  function renderToolbar(visible) {
     return (
       '<div class="rc-toolbar">' +
       '<div class="rc-nav">' +
       '<button type="button" class="rc-btn" data-rc="prev" aria-label="Earlier"><i class="fas fa-chevron-left"></i></button>' +
       '<button type="button" class="rc-btn rc-btn--today" data-rc="today">Today</button>' +
       '<button type="button" class="rc-btn" data-rc="next" aria-label="Later"><i class="fas fa-chevron-right"></i></button>' +
-      '<span class="rc-range">' + esc(rangeLabel) + "</span>" +
+      '<span class="rc-range"></span>' +
       "</div>" +
       '<div class="rc-days">' +
       RANGE_OPTIONS.map(function (n) {
         return (
           '<button type="button" class="rc-btn rc-btn--days' +
-          (n === days ? " active" : "") + '" data-rc="days" data-days="' + n + '">' +
+          (n === visible ? " active" : "") + '" data-rc="days" data-days="' + n + '">' +
           n + "d</button>"
         );
       }).join("") +
@@ -430,7 +427,7 @@
     const now = new Date();
     const today = startOfDay(now);
     const viewStart = state.start;
-    const days = state.days;
+    const days = WINDOW_DAYS;
     const totalMs = days * DAY_MS;
 
     const rooms = window.rooms || {};
@@ -445,7 +442,7 @@
     const nowLine = renderNowLine(viewStart, totalMs, now);
 
     const markup =
-      renderToolbar(viewStart, days) +
+      renderToolbar(state.visible) +
       (roomNames.length
         ? '<div class="rc-scroll"><div class="rc-grid" style="--rc-days:' + days + '">' +
           '<div class="rc-header">' + renderHeader(viewStart, days, today) + "</div>" +
@@ -459,6 +456,7 @@
     const nowLayer = host.querySelector(".rc-now-layer");
     if (markup === state.lastMarkup && nowLayer) {
       nowLayer.innerHTML = nowLine;      // only the clock moved
+      fitColumns();
       return;
     }
 
@@ -477,11 +475,91 @@
     if (freshNowLayer) freshNowLayer.innerHTML = nowLine;
 
     const freshScroller = host.querySelector(".rc-scroll");
-    if (freshScroller && keep) {
-      freshScroller.scrollLeft = keep.left;
-      freshScroller.scrollTop = keep.top;
+    fitColumns();
+    if (freshScroller) {
+      if (keep) {
+        freshScroller.scrollLeft = keep.left;
+        freshScroller.scrollTop = keep.top;
+      }
+      freshScroller.addEventListener("scroll", onScroll, { passive: true });
     }
+    updateRangeLabel();
     host.style.minHeight = "";
+  }
+
+  // ── Zoom + horizontal paging ─────────────────────────────────────────────
+  // 3d / 7d / 14d sets how many day columns fit across the scroll box; the
+  // grid itself is always WINDOW_DAYS wide, so swiping right keeps revealing
+  // later days. Column width is computed from the box's real width, so it
+  // follows rotation and window resizes without a re-render.
+  function colWidth() {
+    const host = container();
+    const grid = host && host.querySelector(".rc-grid");
+    return grid ? parseFloat(grid.style.getPropertyValue("--rc-col-w")) || 0 : 0;
+  }
+
+  function fitColumns() {
+    const host = container();
+    const scroller = host && host.querySelector(".rc-scroll");
+    const grid = scroller && scroller.querySelector(".rc-grid");
+    const roomCell = grid && grid.querySelector(".rc-room, .rc-corner");
+    if (!grid || !roomCell) return;
+    const avail = scroller.clientWidth - roomCell.getBoundingClientRect().width;
+    if (avail <= 0) return;
+    const col = Math.max(MIN_COL_PX, Math.floor(avail / state.visible));
+    grid.style.setProperty("--rc-col-w", col + "px");
+  }
+
+  // First day column currently at the left edge of the scroll box.
+  function firstVisibleIndex() {
+    const host = container();
+    const scroller = host && host.querySelector(".rc-scroll");
+    const col = colWidth();
+    return scroller && col ? Math.round(scroller.scrollLeft / col) : 0;
+  }
+
+  function updateRangeLabel() {
+    const host = container();
+    const label = host && host.querySelector(".rc-range");
+    if (!label) return;
+    const first = firstVisibleIndex();
+    const a = addDays(state.start, first);
+    const b = addDays(state.start, Math.min(WINDOW_DAYS, first + state.visible) - 1);
+    label.textContent =
+      a.toLocaleDateString("en-IN", { day: "numeric", month: "short" }) + " \u2013 " +
+      b.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
+  }
+
+  let scrollRaf = 0;
+  function onScroll() {
+    if (scrollRaf) return;
+    scrollRaf = requestAnimationFrame(function () { scrollRaf = 0; updateRangeLabel(); });
+  }
+
+  function scrollToDay(index, smooth) {
+    const host = container();
+    const scroller = host && host.querySelector(".rc-scroll");
+    if (!scroller) return;
+    scroller.scrollTo({ left: index * colWidth(), behavior: smooth ? "smooth" : "auto" });
+  }
+
+  // Prev / Next page by one screenful; at the edge of the drawn window they
+  // move the window itself so the timeline is effectively endless.
+  function page(dir) {
+    const first = firstVisibleIndex();
+    const target = first + dir * state.visible;
+    if (target < 0 && first === 0) {
+      state.start = addDays(state.start, -WINDOW_DAYS);
+      render();
+      scrollToDay(WINDOW_DAYS - state.visible, false);
+    } else if (target > WINDOW_DAYS - state.visible && first >= WINDOW_DAYS - state.visible) {
+      state.start = addDays(state.start, WINDOW_DAYS);
+      render();
+      scrollToDay(0, false);
+    } else {
+      scrollToDay(Math.max(0, Math.min(WINDOW_DAYS - state.visible, target)), true);
+    }
+    updateRangeLabel();
   }
 
   // ── Bookings source ──────────────────────────────────────────────────────
@@ -539,13 +617,24 @@
     if (btn) {
       closeDayMenu();
       switch (btn.dataset.rc) {
-        case "prev":   state.start = addDays(state.start, -state.days); break;
-        case "next":   state.start = addDays(state.start, state.days); break;
-        case "today":  state.start = startOfDay(new Date()); break;
-        case "days":   state.days = Number(btn.dataset.days) || state.days; break;
+        case "prev":  page(-1); return;
+        case "next":  page(1); return;
+        case "today":
+          state.start = startOfDay(new Date());
+          render();
+          scrollToDay(0, true);
+          return;
+        case "days": {
+          // Keep the same first day on screen while the zoom changes.
+          const first = firstVisibleIndex();
+          state.visible = Number(btn.dataset.days) || state.visible;
+          render();
+          scrollToDay(first, false);
+          updateRangeLabel();
+          return;
+        }
         case "refresh": refreshBookings(); return;
       }
-      render();
       return;
     }
 
@@ -737,6 +826,7 @@
     if (view === "calendar") {
       state.lastMarkup = "";
       render();
+      scrollToDay(0, false);
       refreshBookings();
     }
   }
@@ -757,6 +847,19 @@
     });
     host.addEventListener("click", onCalendarClick);
     host.addEventListener("keydown", onCalendarKey);
+
+    // Column width follows the box width (rotation, window resize).
+    let resizeTimer = 0;
+    window.addEventListener("resize", function () {
+      clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(function () {
+        if (state.view !== "calendar") return;
+        const first = firstVisibleIndex();
+        fitColumns();
+        scrollToDay(first, false);
+        updateRangeLabel();
+      }, 120);
+    });
 
     // Keep the "now" line and overdue tails honest without a server call.
     setInterval(function () {

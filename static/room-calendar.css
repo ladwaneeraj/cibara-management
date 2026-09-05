@@ -129,7 +129,7 @@
   -webkit-tap-highlight-color: transparent;
   transition: background 0.15s, border-color 0.15s, color 0.15s;
 }
-.rc-btn:hover { border-color: var(--primary); color: var(--primary); }
+.rc-btn:not(.active):not(.rc-btn--today):hover { border-color: var(--primary); color: var(--primary); }
 .rc-btn:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
 .rc-btn.active,
 .rc-btn--today { background: var(--primary); border-color: var(--primary); color: #fff; }
@@ -151,7 +151,7 @@
   max-height: calc(100dvh - 250px);
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
-  scroll-snap-type: x proximity;
+  scroll-snap-type: x mandatory;
   scroll-padding-left: var(--rc-room-w);
   background: #fff;
   border: 1px solid var(--rc-line);
@@ -161,7 +161,9 @@
 .rc-grid {
   position: relative;
   display: grid;
-  grid-template-columns: var(--rc-room-w) repeat(var(--rc-days), minmax(var(--rc-col-w), 1fr));
+  /* --rc-col-w is set per render by room-calendar.js so that exactly the
+     chosen number of days (3 / 7 / 14) fits the box; the rest scrolls. */
+  grid-template-columns: var(--rc-room-w) repeat(var(--rc-days), var(--rc-col-w));
   min-width: max-content;
 }
 .rc-header, .rc-row { display: contents; }

@@ -1668,6 +1668,9 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
       <button type="button" class="bl-vt-btn" id="bl-vt-consolidated" data-view="consolidated">Consolidated</button>
       <span class="bl-vt-hint" id="bl-vt-hint"></span>
     </div>
+    <!-- Cleaning / inspection photos of the stay (from the bill's copied
+         stay_timeline). Outside the print area so they never print. -->
+    <div id="bl-bill-photos" class="rp-strip-host"></div>
     <div id="bl-bill-print-area"></div>
     <div class="bill-actions">
       <button class="action-btn btn-secondary" id="bl-bill-close2">Close</button>
@@ -3778,6 +3781,9 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
       attrEl.style.cssText = "margin: 0 0 10px 0;";
       area.insertBefore(attrEl, area.firstChild);
       window.CibaraAttribution.decorate(attrEl, "bills", _openBillId, { hideIfNone: true });
+    }
+    if (window.RoomPhotos && _openBillData) {
+      RoomPhotos.renderStrip("bl-bill-photos", _openBillData, _openBillData.room, { history: false });
     }
   }
 

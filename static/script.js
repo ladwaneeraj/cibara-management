@@ -2211,6 +2211,7 @@ function updateCheckoutModal(roomNumber) {
   if (checkoutRoomNumber) {
     checkoutRoomNumber.textContent = roomNumber;
   }
+  if (window.RoomPhotos) RoomPhotos.renderStrip("checkout-room-photos", roomInfo, roomNumber);
 
   // The payment buttons are shared DOM — sync them to THIS room's own
   // pending-write state, so another room's in-flight payment/checkout can
@@ -4316,6 +4317,9 @@ function showCheckinModal(selectedRoomNumber) {
       } else if (dropdown.options.length > 0) {
         // If the room isn't in the list (might be occupied), select the first available
         dropdown.selectedIndex = 0;
+      }
+      if (window.RoomPhotos) {
+        RoomPhotos.renderStrip("checkin-room-photos", rooms[dropdown.value], dropdown.value);
       }
     }
 

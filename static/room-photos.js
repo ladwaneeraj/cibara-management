@@ -17,9 +17,11 @@
  *     completeRoomCleaning(room, { photos, notes }).
  *   • script.js _applyHousekeepingDone() does the same for context "service"
  *     and sends photos/notes with /toggle_housekeeping.
- *   • script.js's room-details view calls RoomPhotos.detailRows(info) for a
- *     vacant room and RoomPhotos.detailCard(info) for an occupied one (every
- *     photo set on the stay_timeline, with who / when / notes); "History"
+ *   • Viewing: RoomPhotos.renderStrip(hostId, source, room) puts the latest
+ *     set (thumbnails, who, when, note) into the check-in modal (for the
+ *     selected room), the checkout modal (the stay's prep photos) and the
+ *     bill modal after checkout (from the bill's copied stay_timeline).
+ *     Room details use detailRows / detailCard for the full list; "History"
  *     opens a viewer over /room_photos (last 7 days, names from metadata).
  *
  * Each photo is compressed in the browser (1280px JPEG q0.72 plus a 320px
@@ -367,6 +369,48 @@
     );
   }
 
+  // Compact strip for the check-in / checkout / bill modals: the latest
+  // photo set with who / when, thumbnails, and (optionally) the History
+  // link. `source` is anything carrying stay_timeline and/or
+  // last_inspection_photos: a room from `rooms`, or a bill record.
+  // Renders nothing for rooms outside 200-228 or with no photos on file.
+  function renderStrip(hostId, source, room, opts) {
+    const host = el(hostId);
+    if (!host) return;
+    opts = opts || {};
+    const events = photoEvents(source);
+    const latest = events[0] || ((source || {}).last_inspection_photos &&
+      Object.assign({ action: "room.inspection.approve" }, (source || {}).last_inspection_photos,
+                    { photos: (source || {}).last_inspection_photos }));
+    if (!isPhotoRoom(room) || !latest || !(latest.photos.washroom || latest.photos.bed)) {
+      host.innerHTML = "";
+      host.hidden = true;
+      return;
+    }
+    injectStyles();
+    const by = who(latest);
+    const what = ACTION_LABEL[latest.action] || "Photos";
+    const more = events.length > 1 ? " · " + events.length + " sets" : "";
+    host.hidden = false;
+    host.innerHTML =
+      '<div class="rp-strip' + (opts.history === false ? "" : " rp-row") + '" data-rp-room="' + esc(room) + '">' +
+      '<span class="rp-thumbs">' + thumbs(latest.photos) + "</span>" +
+      '<span class="rp-strip-text"><b>' + esc(what) + "</b> " + esc(fmt(latest.at)) +
+      (by ? " · " + esc(by) : "") + more +
+      (latest.notes ? '<br><span class="rp-note">\u201c' + esc(latest.notes) + "\u201d</span>" : "") +
+      "</span>" +
+      (opts.history === false ? "" : '<span class="rp-more">History</span>') +
+      "</div>";
+  }
+
+  // The check-in modal's room dropdown can change after it opens.
+  document.addEventListener("change", function (e) {
+    if (e.target && e.target.id === "checkin-room-dropdown") {
+      const room = e.target.value;
+      renderStrip("checkin-room-photos", (window.rooms || {})[room], room);
+    }
+  });
+
   async function openViewer(room) {
     injectStyles();
     let box = el("rp-viewer");
@@ -437,6 +481,12 @@
       ".rp-notes{width:100%;box-sizing:border-box;margin-top:.75rem;padding:.55rem .7rem;border:1px solid #cbd5e1;" +
         "border-radius:10px;font:inherit;font-size:.85rem;resize:vertical}" +
       ".rp-note{font-size:.75rem;color:#334155;font-style:italic}" +
+      ".rp-strip-host[hidden]{display:none}" +
+      ".rp-strip{display:flex;align-items:center;gap:.6rem;padding:.5rem .7rem;margin:0 0 .8rem;" +
+        "background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;font-size:.78rem;color:#334155}" +
+      ".rp-strip .rp-thumb{width:44px;height:44px;border-radius:8px}" +
+      ".rp-strip-text{flex:1 1 auto;min-width:0;line-height:1.3}" +
+      ".rp-strip .rp-more{margin-left:0;flex-shrink:0}" +
       ".rp-error{margin:.6rem 0 0;font-size:.8rem;color:var(--danger)}" +
       ".rp-row{cursor:pointer}" +
       ".rp-thumbs{display:inline-flex;gap:4px;vertical-align:middle;margin-right:.4rem}" +
@@ -469,6 +519,7 @@
     close: close,
     detailRows: detailRows,
     detailCard: detailCard,
+    renderStrip: renderStrip,
     openViewer: openViewer,
   };
 })();

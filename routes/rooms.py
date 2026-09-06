@@ -33,6 +33,7 @@ from services.gst_lock_service import is_month_locked
 from services.auth_service import requires_permission, login_required
 from services.audit_log import write_log, attribution_create, attribution_update, _safe_user
 from services import stay_timeline
+from services import room_photos
 from routes.billing import auto_generate_bill_pdf
 
 rooms_bp = Blueprint('rooms', __name__)
@@ -4250,6 +4251,48 @@ def mark_room_cleaned():
         return jsonify(success=False, message=f"Error marking room as cleaned: {str(e)}")
 
 
+@rooms_bp.route("/upload_room_photo", methods=["POST"])
+@requires_permission("room.inspection.approve")
+def upload_room_photo():
+    """One inspection photo for a 200-block room that is being cleaned.
+
+    Multipart form: room, kind ("washroom" | "bed"), photo (JPEG, already
+    compressed by the client). Returns {success, url}. The URL is handed
+    back to /mark_room_ready_for_checkin in its `photos` field; the photo
+    itself is retained per services/room_photos (7 days, 6 per room).
+    """
+    try:
+        room = str(request.form.get("room") or "").strip()
+        kind = str(request.form.get("kind") or "").strip().lower()
+        f = request.files.get("photo")
+        if not room_photos.is_photo_room(room):
+            return jsonify(success=False, message="Photos are only taken for rooms 200 to 228"), 400
+        if kind not in room_photos.PHOTO_KINDS:
+            return jsonify(success=False, message="Unknown photo type"), 400
+        if not f or not f.filename:
+            return jsonify(success=False, message="No photo received"), 400
+        snap = rooms_ref.document(room).get()
+        if not snap.exists or (snap.to_dict() or {}).get("status") != "cleaning":
+            return jsonify(success=False, message="Room is not being cleaned"), 400
+        url = room_photos.store(room, kind, f.read())
+        return jsonify(success=True, url=url)
+    except ValueError as ve:
+        return jsonify(success=False, message=str(ve)), 400
+    except Exception as e:
+        logger.error(f"upload_room_photo failed: {e}", exc_info=True)
+        return jsonify(success=False, message="Could not store the photo"), 500
+
+
+@rooms_bp.route("/room_photos", methods=["GET"])
+@requires_permission("room.inspection.approve")
+def get_room_photos():
+    """Recent inspection photos for one room, newest first (?room=204)."""
+    room = str(request.args.get("room") or "").strip()
+    if not room_photos.is_photo_room(room):
+        return jsonify(success=True, photos=[])
+    return jsonify(success=True, photos=room_photos.list_recent(room))
+
+
 @rooms_bp.route("/mark_room_ready_for_checkin", methods=["POST"])
 @requires_permission("room.inspection.approve")
 def mark_room_ready_for_checkin():
@@ -4263,6 +4306,9 @@ def mark_room_ready_for_checkin():
         checklist          : dict of {item_key: bool}  — QC items ticked
         checklist_skipped  : bool                       — inspector chose to skip
         notes              : str                        — free-form notes
+        photos             : {washroom: url, bed: url}  — REQUIRED for a
+                             manager approving a 200-block room (URLs from
+                             /upload_room_photo); replaces the checklist.
     """
     try:
         data_json = request.json or {}
@@ -4270,6 +4316,21 @@ def mark_room_ready_for_checkin():
         qc_checklist = data_json.get("checklist") or {}
         qc_skipped = bool(data_json.get("checklist_skipped"))
         qc_notes = (data_json.get("notes") or "").strip()
+        qc_photos = data_json.get("photos") if isinstance(data_json.get("photos"), dict) else {}
+        qc_photos = {k: str(qc_photos.get(k) or "").strip()
+                     for k in room_photos.PHOTO_KINDS if qc_photos.get(k)}
+
+        # Manager rule for 200-228: both photos, or no approval. Enforced
+        # here, not only in the modal, so a stale or edited client cannot
+        # skip it. Admin and housekeeping are unaffected.
+        if room_photos.photos_required(_safe_user(), room):
+            missing = room_photos.missing_kinds(qc_photos)
+            if missing:
+                return jsonify(
+                    success=False,
+                    message="Washroom and room photos are required before check-in",
+                    missing=missing,
+                ), 400
 
         # Vacate + clear all guest-related fields. Same shape as the old
         # mark_room_cleaned final write, with the cleaning workflow fields
@@ -4284,6 +4345,11 @@ def mark_room_ready_for_checkin():
         # Daily Insights cleaning history.
         _insp_user = (_safe_user() or {}).get("userId") or "system"
         _insp_now = datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S")
+        # Latest photos kept on the room document so the room-details view
+        # can show them without a Storage listing; the full recent history
+        # is available from /room_photos.
+        _insp_photos = ({**qc_photos, "at": _insp_now, "by": _insp_user}
+                        if qc_photos else None)
 
         @firestore.transactional
         def _claim_ready(txn, ref):
@@ -4315,12 +4381,14 @@ def mark_room_ready_for_checkin():
                 # Attribution — who approved the room ready for the next guest
                 "inspectedBy":       _insp_user,
                 "inspectedAt":       _insp_now,
+                "last_inspection_photos": _insp_photos,
                 # Second prep record for the next stay. Appended, not replaced:
                 # a room cleaned and inspected twice while idle shows both,
                 # which is the point of an accountability trail.
                 "stay_timeline":     stay_timeline.append_op(
                     stay_timeline.make_event("room.inspection.approve", room,
-                                             at=_insp_now)),
+                                             at=_insp_now,
+                                             photos=qc_photos or None)),
                 "lastModifiedBy":    _insp_user,
                 "lastModifiedAt":    _insp_now,
             })
@@ -4351,6 +4419,7 @@ def mark_room_ready_for_checkin():
                 "checklist": qc_checklist if isinstance(qc_checklist, dict) else {},
                 "checklist_skipped": qc_skipped,
                 "notes": qc_notes,
+                "photos": qc_photos,
             },
         )
         return jsonify(

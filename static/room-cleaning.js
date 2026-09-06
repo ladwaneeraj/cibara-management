@@ -539,6 +539,14 @@ async function markRoomAsCleaned(roomNumber) {
       return false;
     }
 
+    // Managers approving a 200-block room take two photos instead of a
+    // checklist (static/room-photos.js). Admin and housekeeping fall
+    // through to the checklists below unchanged.
+    if (window.RoomPhotos && RoomPhotos.wantsPhotoCheck(roomNumber)) {
+      RoomPhotos.open(roomNumber);
+      return false;
+    }
+
     // For premium rooms (200-206), show 3-item quality check modal
     if (isPremiumRoom(roomNumber)) {
       showPremiumCheckModal(roomNumber);
@@ -579,17 +587,20 @@ async function markRoomAsCleaned(roomNumber) {
 // a transactional claim — this guard just avoids the wasted round-trip.
 var _cleaningInflight = {};
 
-async function completeRoomCleaning(roomNumber) {
+// `extra` is merged into the request body; the photo flow passes
+// { photos: {washroom, bed} }, which the server requires from managers
+// on rooms 200-228.
+async function completeRoomCleaning(roomNumber, extra) {
   if (_cleaningInflight[roomNumber]) return false;
   _cleaningInflight[roomNumber] = true;
   try {
-    return await _completeRoomCleaningInner(roomNumber);
+    return await _completeRoomCleaningInner(roomNumber, extra || {});
   } finally {
     delete _cleaningInflight[roomNumber];
   }
 }
 
-async function _completeRoomCleaningInner(roomNumber) {
+async function _completeRoomCleaningInner(roomNumber, extra) {
   try {
     const _auth = window.CibaraAuth;
     const _canApprove = _auth && _auth.userCan && _auth.userCan("room.inspection.approve");
@@ -600,16 +611,15 @@ async function _completeRoomCleaningInner(roomNumber) {
     const response = await apiFetch(endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        room: roomNumber,
-      }),
+      body: JSON.stringify(Object.assign({ room: roomNumber }, extra || {})),
     });
 
-    if (!response.ok) {
+    // 400 carries a real message (e.g. photos missing); surface it rather
+    // than the generic status error.
+    const result = await response.json().catch(function () { return {}; });
+    if (!response.ok && !result.message) {
       throw new Error(`Server responded with status: ${response.status}`);
     }
-
-    const result = await response.json();
     if (result.success) {
       // Update local room data so the card re-renders with the right
       // state immediately (the next /get_data fetch will confirm).

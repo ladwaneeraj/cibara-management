@@ -4079,7 +4079,9 @@ function showRoomDetailsModal(roomNumber) {
             <div class="summary-value">${
               roomNumber.startsWith("2") ? "Second Floor" : "First Floor"
             }</div>
-          </div>${vacantPrepRows(info)}
+          </div>${vacantPrepRows(info)}${
+            window.RoomPhotos ? RoomPhotos.detailRows(info, roomNumber) : ""
+          }
         </div>
       `;
     } else if (info.status === "occupied" && info.guest) {

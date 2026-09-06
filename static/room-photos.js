@@ -24,12 +24,17 @@
  *     Room details use detailRows / detailCard for the full list; "History"
  *     opens a viewer over /room_photos (last 7 days, names from metadata).
  *
+ * Grid: RoomPhotos.cardBadge(info, room) adds a camera badge to a room card
+ * that has photos; tapping it opens the history viewer.
+ *
  * Capture: tapping a tile opens an in-page camera (getUserMedia) with one
  * shutter button, so the shot is used the moment it is taken; there is no
  * "retake / use photo" screen. Tapping a finished tile shoots again. On a
  * non-secure origin (plain http over the LAN) or when the camera is refused,
  * the tile falls back to the file picker. Each photo is compressed in the
- * browser (1280px JPEG q0.72 plus a 320px thumbnail) before upload.
+ * browser (1280px JPEG q0.72 plus a 320px thumbnail) and held locally;
+ * uploads happen only when the approve button is pressed, so retakes and
+ * cancelled checks never reach Storage.
  * Retention is handled by the server.
  * ────────────────────────────────────────────────────────────────────────── */
 (function () {
@@ -50,7 +55,9 @@
                   hint: "Take a photo of what was cleaned." },
   };
 
-  const state = { room: null, context: "inspection", kinds: KINDS, urls: {}, busy: {}, onApprove: null };
+  // files[kind] = {blob, thumb} captured locally; nothing is uploaded until
+  // the approve button is pressed, so retakes never reach Storage.
+  const state = { room: null, context: "inspection", kinds: KINDS, files: {}, busy: {}, onApprove: null };
 
   // ── Policy (mirrors services/room_photos.py) ─────────────────────────────
   function isPhotoRoom(room) {
@@ -292,7 +299,7 @@
   }
 
   function refreshApprove() {
-    const ready = state.kinds.every(function (k) { return !!state.urls[k.key]; });
+    const ready = state.kinds.every(function (k) { return !!state.files[k.key]; });
     const busy = Object.keys(state.busy).some(function (k) { return state.busy[k]; });
     el("photo-check-approve").disabled = !ready || busy;
   }
@@ -302,38 +309,46 @@
     showError("");
     state.busy[kind] = true;
     refreshApprove();
-    setTile(tile, "Uploading…", { busy: true });
+    setTile(tile, "Processing…", { busy: true });
     try {
       const files = await compress(file);
-      setTile(tile, "Uploading…", { busy: true, preview: URL.createObjectURL(files.thumb) });
-      const stored = await upload(state.room, state.context, kind, files);
-      state.urls[kind] = stored.url;
-      state.urls[kind + "_thumb"] = stored.thumb;
-      setTile(tile, "Done · tap to retake", { done: true });
+      state.files[kind] = files;
+      setTile(tile, "Ready · tap to retake", { done: true, preview: URL.createObjectURL(files.thumb) });
     } catch (e) {
-      delete state.urls[kind];
-      delete state.urls[kind + "_thumb"];
+      delete state.files[kind];
       setTile(tile, "Failed · tap to try again", { clear: true });
-      showError(e.message || "Upload failed");
+      showError(e.message || "Could not read the photo");
     } finally {
       state.busy[kind] = false;
       refreshApprove();
     }
   }
 
+  // Upload everything now, then complete the step. If any upload fails the
+  // modal stays open with the photos still in hand, so nothing is lost and
+  // no half-set reaches the server.
   async function approve() {
     const btn = el("photo-check-approve");
+    const label = btn.textContent;
     btn.disabled = true;
+    btn.textContent = "Uploading…";
+    showError("");
     try {
-      const payload = {
-        photos: Object.assign({}, state.urls),
-        notes: (el("photo-check-notes").value || "").trim(),
-      };
+      const photos = {};
+      for (const k of state.kinds) {
+        const stored = await upload(state.room, state.context, k.key, state.files[k.key]);
+        photos[k.key] = stored.url;
+        photos[k.key + "_thumb"] = stored.thumb;
+      }
+      const payload = { photos: photos, notes: (el("photo-check-notes").value || "").trim() };
       const ok = await (state.onApprove
         ? state.onApprove(payload)
         : completeRoomCleaning(state.room, payload));
       if (ok !== false) close();
+    } catch (e) {
+      showError(e.message || "Upload failed, please try again");
     } finally {
+      btn.textContent = label;
       refreshApprove();
     }
   }
@@ -350,7 +365,7 @@
     state.context = CONTEXT[opts.context] ? opts.context : "inspection";
     state.kinds = kindsFor(state.context, opts.serviceType);
     state.onApprove = typeof opts.onApprove === "function" ? opts.onApprove : null;
-    state.urls = {};
+    state.files = {};
     state.busy = {};
     const c = CONTEXT[state.context];
     el("photo-check-room").textContent = state.room;
@@ -459,6 +474,26 @@
       "</div>"
     );
   }
+
+  // Small camera badge for the room card (grid). Shown on any 200-block room
+  // that has photos on file for the current cycle; tapping it opens the
+  // photo history without going through the card's own tap action.
+  function cardBadge(info, room) {
+    if (!isPhotoRoom(room)) return "";
+    const p = (info || {}).last_inspection_photos;
+    const has = photoEvents(info).length > 0 || !!(p && (p.washroom || p.bed));
+    if (!has) return "";
+    return '<button type="button" class="rp-card-badge" data-rp-room="' + esc(room) +
+           '" title="Cleaning photos" aria-label="Cleaning photos"><i class="fas fa-camera"></i></button>';
+  }
+
+  document.addEventListener("click", function (e) {
+    const badge = e.target.closest(".rp-card-badge");
+    if (!badge) return;
+    e.stopPropagation();
+    e.preventDefault();
+    openViewer(badge.dataset.rpRoom);
+  }, true);
 
   // Compact strip for the check-in / checkout / bill modals: the latest
   // photo set with who / when, thumbnails, and (optionally) the History
@@ -573,6 +608,9 @@
         "border-radius:10px;font:inherit;font-size:.85rem;resize:vertical}" +
       ".rp-note{font-size:.75rem;color:#334155;font-style:italic}" +
       ".rp-strip-host[hidden]{display:none}" +
+      ".rp-card-badge{position:absolute;bottom:6px;right:6px;width:22px;height:22px;border-radius:50%;border:0;" +
+        "background:var(--primary);color:#fff;font-size:.65rem;display:flex;align-items:center;justify-content:center;" +
+        "cursor:pointer;z-index:2;box-shadow:0 1px 3px rgba(0,0,0,.25)}" +
       ".rp-strip{display:flex;align-items:center;gap:.6rem;padding:.5rem .7rem;margin:0 0 .8rem;" +
         "background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;font-size:.78rem;color:#334155}" +
       ".rp-strip .rp-thumb{width:44px;height:44px;border-radius:8px}" +
@@ -626,6 +664,7 @@
     detailRows: detailRows,
     detailCard: detailCard,
     renderStrip: renderStrip,
+    cardBadge: cardBadge,
     openViewer: openViewer,
   };
 })();

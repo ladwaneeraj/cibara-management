@@ -79,8 +79,13 @@ def _download_url(bucket_name: str, blob_path: str, token: str) -> str:
     )
 
 
-def store(room, kind: str, image_bytes: bytes) -> str:
-    """Upload one photo and return its download URL. Raises on failure."""
+def store(room, kind: str, image_bytes: bytes, user: Optional[dict] = None) -> str:
+    """Upload one photo and return its download URL. Raises on failure.
+
+    Who took it is written into the blob's metadata, so the history listing
+    can show a name without a second lookup and the photo stays attributable
+    even after the room's stay_timeline has been cleared at checkout.
+    """
     if kind not in PHOTO_KINDS:
         raise ValueError("Unknown photo kind")
     if not image_bytes:
@@ -94,7 +99,12 @@ def store(room, kind: str, image_bytes: bytes) -> str:
     token = uuid.uuid4().hex
     blob = bucket.blob(blob_path)
     # Token set before upload so it rides in the single multipart request.
-    blob.metadata = {"firebaseStorageDownloadTokens": token}
+    user = user or {}
+    blob.metadata = {
+        "firebaseStorageDownloadTokens": token,
+        "by": str(user.get("userId") or "system"),
+        "byName": str(user.get("name") or user.get("userId") or "system"),
+    }
     blob.upload_from_string(image_bytes, content_type="image/jpeg")
     logger.info(f"room_photos: stored {blob_path} ({len(image_bytes) // 1024} KB)")
 
@@ -114,12 +124,15 @@ def _parse_blob(blob) -> Optional[dict]:
         return None
     if kind not in PHOTO_KINDS:
         return None
-    token = (blob.metadata or {}).get("firebaseStorageDownloadTokens")
+    meta = blob.metadata or {}
+    token = meta.get("firebaseStorageDownloadTokens")
     if not token:
         return None
     return {
         "kind": kind,
         "at": at.strftime("%Y-%m-%d %H:%M:%S"),
+        "by": meta.get("by") or "",
+        "byName": meta.get("byName") or meta.get("by") or "",
         "url": _download_url(blob.bucket.name, blob.name, token),
     }
 

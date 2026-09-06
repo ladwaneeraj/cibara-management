@@ -13,9 +13,11 @@
  *     first and, if true, RoomPhotos.open(room) instead of a checklist modal.
  *   • On approve it calls completeRoomCleaning(room, { photos }), which
  *     forwards the URLs to /mark_room_ready_for_checkin.
- *   • script.js's room-details view calls RoomPhotos.detailRows(info) to
- *     show the latest pair for a vacant room; tapping opens a lightbox that
- *     also lists the recent history from /room_photos.
+ *   • script.js's room-details view calls RoomPhotos.detailRows(info) for a
+ *     vacant room (latest pair, who, when) and RoomPhotos.detailCard(info)
+ *     for an occupied one (every photo set taken for this stay's prep, from
+ *     stay_timeline); "History" opens a viewer over /room_photos, which
+ *     lists the last 7 days with the inspector's name from blob metadata.
  *
  * Photos are compressed in the browser (longest side 1280px, JPEG q0.72,
  * roughly 150-300 KB) before upload; the server keeps 6 per room for 7
@@ -220,19 +222,65 @@
       d.toLocaleString("en-IN", { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" });
   }
 
-  // Summary-row markup for script.js's room-details view. Empty string when
-  // the room has no photos on file, so the view is unchanged for others.
+  // Audit trail from the room's stay_timeline: every inspection approval
+  // that carried photos, newest first. Prep events survive check-in
+  // (services/stay_timeline.prep_only keeps them), so this is available
+  // for the whole stay; at checkout the timeline is copied onto the bill.
+  function photoEvents(info) {
+    const tl = Array.isArray((info || {}).stay_timeline) ? info.stay_timeline : [];
+    return tl
+      .filter(function (e) { return e && e.photos && (e.photos.washroom || e.photos.bed); })
+      .sort(function (a, b) { return String(b.at || "").localeCompare(String(a.at || "")); });
+  }
+
+  function thumbs(p) {
+    return KINDS.filter(function (k) { return p[k.key]; }).map(function (k) {
+      return '<a href="' + esc(p[k.key]) + '" target="_blank" rel="noopener">' +
+        '<img class="rp-thumb" src="' + esc(p[k.key]) + '" alt="' + k.label + '" title="' + k.label + '"></a>';
+    }).join("");
+  }
+
+  function who(ev) {
+    return String((ev && (ev.byName || ev.by)) || "").trim();
+  }
+
+  // Summary-row markup for a VACANT room in script.js's room-details view:
+  // the latest pair with who / when. Empty when nothing is on file.
   function detailRows(info, room) {
     const p = (info || {}).last_inspection_photos;
     if (!p || !(p.washroom || p.bed)) return "";
-    const thumbs = KINDS.filter(function (k) { return p[k.key]; }).map(function (k) {
-      return '<img class="rp-thumb" src="' + esc(p[k.key]) + '" alt="' + k.label + '" title="' + k.label + '">';
-    }).join("");
+    const by = who(p);
     return (
       '<div class="summary-row rp-row" data-rp-room="' + esc(room) + '">' +
       '<div class="summary-label">Inspection photos</div>' +
-      '<div class="summary-value"><span class="rp-thumbs">' + thumbs + "</span>" +
-      '<span class="rp-when">' + esc(fmt(p.at)) + "</span></div></div>"
+      '<div class="summary-value"><span class="rp-thumbs">' + thumbs(p) + "</span>" +
+      '<span class="rp-when">' + esc(fmt(p.at)) + (by ? " \u00b7 " + esc(by) : "") + "</span>" +
+      '<span class="rp-more">History</span></div></div>'
+    );
+  }
+
+  // Full card for an OCCUPIED room: every photo set taken for this stay's
+  // preparation, each with inspector and time, plus the history link.
+  function detailCard(info, room) {
+    const events = photoEvents(info);
+    const latest = (info || {}).last_inspection_photos;
+    if (!events.length && !(latest && (latest.washroom || latest.bed))) return "";
+    const rows = (events.length ? events : [latest]).map(function (ev) {
+      const p = ev.photos || ev;
+      const by = who(ev);
+      return (
+        '<div class="summary-row"><div class="summary-label">' +
+        esc(fmt(ev.at)) + (by ? '<br><span class="rp-when">by ' + esc(by) + "</span>" : "") +
+        '</div><div class="summary-value"><span class="rp-thumbs">' + thumbs(p) + "</span></div></div>"
+      );
+    }).join("");
+    return (
+      '<div class="summary-card" style="margin-bottom:0">' +
+      '<div class="summary-title">Inspection photos before this stay</div>' +
+      rows +
+      '<div class="summary-row rp-row" data-rp-room="' + esc(room) + '">' +
+      '<div class="summary-label"></div><div class="summary-value"><span class="rp-more">All photos from the last 7 days</span></div></div>' +
+      "</div>"
     );
   }
 
@@ -263,7 +311,8 @@
         return (
           '<figure class="rp-fig"><a href="' + esc(ph.url) + '" target="_blank" rel="noopener">' +
           '<img src="' + esc(ph.url) + '" alt="' + esc(k.label) + '" loading="lazy"></a>' +
-          "<figcaption>" + esc(k.label) + " · " + esc(fmt(ph.at)) + "</figcaption></figure>"
+          "<figcaption>" + esc(k.label) + " · " + esc(fmt(ph.at)) +
+          (ph.byName ? " · " + esc(ph.byName) : "") + "</figcaption></figure>"
         );
       }).join("");
     } catch (_e) {
@@ -272,6 +321,7 @@
   }
 
   document.addEventListener("click", function (e) {
+    if (e.target.closest("a")) return;            // thumbnail → full image
     const row = e.target.closest(".rp-row");
     if (row) openViewer(row.dataset.rpRoom);
   });
@@ -304,6 +354,7 @@
       ".rp-thumbs{display:inline-flex;gap:4px;vertical-align:middle;margin-right:.4rem}" +
       ".rp-thumb{width:36px;height:36px;object-fit:cover;border-radius:6px;border:1px solid #e2e8f0}" +
       ".rp-when{font-size:.75rem;color:var(--gray)}" +
+      ".rp-more{display:inline-block;margin-left:.5rem;font-size:.72rem;font-weight:600;color:var(--primary);text-decoration:underline}" +
       ".rp-viewer{position:fixed;inset:0;z-index:10000;background:rgba(15,23,42,.88);display:flex;" +
         "flex-direction:column;padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom)}" +
       ".rp-viewer[hidden]{display:none}" +
@@ -328,6 +379,7 @@
     open: open,
     close: close,
     detailRows: detailRows,
+    detailCard: detailCard,
     openViewer: openViewer,
   };
 })();

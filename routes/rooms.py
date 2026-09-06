@@ -4274,7 +4274,7 @@ def upload_room_photo():
         snap = rooms_ref.document(room).get()
         if not snap.exists or (snap.to_dict() or {}).get("status") != "cleaning":
             return jsonify(success=False, message="Room is not being cleaned"), 400
-        url = room_photos.store(room, kind, f.read())
+        url = room_photos.store(room, kind, f.read(), _safe_user())
         return jsonify(success=True, url=url)
     except ValueError as ve:
         return jsonify(success=False, message=str(ve)), 400
@@ -4348,7 +4348,8 @@ def mark_room_ready_for_checkin():
         # Latest photos kept on the room document so the room-details view
         # can show them without a Storage listing; the full recent history
         # is available from /room_photos.
-        _insp_photos = ({**qc_photos, "at": _insp_now, "by": _insp_user}
+        _insp_photos = ({**qc_photos, "at": _insp_now, "by": _insp_user,
+                         "byName": (_safe_user() or {}).get("name") or _insp_user}
                         if qc_photos else None)
 
         @firestore.transactional

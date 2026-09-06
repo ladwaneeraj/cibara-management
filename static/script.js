@@ -4173,6 +4173,11 @@ function showRoomDetailsModal(roomNumber) {
 
         html += `</div>`;
       }
+
+      // Inspection photos taken before this guest arrived, with who / when.
+      // The prep events survive check-in (stay_timeline keeps them), so the
+      // trail is visible for the whole stay, not only while the room is empty.
+      if (window.RoomPhotos) html += RoomPhotos.detailCard(info, roomNumber);
     }
 
     contentDiv.innerHTML = html;

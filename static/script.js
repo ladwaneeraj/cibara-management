@@ -1348,29 +1348,50 @@ function showHkConfirm(roomNumber, type) {
   });
 }
 
-/** Actually clears the flag and saves to server. */
-async function _applyHousekeepingDone(roomNumber, type) {
-  if (!rooms[roomNumber]) return;
-  if (!rooms[roomNumber].service_cleaning) rooms[roomNumber].service_cleaning = {};
-  rooms[roomNumber].service_cleaning[type] = false;
-  renderRooms();
+/** Actually clears the flag and saves to server.
+ *
+ * On a 200-block room the person marking it done may have to attach a photo
+ * of what was cleaned (static/room-photos.js, per their Settings switch).
+ * `extra` carries {photos, notes} from that modal; when it is absent and a
+ * photo is required, the modal opens and calls back here with it. The
+ * server enforces the same rule, so this is UX rather than the gate. */
+async function _applyHousekeepingDone(roomNumber, type, extra) {
+  if (!rooms[roomNumber]) return false;
+  if (!extra && window.RoomPhotos && RoomPhotos.wantsPhotoCheck(roomNumber, "service")) {
+    RoomPhotos.open({
+      room: roomNumber, context: "service", serviceType: type,
+      onApprove: (payload) => _applyHousekeepingDone(roomNumber, type, payload),
+    });
+    return false;
+  }
 
+  const body = Object.assign({ room: roomNumber }, extra || {});
+  if (type === "room") body.room_clean = false;
+  else body.bathroom_clean = false;
   const label = type === "room" ? "Room cleaning" : "Bathroom cleaning";
-  showNotification(`${label} marked as done ✓`, "success");
 
   try {
-    const body = { room: roomNumber };
-    if (type === "room") body.room_clean = false;
-    else body.bathroom_clean = false;
-
-    await apiFetch("/toggle_housekeeping", {
+    const res = await apiFetch("/toggle_housekeeping", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.success) {
+      showNotification(data.message || `Could not mark ${label.toLowerCase()} done`, "error");
+      return false;
+    }
   } catch (e) {
     console.error("_applyHousekeepingDone error:", e);
+    showNotification("Network error, please try again", "error");
+    return false;
   }
+
+  if (!rooms[roomNumber].service_cleaning) rooms[roomNumber].service_cleaning = {};
+  rooms[roomNumber].service_cleaning[type] = false;
+  renderRooms();
+  showNotification(`${label} marked as done ✓`, "success");
+  return true;
 }
 
 /**
@@ -5709,7 +5730,7 @@ function _setIncognitoToggleUI(enabled) {
 // always computed from the complete picture, so a partial call never silently
 // clears an unrelated flag. Seeded with defaults; the server-rendered
 // window.__initialUIConfig is merged in by the initial applyUIConfig() call.
-let _uiConfigState = { hide_register_tab: false, incognito_mode: false, inspection_photos: true };
+let _uiConfigState = { hide_register_tab: false, incognito_mode: false, inspection_photos: true, cleaning_photos: false };
 
 // Apply the UI config to the DOM. Idempotent. Incognito is a superset: it hides
 // the Register AND Transactions tabs plus the bill "Edit Price" button (the last
@@ -5773,7 +5794,12 @@ function applyUIConfig(cfg) {
   // Keep the Settings toggle UIs in sync if the modal is open or will open.
   _setHideRegisterToggleUI(!!_uiConfigState.hide_register_tab);
   _setIncognitoToggleUI(incognito);
-  _setInspectionPhotosToggleUI(_uiConfigState.inspection_photos !== false);
+  _setPhotoToggleUI("photos", _uiConfigState.inspection_photos !== false,
+    "On · managers must photograph washroom + room for 200-228",
+    "Off · managers use the checklist");
+  _setPhotoToggleUI("hk-photos", !!_uiConfigState.cleaning_photos,
+    "On · housekeeping must photograph washroom + room for 200-228",
+    "Off · housekeeping uses the checklist");
   // Re-paint the Bill-generation caption too — Incognito overrides it
   // server-side, and the caption explains that while Incognito is on.
   if (typeof _setBillGenToggleUI === "function") {
@@ -5840,53 +5866,59 @@ async function toggleHideRegisterTab(inputEl) {
   }
 }
 
-function _setInspectionPhotosToggleUI(enabled) {
-  const toggle = document.getElementById("settings-photos-toggle");
-  const slider = document.getElementById("settings-photos-slider");
-  const knob   = document.getElementById("settings-photos-knob");
-  const sub    = document.getElementById("settings-photos-sub");
+// Settings switches for the cleaning / inspection photo rules (rooms 200-228).
+// `id` is the element-id stem: "photos" (inspection_photos, managers) or
+// "hk-photos" (cleaning_photos, housekeeping). Same optimistic save / revert
+// shape as the toggles above; the server enforces the flags.
+function _setPhotoToggleUI(id, enabled, onText, offText) {
+  const toggle = document.getElementById("settings-" + id + "-toggle");
+  const slider = document.getElementById("settings-" + id + "-slider");
+  const knob   = document.getElementById("settings-" + id + "-knob");
+  const sub    = document.getElementById("settings-" + id + "-sub");
   if (toggle) toggle.checked = !!enabled;
   if (slider) slider.style.background = enabled ? "var(--primary)" : "#ccc";
   if (knob)   knob.style.transform   = enabled ? "translateX(20px)" : "translateX(0)";
-  if (sub) {
-    sub.textContent = enabled
-      ? "On · managers must photograph washroom + room for 200-228"
-      : "Off · managers use the checklist";
-  }
+  if (sub)    sub.textContent = enabled ? onText : offText;
 }
 
-// Manager photo check (rooms 200-228). Same optimistic save / revert shape as
-// the toggles above; the server enforces the flag in /mark_room_ready_for_checkin.
-async function toggleInspectionPhotos(inputEl) {
+async function _savePhotoFlag(key, inputEl, onMsg, offMsg) {
   const desired = !!(inputEl && inputEl.checked);
-  applyUIConfig({ inspection_photos: desired });
+  const patch = {}; patch[key] = desired;
+  applyUIConfig(patch);
   if (inputEl) inputEl.disabled = true;
   try {
     const res = await apiFetch("/settings/ui_config", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ inspection_photos: desired }),
+      body: JSON.stringify(patch),
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     if (!data.success) throw new Error(data.message || "Save failed");
     applyUIConfig(data.config || {});
-    if (typeof showNotification === "function") {
-      showNotification(
-        desired ? "Photo check ON for managers (rooms 200-228)."
-                : "Photo check OFF. Managers use the checklist.",
-        "success",
-      );
-    }
+    if (typeof showNotification === "function") showNotification(desired ? onMsg : offMsg, "success");
   } catch (err) {
-    console.error("[ui_config] inspection_photos save failed:", err);
-    applyUIConfig({ inspection_photos: !desired });
+    console.error("[ui_config] " + key + " save failed:", err);
+    patch[key] = !desired;
+    applyUIConfig(patch);
     if (typeof showNotification === "function") {
       showNotification("Could not save setting: " + (err.message || "network error"), "error");
     }
   } finally {
     if (inputEl) inputEl.disabled = false;
   }
+}
+
+function toggleInspectionPhotos(inputEl) {
+  return _savePhotoFlag("inspection_photos", inputEl,
+    "Photo check ON for managers (rooms 200-228).",
+    "Photo check OFF. Managers use the checklist.");
+}
+
+function toggleCleaningPhotos(inputEl) {
+  return _savePhotoFlag("cleaning_photos", inputEl,
+    "Cleaning photos ON for housekeeping (rooms 200-228).",
+    "Cleaning photos OFF. Housekeeping uses the checklist.");
 }
 
 async function toggleIncognitoMode(inputEl) {

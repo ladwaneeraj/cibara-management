@@ -539,12 +539,17 @@ async function markRoomAsCleaned(roomNumber) {
       return false;
     }
 
-    // Managers approving a 200-block room take two photos instead of a
-    // checklist (static/room-photos.js). Admin and housekeeping fall
-    // through to the checklists below unchanged.
-    if (window.RoomPhotos && RoomPhotos.wantsPhotoCheck(roomNumber)) {
-      RoomPhotos.open(roomNumber);
-      return false;
+    // Photo steps for 200-block rooms (static/room-photos.js): a manager
+    // approving takes inspection photos, housekeeping marking cleaned takes
+    // cleaning photos, each behind its Settings switch. Admin and anyone
+    // whose switch is off fall through to the checklists below unchanged.
+    if (window.RoomPhotos) {
+      const _a = window.CibaraAuth;
+      const _ctx = _a && _a.userCan && _a.userCan("room.inspection.approve") ? "inspection" : "cleaning";
+      if (RoomPhotos.wantsPhotoCheck(roomNumber, _ctx)) {
+        RoomPhotos.open({ room: roomNumber, context: _ctx });
+        return false;
+      }
     }
 
     // For premium rooms (200-206), show 3-item quality check modal

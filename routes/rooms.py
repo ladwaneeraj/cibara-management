@@ -4192,8 +4192,17 @@ def mark_room_cleaned():
     an admin / manager approves it via /mark_room_ready_for_checkin.
     """
     try:
-        data_json = request.json
+        data_json = request.json or {}
         room = data_json["room"]
+        hk_photos = room_photos.clean_photo_map(data_json.get("photos"))
+        hk_notes = str(data_json.get("notes") or "").strip()[:500]
+
+        # Housekeeping photo rule (Settings → cleaning_photos) for 200-228.
+        if room_photos.photos_required(_safe_user(), room, "cleaning"):
+            missing = room_photos.missing_kinds(hk_photos)
+            if missing:
+                return jsonify(success=False, missing=missing,
+                               message="Washroom and room photos are required before marking cleaned"), 400
 
         room_doc = rooms_ref.document(room).get()
         if not room_doc.exists:
@@ -4222,11 +4231,16 @@ def mark_room_cleaned():
             # Attribution — who marked it cleaned
             "cleanedBy":         _hk_user,
             "cleanedAt":         _hk_now,
+            "last_cleaning_photos": ({**hk_photos, "at": _hk_now, "by": _hk_user,
+                                      "byName": (_safe_user() or {}).get("name") or _hk_user}
+                                     if hk_photos else None),
             # Prep record for the NEXT stay. The room's array was emptied at
             # checkout, so this is the first entry of that stay's history.
             "stay_timeline":     stay_timeline.append_op(
                 stay_timeline.make_event("room.cleaning.complete", room,
-                                         at=_hk_now)),
+                                         at=_hk_now,
+                                         photos=hk_photos or None,
+                                         notes=hk_notes or None)),
             "lastModifiedBy":    _hk_user,
             "lastModifiedAt":    _hk_now,
         })
@@ -4238,7 +4252,7 @@ def mark_room_cleaned():
             "room.cleaning.complete",
             target_collection="rooms",
             target_id=str(room),
-            metadata={"new_state": "ready_to_inspect"},
+            metadata={"new_state": "ready_to_inspect", "photos": hk_photos, "notes": hk_notes},
         )
         return jsonify(
             success=True,
@@ -4252,30 +4266,42 @@ def mark_room_cleaned():
 
 
 @rooms_bp.route("/upload_room_photo", methods=["POST"])
-@requires_permission("room.inspection.approve")
+@requires_permission("room.cleaning.complete")
 def upload_room_photo():
-    """One inspection photo for a 200-block room that is being cleaned.
+    """One cleaning / inspection / service photo for a 200-block room.
 
-    Multipart form: room, kind ("washroom" | "bed"), photo (JPEG, already
-    compressed by the client). Returns {success, url}. The URL is handed
-    back to /mark_room_ready_for_checkin in its `photos` field; the photo
-    itself is retained per services/room_photos (7 days, 6 per room).
+    Multipart form: room, kind ("washroom" | "bed"), context ("inspection" |
+    "cleaning" | "service", default inspection), photo (JPEG, already
+    compressed by the client), thumb (optional 320px JPEG). Returns
+    {success, url, thumb}. The URLs are handed back to the completing call
+    (/mark_room_ready_for_checkin, /mark_room_cleaned, /toggle_housekeeping)
+    in its `photos` field; retention is handled by services/room_photos.
     """
     try:
         room = str(request.form.get("room") or "").strip()
         kind = str(request.form.get("kind") or "").strip().lower()
+        context = str(request.form.get("context") or "inspection").strip().lower()
         f = request.files.get("photo")
+        t = request.files.get("thumb")
         if not room_photos.is_photo_room(room):
             return jsonify(success=False, message="Photos are only taken for rooms 200 to 228"), 400
-        if kind not in room_photos.PHOTO_KINDS:
+        if kind not in room_photos.PHOTO_KINDS or context not in room_photos.CONTEXTS:
             return jsonify(success=False, message="Unknown photo type"), 400
         if not f or not f.filename:
             return jsonify(success=False, message="No photo received"), 400
         snap = rooms_ref.document(room).get()
-        if not snap.exists or (snap.to_dict() or {}).get("status") != "cleaning":
+        data = snap.to_dict() if snap.exists else None
+        if data is None:
+            return jsonify(success=False, message="Room not found"), 404
+        if context == "service":
+            sc = data.get("service_cleaning") or {}
+            if data.get("status") != "occupied" or not (sc.get("room") or sc.get("bathroom")):
+                return jsonify(success=False, message="No service cleaning is pending for this room"), 400
+        elif data.get("status") != "cleaning":
             return jsonify(success=False, message="Room is not being cleaned"), 400
-        url = room_photos.store(room, kind, f.read(), _safe_user())
-        return jsonify(success=True, url=url)
+        stored = room_photos.store(room, kind, f.read(), _safe_user(), context,
+                                   t.read() if t and t.filename else None)
+        return jsonify(success=True, **stored)
     except ValueError as ve:
         return jsonify(success=False, message=str(ve)), 400
     except Exception as e:
@@ -4316,14 +4342,13 @@ def mark_room_ready_for_checkin():
         qc_checklist = data_json.get("checklist") or {}
         qc_skipped = bool(data_json.get("checklist_skipped"))
         qc_notes = (data_json.get("notes") or "").strip()
-        qc_photos = data_json.get("photos") if isinstance(data_json.get("photos"), dict) else {}
-        qc_photos = {k: str(qc_photos.get(k) or "").strip()
-                     for k in room_photos.PHOTO_KINDS if qc_photos.get(k)}
+        qc_photos = room_photos.clean_photo_map(data_json.get("photos"))
+        qc_notes = qc_notes[:500]
 
         # Manager rule for 200-228: both photos, or no approval. Enforced
         # here, not only in the modal, so a stale or edited client cannot
         # skip it. Admin and housekeeping are unaffected.
-        if room_photos.photos_required(_safe_user(), room):
+        if room_photos.photos_required(_safe_user(), room, "inspection"):
             missing = room_photos.missing_kinds(qc_photos)
             if missing:
                 return jsonify(
@@ -4389,7 +4414,8 @@ def mark_room_ready_for_checkin():
                 "stay_timeline":     stay_timeline.append_op(
                     stay_timeline.make_event("room.inspection.approve", room,
                                              at=_insp_now,
-                                             photos=qc_photos or None)),
+                                             photos=qc_photos or None,
+                                             notes=qc_notes or None)),
                 "lastModifiedBy":    _insp_user,
                 "lastModifiedAt":    _insp_now,
             })
@@ -5543,7 +5569,13 @@ def toggle_housekeeping():
     Toggle mid-stay housekeeping request for a room.
     Sets service_cleaning.room and/or service_cleaning.bathroom flags.
 
-    Body: { room: str, room_clean?: bool, bathroom_clean?: bool }
+    Body: { room: str, room_clean?: bool, bathroom_clean?: bool,
+            photos?: {bed|washroom: url, ..._thumb: url}, notes?: str }
+
+    Marking a request DONE (flag → false) on a 200-block room may require a
+    photo of what was cleaned (bed for room, washroom for bathroom), per the
+    caller's role switch (services/room_photos). The completion is recorded
+    on the stay_timeline as room.service_cleaning.done with the photo(s).
 
     Only the flags present in the body are updated; any omitted flag is
     left untouched. This is important because the card icons and the
@@ -5569,20 +5601,43 @@ def toggle_housekeeping():
         room_doc = rooms_ref.document(str(room)).get()
         if not room_doc.exists:
             return jsonify(success=False, message="Room not found"), 404
+        prev = (room_doc.to_dict() or {}).get("service_cleaning") or {}
+
+        # Which requests are being marked done in this call.
+        done_types = [t for t, raw in (("room", room_clean_raw), ("bathroom", bathroom_clean_raw))
+                      if raw is not None and not bool(raw) and prev.get(t)]
+        sv_photos = room_photos.clean_photo_map(data.get("photos"))
+        sv_notes = str(data.get("notes") or "").strip()[:500]
+        if done_types and room_photos.photos_required(_safe_user(), room, "service"):
+            need = [k for t in done_types for k in room_photos.required_kinds("service", t)]
+            missing = room_photos.missing_kinds(sv_photos, need)
+            if missing:
+                return jsonify(success=False, missing=missing,
+                               message="A photo of the cleaned " +
+                                       ("room" if "bed" in missing else "washroom") +
+                                       " is required before marking done"), 400
 
         # Use dotted field paths so only the specified sub-field(s) change;
         # the other flag and the rest of the map are preserved by Firestore.
-        update = {
-            "service_cleaning.requested_at":
-                datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S"),
-        }
+        _now = datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S")
+        update = {"service_cleaning.requested_at": _now}
         if room_clean_raw is not None:
             update["service_cleaning.room"] = bool(room_clean_raw)
         if bathroom_clean_raw is not None:
             update["service_cleaning.bathroom"] = bool(bathroom_clean_raw)
+        if done_types:
+            update["stay_timeline"] = stay_timeline.append_op(
+                stay_timeline.make_event("room.service_cleaning.done", room, at=_now,
+                                         service=",".join(done_types),
+                                         photos=sv_photos or None,
+                                         notes=sv_notes or None))
 
         rooms_ref.document(str(room)).update(update)
         invalidate_rooms_and_totals()
+        if done_types:
+            write_log("room.service_cleaning.done", target_collection="rooms",
+                      target_id=str(room),
+                      metadata={"service": done_types, "photos": sv_photos, "notes": sv_notes})
         return jsonify(success=True, message="Housekeeping flags updated")
     except Exception as e:
         logger.error(f"toggle_housekeeping error: {e}", exc_info=True)

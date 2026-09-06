@@ -1,29 +1,29 @@
 /* ──────────────────────────────────────────────────────────────────────────
- * Inspection photos for rooms 200-228 (manager flow)
+ * Cleaning and inspection photos for rooms 200-228
  *
- * When a MANAGER approves one of these rooms as ready for check-in, the
- * Quality Check becomes two photos, washroom and room/bed, instead of the
- * tick-box list. Both must be uploaded before "Ready for check-in" is
- * enabled, and the server (routes/rooms.py → services/room_photos.py)
- * enforces the same rule, so this modal is the convenience, not the gate.
- * Admin and housekeeping keep the existing checklist modals. An admin can
- * switch the whole thing off in Settings (ui_config.inspection_photos), in
- * which case managers get the checklist too.
+ * Three steps can ask for photos instead of (or on top of) a checklist,
+ * each behind an admin switch in Settings (mirrors services/room_photos.py):
+ *   inspection  manager approves a cleaned room      (inspection_photos, on)
+ *   cleaning    housekeeping marks a room cleaned    (cleaning_photos, off)
+ *   service     a mid-stay service clean is done; only the photo matching
+ *               what was asked (room → bed, bathroom → washroom); follows
+ *               the switch of whoever marks it done.
+ * Admin is never asked. The server enforces the same rules, so the modal is
+ * the convenience, not the gate.
  *
  * Wiring:
- *   • room-cleaning.js markRoomAsCleaned() calls RoomPhotos.wantsPhotoCheck(room)
- *     first and, if true, RoomPhotos.open(room) instead of a checklist modal.
- *   • On approve it calls completeRoomCleaning(room, { photos }), which
- *     forwards the URLs to /mark_room_ready_for_checkin.
+ *   • room-cleaning.js markRoomAsCleaned() → RoomPhotos.wantsPhotoCheck(room, ctx)
+ *     and RoomPhotos.open({...}) instead of a checklist; on approve it calls
+ *     completeRoomCleaning(room, { photos, notes }).
+ *   • script.js _applyHousekeepingDone() does the same for context "service"
+ *     and sends photos/notes with /toggle_housekeeping.
  *   • script.js's room-details view calls RoomPhotos.detailRows(info) for a
- *     vacant room (latest pair, who, when) and RoomPhotos.detailCard(info)
- *     for an occupied one (every photo set taken for this stay's prep, from
- *     stay_timeline); "History" opens a viewer over /room_photos, which
- *     lists the last 7 days with the inspector's name from blob metadata.
+ *     vacant room and RoomPhotos.detailCard(info) for an occupied one (every
+ *     photo set on the stay_timeline, with who / when / notes); "History"
+ *     opens a viewer over /room_photos (last 7 days, names from metadata).
  *
- * Photos are compressed in the browser (longest side 1280px, JPEG q0.72,
- * roughly 150-300 KB) before upload; the server keeps 6 per room for 7
- * days and prunes the rest automatically.
+ * Each photo is compressed in the browser (1280px JPEG q0.72 plus a 320px
+ * thumbnail) before upload. Retention is handled by the server.
  * ────────────────────────────────────────────────────────────────────────── */
 (function () {
   "use strict";
@@ -33,9 +33,17 @@
     { key: "bed",      label: "Room & bed", icon: "fa-bed" },
   ];
   const ROOM_MIN = 200, ROOM_MAX = 228;
-  const MAX_DIM = 1280, JPEG_Q = 0.72;
+  const MAX_DIM = 1280, JPEG_Q = 0.72, THUMB_DIM = 320, THUMB_Q = 0.6;
+  const CONTEXT = {
+    inspection: { title: "Photo check", approve: "Ready for check-in ✓",
+                  hint: "Take both photos after inspecting the room." },
+    cleaning:   { title: "Cleaning photos", approve: "Mark as cleaned ✓",
+                  hint: "Take both photos after cleaning the room." },
+    service:    { title: "Service clean", approve: "Mark as done ✓",
+                  hint: "Take a photo of what was cleaned." },
+  };
 
-  const state = { room: null, urls: {}, busy: {} };
+  const state = { room: null, context: "inspection", kinds: KINDS, urls: {}, busy: {}, onApprove: null };
 
   // ── Policy (mirrors services/room_photos.py) ─────────────────────────────
   function isPhotoRoom(room) {
@@ -43,19 +51,34 @@
     return n >= ROOM_MIN && n <= ROOM_MAX;
   }
 
-  // Admin switch (Settings → "Photo check for rooms 200-228"), flag
-  // ui_config.inspection_photos. script.js keeps _uiConfigState live via the
-  // settings listener; before it exists the server-rendered initial config
-  // applies. Default is on. The server checks the same flag.
-  function featureOn() {
-    const cfg = (typeof _uiConfigState !== "undefined" && _uiConfigState) ||
-                window.__initialUIConfig || {};
-    return cfg.inspection_photos !== false;
+  // Settings switches. script.js keeps _uiConfigState live via the settings
+  // listener; before it exists the server-rendered initial config applies.
+  function uiConfig() {
+    return (typeof _uiConfigState !== "undefined" && _uiConfigState) ||
+           window.__initialUIConfig || {};
   }
 
-  function wantsPhotoCheck(room) {
-    const a = window.CibaraAuth;
-    return featureOn() && !!(a && a.isManager && a.isManager()) && isPhotoRoom(room);
+  // Which switch governs this user: managers follow inspection_photos,
+  // housekeeping follows cleaning_photos, admin is never asked.
+  function switchOn() {
+    const a = window.CibaraAuth || {};
+    const cfg = uiConfig();
+    if (a.isManager && a.isManager()) return cfg.inspection_photos !== false;
+    if (a.isHousekeeping && a.isHousekeeping()) return !!cfg.cleaning_photos;
+    return false;
+  }
+
+  function wantsPhotoCheck(room, context) {
+    if (!isPhotoRoom(room) || !switchOn()) return false;
+    const a = window.CibaraAuth || {};
+    if (context === "inspection") return !!(a.isManager && a.isManager());
+    if (context === "cleaning")   return !!(a.isHousekeeping && a.isHousekeeping());
+    return context === "service";
+  }
+
+  function kindsFor(context, serviceType) {
+    if (context !== "service") return KINDS;
+    return KINDS.filter(function (k) { return k.key === (serviceType === "room" ? "bed" : "washroom"); });
   }
 
   // ── Image compression ────────────────────────────────────────────────────
@@ -73,32 +96,41 @@
     });
   }
 
-  async function compress(file) {
-    const bmp = await loadBitmap(file);
-    const w = bmp.width, h = bmp.height;
-    const scale = Math.min(1, MAX_DIM / Math.max(w, h));
+  function toJpeg(source, maxDim, quality) {
+    const w = source.width, h = source.height;
+    const scale = Math.min(1, maxDim / Math.max(w, h));
     const canvas = document.createElement("canvas");
     canvas.width = Math.round(w * scale);
     canvas.height = Math.round(h * scale);
-    canvas.getContext("2d").drawImage(bmp, 0, 0, canvas.width, canvas.height);
-    if (bmp.close) bmp.close();
+    canvas.getContext("2d").drawImage(source, 0, 0, canvas.width, canvas.height);
     return new Promise(function (resolve, reject) {
       canvas.toBlob(function (blob) {
         blob ? resolve(blob) : reject(new Error("Could not compress photo"));
-      }, "image/jpeg", JPEG_Q);
+      }, "image/jpeg", quality);
     });
   }
 
+  // Full-size for evidence, thumbnail for lists: both from one decode.
+  async function compress(file) {
+    const bmp = await loadBitmap(file);
+    const blob = await toJpeg(bmp, MAX_DIM, JPEG_Q);
+    const thumb = await toJpeg(bmp, THUMB_DIM, THUMB_Q);
+    if (bmp.close) bmp.close();
+    return { blob: blob, thumb: thumb };
+  }
+
   // ── Upload ───────────────────────────────────────────────────────────────
-  async function upload(room, kind, blob) {
+  async function upload(room, context, kind, files) {
     const fd = new FormData();
     fd.append("room", room);
+    fd.append("context", context);
     fd.append("kind", kind);
-    fd.append("photo", blob, kind + ".jpg");
+    fd.append("photo", files.blob, kind + ".jpg");
+    fd.append("thumb", files.thumb, kind + "_t.jpg");
     const resp = await apiFetch("/upload_room_photo", { method: "POST", body: fd });
     const data = await resp.json().catch(function () { return {}; });
     if (!resp.ok || !data.success) throw new Error(data.message || "Upload failed");
-    return data.url;
+    return { url: data.url, thumb: data.thumb || "" };
   }
 
   // ── Modal ────────────────────────────────────────────────────────────────
@@ -122,11 +154,13 @@
       '<div class="modal-backdrop" id="photo-check-modal">' +
       '<div class="modal-content" style="max-width:420px">' +
       '<div class="modal-header" style="padding:1rem 1.5rem">' +
-      '<h2 style="font-size:1.1rem">Room <span id="photo-check-room"></span> · Photo check</h2>' +
+      '<h2 style="font-size:1.1rem">Room <span id="photo-check-room"></span> · <span id="photo-check-title"></span></h2>' +
       '<button class="close-btn" aria-label="Close">&times;</button></div>' +
       '<div class="modal-body" style="padding:1rem 1.5rem">' +
-      '<p class="rp-hint">Take both photos after cleaning. They are kept for 7 days.</p>' +
+      '<p class="rp-hint" id="photo-check-hint"></p>' +
       '<div class="rp-tiles">' + tiles + "</div>" +
+      '<textarea id="photo-check-notes" class="rp-notes" rows="2" maxlength="500" ' +
+      'placeholder="Anything to note? (AC, stains, missing items…)"></textarea>' +
       '<p class="rp-error" id="photo-check-error" hidden></p>' +
       "</div>" +
       '<div class="modal-footer" style="padding:1rem 1.5rem;gap:.5rem">' +
@@ -165,7 +199,7 @@
   }
 
   function refreshApprove() {
-    const ready = KINDS.every(function (k) { return !!state.urls[k.key]; });
+    const ready = state.kinds.every(function (k) { return !!state.urls[k.key]; });
     const busy = Object.keys(state.busy).some(function (k) { return state.busy[k]; });
     el("photo-check-approve").disabled = !ready || busy;
   }
@@ -177,12 +211,15 @@
     refreshApprove();
     setTile(tile, "Uploading…", { busy: true });
     try {
-      const blob = await compress(file);
-      setTile(tile, "Uploading…", { busy: true, preview: URL.createObjectURL(blob) });
-      state.urls[kind] = await upload(state.room, kind, blob);
+      const files = await compress(file);
+      setTile(tile, "Uploading…", { busy: true, preview: URL.createObjectURL(files.thumb) });
+      const stored = await upload(state.room, state.context, kind, files);
+      state.urls[kind] = stored.url;
+      state.urls[kind + "_thumb"] = stored.thumb;
       setTile(tile, "Done · tap to retake", { done: true });
     } catch (e) {
       delete state.urls[kind];
+      delete state.urls[kind + "_thumb"];
       setTile(tile, "Failed · tap to try again", { clear: true });
       showError(e.message || "Upload failed");
     } finally {
@@ -195,23 +232,46 @@
     const btn = el("photo-check-approve");
     btn.disabled = true;
     try {
-      const ok = await completeRoomCleaning(state.room, { photos: Object.assign({}, state.urls) });
-      if (ok) close();
+      const payload = {
+        photos: Object.assign({}, state.urls),
+        notes: (el("photo-check-notes").value || "").trim(),
+      };
+      const ok = await (state.onApprove
+        ? state.onApprove(payload)
+        : completeRoomCleaning(state.room, payload));
+      if (ok !== false) close();
     } finally {
       refreshApprove();
     }
   }
 
-  function open(room) {
+  // open({ room, context, serviceType, onApprove })
+  //   context     "inspection" (default) | "cleaning" | "service"
+  //   serviceType "room" | "bathroom", service context only
+  //   onApprove   async ({photos, notes}) => boolean; defaults to
+  //               completeRoomCleaning(room, payload)
+  function open(opts) {
+    if (typeof opts !== "object") opts = { room: opts };
     ensureModal();
-    state.room = String(room);
+    state.room = String(opts.room);
+    state.context = CONTEXT[opts.context] ? opts.context : "inspection";
+    state.kinds = kindsFor(state.context, opts.serviceType);
+    state.onApprove = typeof opts.onApprove === "function" ? opts.onApprove : null;
     state.urls = {};
     state.busy = {};
+    const c = CONTEXT[state.context];
     el("photo-check-room").textContent = state.room;
+    el("photo-check-title").textContent = c.title;
+    el("photo-check-hint").textContent = c.hint;
+    el("photo-check-approve").textContent = c.approve;
+    el("photo-check-notes").value = "";
     showError("");
+    const wanted = state.kinds.map(function (k) { return k.key; });
     document.querySelectorAll("#photo-check-modal .rp-tile").forEach(function (t) {
+      t.hidden = wanted.indexOf(t.dataset.kind) === -1;
       setTile(t, "Tap to take photo", { clear: true });
     });
+    document.querySelector("#photo-check-modal .rp-tiles").classList.toggle("rp-tiles--single", wanted.length === 1);
     refreshApprove();
     el("photo-check-modal").classList.add("show");
   }
@@ -248,9 +308,16 @@
   function thumbs(p) {
     return KINDS.filter(function (k) { return p[k.key]; }).map(function (k) {
       return '<a href="' + esc(p[k.key]) + '" target="_blank" rel="noopener">' +
-        '<img class="rp-thumb" src="' + esc(p[k.key]) + '" alt="' + k.label + '" title="' + k.label + '"></a>';
+        '<img class="rp-thumb" src="' + esc(p[k.key + "_thumb"] || p[k.key]) + '" alt="' + k.label +
+        '" title="' + k.label + '" loading="lazy"></a>';
     }).join("");
   }
+
+  const ACTION_LABEL = {
+    "room.inspection.approve": "Inspected",
+    "room.cleaning.complete": "Cleaned",
+    "room.service_cleaning.done": "Service clean",
+  };
 
   function who(ev) {
     return String((ev && (ev.byName || ev.by)) || "").trim();
@@ -280,15 +347,19 @@
     const rows = (events.length ? events : [latest]).map(function (ev) {
       const p = ev.photos || ev;
       const by = who(ev);
+      const what = ACTION_LABEL[ev.action] || "Photos";
+      const svc = ev.service ? " (" + esc(ev.service) + ")" : "";
       return (
         '<div class="summary-row"><div class="summary-label">' +
-        esc(fmt(ev.at)) + (by ? '<br><span class="rp-when">by ' + esc(by) + "</span>" : "") +
+        esc(what) + svc + '<br><span class="rp-when">' + esc(fmt(ev.at)) +
+        (by ? " \u00b7 " + esc(by) : "") + "</span>" +
+        (ev.notes ? '<br><span class="rp-note">\u201c' + esc(ev.notes) + "\u201d</span>" : "") +
         '</div><div class="summary-value"><span class="rp-thumbs">' + thumbs(p) + "</span></div></div>"
       );
     }).join("");
     return (
       '<div class="summary-card" style="margin-bottom:0">' +
-      '<div class="summary-title">Inspection photos before this stay</div>' +
+      '<div class="summary-title">Cleaning & inspection photos (this stay)</div>' +
       rows +
       '<div class="summary-row rp-row" data-rp-room="' + esc(room) + '">' +
       '<div class="summary-label"></div><div class="summary-value"><span class="rp-more">All photos from the last 7 days</span></div></div>' +
@@ -320,10 +391,11 @@
       if (!photos.length) { body.innerHTML = '<p class="rp-hint">No photos in the last 7 days.</p>'; return; }
       body.innerHTML = photos.map(function (ph) {
         const k = KINDS.find(function (x) { return x.key === ph.kind; }) || { label: ph.kind };
+        const ctx = ph.context && ph.context !== "inspection" ? " · " + esc(ph.context) : "";
         return (
           '<figure class="rp-fig"><a href="' + esc(ph.url) + '" target="_blank" rel="noopener">' +
-          '<img src="' + esc(ph.url) + '" alt="' + esc(k.label) + '" loading="lazy"></a>' +
-          "<figcaption>" + esc(k.label) + " · " + esc(fmt(ph.at)) +
+          '<img src="' + esc(ph.thumb || ph.url) + '" alt="' + esc(k.label) + '" loading="lazy"></a>' +
+          "<figcaption>" + esc(k.label) + ctx + " · " + esc(fmt(ph.at)) +
           (ph.byName ? " · " + esc(ph.byName) : "") + "</figcaption></figure>"
         );
       }).join("");
@@ -361,6 +433,10 @@
       ".rp-check{position:absolute;top:8px;right:8px;width:24px;height:24px;border-radius:50%;" +
         "background:var(--success);color:#fff;display:none;align-items:center;justify-content:center;font-size:.75rem}" +
       ".rp-tile--done .rp-check{display:flex}" +
+      ".rp-tiles--single{grid-template-columns:1fr;max-width:220px;margin:0 auto}" +
+      ".rp-notes{width:100%;box-sizing:border-box;margin-top:.75rem;padding:.55rem .7rem;border:1px solid #cbd5e1;" +
+        "border-radius:10px;font:inherit;font-size:.85rem;resize:vertical}" +
+      ".rp-note{font-size:.75rem;color:#334155;font-style:italic}" +
       ".rp-error{margin:.6rem 0 0;font-size:.8rem;color:var(--danger)}" +
       ".rp-row{cursor:pointer}" +
       ".rp-thumbs{display:inline-flex;gap:4px;vertical-align:middle;margin-right:.4rem}" +
@@ -388,6 +464,7 @@
   window.RoomPhotos = {
     isPhotoRoom: isPhotoRoom,
     wantsPhotoCheck: wantsPhotoCheck,
+    kindsFor: kindsFor,
     open: open,
     close: close,
     detailRows: detailRows,

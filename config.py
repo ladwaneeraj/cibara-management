@@ -512,6 +512,12 @@ _UI_CONFIG_DEFAULTS = {
     #   False → managers use the same checklists as admin. Admin and
     #           housekeeping are unaffected either way.
     "inspection_photos": True,
+    # cleaning_photos (bool, default False):
+    #   True  → HOUSEKEEPING marking a room in 200-228 as cleaned must attach
+    #           washroom + room photos; mid-stay service cleans they complete
+    #           need the matching photo. The manager's inspection photos are
+    #           governed separately by inspection_photos.
+    "cleaning_photos": False,
 }
 
 

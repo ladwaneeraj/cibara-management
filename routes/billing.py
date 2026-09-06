@@ -1173,6 +1173,8 @@ def update_ui_config_endpoint():
         # Manager photo check for rooms 200-228 (see config._UI_CONFIG_DEFAULTS).
         if "inspection_photos" in data:
             update["inspection_photos"] = bool(data["inspection_photos"])
+        if "cleaning_photos" in data:
+            update["cleaning_photos"] = bool(data["cleaning_photos"])
 
         if not update:
             return jsonify(success=False,

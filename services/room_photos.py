@@ -154,6 +154,11 @@ def _put(bucket, blob_path: str, data: bytes, meta: dict) -> str:
     blob = bucket.blob(blob_path)
     # Token set before upload so it rides in the single multipart request.
     blob.metadata = dict(meta, firebaseStorageDownloadTokens=token)
+    # Every object name is unique (timestamp + context + kind) and never
+    # rewritten, so browsers and the PWA may cache it indefinitely: each
+    # thumbnail is downloaded once per device instead of on every modal
+    # open. Deleted objects simply stop being requested.
+    blob.cache_control = "public, max-age=31536000, immutable"
     blob.upload_from_string(data, content_type="image/jpeg")
     return _download_url(bucket.name, blob_path, token)
 

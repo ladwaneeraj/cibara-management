@@ -841,7 +841,6 @@ function renderRooms() {
         <div class="guest-name">
           ${isMmtRoom ? '<span style="background:#0c6fcd;color:#fff;font-size:0.6rem;font-weight:700;padding:1px 5px;border-radius:4px;margin-right:4px;letter-spacing:0.03em;vertical-align:middle;">MMT</span>' : ''}${info.guest.name}
         </div>
-        ${window.RoomPhotos ? RoomPhotos.cardBadge(info, roomNumber) : ""}
       `;
 
       const renewalStatus = getRoomRenewalStatus(info);
@@ -930,7 +929,7 @@ function renderRooms() {
         <div class="room-footer">
           <div>Available</div>
         </div>
-        ${vacantAccountability(info)}${window.RoomPhotos ? RoomPhotos.cardBadge(info, roomNumber) : ""}
+        ${vacantAccountability(info)}
       `;
     }
 

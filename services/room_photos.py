@@ -53,7 +53,8 @@ from config import IST
 logger = logging.getLogger(__name__)
 
 PHOTO_ROOM_MIN, PHOTO_ROOM_MAX = 200, 228
-PHOTO_KINDS = ("washroom", "bed")
+PREMIUM_MIN, PREMIUM_MAX = 200, 206   # premium rooms also photograph the coffee maker
+PHOTO_KINDS = ("washroom", "coffee", "bed")   # display / capture order
 CONTEXTS = ("inspection", "cleaning", "service")
 SWITCH_FOR_ROLE = {"manager": "inspection_photos", "housekeeping": "cleaning_photos"}
 RETENTION_DAYS = 7
@@ -96,11 +97,22 @@ def photos_required(user: Optional[dict], room, context: str) -> bool:
     return _switch_on(switch)
 
 
-def required_kinds(context: str, service_type: Optional[str] = None) -> tuple:
-    """Which photos a step needs. Service cleans need only what was asked."""
+def is_premium_room(room) -> bool:
+    try:
+        return PREMIUM_MIN <= int(str(room).strip()) <= PREMIUM_MAX
+    except (TypeError, ValueError):
+        return False
+
+
+def required_kinds(context: str, service_type: Optional[str] = None, room=None) -> tuple:
+    """Which photos a step needs.
+
+    Full checks: washroom + bed, plus coffee maker for premium rooms
+    (200-206). Service cleans need only what was asked for.
+    """
     if context == "service":
         return ("bed",) if service_type == "room" else ("washroom",)
-    return PHOTO_KINDS
+    return PHOTO_KINDS if is_premium_room(room) else tuple(k for k in PHOTO_KINDS if k != "coffee")
 
 
 def missing_kinds(photos: Optional[dict], kinds: Iterable[str] = PHOTO_KINDS) -> list:

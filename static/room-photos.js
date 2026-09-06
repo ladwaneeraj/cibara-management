@@ -24,8 +24,10 @@
  *     Room details use detailRows / detailCard for the full list; "History"
  *     opens a viewer over /room_photos (last 7 days, names from metadata).
  *
- * Grid: RoomPhotos.cardBadge(info, room) adds a camera badge to a room card
- * that has photos; tapping it opens the history viewer.
+ * Viewing photos: tapping any thumbnail opens a lightbox (one photo, swipe
+ * or arrows through the set, pinch / double-tap / buttons to zoom, drag to
+ * pan). "History" opens the 7-day list, whose thumbnails use the same
+ * lightbox. Nothing opens in a browser tab.
  *
  * Capture: tapping a tile opens an in-page camera (getUserMedia) with one
  * shutter button, so the shot is used the moment it is taken; there is no
@@ -40,17 +42,20 @@
 (function () {
   "use strict";
 
+  // Capture / display order. Coffee maker only for premium rooms 200-206.
   const KINDS = [
-    { key: "washroom", label: "Washroom", icon: "fa-shower" },
-    { key: "bed",      label: "Room & bed", icon: "fa-bed" },
+    { key: "washroom", label: "Washroom",     icon: "fa-shower" },
+    { key: "coffee",   label: "Coffee maker", icon: "fa-mug-hot", premium: true },
+    { key: "bed",      label: "Room & bed",   icon: "fa-bed" },
   ];
   const ROOM_MIN = 200, ROOM_MAX = 228;
+  const PREMIUM_MIN = 200, PREMIUM_MAX = 206;
   const MAX_DIM = 1280, JPEG_Q = 0.72, THUMB_DIM = 320, THUMB_Q = 0.6;
   const CONTEXT = {
     inspection: { title: "Photo check", approve: "Ready for check-in ✓",
-                  hint: "Take both photos after inspecting the room." },
+                  hint: "Take the photos after inspecting the room." },
     cleaning:   { title: "Cleaning photos", approve: "Mark as cleaned ✓",
-                  hint: "Take both photos after cleaning the room." },
+                  hint: "Take the photos after cleaning the room." },
     service:    { title: "Service clean", approve: "Mark as done ✓",
                   hint: "Take a photo of what was cleaned." },
   };
@@ -90,9 +95,16 @@
     return context === "service";
   }
 
-  function kindsFor(context, serviceType) {
-    if (context !== "service") return KINDS;
-    return KINDS.filter(function (k) { return k.key === (serviceType === "room" ? "bed" : "washroom"); });
+  function isPremiumRoom(room) {
+    const n = parseInt(room, 10);
+    return n >= PREMIUM_MIN && n <= PREMIUM_MAX;
+  }
+
+  function kindsFor(context, serviceType, room) {
+    if (context === "service") {
+      return KINDS.filter(function (k) { return k.key === (serviceType === "room" ? "bed" : "washroom"); });
+    }
+    return KINDS.filter(function (k) { return !k.premium || isPremiumRoom(room); });
   }
 
   // ── Image compression ────────────────────────────────────────────────────
@@ -363,7 +375,7 @@
     ensureModal();
     state.room = String(opts.room);
     state.context = CONTEXT[opts.context] ? opts.context : "inspection";
-    state.kinds = kindsFor(state.context, opts.serviceType);
+    state.kinds = kindsFor(state.context, opts.serviceType, state.room);
     state.onApprove = typeof opts.onApprove === "function" ? opts.onApprove : null;
     state.files = {};
     state.busy = {};
@@ -379,7 +391,9 @@
       t.hidden = wanted.indexOf(t.dataset.kind) === -1;
       setTile(t, "Tap to take photo", { clear: true });
     });
-    document.querySelector("#photo-check-modal .rp-tiles").classList.toggle("rp-tiles--single", wanted.length === 1);
+    const tiles = document.querySelector("#photo-check-modal .rp-tiles");
+    tiles.classList.toggle("rp-tiles--single", wanted.length === 1);
+    tiles.classList.toggle("rp-tiles--three", wanted.length === 3);
     refreshApprove();
     el("photo-check-modal").classList.add("show");
   }
@@ -413,11 +427,25 @@
       .sort(function (a, b) { return String(b.at || "").localeCompare(String(a.at || "")); });
   }
 
-  function thumbs(p) {
+  // Thumbnails of one photo set, in KINDS order. Tapping one opens the
+  // lightbox on that photo with the rest of the set to swipe through.
+  function setPhotos(p, meta) {
     return KINDS.filter(function (k) { return p[k.key]; }).map(function (k) {
-      return '<a href="' + esc(p[k.key]) + '" target="_blank" rel="noopener">' +
-        '<img class="rp-thumb" src="' + esc(p[k.key + "_thumb"] || p[k.key]) + '" alt="' + k.label +
-        '" title="' + k.label + '" loading="lazy"></a>';
+      return { url: p[k.key], thumb: p[k.key + "_thumb"] || "", label: k.label,
+               caption: (meta || "") };
+    });
+  }
+
+  let lbSets = {};   // id → photo list, for click delegation
+  let lbSeq = 0;
+
+  function thumbs(p, meta) {
+    const list = setPhotos(p, meta);
+    const id = "s" + (++lbSeq);
+    lbSets[id] = list;
+    return list.map(function (ph, i) {
+      return '<img class="rp-thumb" data-rp-set="' + id + '" data-rp-idx="' + i + '" src="' +
+        esc(ph.thumb || ph.url) + '" alt="' + esc(ph.label) + '" title="' + esc(ph.label) + '" loading="lazy">';
     }).join("");
   }
 
@@ -438,11 +466,11 @@
     if (!p || !(p.washroom || p.bed)) return "";
     const by = who(p);
     return (
-      '<div class="summary-row rp-row" data-rp-room="' + esc(room) + '">' +
+      '<div class="summary-row" data-rp-room="' + esc(room) + '">' +
       '<div class="summary-label">Inspection photos</div>' +
-      '<div class="summary-value"><span class="rp-thumbs">' + thumbs(p) + "</span>" +
+      '<div class="summary-value"><span class="rp-thumbs">' + thumbs(p, "Inspected · " + fmt(p.at) + (by ? " · " + by : "")) + "</span>" +
       '<span class="rp-when">' + esc(fmt(p.at)) + (by ? " \u00b7 " + esc(by) : "") + "</span>" +
-      '<span class="rp-more">History</span></div></div>'
+      '<span class="rp-more" data-rp-history="' + esc(room) + '">History</span></div></div>'
     );
   }
 
@@ -462,38 +490,18 @@
         esc(what) + svc + '<br><span class="rp-when">' + esc(fmt(ev.at)) +
         (by ? " \u00b7 " + esc(by) : "") + "</span>" +
         (ev.notes ? '<br><span class="rp-note">\u201c' + esc(ev.notes) + "\u201d</span>" : "") +
-        '</div><div class="summary-value"><span class="rp-thumbs">' + thumbs(p) + "</span></div></div>"
+        '</div><div class="summary-value"><span class="rp-thumbs">' + thumbs(p, what + " · " + fmt(ev.at) + (by ? " · " + by : "")) + "</span></div></div>"
       );
     }).join("");
     return (
       '<div class="summary-card" style="margin-bottom:0">' +
       '<div class="summary-title">Cleaning & inspection photos (this stay)</div>' +
       rows +
-      '<div class="summary-row rp-row" data-rp-room="' + esc(room) + '">' +
-      '<div class="summary-label"></div><div class="summary-value"><span class="rp-more">All photos from the last 7 days</span></div></div>' +
+      '<div class="summary-row">' +
+      '<div class="summary-label"></div><div class="summary-value"><span class="rp-more" data-rp-history="' + esc(room) + '">All photos from the last 7 days</span></div></div>' +
       "</div>"
     );
   }
-
-  // Small camera badge for the room card (grid). Shown on any 200-block room
-  // that has photos on file for the current cycle; tapping it opens the
-  // photo history without going through the card's own tap action.
-  function cardBadge(info, room) {
-    if (!isPhotoRoom(room)) return "";
-    const p = (info || {}).last_inspection_photos;
-    const has = photoEvents(info).length > 0 || !!(p && (p.washroom || p.bed));
-    if (!has) return "";
-    return '<button type="button" class="rp-card-badge" data-rp-room="' + esc(room) +
-           '" title="Cleaning photos" aria-label="Cleaning photos"><i class="fas fa-camera"></i></button>';
-  }
-
-  document.addEventListener("click", function (e) {
-    const badge = e.target.closest(".rp-card-badge");
-    if (!badge) return;
-    e.stopPropagation();
-    e.preventDefault();
-    openViewer(badge.dataset.rpRoom);
-  }, true);
 
   // Compact strip for the check-in / checkout / bill modals: the latest
   // photo set with who / when, thumbnails, and (optionally) the History
@@ -517,24 +525,29 @@
     const by = who(latest);
     const what = ACTION_LABEL[latest.action] || "Photos";
     const more = events.length > 1 ? " · " + events.length + " sets" : "";
+    const meta = what + " · " + fmt(latest.at) + (by ? " · " + by : "");
     host.hidden = false;
     host.innerHTML =
-      '<div class="rp-strip' + (opts.history === false ? "" : " rp-row") + '" data-rp-room="' + esc(room) + '">' +
-      '<span class="rp-thumbs">' + thumbs(latest.photos) + "</span>" +
+      '<div class="rp-strip" data-rp-room="' + esc(room) + '">' +
+      '<span class="rp-thumbs">' + thumbs(latest.photos, meta) + "</span>" +
       '<span class="rp-strip-text"><b>' + esc(what) + "</b> " + esc(fmt(latest.at)) +
       (by ? " · " + esc(by) : "") + more +
       (latest.notes ? '<br><span class="rp-note">\u201c' + esc(latest.notes) + "\u201d</span>" : "") +
       "</span>" +
-      (opts.history === false ? "" : '<span class="rp-more">History</span>') +
+      (opts.history === false ? "" : '<span class="rp-more" data-rp-history="' + esc(room) + '">History</span>') +
       "</div>";
   }
 
-  // The check-in modal's room dropdown can change after it opens.
+  // Check-in modal: script.js fires checkinModalOpened once the room dropdown
+  // is set (on every open path); the dropdown can also change afterwards.
+  function renderCheckinStrip() {
+    const dd = el("checkin-room-dropdown");
+    if (!dd) return;
+    renderStrip("checkin-room-photos", (window.rooms || {})[dd.value], dd.value);
+  }
+  document.addEventListener("checkinModalOpened", renderCheckinStrip);
   document.addEventListener("change", function (e) {
-    if (e.target && e.target.id === "checkin-room-dropdown") {
-      const room = e.target.value;
-      renderStrip("checkin-room-photos", (window.rooms || {})[room], room);
-    }
+    if (e.target && e.target.id === "checkin-room-dropdown") renderCheckinStrip();
   });
 
   async function openViewer(room) {
@@ -559,14 +572,19 @@
       const data = await resp.json();
       const photos = (data && data.photos) || [];
       if (!photos.length) { body.innerHTML = '<p class="rp-hint">No photos in the last 7 days.</p>'; return; }
-      body.innerHTML = photos.map(function (ph) {
+      const list = photos.map(function (ph) {
         const k = KINDS.find(function (x) { return x.key === ph.kind; }) || { label: ph.kind };
-        const ctx = ph.context && ph.context !== "inspection" ? " · " + esc(ph.context) : "";
+        const ctx = ph.context && ph.context !== "inspection" ? " · " + ph.context : "";
+        return { url: ph.url, thumb: ph.thumb || "", label: k.label,
+                 caption: fmt(ph.at) + ctx + (ph.byName ? " · " + ph.byName : "") };
+      });
+      const id = "h" + (++lbSeq);
+      lbSets[id] = list;
+      body.innerHTML = list.map(function (ph, i) {
         return (
-          '<figure class="rp-fig"><a href="' + esc(ph.url) + '" target="_blank" rel="noopener">' +
-          '<img src="' + esc(ph.thumb || ph.url) + '" alt="' + esc(k.label) + '" loading="lazy"></a>' +
-          "<figcaption>" + esc(k.label) + ctx + " · " + esc(fmt(ph.at)) +
-          (ph.byName ? " · " + esc(ph.byName) : "") + "</figcaption></figure>"
+          '<figure class="rp-fig"><img class="rp-thumb" data-rp-set="' + id + '" data-rp-idx="' + i + '" src="' +
+          esc(ph.thumb || ph.url) + '" alt="' + esc(ph.label) + '" loading="lazy">' +
+          "<figcaption>" + esc(ph.label) + " · " + esc(ph.caption) + "</figcaption></figure>"
         );
       }).join("");
     } catch (_e) {
@@ -575,10 +593,146 @@
   }
 
   document.addEventListener("click", function (e) {
-    if (e.target.closest("a")) return;            // thumbnail → full image
-    const row = e.target.closest(".rp-row");
-    if (row) openViewer(row.dataset.rpRoom);
+    const th = e.target.closest(".rp-thumb[data-rp-set]");
+    if (th) {
+      e.preventDefault();
+      openLightbox(lbSets[th.dataset.rpSet] || [], Number(th.dataset.rpIdx) || 0);
+      return;
+    }
+    const hist = e.target.closest("[data-rp-history]");
+    if (hist) openViewer(hist.dataset.rpHistory);
   });
+
+  // ── Lightbox: one photo at a time, swipe / arrows for the rest of the set,
+  //    pinch or double-tap to zoom, drag to pan while zoomed ───────────────
+  const lb = { list: [], idx: 0, scale: 1, x: 0, y: 0, pointers: new Map(), pinch: null, drag: null, lastTap: 0 };
+
+  function ensureLightbox() {
+    if (el("rp-lb")) return;
+    injectStyles();
+    document.body.insertAdjacentHTML("beforeend",
+      '<div id="rp-lb" class="rp-lb" hidden>' +
+      '<div class="rp-lb-top"><span id="rp-lb-title"></span>' +
+      '<button type="button" class="rp-lb-close" aria-label="Close">&times;</button></div>' +
+      '<div class="rp-lb-stage" id="rp-lb-stage"><img id="rp-lb-img" alt="" draggable="false"></div>' +
+      '<button type="button" class="rp-lb-nav rp-lb-prev" aria-label="Previous">&#8249;</button>' +
+      '<button type="button" class="rp-lb-nav rp-lb-next" aria-label="Next">&#8250;</button>' +
+      '<div class="rp-lb-bottom"><span id="rp-lb-caption"></span>' +
+      '<span class="rp-lb-zoom"><button type="button" data-lb-zoom="-1">&minus;</button>' +
+      '<span id="rp-lb-count"></span><button type="button" data-lb-zoom="1">+</button></span></div></div>');
+    const box = el("rp-lb");
+    box.querySelector(".rp-lb-close").addEventListener("click", closeLightbox);
+    box.querySelector(".rp-lb-prev").addEventListener("click", function () { lbGo(-1); });
+    box.querySelector(".rp-lb-next").addEventListener("click", function () { lbGo(1); });
+    box.querySelectorAll("[data-lb-zoom]").forEach(function (b) {
+      b.addEventListener("click", function () { lbZoomTo(lb.scale * (b.dataset.lbZoom === "1" ? 1.5 : 1 / 1.5)); });
+    });
+    const stage = el("rp-lb-stage");
+    stage.addEventListener("pointerdown", lbDown);
+    stage.addEventListener("pointermove", lbMove);
+    stage.addEventListener("pointerup", lbUp);
+    stage.addEventListener("pointercancel", lbUp);
+    stage.addEventListener("wheel", function (e) {
+      e.preventDefault();
+      lbZoomTo(lb.scale * (e.deltaY < 0 ? 1.15 : 1 / 1.15));
+    }, { passive: false });
+    document.addEventListener("keydown", function (e) {
+      if (el("rp-lb").hidden) return;
+      if (e.key === "Escape") closeLightbox();
+      else if (e.key === "ArrowLeft") lbGo(-1);
+      else if (e.key === "ArrowRight") lbGo(1);
+    });
+  }
+
+  function openLightbox(list, idx) {
+    if (!list || !list.length) return;
+    ensureLightbox();
+    lb.list = list;
+    lb.idx = Math.max(0, Math.min(list.length - 1, idx || 0));
+    el("rp-lb").hidden = false;
+    lbShow();
+  }
+
+  function closeLightbox() {
+    const box = el("rp-lb");
+    if (box) box.hidden = true;
+    el("rp-lb-img").removeAttribute("src");
+  }
+
+  function lbShow() {
+    const ph = lb.list[lb.idx];
+    lb.scale = 1; lb.x = 0; lb.y = 0;
+    lbApply();
+    el("rp-lb-img").src = ph.url;
+    el("rp-lb-title").textContent = ph.label || "";
+    el("rp-lb-caption").textContent = ph.caption || "";
+    el("rp-lb-count").textContent = (lb.idx + 1) + " / " + lb.list.length;
+    const many = lb.list.length > 1;
+    el("rp-lb").querySelector(".rp-lb-prev").hidden = !many;
+    el("rp-lb").querySelector(".rp-lb-next").hidden = !many;
+  }
+
+  function lbGo(dir) {
+    if (lb.list.length < 2) return;
+    lb.idx = (lb.idx + dir + lb.list.length) % lb.list.length;
+    lbShow();
+  }
+
+  function lbApply() {
+    el("rp-lb-img").style.transform =
+      "translate(" + lb.x + "px," + lb.y + "px) scale(" + lb.scale + ")";
+  }
+
+  function lbZoomTo(scale) {
+    lb.scale = Math.max(1, Math.min(5, scale));
+    if (lb.scale === 1) { lb.x = 0; lb.y = 0; }
+    lbApply();
+  }
+
+  function lbDown(e) {
+    const stage = el("rp-lb-stage");
+    stage.setPointerCapture(e.pointerId);
+    lb.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (lb.pointers.size === 2) {
+      const pts = Array.from(lb.pointers.values());
+      lb.pinch = { d: Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y), scale: lb.scale };
+      lb.drag = null;
+    } else if (lb.pointers.size === 1) {
+      lb.drag = { x: e.clientX, y: e.clientY, ox: lb.x, oy: lb.y, moved: false };
+    }
+  }
+
+  function lbMove(e) {
+    if (!lb.pointers.has(e.pointerId)) return;
+    lb.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (lb.pinch && lb.pointers.size === 2) {
+      const pts = Array.from(lb.pointers.values());
+      const d = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+      lbZoomTo(lb.pinch.scale * (d / lb.pinch.d));
+    } else if (lb.drag) {
+      const dx = e.clientX - lb.drag.x, dy = e.clientY - lb.drag.y;
+      if (Math.abs(dx) > 6 || Math.abs(dy) > 6) lb.drag.moved = true;
+      if (lb.scale > 1) { lb.x = lb.drag.ox + dx; lb.y = lb.drag.oy + dy; lbApply(); }
+    }
+  }
+
+  function lbUp(e) {
+    lb.pointers.delete(e.pointerId);
+    if (lb.pointers.size < 2) lb.pinch = null;
+    if (!lb.drag || lb.pointers.size) return;
+    const dx = e.clientX - lb.drag.x;
+    const drag = lb.drag;
+    lb.drag = null;
+    if (lb.scale === 1 && drag.moved && Math.abs(dx) > 50) {   // swipe
+      lbGo(dx < 0 ? 1 : -1);
+      return;
+    }
+    if (!drag.moved) {                                       // tap / double-tap
+      const now = Date.now();
+      if (now - lb.lastTap < 320) lbZoomTo(lb.scale > 1 ? 1 : 2.5);
+      lb.lastTap = now;
+    }
+  }
 
   // ── Styles ───────────────────────────────────────────────────────────────
   function injectStyles() {
@@ -604,13 +758,13 @@
         "background:var(--success);color:#fff;display:none;align-items:center;justify-content:center;font-size:.75rem}" +
       ".rp-tile--done .rp-check{display:flex}" +
       ".rp-tiles--single{grid-template-columns:1fr;max-width:220px;margin:0 auto}" +
+      ".rp-tiles--three{grid-template-columns:1fr 1fr 1fr;gap:.5rem}" +
+      ".rp-tiles--three .rp-label{font-size:.72rem}.rp-tiles--three .rp-status{font-size:.62rem}.rp-tiles--three .rp-icon{font-size:1.2rem}" +
       ".rp-notes{width:100%;box-sizing:border-box;margin-top:.75rem;padding:.55rem .7rem;border:1px solid #cbd5e1;" +
         "border-radius:10px;font:inherit;font-size:.85rem;resize:vertical}" +
       ".rp-note{font-size:.75rem;color:#334155;font-style:italic}" +
       ".rp-strip-host[hidden]{display:none}" +
-      ".rp-card-badge{position:absolute;bottom:6px;right:6px;width:22px;height:22px;border-radius:50%;border:0;" +
-        "background:var(--primary);color:#fff;font-size:.65rem;display:flex;align-items:center;justify-content:center;" +
-        "cursor:pointer;z-index:2;box-shadow:0 1px 3px rgba(0,0,0,.25)}" +
+
       ".rp-strip{display:flex;align-items:center;gap:.6rem;padding:.5rem .7rem;margin:0 0 .8rem;" +
         "background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;font-size:.78rem;color:#334155}" +
       ".rp-strip .rp-thumb{width:44px;height:44px;border-radius:8px}" +
@@ -632,7 +786,6 @@
       ".rp-cam-shutter:active{transform:scale(.92)}" +
       ".rp-cam-pick{justify-self:start;background:rgba(255,255,255,.18);color:#fff;border:0;border-radius:20px;" +
         "padding:.5rem .9rem;font-weight:600;cursor:pointer}" +
-      ".rp-row{cursor:pointer}" +
       ".rp-thumbs{display:inline-flex;gap:4px;vertical-align:middle;margin-right:.4rem}" +
       ".rp-thumb{width:36px;height:36px;object-fit:cover;border-radius:6px;border:1px solid #e2e8f0}" +
       ".rp-when{font-size:.75rem;color:var(--gray)}" +
@@ -646,9 +799,27 @@
       ".rp-viewer-body{overflow:auto;padding:0 1rem 1rem;display:grid;gap:.8rem;" +
         "grid-template-columns:repeat(auto-fill,minmax(220px,1fr))}" +
       ".rp-fig{margin:0;background:#fff;border-radius:10px;overflow:hidden}" +
-      ".rp-fig img{display:block;width:100%;aspect-ratio:4/3;object-fit:cover}" +
+      ".rp-fig img.rp-thumb{display:block;width:100%;height:auto;aspect-ratio:4/3;object-fit:cover;border-radius:0;border:0;cursor:pointer}" +
       ".rp-fig figcaption{padding:.4rem .6rem;font-size:.75rem;color:#334155}" +
-      ".rp-viewer .rp-hint{color:#e2e8f0;padding:1rem}";
+      ".rp-viewer .rp-hint{color:#e2e8f0;padding:1rem}" +
+      ".rp-thumb{cursor:pointer}" +
+      ".rp-lb{position:fixed;inset:0;z-index:10002;background:#000;display:flex;flex-direction:column;color:#fff;" +
+        "-webkit-user-select:none;user-select:none}" +
+      ".rp-lb[hidden]{display:none}" +
+      ".rp-lb-top,.rp-lb-bottom{display:flex;justify-content:space-between;align-items:center;gap:.6rem;" +
+        "padding:.7rem 1rem;font-size:.85rem;background:rgba(0,0,0,.55);z-index:2}" +
+      ".rp-lb-top{padding-top:calc(.7rem + env(safe-area-inset-top));font-weight:700}" +
+      ".rp-lb-bottom{padding-bottom:calc(.7rem + env(safe-area-inset-bottom));color:#cbd5e1}" +
+      ".rp-lb-close{background:none;border:0;color:#fff;font-size:2rem;line-height:1;cursor:pointer}" +
+      ".rp-lb-stage{flex:1 1 auto;min-height:0;display:flex;align-items:center;justify-content:center;overflow:hidden;" +
+        "touch-action:none;cursor:grab}" +
+      ".rp-lb-stage img{max-width:100%;max-height:100%;object-fit:contain;transition:transform .08s;will-change:transform}" +
+      ".rp-lb-nav{position:absolute;top:50%;transform:translateY(-50%);width:44px;height:64px;border:0;" +
+        "background:rgba(255,255,255,.15);color:#fff;font-size:2.2rem;line-height:1;cursor:pointer;border-radius:8px}" +
+      ".rp-lb-nav[hidden]{display:none}.rp-lb-prev{left:6px}.rp-lb-next{right:6px}" +
+      ".rp-lb-zoom{display:inline-flex;align-items:center;gap:.5rem}" +
+      ".rp-lb-zoom button{width:34px;height:34px;border-radius:50%;border:0;background:rgba(255,255,255,.18);color:#fff;" +
+        "font-size:1.2rem;cursor:pointer}";
     const style = document.createElement("style");
     style.id = "room-photos-styles";
     style.textContent = css;
@@ -664,7 +835,7 @@
     detailRows: detailRows,
     detailCard: detailCard,
     renderStrip: renderStrip,
-    cardBadge: cardBadge,
     openViewer: openViewer,
+    openLightbox: openLightbox,
   };
 })();

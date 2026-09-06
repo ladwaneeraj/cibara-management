@@ -4199,10 +4199,11 @@ def mark_room_cleaned():
 
         # Housekeeping photo rule (Settings → cleaning_photos) for 200-228.
         if room_photos.photos_required(_safe_user(), room, "cleaning"):
-            missing = room_photos.missing_kinds(hk_photos)
+            missing = room_photos.missing_kinds(hk_photos, room_photos.required_kinds("cleaning", room=room))
             if missing:
                 return jsonify(success=False, missing=missing,
-                               message="Washroom and room photos are required before marking cleaned"), 400
+                               message=("Washroom, coffee maker and room photos" if "coffee" in missing or room_photos.is_premium_room(room)
+                                        else "Washroom and room photos") + " are required before marking cleaned"), 400
 
         room_doc = rooms_ref.document(room).get()
         if not room_doc.exists:
@@ -4349,11 +4350,13 @@ def mark_room_ready_for_checkin():
         # here, not only in the modal, so a stale or edited client cannot
         # skip it. Admin and housekeeping are unaffected.
         if room_photos.photos_required(_safe_user(), room, "inspection"):
-            missing = room_photos.missing_kinds(qc_photos)
+            need = room_photos.required_kinds("inspection", room=room)
+            missing = room_photos.missing_kinds(qc_photos, need)
             if missing:
                 return jsonify(
                     success=False,
-                    message="Washroom and room photos are required before check-in",
+                    message=("Washroom, coffee maker and room photos" if "coffee" in need
+                             else "Washroom and room photos") + " are required before check-in",
                     missing=missing,
                 ), 400
 

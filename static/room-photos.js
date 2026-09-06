@@ -24,8 +24,13 @@
  *     Room details use detailRows / detailCard for the full list; "History"
  *     opens a viewer over /room_photos (last 7 days, names from metadata).
  *
- * Each photo is compressed in the browser (1280px JPEG q0.72 plus a 320px
- * thumbnail) before upload. Retention is handled by the server.
+ * Capture: tapping a tile opens an in-page camera (getUserMedia) with one
+ * shutter button, so the shot is used the moment it is taken; there is no
+ * "retake / use photo" screen. Tapping a finished tile shoots again. On a
+ * non-secure origin (plain http over the LAN) or when the camera is refused,
+ * the tile falls back to the file picker. Each photo is compressed in the
+ * browser (1280px JPEG q0.72 plus a 320px thumbnail) before upload.
+ * Retention is handled by the server.
  * ────────────────────────────────────────────────────────────────────────── */
 (function () {
   "use strict";
@@ -174,7 +179,16 @@
     const modal = el("photo-check-modal");
     modal.querySelector(".close-btn").addEventListener("click", close);
     modal.querySelector(".rp-cancel").addEventListener("click", close);
-    modal.querySelectorAll(".rp-tile input").forEach(function (input) {
+    modal.querySelectorAll(".rp-tile").forEach(function (tile) {
+      const input = tile.querySelector("input");
+      // Tap = shoot. With the in-page camera the shot is taken on the
+      // shutter tap and used immediately (no "retake / use photo" screen
+      // from the phone's camera app). Tapping a finished tile shoots again.
+      tile.addEventListener("click", function (e) {
+        if (!cameraAvailable()) return;      // let the <input> open the picker
+        e.preventDefault();
+        openCamera(tile);
+      });
       input.addEventListener("change", function () {
         const file = input.files && input.files[0];
         input.value = "";                     // same photo again must re-trigger
@@ -182,6 +196,83 @@
       });
     });
     el("photo-check-approve").addEventListener("click", approve);
+  }
+
+  // ── In-page camera ───────────────────────────────────────────────────────
+  // getUserMedia needs a secure context (https, or localhost). On plain http
+  // over the LAN it is unavailable and the tile falls back to the file
+  // picker, where the phone's camera app shows its own confirm screen.
+  let cam = null;   // { stream, tile }
+
+  function cameraAvailable() {
+    return !!(window.isSecureContext && navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
+  }
+
+  function ensureCamera() {
+    if (el("rp-cam")) return;
+    document.body.insertAdjacentHTML("beforeend",
+      '<div id="rp-cam" class="rp-cam" hidden>' +
+      '<video id="rp-cam-video" class="rp-cam-video" playsinline autoplay muted></video>' +
+      '<div class="rp-cam-top"><span id="rp-cam-label"></span>' +
+      '<button type="button" class="rp-cam-close" aria-label="Close">&times;</button></div>' +
+      '<div class="rp-cam-bottom">' +
+      '<button type="button" class="rp-cam-pick" id="rp-cam-pick">Gallery</button>' +
+      '<button type="button" class="rp-cam-shutter" id="rp-cam-shutter" aria-label="Take photo"></button>' +
+      '<span class="rp-cam-spacer"></span></div></div>');
+    const box = el("rp-cam");
+    box.querySelector(".rp-cam-close").addEventListener("click", closeCamera);
+    el("rp-cam-shutter").addEventListener("click", shoot);
+    el("rp-cam-pick").addEventListener("click", function () {
+      const tile = cam && cam.tile;
+      closeCamera();
+      if (tile) tile.querySelector("input").click();
+    });
+  }
+
+  async function openCamera(tile) {
+    ensureCamera();
+    const label = KINDS.find(function (k) { return k.key === tile.dataset.kind; });
+    el("rp-cam-label").textContent = "Room " + state.room + " · " + (label ? label.label : "");
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: "environment" }, width: { ideal: 1920 }, height: { ideal: 1440 } },
+        audio: false,
+      });
+      cam = { stream: stream, tile: tile };
+      const video = el("rp-cam-video");
+      video.srcObject = stream;
+      el("rp-cam").hidden = false;
+      await video.play().catch(function () {});
+    } catch (_e) {
+      // Permission refused or no camera: the picker still works.
+      closeCamera();
+      tile.querySelector("input").click();
+    }
+  }
+
+  function closeCamera() {
+    if (cam && cam.stream) cam.stream.getTracks().forEach(function (t) { t.stop(); });
+    const video = el("rp-cam-video");
+    if (video) video.srcObject = null;
+    const box = el("rp-cam");
+    if (box) box.hidden = true;
+    cam = null;
+  }
+
+  function shoot() {
+    if (!cam) return;
+    const video = el("rp-cam-video");
+    const tile = cam.tile;
+    if (!video.videoWidth) return;
+    const canvas = document.createElement("canvas");
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    canvas.getContext("2d").drawImage(video, 0, 0);
+    closeCamera();
+    canvas.toBlob(function (blob) {
+      if (blob) onPick(tile, blob);
+      else showError("Could not capture the photo, try again");
+    }, "image/jpeg", 0.92);
   }
 
   function setTile(tile, status, opts) {
@@ -488,6 +579,21 @@
       ".rp-strip-text{flex:1 1 auto;min-width:0;line-height:1.3}" +
       ".rp-strip .rp-more{margin-left:0;flex-shrink:0}" +
       ".rp-error{margin:.6rem 0 0;font-size:.8rem;color:var(--danger)}" +
+      ".rp-cam{position:fixed;inset:0;z-index:10001;background:#000;display:flex;flex-direction:column}" +
+      ".rp-cam[hidden]{display:none}" +
+      ".rp-cam-video{flex:1 1 auto;width:100%;height:100%;object-fit:cover;background:#000}" +
+      ".rp-cam-top{position:absolute;top:0;left:0;right:0;display:flex;justify-content:space-between;align-items:center;" +
+        "padding:calc(.6rem + env(safe-area-inset-top)) 1rem .6rem;color:#fff;font-weight:700;" +
+        "background:linear-gradient(rgba(0,0,0,.55),transparent)}" +
+      ".rp-cam-close{background:none;border:0;color:#fff;font-size:2rem;line-height:1;cursor:pointer}" +
+      ".rp-cam-bottom{position:absolute;bottom:0;left:0;right:0;display:grid;grid-template-columns:1fr auto 1fr;" +
+        "align-items:center;padding:1rem 1.5rem calc(1.4rem + env(safe-area-inset-bottom));" +
+        "background:linear-gradient(transparent,rgba(0,0,0,.6))}" +
+      ".rp-cam-shutter{width:74px;height:74px;border-radius:50%;background:#fff;border:5px solid rgba(255,255,255,.45);" +
+        "background-clip:padding-box;cursor:pointer;-webkit-tap-highlight-color:transparent}" +
+      ".rp-cam-shutter:active{transform:scale(.92)}" +
+      ".rp-cam-pick{justify-self:start;background:rgba(255,255,255,.18);color:#fff;border:0;border-radius:20px;" +
+        "padding:.5rem .9rem;font-weight:600;cursor:pointer}" +
       ".rp-row{cursor:pointer}" +
       ".rp-thumbs{display:inline-flex;gap:4px;vertical-align:middle;margin-right:.4rem}" +
       ".rp-thumb{width:36px;height:36px;object-fit:cover;border-radius:6px;border:1px solid #e2e8f0}" +

@@ -4756,6 +4756,14 @@ function _bkRoomSort(a, b) {
   return String(a.room).localeCompare(String(b.room), undefined, { numeric: true });
 }
 
+// Arrivals read top-to-bottom in the order guests are expected: by ETA,
+// with room number only as a tie-break for the same time.
+function _bkEtaSort(a, b) {
+  const ta = String(a.check_in_time || "14:00").slice(0, 5);
+  const tb = String(b.check_in_time || "14:00").slice(0, 5);
+  return ta.localeCompare(tb) || _bkRoomSort(a, b);
+}
+
 // Arrivals = confirmed or already-checked-in bookings whose check-in is this
 // date. Cancelled rooms are excluded — they must never reach the sheet.
 function _bkArrivalsFor(dateStr) {
@@ -4765,7 +4773,7 @@ function _bkArrivalsFor(dateStr) {
         b.check_in_date === dateStr &&
         b.status !== "cancelled",
     )
-    .sort(_bkRoomSort);
+    .sort(_bkEtaSort);
 }
 
 // Departures are the *expected* check-outs recorded on the booking. Actual
@@ -4876,10 +4884,6 @@ function _bkArrivalRowsHtml(arrivals, groupLabels) {
           (isOta ? "settled via OTA" : "due ₹" + (bal > 0 ? bal : 0)) + "</div></td>" +
         "<td></td>" +
         '<td class="bk-c-tick"><span class="bk-tick-box"></span></td>' +
-        '<td class="bk-c-tick"><span class="bk-tick-box"></span></td>' +
-        '<td class="bk-c-tick"><span class="bk-tick-box"></span></td>' +
-        '<td class="bk-c-tick"><span class="bk-tick-box"></span></td>' +
-        "<td></td>" +
         "</tr>"
       );
     })
@@ -4900,18 +4904,6 @@ function buildArrivalsSheetHtml(dateStr, includeDepartures) {
     }
   });
 
-  const guests = arrivals.reduce((s, b) => s + (b.guest_count || 1), 0);
-  const balance = arrivals.reduce(
-    (s, b) =>
-      s +
-      (isOtaPrepaid(b.booking_source)
-        ? 0
-        : b.balance != null
-          ? b.balance
-          : (b.total_amount || 0) - (b.paid_amount || 0)),
-    0,
-  );
-
   const printedAt = new Date().toLocaleString("en-IN", {
     day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit",
   });
@@ -4920,7 +4912,7 @@ function buildArrivalsSheetHtml(dateStr, includeDepartures) {
   // printer is set to, instead of being tuned to one paper size in mm.
   const arrivalsTable = arrivals.length
     ? "<table><colgroup>" +
-      ["3%","8%","19%","4%","7%","9%","11%","10%","5%","5%","4%","5%","10%"]
+      ["4%","10%","30%","6%","9%","12%","14%","9%","6%"]
         .map((w) => '<col style="width:' + w + '"/>').join("") +
       "</colgroup><thead><tr>" +
       "<th>#</th>" +
@@ -4932,10 +4924,6 @@ function buildArrivalsSheetHtml(dateStr, includeDepartures) {
       "<th style=\"text-align:right\">Amount</th>" +
       "<th>Room allotted</th>" +
       "<th class=\"bk-c-tick\">Ready</th>" +
-      "<th class=\"bk-c-tick\">Insp.</th>" +
-      "<th class=\"bk-c-tick\">ID</th>" +
-      "<th class=\"bk-c-tick\">Keys</th>" +
-      "<th>Remarks</th>" +
       "</tr></thead><tbody>" +
       _bkArrivalRowsHtml(arrivals, groupLabels) +
       "</tbody></table>"
@@ -5000,16 +4988,6 @@ function buildArrivalsSheetHtml(dateStr, includeDepartures) {
           '<div><span class="bk-k">Printed</span>' + _bkEsc(printedAt) + "</div>" +
           '<div><span class="bk-k">Duty manager</span>________________</div>' +
         "</div>" +
-      "</div>" +
-
-      '<div class="bk-stats">' +
-        "<div class=\"bk-stat\"><span>Rooms arriving</span><b>" + arrivals.length + "</b></div>" +
-        "<div class=\"bk-stat\"><span>Guests expected</span><b>" + guests + "</b></div>" +
-        "<div class=\"bk-stat\"><span>Balance to collect</span><b>₹" + balance + "</b></div>" +
-        (includeDepartures
-          ? "<div class=\"bk-stat\"><span>Departures</span><b>" + departures.length + "</b></div>"
-          : "") +
-        "<div class=\"bk-stat\"><span>Multi-room groups</span><b>" + groupLabels.size + "</b></div>" +
       "</div>" +
 
       '<div class="bk-sheet-block">' +

@@ -144,11 +144,25 @@ def require_auth():
         g.current_user = user
         return None
 
-    # 3. Legacy API key fallback
+    # 2b. A request that PRESENTED a token but failed verification (almost
+    # always an expired hourly token) is a browser session, not a script.
+    # It must not fall through to the API-key path below: that path has no
+    # user, so the write would be accepted and attributed to "system" (the
+    # "System" chip on transactions). A 401 makes static/auth.js refresh
+    # the token and retry the same request with the real user attached.
+    if request.headers.get("Authorization", "").startswith("Bearer "):
+        logger.info(f"require_auth: rejected stale token on {request.method} {path}")
+        return jsonify(success=False, message="Session expired, retrying"), 401
+
+    # 3. Legacy API key fallback (scripts, integrations, pre-login boot)
     api_key = os.environ.get("API_KEY", "")
     if api_key:
         provided = request.headers.get("X-API-Key", "") or request.args.get("api_key", "")
         if provided == api_key:
+            if request.method != "GET":
+                # Surfaced so any remaining unattributed writes are visible
+                # in the log instead of silently becoming "System".
+                logger.warning(f"require_auth: {request.method} {path} accepted via API key with no user")
             return None
     elif not api_key and request.method == "GET":
         # Dev mode (no API_KEY set, no token): allow GETs so a fresh

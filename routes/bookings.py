@@ -867,25 +867,34 @@ def convert_booking_to_checkin():
         current_time = datetime.now(IST).strftime("%H:%M")
         serial_number = get_next_serial_number(current_date)
         
-        expected_time = booking.get("check_in_time", "14:00")
-        expected_datetime_str = f"{current_date} {expected_time}"
+        # Stay clock under the 24-hour policy. The booking carries an
+        # expected arrival time; the stay's `checkin_time` (which the renewal
+        # clock and the calendar run from) is the EARLIER of that and the
+        # moment the guest actually walks in:
+        #   • arrives before the expected time → actual time (the guest
+        #     starts using the room now, so the 24h count starts now)
+        #   • arrives at or after it            → expected time (the room
+        #     was held from then; a late arrival does not extend the stay)
+        # The expected time is placed on TODAY's date: a booking dated
+        # earlier that is only being checked in now must not start its
+        # clock on a day that has already passed.
+        # OTA/MMT bookings can carry "14:00:00" or "", so the time is
+        # trimmed to HH:MM and anything unparseable falls back to now.
         current_datetime = datetime.now(IST)
-        # Initialised up-front so a malformed `check_in_time` (which OTA/MMT
-        # bookings can carry, e.g. "14:00:00" or "") can't leave this name
-        # unbound. It is referenced again far below for `arrival_status`,
-        # which runs AFTER batch.commit() — an unbound name there raised and
-        # made an already-committed check-in return success=False.
+        expected_time = (str(booking.get("check_in_time") or "14:00").strip())[:5]
+        expected_datetime_str = f"{current_date} {expected_time}"
+        # Initialised up-front: referenced again far below for
+        # `arrival_status`, which runs AFTER batch.commit().
         expected_datetime = None
 
         try:
             expected_datetime = IST.localize(datetime.strptime(expected_datetime_str, "%Y-%m-%d %H:%M"))
-
             if current_datetime < expected_datetime:
-                checkin_datetime_str = expected_datetime_str
-                logger.info(f"Guest arriving early. Using expected check-in time: {expected_datetime_str}")
-            else:
                 checkin_datetime_str = current_datetime.strftime("%Y-%m-%d %H:%M")
-                logger.info(f"Guest arriving on time or late. Using current time: {checkin_datetime_str}")
+                logger.info(f"Guest arriving early. Stay clock starts now: {checkin_datetime_str}")
+            else:
+                checkin_datetime_str = expected_datetime_str
+                logger.info(f"Guest arriving on time or late. Stay clock starts at expected time: {expected_datetime_str}")
         except Exception as e:
             logger.error(f"Error parsing expected time, using current time: {str(e)}")
             checkin_datetime_str = current_datetime.strftime("%Y-%m-%d %H:%M")
@@ -1332,7 +1341,7 @@ def convert_booking_to_checkin():
         arrival_status = (
             "early"
             if (expected_datetime is not None and current_datetime < expected_datetime)
-            else "on time"
+            else "on time or late"
         )
 
         logger.info(

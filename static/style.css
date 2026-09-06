@@ -6512,3 +6512,10 @@ select.filter-select:disabled, .rpt-gst-toggle.rpt-disabled { opacity: 0.45; poi
   }
   #bills-tab .bl-note { font-size: 0.55rem; line-height: 1.25; }
 }
+
+/* ── Scrollbars: hidden everywhere, scrolling untouched ──────────────────
+   Wheel, trackpad, touch and keyboard scrolling all still work; only the
+   bar itself is not drawn, so lists and the room calendar keep the width
+   and height the bar used to take. */
+* { scrollbar-width: none; }
+*::-webkit-scrollbar { width: 0; height: 0; display: none; }

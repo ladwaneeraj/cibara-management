@@ -21,13 +21,12 @@
  *     set (thumbnails, who, when, note) into the check-in modal (for the
  *     selected room), the checkout modal (the stay's prep photos) and the
  *     bill modal after checkout (from the bill's copied stay_timeline).
- *     Room details use detailRows / detailCard for the full list; "History"
- *     opens a viewer over /room_photos (last 7 days, names from metadata).
+ *     Room details use detailRows / detailCard for the full list of sets.
  *
- * Viewing photos: tapping any thumbnail opens a lightbox (one photo, swipe
- * or arrows through the set, pinch / double-tap / buttons to zoom, drag to
- * pan). "History" opens the 7-day list, whose thumbnails use the same
- * lightbox. Nothing opens in a browser tab.
+ * Viewing photos: tapping any thumbnail opens a compact viewer card (same
+ * shape as the customer-document viewer): one photo, thumbnail strip and
+ * arrows for the rest of the set, pinch / double-tap / buttons to zoom,
+ * drag to pan. Nothing opens in a browser tab.
  *
  * Capture: tapping a tile opens an in-page camera (getUserMedia) with one
  * shutter button, so the shot is used the moment it is taken; there is no
@@ -469,8 +468,7 @@
       '<div class="summary-row" data-rp-room="' + esc(room) + '">' +
       '<div class="summary-label">Inspection photos</div>' +
       '<div class="summary-value"><span class="rp-thumbs">' + thumbs(p, "Inspected · " + fmt(p.at) + (by ? " · " + by : "")) + "</span>" +
-      '<span class="rp-when">' + esc(fmt(p.at)) + (by ? " \u00b7 " + esc(by) : "") + "</span>" +
-      '<span class="rp-more" data-rp-history="' + esc(room) + '">History</span></div></div>'
+      '<span class="rp-when">' + esc(fmt(p.at)) + (by ? " \u00b7 " + esc(by) : "") + "</span></div></div>"
     );
   }
 
@@ -497,14 +495,12 @@
       '<div class="summary-card" style="margin-bottom:0">' +
       '<div class="summary-title">Cleaning & inspection photos (this stay)</div>' +
       rows +
-      '<div class="summary-row">' +
-      '<div class="summary-label"></div><div class="summary-value"><span class="rp-more" data-rp-history="' + esc(room) + '">All photos from the last 7 days</span></div></div>' +
       "</div>"
     );
   }
 
   // Compact strip for the check-in / checkout / bill modals: the latest
-  // photo set with who / when, thumbnails, and (optionally) the History
+  // photo set with who / when and thumbnails (tap → viewer card).
   // link. `source` is anything carrying stay_timeline and/or
   // last_inspection_photos: a room from `rooms`, or a bill record.
   // Renders nothing for rooms outside 200-228 or with no photos on file.
@@ -534,7 +530,6 @@
       (by ? " · " + esc(by) : "") + more +
       (latest.notes ? '<br><span class="rp-note">\u201c' + esc(latest.notes) + "\u201d</span>" : "") +
       "</span>" +
-      (opts.history === false ? "" : '<span class="rp-more" data-rp-history="' + esc(room) + '">History</span>') +
       "</div>";
   }
 
@@ -550,48 +545,6 @@
     if (e.target && e.target.id === "checkin-room-dropdown") renderCheckinStrip();
   });
 
-  async function openViewer(room) {
-    injectStyles();
-    let box = el("rp-viewer");
-    if (!box) {
-      document.body.insertAdjacentHTML("beforeend",
-        '<div id="rp-viewer" class="rp-viewer" hidden>' +
-        '<div class="rp-viewer-head"><span id="rp-viewer-title"></span>' +
-        '<button class="rp-viewer-close" aria-label="Close">&times;</button></div>' +
-        '<div class="rp-viewer-body" id="rp-viewer-body"></div></div>');
-      box = el("rp-viewer");
-      box.querySelector(".rp-viewer-close").addEventListener("click", function () { box.hidden = true; });
-      box.addEventListener("click", function (e) { if (e.target === box) box.hidden = true; });
-    }
-    el("rp-viewer-title").textContent = "Room " + room + " · recent inspection photos";
-    const body = el("rp-viewer-body");
-    body.innerHTML = '<p class="rp-hint">Loading…</p>';
-    box.hidden = false;
-    try {
-      const resp = await apiFetch("/room_photos?room=" + encodeURIComponent(room));
-      const data = await resp.json();
-      const photos = (data && data.photos) || [];
-      if (!photos.length) { body.innerHTML = '<p class="rp-hint">No photos in the last 7 days.</p>'; return; }
-      const list = photos.map(function (ph) {
-        const k = KINDS.find(function (x) { return x.key === ph.kind; }) || { label: ph.kind };
-        const ctx = ph.context && ph.context !== "inspection" ? " · " + ph.context : "";
-        return { url: ph.url, thumb: ph.thumb || "", label: k.label,
-                 caption: fmt(ph.at) + ctx + (ph.byName ? " · " + ph.byName : "") };
-      });
-      const id = "h" + (++lbSeq);
-      lbSets[id] = list;
-      body.innerHTML = list.map(function (ph, i) {
-        return (
-          '<figure class="rp-fig"><img class="rp-thumb" data-rp-set="' + id + '" data-rp-idx="' + i + '" src="' +
-          esc(ph.thumb || ph.url) + '" alt="' + esc(ph.label) + '" loading="lazy">' +
-          "<figcaption>" + esc(ph.label) + " · " + esc(ph.caption) + "</figcaption></figure>"
-        );
-      }).join("");
-    } catch (_e) {
-      body.innerHTML = '<p class="rp-hint">Could not load photos.</p>';
-    }
-  }
-
   document.addEventListener("click", function (e) {
     const th = e.target.closest(".rp-thumb[data-rp-set]");
     if (th) {
@@ -599,8 +552,6 @@
       openLightbox(lbSets[th.dataset.rpSet] || [], Number(th.dataset.rpIdx) || 0);
       return;
     }
-    const hist = e.target.closest("[data-rp-history]");
-    if (hist) openViewer(hist.dataset.rpHistory);
   });
 
   // ── Lightbox: one photo at a time, swipe / arrows for the rest of the set,
@@ -611,17 +562,24 @@
     if (el("rp-lb")) return;
     injectStyles();
     document.body.insertAdjacentHTML("beforeend",
-      '<div id="rp-lb" class="rp-lb" hidden>' +
-      '<div class="rp-lb-top"><span id="rp-lb-title"></span>' +
+      '<div id="rp-lb" class="rp-lb" hidden><div class="rp-lb-card">' +
+      '<div class="rp-lb-top"><span class="rp-lb-icon"><i class="fas fa-camera"></i></span>' +
+      '<span class="rp-lb-head"><b id="rp-lb-title"></b><small id="rp-lb-caption"></small></span>' +
       '<button type="button" class="rp-lb-close" aria-label="Close">&times;</button></div>' +
-      '<div class="rp-lb-stage" id="rp-lb-stage"><img id="rp-lb-img" alt="" draggable="false"></div>' +
+      '<div class="rp-lb-stage" id="rp-lb-stage"><img id="rp-lb-img" alt="" draggable="false">' +
       '<button type="button" class="rp-lb-nav rp-lb-prev" aria-label="Previous">&#8249;</button>' +
-      '<button type="button" class="rp-lb-nav rp-lb-next" aria-label="Next">&#8250;</button>' +
-      '<div class="rp-lb-bottom"><span id="rp-lb-caption"></span>' +
+      '<button type="button" class="rp-lb-nav rp-lb-next" aria-label="Next">&#8250;</button></div>' +
+      '<div class="rp-lb-bottom"><div class="rp-lb-thumbs" id="rp-lb-thumbs"></div>' +
       '<span class="rp-lb-zoom"><button type="button" data-lb-zoom="-1">&minus;</button>' +
-      '<span id="rp-lb-count"></span><button type="button" data-lb-zoom="1">+</button></span></div></div>');
+      '<span id="rp-lb-count"></span><button type="button" data-lb-zoom="1">+</button></span></div>' +
+      "</div></div>");
     const box = el("rp-lb");
     box.querySelector(".rp-lb-close").addEventListener("click", closeLightbox);
+    box.addEventListener("click", function (e) { if (e.target === box) closeLightbox(); });
+    el("rp-lb-thumbs").addEventListener("click", function (e) {
+      const t = e.target.closest("[data-lb-idx]");
+      if (t) { lb.idx = Number(t.dataset.lbIdx); lbShow(); }
+    });
     box.querySelector(".rp-lb-prev").addEventListener("click", function () { lbGo(-1); });
     box.querySelector(".rp-lb-next").addEventListener("click", function () { lbGo(1); });
     box.querySelectorAll("[data-lb-zoom]").forEach(function (b) {
@@ -670,6 +628,12 @@
     const many = lb.list.length > 1;
     el("rp-lb").querySelector(".rp-lb-prev").hidden = !many;
     el("rp-lb").querySelector(".rp-lb-next").hidden = !many;
+    const strip = el("rp-lb-thumbs");
+    strip.hidden = !many;
+    strip.innerHTML = lb.list.map(function (p, i) {
+      return '<img src="' + esc(p.thumb || p.url) + '" alt="' + esc(p.label) + '" title="' + esc(p.label) +
+             '" data-lb-idx="' + i + '" class="' + (i === lb.idx ? "active" : "") + '">';
+    }).join("");
   }
 
   function lbGo(dir) {
@@ -690,6 +654,7 @@
   }
 
   function lbDown(e) {
+    if (e.target.closest(".rp-lb-nav")) return;   // arrows keep their own click
     const stage = el("rp-lb-stage");
     stage.setPointerCapture(e.pointerId);
     lb.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
@@ -769,7 +734,6 @@
         "background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;font-size:.78rem;color:#334155}" +
       ".rp-strip .rp-thumb{width:44px;height:44px;border-radius:8px}" +
       ".rp-strip-text{flex:1 1 auto;min-width:0;line-height:1.3}" +
-      ".rp-strip .rp-more{margin-left:0;flex-shrink:0}" +
       ".rp-error{margin:.6rem 0 0;font-size:.8rem;color:var(--danger)}" +
       ".rp-cam{position:fixed;inset:0;z-index:10001;background:#000;display:flex;flex-direction:column}" +
       ".rp-cam[hidden]{display:none}" +
@@ -789,37 +753,34 @@
       ".rp-thumbs{display:inline-flex;gap:4px;vertical-align:middle;margin-right:.4rem}" +
       ".rp-thumb{width:36px;height:36px;object-fit:cover;border-radius:6px;border:1px solid #e2e8f0}" +
       ".rp-when{font-size:.75rem;color:var(--gray)}" +
-      ".rp-more{display:inline-block;margin-left:.5rem;font-size:.72rem;font-weight:600;color:var(--primary);text-decoration:underline}" +
-      ".rp-viewer{position:fixed;inset:0;z-index:10000;background:rgba(15,23,42,.88);display:flex;" +
-        "flex-direction:column;padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom)}" +
-      ".rp-viewer[hidden]{display:none}" +
-      ".rp-viewer-head{display:flex;justify-content:space-between;align-items:center;color:#fff;" +
-        "padding:.8rem 1rem;font-weight:700}" +
-      ".rp-viewer-close{background:none;border:0;color:#fff;font-size:1.8rem;line-height:1;cursor:pointer}" +
-      ".rp-viewer-body{overflow:auto;padding:0 1rem 1rem;display:grid;gap:.8rem;" +
-        "grid-template-columns:repeat(auto-fill,minmax(220px,1fr))}" +
-      ".rp-fig{margin:0;background:#fff;border-radius:10px;overflow:hidden}" +
-      ".rp-fig img.rp-thumb{display:block;width:100%;height:auto;aspect-ratio:4/3;object-fit:cover;border-radius:0;border:0;cursor:pointer}" +
-      ".rp-fig figcaption{padding:.4rem .6rem;font-size:.75rem;color:#334155}" +
-      ".rp-viewer .rp-hint{color:#e2e8f0;padding:1rem}" +
       ".rp-thumb{cursor:pointer}" +
-      ".rp-lb{position:fixed;inset:0;z-index:10002;background:#000;display:flex;flex-direction:column;color:#fff;" +
-        "-webkit-user-select:none;user-select:none}" +
+      ".rp-lb{position:fixed;inset:0;z-index:10002;background:rgba(0,0,0,.72);display:flex;align-items:center;" +
+        "justify-content:center;padding:1rem;-webkit-user-select:none;user-select:none}" +
       ".rp-lb[hidden]{display:none}" +
-      ".rp-lb-top,.rp-lb-bottom{display:flex;justify-content:space-between;align-items:center;gap:.6rem;" +
-        "padding:.7rem 1rem;font-size:.85rem;background:rgba(0,0,0,.55);z-index:2}" +
-      ".rp-lb-top{padding-top:calc(.7rem + env(safe-area-inset-top));font-weight:700}" +
-      ".rp-lb-bottom{padding-bottom:calc(.7rem + env(safe-area-inset-bottom));color:#cbd5e1}" +
-      ".rp-lb-close{background:none;border:0;color:#fff;font-size:2rem;line-height:1;cursor:pointer}" +
-      ".rp-lb-stage{flex:1 1 auto;min-height:0;display:flex;align-items:center;justify-content:center;overflow:hidden;" +
-        "touch-action:none;cursor:grab}" +
-      ".rp-lb-stage img{max-width:100%;max-height:100%;object-fit:contain;transition:transform .08s;will-change:transform}" +
-      ".rp-lb-nav{position:absolute;top:50%;transform:translateY(-50%);width:44px;height:64px;border:0;" +
-        "background:rgba(255,255,255,.15);color:#fff;font-size:2.2rem;line-height:1;cursor:pointer;border-radius:8px}" +
+      ".rp-lb-card{width:100%;max-width:420px;max-height:calc(100dvh - 2rem);display:flex;flex-direction:column;" +
+        "background:linear-gradient(160deg,#1c2133 0%,#141824 100%);border-radius:20px;overflow:hidden;color:#fff;" +
+        "box-shadow:0 32px 80px rgba(0,0,0,.75),0 0 0 1px rgba(255,255,255,.06)}" +
+      ".rp-lb-top{display:flex;align-items:center;gap:.7rem;padding:.9rem 1.1rem;background:rgba(255,255,255,.04)}" +
+      ".rp-lb-icon{width:34px;height:34px;border-radius:10px;background:linear-gradient(135deg,#1565c0,#1976d2);" +
+        "display:flex;align-items:center;justify-content:center;font-size:.9rem;flex-shrink:0}" +
+      ".rp-lb-head{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;line-height:1.25}" +
+      ".rp-lb-head b{font-size:.95rem}.rp-lb-head small{font-size:.72rem;color:#9aa4b8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}" +
+      ".rp-lb-close{background:none;border:0;color:#fff;font-size:1.7rem;line-height:1;cursor:pointer;flex-shrink:0}" +
+      ".rp-lb-stage{position:relative;flex:1 1 auto;min-height:280px;max-height:60vh;display:flex;align-items:center;" +
+        "justify-content:center;overflow:hidden;background:#0b0e17;touch-action:none;cursor:grab}" +
+      ".rp-lb-stage img#rp-lb-img{max-width:100%;max-height:60vh;object-fit:contain;transition:transform .08s;will-change:transform}" +
+      ".rp-lb-nav{position:absolute;top:50%;transform:translateY(-50%);width:36px;height:52px;border:0;border-radius:8px;" +
+        "background:rgba(255,255,255,.14);color:#fff;font-size:1.9rem;line-height:1;cursor:pointer}" +
       ".rp-lb-nav[hidden]{display:none}.rp-lb-prev{left:6px}.rp-lb-next{right:6px}" +
-      ".rp-lb-zoom{display:inline-flex;align-items:center;gap:.5rem}" +
-      ".rp-lb-zoom button{width:34px;height:34px;border-radius:50%;border:0;background:rgba(255,255,255,.18);color:#fff;" +
-        "font-size:1.2rem;cursor:pointer}";
+      ".rp-lb-bottom{display:flex;align-items:center;justify-content:space-between;gap:.6rem;padding:.6rem .9rem " +
+        "calc(.6rem + env(safe-area-inset-bottom))}" +
+      ".rp-lb-thumbs{display:flex;gap:6px;overflow-x:auto;flex:1 1 auto;min-width:0}" +
+      ".rp-lb-thumbs[hidden]{display:none}" +
+      ".rp-lb-thumbs img{width:46px;height:46px;object-fit:cover;border-radius:8px;border:2px solid transparent;opacity:.6;cursor:pointer;flex-shrink:0}" +
+      ".rp-lb-thumbs img.active{border-color:#1976d2;opacity:1}" +
+      ".rp-lb-zoom{display:inline-flex;align-items:center;gap:.4rem;font-size:.75rem;color:#cbd5e1;flex-shrink:0}" +
+      ".rp-lb-zoom button{width:30px;height:30px;border-radius:50%;border:0;background:rgba(255,255,255,.16);color:#fff;" +
+        "font-size:1.05rem;cursor:pointer}";
     const style = document.createElement("style");
     style.id = "room-photos-styles";
     style.textContent = css;
@@ -835,7 +796,6 @@
     detailRows: detailRows,
     detailCard: detailCard,
     renderStrip: renderStrip,
-    openViewer: openViewer,
     openLightbox: openLightbox,
   };
 })();

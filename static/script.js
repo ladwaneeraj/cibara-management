@@ -5709,7 +5709,7 @@ function _setIncognitoToggleUI(enabled) {
 // always computed from the complete picture, so a partial call never silently
 // clears an unrelated flag. Seeded with defaults; the server-rendered
 // window.__initialUIConfig is merged in by the initial applyUIConfig() call.
-let _uiConfigState = { hide_register_tab: false, incognito_mode: false };
+let _uiConfigState = { hide_register_tab: false, incognito_mode: false, inspection_photos: true };
 
 // Apply the UI config to the DOM. Idempotent. Incognito is a superset: it hides
 // the Register AND Transactions tabs plus the bill "Edit Price" button (the last
@@ -5773,6 +5773,7 @@ function applyUIConfig(cfg) {
   // Keep the Settings toggle UIs in sync if the modal is open or will open.
   _setHideRegisterToggleUI(!!_uiConfigState.hide_register_tab);
   _setIncognitoToggleUI(incognito);
+  _setInspectionPhotosToggleUI(_uiConfigState.inspection_photos !== false);
   // Re-paint the Bill-generation caption too — Incognito overrides it
   // server-side, and the caption explains that while Incognito is on.
   if (typeof _setBillGenToggleUI === "function") {
@@ -5833,6 +5834,55 @@ async function toggleHideRegisterTab(inputEl) {
       );
     } else {
       alert("Could not save setting: " + (err.message || "network error"));
+    }
+  } finally {
+    if (inputEl) inputEl.disabled = false;
+  }
+}
+
+function _setInspectionPhotosToggleUI(enabled) {
+  const toggle = document.getElementById("settings-photos-toggle");
+  const slider = document.getElementById("settings-photos-slider");
+  const knob   = document.getElementById("settings-photos-knob");
+  const sub    = document.getElementById("settings-photos-sub");
+  if (toggle) toggle.checked = !!enabled;
+  if (slider) slider.style.background = enabled ? "var(--primary)" : "#ccc";
+  if (knob)   knob.style.transform   = enabled ? "translateX(20px)" : "translateX(0)";
+  if (sub) {
+    sub.textContent = enabled
+      ? "On · managers must photograph washroom + room for 200-228"
+      : "Off · managers use the checklist";
+  }
+}
+
+// Manager photo check (rooms 200-228). Same optimistic save / revert shape as
+// the toggles above; the server enforces the flag in /mark_room_ready_for_checkin.
+async function toggleInspectionPhotos(inputEl) {
+  const desired = !!(inputEl && inputEl.checked);
+  applyUIConfig({ inspection_photos: desired });
+  if (inputEl) inputEl.disabled = true;
+  try {
+    const res = await apiFetch("/settings/ui_config", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ inspection_photos: desired }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    if (!data.success) throw new Error(data.message || "Save failed");
+    applyUIConfig(data.config || {});
+    if (typeof showNotification === "function") {
+      showNotification(
+        desired ? "Photo check ON for managers (rooms 200-228)."
+                : "Photo check OFF. Managers use the checklist.",
+        "success",
+      );
+    }
+  } catch (err) {
+    console.error("[ui_config] inspection_photos save failed:", err);
+    applyUIConfig({ inspection_photos: !desired });
+    if (typeof showNotification === "function") {
+      showNotification("Could not save setting: " + (err.message || "network error"), "error");
     }
   } finally {
     if (inputEl) inputEl.disabled = false;

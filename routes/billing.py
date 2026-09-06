@@ -1170,6 +1170,9 @@ def update_ui_config_endpoint():
         # legacy /get_data path on every device at their next page load.
         if "listener_first" in data:
             update["listener_first"] = bool(data["listener_first"])
+        # Manager photo check for rooms 200-228 (see config._UI_CONFIG_DEFAULTS).
+        if "inspection_photos" in data:
+            update["inspection_photos"] = bool(data["inspection_photos"])
 
         if not update:
             return jsonify(success=False,

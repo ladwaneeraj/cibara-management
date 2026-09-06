@@ -6,7 +6,9 @@
  * tick-box list. Both must be uploaded before "Ready for check-in" is
  * enabled, and the server (routes/rooms.py → services/room_photos.py)
  * enforces the same rule, so this modal is the convenience, not the gate.
- * Admin and housekeeping keep the existing checklist modals.
+ * Admin and housekeeping keep the existing checklist modals. An admin can
+ * switch the whole thing off in Settings (ui_config.inspection_photos), in
+ * which case managers get the checklist too.
  *
  * Wiring:
  *   • room-cleaning.js markRoomAsCleaned() calls RoomPhotos.wantsPhotoCheck(room)
@@ -41,9 +43,19 @@
     return n >= ROOM_MIN && n <= ROOM_MAX;
   }
 
+  // Admin switch (Settings → "Photo check for rooms 200-228"), flag
+  // ui_config.inspection_photos. script.js keeps _uiConfigState live via the
+  // settings listener; before it exists the server-rendered initial config
+  // applies. Default is on. The server checks the same flag.
+  function featureOn() {
+    const cfg = (typeof _uiConfigState !== "undefined" && _uiConfigState) ||
+                window.__initialUIConfig || {};
+    return cfg.inspection_photos !== false;
+  }
+
   function wantsPhotoCheck(room) {
     const a = window.CibaraAuth;
-    return !!(a && a.isManager && a.isManager()) && isPhotoRoom(room);
+    return featureOn() && !!(a && a.isManager && a.isManager()) && isPhotoRoom(room);
   }
 
   // ── Image compression ────────────────────────────────────────────────────

@@ -52,10 +52,20 @@ def is_photo_room(room) -> bool:
         return False
 
 
+def enabled() -> bool:
+    """Admin switch: Settings → "Photo check for rooms 200-228"."""
+    try:
+        from config import get_ui_config
+        return bool(get_ui_config().get("inspection_photos", True))
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"room_photos: ui_config read failed, assuming on: {e}")
+        return True
+
+
 def photos_required(user: Optional[dict], room) -> bool:
     """True when this user approving this room must attach both photos."""
     role = str((user or {}).get("role") or "").lower()
-    return role in PHOTO_ROLES and is_photo_room(room)
+    return enabled() and role in PHOTO_ROLES and is_photo_room(room)
 
 
 def missing_kinds(photos: Optional[dict]) -> list:
@@ -155,18 +165,28 @@ def prune(room) -> int:
 
     Returns the number deleted. Safe to call any time; errors are logged,
     never raised, because this runs in a background thread.
+
+    Scope, deliberately narrow: only objects under room_photos/<room>/ are
+    listed (customer documents live under customer_docs/, bills and every
+    Firestore record are untouched), and within that folder only files
+    whose name parses as <stamp>_<kind>.jpg are ever deleted. Anything
+    else found there is left alone and logged.
     """
     deleted = 0
     try:
         bucket = _bucket()
         blobs = list(bucket.list_blobs(prefix=f"{_PREFIX}/{int(room)}/"))
-        blobs.sort(key=lambda b: b.name, reverse=True)      # newest first
         cutoff = datetime.now(IST).replace(tzinfo=None) - timedelta(days=RETENTION_DAYS)
-        for idx, blob in enumerate(blobs):
+        photos = []
+        for blob in blobs:
             parsed = _parse_blob(blob)
-            too_old = parsed is not None and datetime.strptime(
-                parsed["at"], "%Y-%m-%d %H:%M:%S") < cutoff
-            if idx >= MAX_PER_ROOM or too_old or parsed is None:
+            if parsed is None:
+                logger.warning(f"room_photos: leaving unrecognised object {blob.name}")
+                continue
+            photos.append((blob, datetime.strptime(parsed["at"], "%Y-%m-%d %H:%M:%S")))
+        photos.sort(key=lambda p: p[1], reverse=True)       # newest first
+        for idx, (blob, taken_at) in enumerate(photos):
+            if idx >= MAX_PER_ROOM or taken_at < cutoff:
                 blob.delete()
                 deleted += 1
         if deleted:

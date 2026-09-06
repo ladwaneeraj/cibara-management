@@ -505,6 +505,13 @@ _UI_CONFIG_DEFAULTS = {
     #   devices can override it for testing via
     #   localStorage.cibara_listener_first = "1" | "0".
     "listener_first": False,
+    # inspection_photos (bool, default True):
+    #   True  → a MANAGER approving a room in 200-228 as ready for check-in
+    #           must attach washroom + room photos (services/room_photos);
+    #           the checklist is replaced for that role and those rooms.
+    #   False → managers use the same checklists as admin. Admin and
+    #           housekeeping are unaffected either way.
+    "inspection_photos": True,
 }
 
 

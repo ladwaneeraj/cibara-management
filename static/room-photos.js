@@ -709,6 +709,7 @@
         "display:flex;flex-direction:column;align-items:center;justify-content:center;gap:.3rem;" +
         "cursor:pointer;overflow:hidden;background:#f8fafc;text-align:center;padding:.5rem;" +
         "-webkit-tap-highlight-color:transparent}" +
+      ".rp-tile[hidden]{display:none}" +
       ".rp-tile:active{transform:scale(.98)}" +
       ".rp-tile--done{border:2px solid var(--success)}" +
       ".rp-preview{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}" +

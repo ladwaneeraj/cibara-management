@@ -29,7 +29,9 @@
  *     Check popup as the card's Cleaned / Ready button. Housekeeping users
  *     can only do that last one.
  *
- * Past stays are not drawn: the room document only holds the current guest.
+ * History: for admin, past stays and the cleaning windows between them are
+ * fetched from /calendar_history (bill records) for any visible days before
+ * today, and drawn muted. Other roles see live data and bookings only.
  * ────────────────────────────────────────────────────────────────────────── */
 (function () {
   "use strict";
@@ -38,6 +40,7 @@
   const STORAGE_KEY = "cibara.roomsView";
   const RANGE_OPTIONS = [3, 7, 14];  // days that fit on screen at once (zoom)
   const WINDOW_DAYS = 30;            // days actually drawn; swipe to see them
+  const PAST_DAYS = 7;               // days before today inside the first window
   const MIN_COL_PX = 44;             // never squeeze a day column below this
   const DEFAULT_BOOKING_TIME = "12:00"; // mirrors /get_upcoming_bookings
   const STATUS_LABEL = { vacant: "Vacant", occupied: "Occupied", cleaning: "Cleaning", unknown: "No room" };
@@ -48,11 +51,14 @@
   // ── State ────────────────────────────────────────────────────────────────
   const state = {
     view: "grid",          // "grid" | "calendar"
-    start: startOfDay(new Date()),
+    start: addDays(startOfDay(new Date()), -PAST_DAYS),
     visible: 3,            // days per screen by default; 7 / 14 via the toolbar
     loadingBookings: false,
     lastMarkup: "",        // last rendered grid, so unchanged data is a no-op
     lastToolbar: "",       // same idea for the toolbar in the search row
+    // Admin only: past stays and past cleaning windows from /calendar_history,
+    // cached per requested range so paging back does not refetch.
+    history: { key: "", stays: [], cleanings: [], loading: false },
   };
 
   // ── Small helpers ────────────────────────────────────────────────────────
@@ -113,6 +119,11 @@
     const ka = roomSortKey(a), kb = roomSortKey(b);
     if (ka[0] !== kb[0]) return ka[0] - kb[0];
     return ka[1] < kb[1] ? -1 : ka[1] > kb[1] ? 1 : 0;
+  }
+
+  function isAdminUser() {
+    const a = window.CibaraAuth;
+    return !!(a && a.isAdmin && a.isAdmin());
   }
 
   function isHousekeepingUser() {
@@ -179,6 +190,32 @@
     };
   }
 
+  // History (admin): completed stays and the cleaning windows between them,
+  // as returned by /calendar_history. Drawn muted so live data stands out.
+  function pastStaySegment(h) {
+    const start = parseLocal(h.start), end = parseLocal(h.end);
+    if (!start || !end || end <= start) return null;
+    return {
+      kind: "past", room: String(h.room), start, end, billId: h.bill_id,
+      label: h.name || "Guest",
+      title: "Room " + h.room + " · " + (h.name || "Guest") +
+             "\nChecked in " + fmtDateTime(start) + "\nChecked out " + fmtDateTime(end),
+    };
+  }
+
+  function pastCleaningSegment(h) {
+    const start = parseLocal(h.start), end = parseLocal(h.end);
+    if (!start || !end || end <= start) return null;
+    const mins = Math.round((end - start) / 60000);
+    const dur = mins < 60 ? mins + "m" : Math.floor(mins / 60) + "h " + (mins % 60) + "m";
+    return {
+      kind: "cleaning", room: String(h.room), start, end,
+      label: "Cleaned · " + dur + (h.by ? " · " + h.by : ""),
+      title: "Room " + h.room + " · cleaning " + dur +
+             "\nFrom " + fmtDateTime(start) + "\nReady " + fmtDateTime(end) + (h.by ? "\nApproved by " + h.by : ""),
+    };
+  }
+
   function bookingSegment(b) {
     const status = String(b.status || "").toLowerCase();
     if (BOOKING_SKIP_STATUSES.has(status)) return null;
@@ -223,9 +260,18 @@
     }
   }
 
-  function buildTimeline(rooms, bookings, now) {
+  function buildTimeline(rooms, bookings, now, history) {
     const byRoom = {};
     const segments = [];
+
+    (history && history.stays || []).forEach(function (h) {
+      const seg = pastStaySegment(h);
+      if (seg) segments.push(seg);
+    });
+    (history && history.cleanings || []).forEach(function (h) {
+      const seg = pastCleaningSegment(h);
+      if (seg) segments.push(seg);
+    });
 
     Object.keys(rooms || {}).forEach(function (room) {
       const info = rooms[room] || {};
@@ -240,15 +286,16 @@
 
     (bookings || []).forEach(function (b) {
       const seg = bookingSegment(b);
-      if (!seg) return;
-      // A booking for a room that no longer exists still deserves a row,
-      // otherwise it would silently vanish from the plan.
-      if (!byRoom[seg.room]) byRoom[seg.room] = { status: "unknown", segments: [] };
-      segments.push(seg);
+      if (seg) segments.push(seg);
     });
 
     markClashes(segments);
-    segments.forEach(function (s) { byRoom[s.room].segments.push(s); });
+    segments.forEach(function (s) {
+      // A booking or past stay for a room that no longer exists still
+      // deserves a row, otherwise it would silently vanish from the plan.
+      if (!byRoom[s.room]) byRoom[s.room] = { status: "unknown", segments: [] };
+      byRoom[s.room].segments.push(s);
+    });
     Object.keys(byRoom).forEach(function (room) {
       byRoom[room].segments.sort(function (a, b) { return a.start - b.start; });
     });
@@ -414,7 +461,8 @@
 
     const rooms = window.rooms || {};
     const bookings = currentBookings();
-    const timeline = buildTimeline(rooms, bookings, now);
+    ensureHistory(viewStart, days, today);
+    const timeline = buildTimeline(rooms, bookings, now, state.history);
     const roomNames = Object.keys(timeline).sort(sortRooms);
 
     let grid = "";
@@ -565,6 +613,34 @@
     updateRangeLabel();
   }
 
+  // ── History source (admin) ───────────────────────────────────────────────
+  // Fetch past stays / cleanings for the visible days that are before today.
+  // Keyed by range so the same window is fetched once; re-rendering while a
+  // fetch is in flight just draws what is already known.
+  function ensureHistory(viewStart, days, today) {
+    if (!isAdminUser()) return;
+    const viewEnd = addDays(viewStart, days - 1);
+    if (viewStart >= today) return;                      // nothing in the past on screen
+    const end = viewEnd < today ? viewEnd : today;
+    const key = toYMD(viewStart) + ".." + toYMD(end);
+    if (state.history.key === key || state.history.loading) return;
+    state.history.loading = true;
+    apiFetch("/calendar_history?start=" + toYMD(viewStart) + "&end=" + toYMD(end))
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (data && data.success) {
+          state.history = { key: key, stays: data.stays || [], cleanings: data.cleanings || [], loading: false };
+          render();
+        } else {
+          state.history.loading = false;
+        }
+      })
+      .catch(function (e) {
+        console.warn("RoomCalendar: history fetch failed", e);
+        state.history.loading = false;
+      });
+  }
+
   // ── Bookings source ──────────────────────────────────────────────────────
   // booking.js owns the `bookings` array (top-level let, shared across
   // classic scripts). Reusing it keeps one copy of the data on the page.
@@ -623,9 +699,9 @@
         case "prev":  page(-1); return;
         case "next":  page(1); return;
         case "today":
-          state.start = startOfDay(new Date());
+          state.start = addDays(startOfDay(new Date()), -PAST_DAYS);
           render();
-          scrollToDay(0, true);
+          scrollToDay(PAST_DAYS, true);
           return;
         case "days": {
           // Keep the same first day on screen while the zoom changes.
@@ -678,6 +754,7 @@
 
     if (bar) {
       const room = bar.dataset.room;
+      if (bar.dataset.kind === "past" || bar.dataset.kind === "cleaning") return;   // history: tooltip only
       if (bar.dataset.kind === "booking") {
         if (typeof showBookingDetails === "function") showBookingDetails(bar.dataset.bookingId);
       } else if (typeof showCheckoutModal === "function") {
@@ -832,7 +909,7 @@
       state.lastMarkup = "";
       state.lastToolbar = "";
       render();
-      scrollToDay(0, false);
+      scrollToDay(PAST_DAYS, false);   // open on today with a week to swipe back into
       refreshBookings();
     }
   }

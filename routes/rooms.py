@@ -30,7 +30,7 @@ from config import (
 from services import payment_service, customer_service, expense_service, bills_service
 from services import system_alerts
 from services.gst_lock_service import is_month_locked
-from services.auth_service import requires_permission, login_required
+from services.auth_service import requires_permission, login_required, requires_role
 from services.audit_log import write_log, attribution_create, attribution_update, _safe_user
 from services import stay_timeline
 from services import room_photos
@@ -4460,6 +4460,98 @@ def mark_room_ready_for_checkin():
     except Exception as e:
         logger.error(f"Error approving room: {str(e)}")
         return jsonify(success=False, message=f"Error approving room: {str(e)}")
+
+@rooms_bp.route("/calendar_history", methods=["GET"])
+@requires_role("admin")
+def calendar_history():
+    """Past stays and past cleaning windows for the Rooms calendar (admin).
+
+    ?start=YYYY-MM-DD&end=YYYY-MM-DD (inclusive, IST). Sources: bill records
+    (one per completed stay: room, guest, checkin_time, checkout_time, and
+    the stay_timeline copied at checkout, whose prep events say when the
+    room was approved ready before that stay).
+
+    A cleaning window runs from a stay's checkout to the moment the room was
+    next approved ready: taken from the NEXT bill's prep events, or, for the
+    most recent checkout in a room, from the live room document
+    (inspectedAt). A room still being cleaned is drawn live by the client,
+    so it is not returned here.
+
+    Response: {success, stays:[{room, name, start, end, bill_id}],
+               cleanings:[{room, start, end, by}]}
+    """
+    def _parse(v):
+        v = str(v or "").strip().replace("T", " ")[:19]
+        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"):
+            try:
+                return datetime.strptime(v, fmt)
+            except ValueError:
+                continue
+        return None
+
+    def _approved_at(timeline, after):
+        """Earliest inspection approval (else cleaning complete) after `after`."""
+        best = None
+        for action in ("room.inspection.approve", "room.cleaning.complete"):
+            for ev in timeline or []:
+                if not isinstance(ev, dict) or ev.get("action") != action:
+                    continue
+                at = _parse(ev.get("at"))
+                if at and at > after and (best is None or at < best[0]):
+                    best = (at, ev.get("byName") or ev.get("by") or "")
+            if best:
+                break
+        return best
+
+    try:
+        start = _parse((request.args.get("start") or "") + " 00:00")
+        end = _parse((request.args.get("end") or "") + " 23:59")
+        if not start or not end or end < start:
+            return jsonify(success=False, message="start and end (YYYY-MM-DD) required"), 400
+        # Look back so the checkout that opened a cleaning window inside the
+        # range is found even when it happened before the range.
+        lookback = (start - timedelta(days=10)).strftime("%Y-%m-%d 00:00")
+        q = (bills_ref.where("created_at", ">=", lookback)
+                      .where("created_at", "<=", end.strftime("%Y-%m-%d %H:%M")))
+        by_room = {}
+        for snap in q.stream():
+            b = snap.to_dict() or {}
+            ci, co = _parse(b.get("checkin_time")), _parse(b.get("checkout_time") or b.get("created_at"))
+            room = str(b.get("room") or "")
+            if not room or not ci or not co:
+                continue
+            by_room.setdefault(room, []).append({
+                "id": snap.id, "room": room, "name": b.get("guest_name") or "",
+                "ci": ci, "co": co, "timeline": b.get("stay_timeline") or [],
+            })
+
+        fmt = "%Y-%m-%d %H:%M:%S"
+        rooms_now = get_all_rooms()
+        stays, cleanings = [], []
+        for room, bills in by_room.items():
+            bills.sort(key=lambda x: x["co"])
+            for i, bill in enumerate(bills):
+                if bill["co"] >= start and bill["ci"] <= end:
+                    stays.append({"room": room, "name": bill["name"], "bill_id": bill["id"],
+                                  "start": bill["ci"].strftime(fmt), "end": bill["co"].strftime(fmt)})
+                # Cleaning window that this checkout opened.
+                nxt = bills[i + 1] if i + 1 < len(bills) else None
+                ready = _approved_at(nxt["timeline"], bill["co"]) if nxt else None
+                if not ready and not nxt:
+                    live = rooms_now.get(room) or {}
+                    ready = _approved_at(live.get("stay_timeline"), bill["co"])
+                    if not ready:
+                        insp = _parse(live.get("inspectedAt"))
+                        if insp and insp > bill["co"]:
+                            ready = (insp, live.get("inspectedBy") or "")
+                if ready and ready[0] >= start and bill["co"] <= end:
+                    cleanings.append({"room": room, "by": ready[1],
+                                      "start": bill["co"].strftime(fmt), "end": ready[0].strftime(fmt)})
+        return jsonify(success=True, stays=stays, cleanings=cleanings)
+    except Exception as e:
+        logger.error(f"calendar_history failed: {e}", exc_info=True)
+        return jsonify(success=False, message="Could not load history"), 500
+
 
 @rooms_bp.route("/get_rooms_only")
 def get_rooms_only():

@@ -191,11 +191,6 @@ function initializeBookingForm() {
   const checkOutDate = document.getElementById("booking-check-out");
 
   if (checkInDate && checkOutDate) {
-    // Set min date to today
-    const today = new Date().toISOString().split("T")[0];
-    checkInDate.min = today;
-    checkOutDate.min = today;
-
     // Update checkout min date when checkin changes
     checkInDate.addEventListener("change", function () {
       checkOutDate.min = this.value;
@@ -2843,6 +2838,11 @@ function showUpdateBookingModal(bookingId) {
   document.getElementById("update-check-in-time").value =
     booking.check_in_time || "14:00"; // Default to 2 PM if not set
   document.getElementById("update-check-out").value = booking.check_out_date;
+  if (window.updateDatePicker) {
+    // setDate(..., false) skips onChange so the hidden inputs set above stay authoritative.
+    window.updateDatePicker.setDate(
+      [booking.check_in_date, booking.check_out_date].filter(Boolean), false, "Y-m-d");
+  }
   document.getElementById("update-guest-count").value =
     booking.guest_count || 1;
   document.getElementById("update-total-amount").value = booking.total_amount;
@@ -2864,8 +2864,36 @@ function showUpdateBookingModal(bookingId) {
     booking.check_out_date,
   );
 
+  // Header subtitle + nights / per-night hints (presentation only).
+  const sub = document.getElementById("update-subtitle");
+  if (sub) {
+    const src = typeof _bkSourceLabel === "function" ? _bkSourceLabel(booking) : "";
+    sub.textContent = "Room " + booking.room + (src ? " · " + src : "") +
+      (booking.booking_date ? " · booked " + booking.booking_date : "");
+  }
+  _updateBookingStayHints();
+
   // Show modal
   modal.classList.add("show");
+}
+
+// Nights pill and per-night hint on the Update Booking modal. Reads the
+// three inputs directly so it can run on every change without arguments.
+function _updateBookingStayHints() {
+  const ci = document.getElementById("update-check-in");
+  const co = document.getElementById("update-check-out");
+  const amt = document.getElementById("update-total-amount");
+  const nightsEl = document.getElementById("update-nights");
+  const perNightEl = document.getElementById("update-per-night");
+  if (!ci || !co) return;
+  const nights = ci.value && co.value ? _waNights(ci.value, co.value) : 0;
+  if (nightsEl) nightsEl.textContent = nights > 0 ? nights + " night" + (nights !== 1 ? "s" : "") : "";
+  if (perNightEl) {
+    const total = amt ? Number(amt.value) : 0;
+    perNightEl.textContent = nights > 0 && total > 0
+      ? "₹" + Math.round(total / nights) + " per night"
+      : "";
+  }
 }
 
 // Show/hide and refresh the AC toggle on the Update Booking modal based on
@@ -2936,6 +2964,13 @@ function initializeUpdateBookingForm() {
     });
   }
 
+  // Nights pill / per-night hint follow the dates and amount.
+  ["update-check-in", "update-check-out", "update-total-amount"].forEach(function (id) {
+    const elx = document.getElementById(id);
+    if (elx) elx.addEventListener("input", _updateBookingStayHints);
+    if (elx) elx.addEventListener("change", _updateBookingStayHints);
+  });
+
   // Room change → refresh AC toggle visibility for the newly selected room.
   // Without this, the toggle would stay visible/hidden based on the old
   // room until the modal is reopened.
@@ -2974,6 +3009,13 @@ function initializeUpdateBookingForm() {
       document.getElementById("update-total-amount").value,
     );
     const notes = document.getElementById("update-notes").value;
+
+    // Dates live in hidden inputs behind the range picker, so native
+    // `required` does not fire; guard here.
+    if (!checkInDate || !checkOutDate || checkOutDate < checkInDate) {
+      showNotification("Pick check-in and check-out dates", "error");
+      return;
+    }
 
     // AC flag — only meaningful for rooms 200-206. We always include it in
     // the payload (defaulting to false for non-AC rooms) so the server can

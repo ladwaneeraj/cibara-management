@@ -52,6 +52,7 @@
   const state = {
     view: "grid",          // "grid" | "calendar"
     start: addDays(startOfDay(new Date()), -PAST_DAYS),
+    pendingScroll: null,               // day index to jump to once columns have a width
     visible: 3,            // days per screen by default; 7 / 14 via the toolbar
     loadingBookings: false,
     lastMarkup: "",        // last rendered grid, so unchanged data is a no-op
@@ -492,6 +493,7 @@
     if (markup === state.lastMarkup && nowLayer) {
       nowLayer.innerHTML = nowLine;      // only the clock moved
       fitColumns();
+      if (state.pendingScroll != null && colWidth()) scrollToDay(state.pendingScroll, false);
       return;
     }
 
@@ -512,7 +514,10 @@
     const freshScroller = host.querySelector(".rc-scroll");
     fitColumns();
     if (freshScroller) {
-      if (keep) {
+      if (state.pendingScroll != null && colWidth()) {
+        freshScroller.scrollLeft = state.pendingScroll * colWidth();
+        state.pendingScroll = null;
+      } else if (keep) {
         freshScroller.scrollLeft = keep.left;
         freshScroller.scrollTop = keep.top;
       }
@@ -590,8 +595,15 @@
   function scrollToDay(index, smooth) {
     const host = container();
     const scroller = host && host.querySelector(".rc-scroll");
-    if (!scroller) return;
-    scroller.scrollTo({ left: index * colWidth(), behavior: smooth ? "smooth" : "auto" });
+    const col = colWidth();
+    if (!scroller || !col) {
+      // Not laid out yet (tab hidden at boot, display:none): remember the
+      // target and let the next render apply it once columns have a width.
+      state.pendingScroll = index;
+      return;
+    }
+    state.pendingScroll = null;
+    scroller.scrollTo({ left: index * col, behavior: smooth ? "smooth" : "auto" });
   }
 
   // Prev / Next page by one screenful; at the edge of the drawn window they
@@ -939,12 +951,25 @@
       clearTimeout(resizeTimer);
       resizeTimer = setTimeout(function () {
         if (state.view !== "calendar") return;
-        const first = firstVisibleIndex();
+        const first = state.pendingScroll != null ? state.pendingScroll : firstVisibleIndex();
         fitColumns();
         scrollToDay(first, false);
         updateRangeLabel();
       }, 120);
     });
+
+    // The rooms tab can be display:none while the calendar first renders
+    // (boot with a saved "calendar" view, or switching tabs). Columns get a
+    // width only once the host is actually laid out, so watch for that and
+    // finish the deferred "open on today" jump then.
+    if (window.ResizeObserver) {
+      new ResizeObserver(function () {
+        if (state.view !== "calendar" || !host.offsetWidth) return;
+        fitColumns();
+        if (state.pendingScroll != null) scrollToDay(state.pendingScroll, false);
+        updateRangeLabel();
+      }).observe(host);
+    }
 
     // Keep the "now" line and overdue tails honest without a server call.
     setInterval(function () {

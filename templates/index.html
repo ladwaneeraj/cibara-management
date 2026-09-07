@@ -6264,138 +6264,104 @@
       </div>
     </div>
 
-    <!-- Update Booking Modal -->
+    <!-- Update Booking Modal. Element IDs are unchanged (booking.js reads
+         and writes them); only the layout and styling (booking.css, ub-*)
+         are new. -->
     <div class="modal-backdrop" id="update-booking-modal" data-bk-modal>
-      <div class="modal-content">
-        <div class="modal-header">
-          <h2>Update Booking</h2>
-          <button class="close-btn" aria-label="Close">&times;</button>
+      <div class="modal-content ub-modal">
+        <div class="ub-head">
+          <span class="ub-head-icon"><i class="fas fa-pen"></i></span>
+          <div class="ub-head-text">
+            <h2>Update booking</h2>
+            <div class="ub-head-sub" id="update-subtitle"></div>
+          </div>
+          <button class="close-btn ub-close" type="button" aria-label="Close">&times;</button>
         </div>
 
-        <form id="update-booking-form">
+        <form id="update-booking-form" class="ub-form">
           <input type="hidden" id="update-booking-id" />
 
-          <div class="form-group">
-            <label class="form-label" for="update-guest-name">Guest Name</label>
-            <input
-              type="text"
-              class="form-control"
-              id="update-guest-name"
-              placeholder="Full name"
-              required
-            />
-          </div>
-          <div class="form-group">
-            <label class="form-label" for="update-guest-mobile"
-              >Mobile Number</label
-            >
-            <input
-              type="tel"
-              class="form-control"
-              id="update-guest-mobile"
-              placeholder="10-digit mobile number"
-              pattern="[0-9]{10}"
-              title="Please enter a valid 10-digit mobile number"
-            />
-          </div>
-          <div class="form-group">
-            <label class="form-label" for="update-check-in"
-              >Check-in Date</label
-            >
-            <input
-              type="date"
-              class="form-control"
-              id="update-check-in"
-              required
-            />
-          </div>
-          <div class="form-group">
-            <label class="form-label" for="update-check-in-time"
-              >Expected Check-in Time</label
-            >
-            <input
-              type="time"
-              class="form-control"
-              id="update-check-in-time"
-              required
-            />
-          </div>
-          <div class="form-group">
-            <label class="form-label" for="update-check-out"
-              >Check-out Date</label
-            >
-            <input
-              type="date"
-              class="form-control"
-              id="update-check-out"
-              required
-            />
-          </div>
-          <div class="form-group">
-            <label class="form-label" for="update-room">Room</label>
-            <select class="form-control" id="update-room" required>
-              <option value="">Loading available rooms...</option>
-            </select>
-          </div>
-
-          <!-- AC Toggle for rooms 200-206. Visibility is driven by JS
-               (see showUpdateBookingModal / update-room change handler)
-               so the toggle only appears when the selected room actually
-               supports AC. Mirrors the markup used by the new-booking form. -->
-          <div id="update-ac-toggle-container" style="display:none; margin-bottom:0.6rem;">
-            <div style="display:flex; align-items:center; gap:0.6rem; background:linear-gradient(135deg,#e0f2fe,#bae6fd); border:1px solid #7dd3fc; border-radius:8px; padding:0.5rem 0.75rem;">
-              <span style="font-size:1.1rem;">❄️</span>
-              <label for="update-ac-toggle" style="font-weight:600; font-size:0.88rem; color:#0369a1; cursor:pointer; flex:1; margin:0;">AC Room</label>
-              <label style="position:relative; display:inline-block; width:40px; height:22px; margin:0;">
-                <input type="checkbox" id="update-ac-toggle" style="opacity:0; width:0; height:0;">
-                <span style="position:absolute; cursor:pointer; top:0; left:0; right:0; bottom:0; background:#ccc; border-radius:22px; transition:.3s;"
-                  id="update-ac-slider"></span>
-              </label>
-              <span id="update-ac-label" style="font-size:0.8rem; color:#0369a1; font-weight:500; min-width:40px;">OFF</span>
+          <section class="ub-card">
+            <div class="ub-card-title"><i class="fas fa-user"></i> Guest</div>
+            <div class="ub-grid-2">
+              <div class="ub-field">
+                <label for="update-guest-name">Name</label>
+                <input type="text" class="form-control" id="update-guest-name" placeholder="Full name" required />
+              </div>
+              <div class="ub-field">
+                <label for="update-guest-mobile">Mobile</label>
+                <input type="tel" class="form-control" id="update-guest-mobile" placeholder="10-digit number"
+                       pattern="[0-9]{10}" inputmode="numeric" title="Please enter a valid 10-digit mobile number" />
+              </div>
             </div>
-          </div>
+          </section>
 
-          <div class="form-group">
-            <label class="form-label" for="update-guest-count"
-              >Number of Guests</label
-            >
-            <input
-              type="number"
-              class="form-control"
-              id="update-guest-count"
-              placeholder="Number of guests"
-              min="1"
-              required
-            />
-          </div>
-          <div class="form-group">
-            <label class="form-label" for="update-total-amount"
-              >Total Amount (₹)</label
-            >
-            <input
-              type="number"
-              class="form-control"
-              id="update-total-amount"
-              placeholder="Enter total amount"
-              required
-              min="1"
-            />
-          </div>
-          <div class="form-group">
-            <label class="form-label" for="update-notes"
-              >Notes (Optional)</label
-            >
-            <textarea
-              class="form-control"
-              id="update-notes"
-              placeholder="Add any special requests or notes"
-              rows="3"
-            ></textarea>
-          </div>
+          <section class="ub-card">
+            <div class="ub-card-title"><i class="fas fa-calendar-alt"></i> Stay
+              <span class="ub-nights" id="update-nights"></span>
+            </div>
+            <div class="ub-grid-2">
+              <div class="ub-field ub-span-2">
+                <label for="update-date-range">Check-in → Check-out</label>
+                <div class="booking-date-range-wrap">
+                  <input type="text" class="form-control" id="update-date-range" placeholder="Select dates" readonly />
+                </div>
+                <input type="hidden" id="update-check-in" required />
+                <input type="hidden" id="update-check-out" required />
+              </div>
+              <div class="ub-field">
+                <label for="update-check-in-time">Expected time</label>
+                <input type="time" class="form-control" id="update-check-in-time" required />
+              </div>
+              <div class="ub-field">
+                <label for="update-guest-count">Guests</label>
+                <input type="number" class="form-control" id="update-guest-count" placeholder="1" min="1" inputmode="numeric" required />
+              </div>
+            </div>
+          </section>
 
-          <button type="submit" class="action-btn btn-primary">
-            Update Booking
-          </button>
+          <section class="ub-card">
+            <div class="ub-card-title"><i class="fas fa-door-open"></i> Room</div>
+            <div class="ub-field">
+              <label for="update-room">Allotted room</label>
+              <select class="form-control" id="update-room" required>
+                <option value="">Loading available rooms...</option>
+              </select>
+              <div class="ub-help">Only rooms free for these dates are listed, plus the current one.</div>
+            </div>
+            <!-- AC toggle for rooms 200-206. Visibility is driven by JS
+                 (showUpdateBookingModal / update-room change handler). -->
+            <div id="update-ac-toggle-container" class="ub-ac" style="display:none">
+              <span class="ub-ac-icon">❄️</span>
+              <label for="update-ac-toggle" class="ub-ac-label">AC room</label>
+              <label class="ub-switch">
+                <input type="checkbox" id="update-ac-toggle" />
+                <span class="ub-switch-track" id="update-ac-slider"></span>
+              </label>
+              <span id="update-ac-label" class="ub-ac-state">OFF</span>
+            </div>
+          </section>
+
+          <section class="ub-card">
+            <div class="ub-card-title"><i class="fas fa-rupee-sign"></i> Amount</div>
+            <div class="ub-field">
+              <label for="update-total-amount">Total for the stay</label>
+              <div class="ub-money">
+                <span>₹</span>
+                <input type="number" class="form-control" id="update-total-amount" placeholder="0" required min="1" inputmode="numeric" />
+              </div>
+              <div class="ub-help" id="update-per-night"></div>
+            </div>
+            <div class="ub-field">
+              <label for="update-notes">Notes <span class="ub-opt">optional</span></label>
+              <textarea class="form-control" id="update-notes" placeholder="Special requests, arrival details…" rows="2"></textarea>
+            </div>
+          </section>
+
+          <div class="ub-footer">
+            <button type="button" class="ub-btn ub-btn-secondary close-btn">Cancel</button>
+            <button type="submit" class="ub-btn ub-btn-primary"><i class="fas fa-check"></i> Save changes</button>
+          </div>
         </form>
       </div>
     </div>
@@ -6534,6 +6500,29 @@
                 "-" +
                 String(d.getDate()).padStart(2, "0")
               );
+            }
+            if (selectedDates.length >= 1 && ci) {
+              ci.value = toYMD(selectedDates[0]);
+              ci.dispatchEvent(new Event("change"));
+            }
+            if (selectedDates.length === 2 && co) {
+              co.value = toYMD(selectedDates[1]);
+              co.dispatchEvent(new Event("change"));
+            }
+          },
+        });
+        // Update Booking modal: same range picker, no minDate (admins may
+        // edit past-dated bookings); hidden #update-check-in/out keep the
+        // rest of booking.js unchanged.
+        window.updateDatePicker = flatpickr("#update-date-range", {
+          mode: "range",
+          dateFormat: "D, d M",
+          disableMobile: true,
+          onChange: function (selectedDates) {
+            var ci = document.getElementById("update-check-in");
+            var co = document.getElementById("update-check-out");
+            function toYMD(d) {
+              return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
             }
             if (selectedDates.length >= 1 && ci) {
               ci.value = toYMD(selectedDates[0]);

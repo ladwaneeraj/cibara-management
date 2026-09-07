@@ -1448,3 +1448,101 @@
     color: #555;
   }
 }
+
+/* ── Update Booking modal (ub-*) ────────────────────────────────────────────
+   Card-per-section layout with a sticky header and footer. IDs inside are
+   the ones booking.js already drives; this is presentation only. */
+.ub-modal { padding: 0; max-width: 520px; display: flex; flex-direction: column; }
+.ub-head {
+  position: sticky; top: 0; z-index: 2;
+  display: flex; align-items: center; gap: 0.75rem;
+  padding: 0.9rem 1.1rem;
+  background: #fff; border-bottom: 1px solid #eef0f4;
+  border-radius: var(--border-radius-lg) var(--border-radius-lg) 0 0;
+}
+.ub-head-icon {
+  width: 38px; height: 38px; border-radius: 12px; flex-shrink: 0;
+  background: linear-gradient(135deg, #4361ee, #6d8bff); color: #fff;
+  display: flex; align-items: center; justify-content: center; font-size: 0.95rem;
+}
+.ub-head-text { flex: 1 1 auto; min-width: 0; }
+.ub-head h2 { margin: 0; font-size: 1.05rem; line-height: 1.2; }
+.ub-head-sub { font-size: 0.76rem; color: var(--gray); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ub-close { margin-left: auto; }
+.ub-form { padding: 0.9rem 1.1rem 0; display: flex; flex-direction: column; gap: 0.75rem; }
+.ub-card {
+  background: #f8fafc; border: 1px solid #e8ecf2; border-radius: 12px;
+  padding: 0.75rem 0.85rem 0.85rem;
+}
+.ub-card-title {
+  display: flex; align-items: center; gap: 0.45rem;
+  font-size: 0.72rem; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase;
+  color: #64748b; margin-bottom: 0.6rem;
+}
+.ub-card-title i { color: var(--primary); font-size: 0.75rem; }
+.ub-nights {
+  margin-left: auto; text-transform: none; letter-spacing: 0;
+  background: #e8edff; color: #3651d4; border-radius: 999px;
+  padding: 2px 9px; font-size: 0.72rem; font-weight: 700;
+}
+.ub-nights:empty { display: none; }
+.ub-grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0.6rem 0.7rem; }
+.ub-field { display: flex; flex-direction: column; gap: 0.3rem; min-width: 0; }
+.ub-field + .ub-field { margin-top: 0.6rem; }
+.ub-grid-2 .ub-field + .ub-field { margin-top: 0; }
+.ub-field label { font-size: 0.78rem; font-weight: 600; color: #334155; }
+.ub-opt { font-weight: 400; color: var(--gray); font-size: 0.72rem; }
+.ub-modal .form-control {
+  padding: 0.6rem 0.7rem; font-size: 0.92rem; border-radius: 10px;
+  border: 1px solid #d8dee8; background: #fff; min-height: 42px;
+}
+.ub-modal .form-control:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(67, 97, 238, 0.15); outline: none; }
+.ub-modal select.form-control { appearance: auto; }
+.ub-help { font-size: 0.72rem; color: var(--gray); }
+.ub-help:empty { display: none; }
+.ub-money { position: relative; }
+.ub-money > span {
+  position: absolute; left: 0.75rem; top: 50%; transform: translateY(-50%);
+  font-weight: 700; color: #334155;
+}
+.ub-money .form-control { padding-left: 1.7rem; font-weight: 600; }
+.ub-ac {
+  display: flex; align-items: center; gap: 0.6rem; margin-top: 0.7rem;
+  background: linear-gradient(135deg, #e0f2fe, #bae6fd); border: 1px solid #7dd3fc;
+  border-radius: 10px; padding: 0.5rem 0.75rem;
+}
+.ub-ac-icon { font-size: 1.05rem; }
+.ub-ac-label { flex: 1; margin: 0; font-weight: 600; font-size: 0.86rem; color: #0369a1; cursor: pointer; }
+.ub-ac-state { font-size: 0.78rem; font-weight: 600; color: #0369a1; min-width: 32px; text-align: right; }
+.ub-switch { position: relative; display: inline-block; width: 40px; height: 22px; margin: 0; flex-shrink: 0; }
+.ub-switch input { opacity: 0; width: 0; height: 0; }
+.ub-switch-track {
+  position: absolute; inset: 0; background: #cbd5e1; border-radius: 22px; cursor: pointer; transition: 0.25s;
+}
+.ub-switch-track::before {
+  content: ""; position: absolute; width: 16px; height: 16px; left: 3px; top: 3px;
+  background: #fff; border-radius: 50%; transition: 0.25s; box-shadow: 0 1px 2px rgba(0,0,0,0.25);
+}
+.ub-switch input:checked + .ub-switch-track::before { transform: translateX(18px); }
+.ub-footer {
+  position: sticky; bottom: 0; z-index: 2;
+  display: flex; gap: 0.6rem; padding: 0.8rem 0 calc(0.9rem + env(safe-area-inset-bottom));
+  margin: 0.2rem -1.1rem 0; padding-left: 1.1rem; padding-right: 1.1rem;
+  background: #fff; border-top: 1px solid #eef0f4;
+}
+.ub-btn {
+  flex: 1; height: 46px; border: 0; border-radius: 12px; font-size: 0.95rem; font-weight: 700;
+  cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 0.4rem;
+  -webkit-tap-highlight-color: transparent;
+}
+.ub-btn-secondary { background: #eef1f6; color: #334155; }
+.ub-btn-primary { background: var(--primary); color: #fff; box-shadow: 0 6px 16px rgba(67, 97, 238, 0.3); }
+.ub-btn-primary:active { transform: translateY(1px); }
+@media (max-width: 400px) {
+  .ub-grid-2 { grid-template-columns: 1fr; }
+  .ub-grid-2 .ub-field + .ub-field { margin-top: 0; }
+}
+
+/* Update Booking: single range picker spans both grid columns */
+.ub-span-2 { grid-column: 1 / -1; }
+#update-booking-modal .booking-date-range-wrap input[type="text"] { padding-left: 2rem; }

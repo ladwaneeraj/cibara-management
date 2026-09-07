@@ -29,9 +29,7 @@
  *     Check popup as the card's Cleaned / Ready button. Housekeeping users
  *     can only do that last one.
  *
- * History: for admin, past stays and the cleaning windows between them are
- * fetched from /calendar_history (bill records) for any visible days before
- * today, and drawn muted. Other roles see live data and bookings only.
+ * Past stays are not drawn: the room document only holds the current guest.
  * ────────────────────────────────────────────────────────────────────────── */
 (function () {
   "use strict";
@@ -40,7 +38,6 @@
   const STORAGE_KEY = "cibara.roomsView";
   const RANGE_OPTIONS = [3, 7, 14];  // days that fit on screen at once (zoom)
   const WINDOW_DAYS = 30;            // days actually drawn; swipe to see them
-  const PAST_DAYS = 7;               // days before today inside the first window (admin only)
   const MIN_COL_PX = 44;             // never squeeze a day column below this
   const DEFAULT_BOOKING_TIME = "12:00"; // mirrors /get_upcoming_bookings
   const STATUS_LABEL = { vacant: "Vacant", occupied: "Occupied", cleaning: "Cleaning", unknown: "No room" };
@@ -51,15 +48,11 @@
   // ── State ────────────────────────────────────────────────────────────────
   const state = {
     view: "grid",          // "grid" | "calendar"
-    start: homeStart(),    // re-evaluated in setView once the role is known
-    pendingScroll: null,               // day index to jump to once columns have a width
+    start: startOfDay(new Date()),
     visible: 3,            // days per screen by default; 7 / 14 via the toolbar
     loadingBookings: false,
     lastMarkup: "",        // last rendered grid, so unchanged data is a no-op
     lastToolbar: "",       // same idea for the toolbar in the search row
-    // Admin only: past stays and past cleaning windows from /calendar_history,
-    // cached per requested range so paging back does not refetch.
-    history: { key: "", stays: [], cleanings: [], loading: false },
   };
 
   // ── Small helpers ────────────────────────────────────────────────────────
@@ -120,17 +113,6 @@
     const ka = roomSortKey(a), kb = roomSortKey(b);
     if (ka[0] !== kb[0]) return ka[0] - kb[0];
     return ka[1] < kb[1] ? -1 : ka[1] > kb[1] ? 1 : 0;
-  }
-
-  // Only admins get history, so only admins get a window that reaches into
-  // the past. Everyone else starts the timeline on today and cannot page
-  // before it.
-  function pastDays() { return isAdminUser() ? PAST_DAYS : 0; }
-  function homeStart() { return addDays(startOfDay(new Date()), -pastDays()); }
-
-  function isAdminUser() {
-    const a = window.CibaraAuth;
-    return !!(a && a.isAdmin && a.isAdmin());
   }
 
   function isHousekeepingUser() {
@@ -197,32 +179,6 @@
     };
   }
 
-  // History (admin): completed stays and the cleaning windows between them,
-  // as returned by /calendar_history. Drawn muted so live data stands out.
-  function pastStaySegment(h) {
-    const start = parseLocal(h.start), end = parseLocal(h.end);
-    if (!start || !end || end <= start) return null;
-    return {
-      kind: "past", room: String(h.room), start, end, billId: h.bill_id,
-      label: h.name || "Guest",
-      title: "Room " + h.room + " · " + (h.name || "Guest") +
-             "\nChecked in " + fmtDateTime(start) + "\nChecked out " + fmtDateTime(end),
-    };
-  }
-
-  function pastCleaningSegment(h) {
-    const start = parseLocal(h.start), end = parseLocal(h.end);
-    if (!start || !end || end <= start) return null;
-    const mins = Math.round((end - start) / 60000);
-    const dur = mins < 60 ? mins + "m" : Math.floor(mins / 60) + "h " + (mins % 60) + "m";
-    return {
-      kind: "cleaning", room: String(h.room), start, end,
-      label: "Cleaned · " + dur + (h.by ? " · " + h.by : ""),
-      title: "Room " + h.room + " · cleaning " + dur +
-             "\nFrom " + fmtDateTime(start) + "\nReady " + fmtDateTime(end) + (h.by ? "\nApproved by " + h.by : ""),
-    };
-  }
-
   function bookingSegment(b) {
     const status = String(b.status || "").toLowerCase();
     if (BOOKING_SKIP_STATUSES.has(status)) return null;
@@ -267,18 +223,9 @@
     }
   }
 
-  function buildTimeline(rooms, bookings, now, history) {
+  function buildTimeline(rooms, bookings, now) {
     const byRoom = {};
     const segments = [];
-
-    (history && history.stays || []).forEach(function (h) {
-      const seg = pastStaySegment(h);
-      if (seg) segments.push(seg);
-    });
-    (history && history.cleanings || []).forEach(function (h) {
-      const seg = pastCleaningSegment(h);
-      if (seg) segments.push(seg);
-    });
 
     Object.keys(rooms || {}).forEach(function (room) {
       const info = rooms[room] || {};
@@ -293,16 +240,15 @@
 
     (bookings || []).forEach(function (b) {
       const seg = bookingSegment(b);
-      if (seg) segments.push(seg);
+      if (!seg) return;
+      // A booking for a room that no longer exists still deserves a row,
+      // otherwise it would silently vanish from the plan.
+      if (!byRoom[seg.room]) byRoom[seg.room] = { status: "unknown", segments: [] };
+      segments.push(seg);
     });
 
     markClashes(segments);
-    segments.forEach(function (s) {
-      // A booking or past stay for a room that no longer exists still
-      // deserves a row, otherwise it would silently vanish from the plan.
-      if (!byRoom[s.room]) byRoom[s.room] = { status: "unknown", segments: [] };
-      byRoom[s.room].segments.push(s);
-    });
+    segments.forEach(function (s) { byRoom[s.room].segments.push(s); });
     Object.keys(byRoom).forEach(function (room) {
       byRoom[room].segments.sort(function (a, b) { return a.start - b.start; });
     });
@@ -468,8 +414,7 @@
 
     const rooms = window.rooms || {};
     const bookings = currentBookings();
-    ensureHistory(viewStart, days, today);
-    const timeline = buildTimeline(rooms, bookings, now, state.history);
+    const timeline = buildTimeline(rooms, bookings, now);
     const roomNames = Object.keys(timeline).sort(sortRooms);
 
     let grid = "";
@@ -499,7 +444,6 @@
     if (markup === state.lastMarkup && nowLayer) {
       nowLayer.innerHTML = nowLine;      // only the clock moved
       fitColumns();
-      if (state.pendingScroll != null && colWidth()) scrollToDay(state.pendingScroll, false);
       return;
     }
 
@@ -520,10 +464,7 @@
     const freshScroller = host.querySelector(".rc-scroll");
     fitColumns();
     if (freshScroller) {
-      if (state.pendingScroll != null && colWidth()) {
-        freshScroller.scrollLeft = state.pendingScroll * colWidth();
-        state.pendingScroll = null;
-      } else if (keep) {
+      if (keep) {
         freshScroller.scrollLeft = keep.left;
         freshScroller.scrollTop = keep.top;
       }
@@ -601,15 +542,8 @@
   function scrollToDay(index, smooth) {
     const host = container();
     const scroller = host && host.querySelector(".rc-scroll");
-    const col = colWidth();
-    if (!scroller || !col) {
-      // Not laid out yet (tab hidden at boot, display:none): remember the
-      // target and let the next render apply it once columns have a width.
-      state.pendingScroll = index;
-      return;
-    }
-    state.pendingScroll = null;
-    scroller.scrollTo({ left: index * col, behavior: smooth ? "smooth" : "auto" });
+    if (!scroller) return;
+    scroller.scrollTo({ left: index * colWidth(), behavior: smooth ? "smooth" : "auto" });
   }
 
   // Prev / Next page by one screenful; at the edge of the drawn window they
@@ -618,10 +552,11 @@
     const first = firstVisibleIndex();
     const target = first + dir * state.visible;
     if (target < 0 && first === 0) {
+      // Nothing is drawn before today, so today is the floor: only page the
+      // window back when it was paged forward earlier.
       const today = startOfDay(new Date());
-      if (!isAdminUser() && state.start <= today) return;   // non-admin: today is the floor
-      let newStart = addDays(state.start, -WINDOW_DAYS);
-      if (!isAdminUser() && newStart < today) newStart = today;
+      if (state.start <= today) return;
+      const newStart = addDays(state.start, -WINDOW_DAYS) < today ? today : addDays(state.start, -WINDOW_DAYS);
       const shifted = Math.round((state.start - newStart) / 86400000);
       state.start = newStart;
       render();
@@ -634,34 +569,6 @@
       scrollToDay(Math.max(0, Math.min(WINDOW_DAYS - state.visible, target)), true);
     }
     updateRangeLabel();
-  }
-
-  // ── History source (admin) ───────────────────────────────────────────────
-  // Fetch past stays / cleanings for the visible days that are before today.
-  // Keyed by range so the same window is fetched once; re-rendering while a
-  // fetch is in flight just draws what is already known.
-  function ensureHistory(viewStart, days, today) {
-    if (!isAdminUser()) return;
-    const viewEnd = addDays(viewStart, days - 1);
-    if (viewStart >= today) return;                      // nothing in the past on screen
-    const end = viewEnd < today ? viewEnd : today;
-    const key = toYMD(viewStart) + ".." + toYMD(end);
-    if (state.history.key === key || state.history.loading) return;
-    state.history.loading = true;
-    apiFetch("/calendar_history?start=" + toYMD(viewStart) + "&end=" + toYMD(end))
-      .then(function (r) { return r.json(); })
-      .then(function (data) {
-        if (data && data.success) {
-          state.history = { key: key, stays: data.stays || [], cleanings: data.cleanings || [], loading: false };
-          render();
-        } else {
-          state.history.loading = false;
-        }
-      })
-      .catch(function (e) {
-        console.warn("RoomCalendar: history fetch failed", e);
-        state.history.loading = false;
-      });
   }
 
   // ── Bookings source ──────────────────────────────────────────────────────
@@ -722,9 +629,9 @@
         case "prev":  page(-1); return;
         case "next":  page(1); return;
         case "today":
-          state.start = homeStart();
+          state.start = startOfDay(new Date());
           render();
-          scrollToDay(pastDays(), true);
+          scrollToDay(0, true);
           return;
         case "days": {
           // Keep the same first day on screen while the zoom changes.
@@ -777,7 +684,6 @@
 
     if (bar) {
       const room = bar.dataset.room;
-      if (bar.dataset.kind === "past" || bar.dataset.kind === "cleaning") return;   // history: tooltip only
       if (bar.dataset.kind === "booking") {
         if (typeof showBookingDetails === "function") showBookingDetails(bar.dataset.bookingId);
       } else if (typeof showCheckoutModal === "function") {
@@ -931,9 +837,8 @@
     if (view === "calendar") {
       state.lastMarkup = "";
       state.lastToolbar = "";
-      state.start = homeStart();       // role may only be known now, not at script load
       render();
-      scrollToDay(pastDays(), false);  // open on today (admins get a week to swipe back into)
+      scrollToDay(0, false);
       refreshBookings();
     }
   }
@@ -963,25 +868,12 @@
       clearTimeout(resizeTimer);
       resizeTimer = setTimeout(function () {
         if (state.view !== "calendar") return;
-        const first = state.pendingScroll != null ? state.pendingScroll : firstVisibleIndex();
+        const first = firstVisibleIndex();
         fitColumns();
         scrollToDay(first, false);
         updateRangeLabel();
       }, 120);
     });
-
-    // The rooms tab can be display:none while the calendar first renders
-    // (boot with a saved "calendar" view, or switching tabs). Columns get a
-    // width only once the host is actually laid out, so watch for that and
-    // finish the deferred "open on today" jump then.
-    if (window.ResizeObserver) {
-      new ResizeObserver(function () {
-        if (state.view !== "calendar" || !host.offsetWidth) return;
-        fitColumns();
-        if (state.pendingScroll != null) scrollToDay(state.pendingScroll, false);
-        updateRangeLabel();
-      }).observe(host);
-    }
 
     // Keep the "now" line and overdue tails honest without a server call.
     setInterval(function () {

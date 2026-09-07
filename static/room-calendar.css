@@ -313,8 +313,6 @@
 
 .rc-bar--stay    { background: var(--rc-occupied-bg); border-color: var(--rc-occupied); color: #8a1c26; }
 .rc-bar--cleaning { background: var(--rc-cleaning-bg); border-color: var(--rc-cleaning); color: #8a4b00; }
-/* History (admin): a completed stay, muted so live stays stand out. */
-.rc-bar--past { background: #f3e2e4; border-color: #c98a92; color: #7a4a50; cursor: default; }
 .rc-bar--booking { background: var(--rc-booking-bg);  border-color: var(--rc-booking);  color: #0d47a1; }
 .rc-bar--overdue {
   background: repeating-linear-gradient(45deg, var(--rc-occupied) 0 6px, var(--rc-overdue-dark) 6px 12px);

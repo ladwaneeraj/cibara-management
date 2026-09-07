@@ -40,7 +40,7 @@
   const STORAGE_KEY = "cibara.roomsView";
   const RANGE_OPTIONS = [3, 7, 14];  // days that fit on screen at once (zoom)
   const WINDOW_DAYS = 30;            // days actually drawn; swipe to see them
-  const PAST_DAYS = 7;               // days before today inside the first window
+  const PAST_DAYS = 7;               // days before today inside the first window (admin only)
   const MIN_COL_PX = 44;             // never squeeze a day column below this
   const DEFAULT_BOOKING_TIME = "12:00"; // mirrors /get_upcoming_bookings
   const STATUS_LABEL = { vacant: "Vacant", occupied: "Occupied", cleaning: "Cleaning", unknown: "No room" };
@@ -51,7 +51,7 @@
   // ── State ────────────────────────────────────────────────────────────────
   const state = {
     view: "grid",          // "grid" | "calendar"
-    start: addDays(startOfDay(new Date()), -PAST_DAYS),
+    start: homeStart(),    // re-evaluated in setView once the role is known
     pendingScroll: null,               // day index to jump to once columns have a width
     visible: 3,            // days per screen by default; 7 / 14 via the toolbar
     loadingBookings: false,
@@ -121,6 +121,12 @@
     if (ka[0] !== kb[0]) return ka[0] - kb[0];
     return ka[1] < kb[1] ? -1 : ka[1] > kb[1] ? 1 : 0;
   }
+
+  // Only admins get history, so only admins get a window that reaches into
+  // the past. Everyone else starts the timeline on today and cannot page
+  // before it.
+  function pastDays() { return isAdminUser() ? PAST_DAYS : 0; }
+  function homeStart() { return addDays(startOfDay(new Date()), -pastDays()); }
 
   function isAdminUser() {
     const a = window.CibaraAuth;
@@ -612,9 +618,14 @@
     const first = firstVisibleIndex();
     const target = first + dir * state.visible;
     if (target < 0 && first === 0) {
-      state.start = addDays(state.start, -WINDOW_DAYS);
+      const today = startOfDay(new Date());
+      if (!isAdminUser() && state.start <= today) return;   // non-admin: today is the floor
+      let newStart = addDays(state.start, -WINDOW_DAYS);
+      if (!isAdminUser() && newStart < today) newStart = today;
+      const shifted = Math.round((state.start - newStart) / 86400000);
+      state.start = newStart;
       render();
-      scrollToDay(WINDOW_DAYS - state.visible, false);
+      scrollToDay(Math.max(0, shifted - state.visible), false);
     } else if (target > WINDOW_DAYS - state.visible && first >= WINDOW_DAYS - state.visible) {
       state.start = addDays(state.start, WINDOW_DAYS);
       render();
@@ -711,9 +722,9 @@
         case "prev":  page(-1); return;
         case "next":  page(1); return;
         case "today":
-          state.start = addDays(startOfDay(new Date()), -PAST_DAYS);
+          state.start = homeStart();
           render();
-          scrollToDay(PAST_DAYS, true);
+          scrollToDay(pastDays(), true);
           return;
         case "days": {
           // Keep the same first day on screen while the zoom changes.
@@ -920,8 +931,9 @@
     if (view === "calendar") {
       state.lastMarkup = "";
       state.lastToolbar = "";
+      state.start = homeStart();       // role may only be known now, not at script load
       render();
-      scrollToDay(PAST_DAYS, false);   // open on today with a week to swipe back into
+      scrollToDay(pastDays(), false);  // open on today (admins get a week to swipe back into)
       refreshBookings();
     }
   }

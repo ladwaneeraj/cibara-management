@@ -17,10 +17,16 @@ function _roomCategoryOf(roomNumber) {
   }
 }
 
+// Display name for a rate-slab category ("regular" -> "Regular Room"). Only
+// called with a category from _roomCategoryOf(), so roomPricing is loaded.
+function _categoryLabel(cat) {
+  return (roomPricing.CATEGORY_LABELS && roomPricing.CATEGORY_LABELS[cat]) || cat;
+}
+
 // True when the signed-in user may re-rate a stay (cross-category shift).
-// Managers hold only "room.transfer" (same-category moves); the
-// cross-category permission comes via the admin wildcard. Fails CLOSED if
-// the auth helper isn't loaded yet — the server enforces the same rule.
+// Admins (wildcard) and managers hold "room.transfer.cross_category"; a role
+// with only "room.transfer" gets same-category moves. Fails CLOSED if the
+// auth helper isn't loaded yet, and the server enforces the same rule.
 function _canCrossCategoryShift() {
   return !!(
     window.CibaraAuth &&
@@ -29,12 +35,64 @@ function _canCrossCategoryShift() {
   );
 }
 
+// The desk's words for a folio balance: positive is owed by the guest,
+// negative is owed back to them.
+function _balanceText(balance) {
+  const b = Number(balance) || 0;
+  if (b > 0) return `₹${b.toLocaleString("en-IN")} due`;
+  if (b < 0) return `₹${Math.abs(b).toLocaleString("en-IN")} refund`;
+  return "Settled";
+}
+
+// Stay day the way the room card's D-badge counts it.
+function _stayDay(info) {
+  return (Number(info.renewal_count) || 0) + 1;
+}
+
+// Room-number order for [roomNum, info] entries, so the pickers read like
+// the room grid. `numeric` puts 27 before 200 and tolerates non-numeric ids.
+function _byRoomNumber([a], [b]) {
+  return a.localeCompare(b, undefined, { numeric: true });
+}
+
+// Both room pickers use CibaraSelect: the native option list is drawn by the
+// OS, and on Windows Chrome it ran taller than the modal with no styling.
+// The <select>s stay the source of truth (value, onchange, required), so
+// without nice-select.js the native controls keep working. No `placeholder`
+// option on purpose: the trigger then shows the empty option's text, which
+// showQuickTransferModal() rewrites to say why a picker is waiting or empty.
+function _enhanceTransferPickers() {
+  if (!window.CibaraSelect) return;
+  window.CibaraSelect.enhance("quick-source-room", {
+    search: true,
+    searchPlaceholder: "Search room or guest",
+    noMatchText: "No matching rooms",
+  });
+  window.CibaraSelect.enhance("quick-dest-room", {
+    search: true,
+    searchPlaceholder: "Search room or category",
+    noMatchText: "No matching rooms",
+  });
+}
+
+// Re-read a picker after its options or disabled flag changed.
+function _refreshTransferPicker(select) {
+  if (window.CibaraSelect) window.CibaraSelect.refresh(select);
+}
+
+// Wire the button and modal once. This used to re-run after every fetchData
+// as well, and each run stacked another click listener, so a single tap
+// ended up opening the modal several times over.
+let _quickTransferWired = false;
+
 function initQuickTransferButton() {
+  if (_quickTransferWired) return;
   const quickTransferBtn = document.getElementById("quick-transfer-btn");
   if (!quickTransferBtn) {
     console.error("Quick transfer button not found");
     return;
   }
+  _quickTransferWired = true;
 
   quickTransferBtn.addEventListener("click", function () {
     showQuickTransferModal();
@@ -63,6 +121,8 @@ function initQuickTransferButton() {
       });
     }
   }
+
+  _enhanceTransferPickers();
 }
 
 // Show enhanced quick transfer modal
@@ -75,9 +135,9 @@ function showQuickTransferModal() {
 
   const sourceRoomSelect = document.getElementById("quick-source-room");
   const destRoomSelect = document.getElementById("quick-dest-room");
-  const quickGuestInfo = document.getElementById("quick-guest-info");
-  const quickBalanceInfo = document.getElementById("quick-balance-info");
+  const summaryCard = document.getElementById("quick-transfer-summary");
   const quickGuestName = document.getElementById("quick-guest-name");
+  const quickStayMeta = document.getElementById("quick-stay-meta");
   const quickBalance = document.getElementById("quick-balance");
 
   // Enhanced fields
@@ -87,18 +147,38 @@ function showQuickTransferModal() {
   const newRoomAcToggle = document.getElementById("new-room-ac-toggle");
   const diffSection = document.getElementById("transfer-diff-section");
   const applyDiffToggle = document.getElementById("transfer-apply-diff");
+  const hintEl = document.getElementById("transfer-balance-hint");
 
   if (!sourceRoomSelect || !destRoomSelect) {
     console.error("Quick transfer form elements not found");
     return;
   }
 
+  // Hide what depends on the destination: the cross-category price, AC and
+  // rate-from-today controls and the balance hint. Left alone, the ones from
+  // an earlier pick stayed on screen after the source room changed.
+  function _hideCrossControls() {
+    if (roomPriceSection) roomPriceSection.style.display = "none";
+    if (acToggleSection) acToggleSection.style.display = "none";
+    if (diffSection) diffSection.style.display = "none";
+    if (hintEl) hintEl.style.display = "none";
+  }
+
+  // Empty a picker down to its prompt, which is what its trigger shows.
+  function _resetPicker(select, prompt) {
+    select.innerHTML = '<option value=""></option>';
+    select.options[0].textContent = prompt;
+  }
+
+  function _waitForSource() {
+    _resetPicker(destRoomSelect, "Select the occupied room first");
+    destRoomSelect.disabled = true;
+    _refreshTransferPicker(destRoomSelect);
+  }
+
   // Reset the form
-  quickGuestInfo.style.display = "none";
-  quickBalanceInfo.style.display = "none";
-  if (roomPriceSection) roomPriceSection.style.display = "none";
-  if (acToggleSection) acToggleSection.style.display = "none";
-  if (diffSection) diffSection.style.display = "none";
+  if (summaryCard) summaryCard.style.display = "none";
+  _hideCrossControls();
   if (applyDiffToggle) applyDiffToggle.checked = true;
 
   // Populate source room dropdown.
@@ -111,30 +191,29 @@ function showQuickTransferModal() {
   // snapshots pre-transfer charges and carries a transfer_day_offset, so a
   // multi-day stay is billed correctly across the move and the tariff is
   // never re-rated on transfer.
-  sourceRoomSelect.innerHTML = '<option value="">Select source room</option>';
-  let occupiedRoomCount = 0;
+  const occupied = Object.entries(rooms)
+    .filter(([, info]) => info.status === "occupied")
+    .sort(_byRoomNumber);
 
-  Object.entries(rooms).forEach(([roomNum, info]) => {
-    if (info.status !== "occupied") return;
+  _resetPicker(
+    sourceRoomSelect,
+    occupied.length ? "Select occupied room" : "No occupied rooms",
+  );
+  // Nothing to move: a disabled picker says so instead of an empty list.
+  sourceRoomSelect.disabled = occupied.length === 0;
 
+  occupied.forEach(([roomNum, info]) => {
     const option = document.createElement("option");
     option.value = roomNum;
-    option.textContent = `Room ${roomNum} - ${info.guest.name}`;
+    option.textContent =
+      `Room ${roomNum} · ${(info.guest && info.guest.name) || "Guest"}`;
+    option.dataset.sub =
+      `${_balanceText(info.balance)} · Day ${_stayDay(info)}`;
+    option.dataset.icon = "fa-user";
     sourceRoomSelect.appendChild(option);
-    occupiedRoomCount++;
   });
-
-  if (occupiedRoomCount === 0) {
-    const option = document.createElement("option");
-    option.disabled = true;
-    option.textContent = "No occupied rooms available";
-    sourceRoomSelect.appendChild(option);
-  }
-
-  // Reset destination room dropdown
-  destRoomSelect.innerHTML =
-    '<option value="">Select destination room</option>';
-  destRoomSelect.disabled = true;
+  _refreshTransferPicker(sourceRoomSelect);
+  _waitForSource();
 
   // Set up source room change handler
   // NOTE: use .onchange (single-slot) instead of addEventListener — this
@@ -143,37 +222,35 @@ function showQuickTransferModal() {
   // flicker or disappear after multiple transfers.
   sourceRoomSelect.onchange = function () {
     const selectedRoom = sourceRoomSelect.value;
+    // Any destination picked for the previous source no longer applies.
+    _hideCrossControls();
 
     if (!selectedRoom) {
-      // Reset UI if no room selected
-      quickGuestInfo.style.display = "none";
-      quickBalanceInfo.style.display = "none";
-      if (roomPriceSection) roomPriceSection.style.display = "none";
-      if (acToggleSection) acToggleSection.style.display = "none";
-      if (diffSection) diffSection.style.display = "none";
-      destRoomSelect.innerHTML =
-        '<option value="">Select destination room</option>';
-      destRoomSelect.disabled = true;
+      if (summaryCard) summaryCard.style.display = "none";
+      _waitForSource();
       return;
     }
 
-    // Show guest information
-    if (rooms[selectedRoom] && rooms[selectedRoom].guest) {
-      const guest = rooms[selectedRoom].guest;
+    const _srcCat = _roomCategoryOf(selectedRoom);
 
-      quickGuestName.textContent = guest.name;
-      quickGuestInfo.style.display = "block";
-
-      // Show balance information
-      const balance = rooms[selectedRoom].balance;
-      if (balance < 0) {
-        quickBalance.textContent = `₹${Math.abs(balance)} (refund)`;
-        quickBalance.style.color = "var(--success)";
-      } else {
-        quickBalance.textContent = `₹${balance}`;
-        quickBalance.style.color = balance > 0 ? "var(--danger)" : "";
+    // Who is moving, on what tariff, and where their folio stands.
+    const roomData = rooms[selectedRoom] || {};
+    if (summaryCard) {
+      const guest = roomData.guest || {};
+      const meta = [];
+      if (_srcCat !== null) meta.push(_categoryLabel(_srcCat));
+      if (guest.price) {
+        meta.push(`₹${Number(guest.price).toLocaleString("en-IN")}/night`);
       }
-      quickBalanceInfo.style.display = "block";
+      meta.push(`Day ${_stayDay(roomData)}`);
+      const bal = Number(roomData.balance) || 0;
+
+      quickGuestName.textContent = guest.name || "Guest";
+      quickStayMeta.textContent = meta.join(" · ");
+      quickBalance.textContent = _balanceText(bal);
+      quickBalance.dataset.state =
+        bal > 0 ? "due" : bal < 0 ? "refund" : "settled";
+      summaryCard.style.display = "flex";
     }
 
     // Populate destination room dropdown — ALL vacant rooms.
@@ -183,51 +260,48 @@ function showQuickTransferModal() {
     //                    segments, so billing stays exact.
     // Party hall / unmapped rooms have no standard tariff and are excluded
     // as cross-category destinations.
-    destRoomSelect.innerHTML =
-      '<option value="">Select destination room</option>';
-    destRoomSelect.disabled = false;
-
-    const _srcCat = _roomCategoryOf(selectedRoom);
     const _allowCross = _canCrossCategoryShift();
+    const vacant = Object.entries(rooms)
+      .filter(([roomNum, info]) =>
+        roomNum !== selectedRoom && info.status === "vacant")
+      .sort(_byRoomNumber);
 
+    _resetPicker(destRoomSelect, "Select vacant room");
     let vacantRoomCount = 0;
 
-    Object.entries(rooms).forEach(([roomNum, info]) => {
-      if (roomNum === selectedRoom || info.status !== "vacant") return;
+    vacant.forEach(([roomNum]) => {
       const _cat = _roomCategoryOf(roomNum);
       const _isCross = _srcCat !== null && _cat !== null && _cat !== _srcCat;
-      // Cross-category (upgrade/downgrade) is admin-only.
+      // Upgrade/downgrade needs "room.transfer.cross_category".
       if (_isCross && !_allowCross) return;
       if (_isCross && (_cat === "party-hall" || _cat === "other")) return;
 
       const option = document.createElement("option");
       option.value = roomNum;
-      let _label = `Room ${roomNum}`;
-      if (_cat !== null && typeof roomPricing !== "undefined") {
-        const _catLabel =
-          (roomPricing.CATEGORY_LABELS && roomPricing.CATEGORY_LABELS[_cat]) ||
-          _cat;
-        _label += ` — ${_catLabel}`;
-        if (_isCross) _label += " ▲ category change";
+      option.textContent = `Room ${roomNum}`;
+      option.dataset.icon = "fa-bed";
+      if (_cat !== null) {
+        option.dataset.sub = _isCross
+          ? `Category change: ${_categoryLabel(_srcCat)} to ${_categoryLabel(_cat)}`
+          : _categoryLabel(_cat);
       }
-      option.textContent = _label;
       destRoomSelect.appendChild(option);
       vacantRoomCount++;
     });
 
+    destRoomSelect.disabled = vacantRoomCount === 0;
     if (vacantRoomCount === 0) {
-      const option = document.createElement("option");
-      option.disabled = true;
-      option.textContent = _allowCross
-        ? "No vacant rooms available"
-        : "No vacant rooms in the same category";
-      destRoomSelect.appendChild(option);
-      destRoomSelect.disabled = true;
+      destRoomSelect.options[0].textContent = _allowCross
+        ? "No vacant rooms"
+        : "No vacant rooms in this category";
+    }
+    _refreshTransferPicker(destRoomSelect);
 
+    if (vacantRoomCount === 0) {
       showNotification(
         _allowCross
           ? "No vacant rooms available for transfer"
-          : "No vacant same-category rooms (category changes need admin)",
+          : "No vacant same-category rooms (category changes need a manager or admin)",
         "warning",
       );
     }
@@ -311,13 +385,9 @@ function showQuickTransferModal() {
   destRoomSelect.onchange = function () {
     const srcRoom = sourceRoomSelect.value;
     const destRoom = destRoomSelect.value;
-    const hintEl = document.getElementById("transfer-balance-hint");
 
     // Reset the enhanced controls on every change.
-    if (roomPriceSection) roomPriceSection.style.display = "none";
-    if (acToggleSection) acToggleSection.style.display = "none";
-    if (diffSection) diffSection.style.display = "none";
-    if (hintEl) hintEl.style.display = "none";
+    _hideCrossControls();
     if (newRoomAcToggle) {
       newRoomAcToggle.checked = false;
       newRoomAcToggle.onchange = null;
@@ -414,11 +484,11 @@ function showQuickTransferModal() {
         _oldCat !== null && _newCat !== null && _oldCat !== _newCat;
 
       // Defense-in-depth: the dropdown never offers cross-category rooms
-      // to non-admins, but guard against a stale dropdown / DOM tampering.
-      // The server enforces the same rule with a 403.
+      // without "room.transfer.cross_category", but guard against a stale
+      // dropdown / DOM tampering. The server enforces the same rule with a 403.
       if (_isCross && !_canCrossCategoryShift()) {
         showNotification(
-          "Category changes (upgrade/downgrade) need admin access. " +
+          "Category changes (upgrade/downgrade) need manager or admin access. " +
             "You can shift only within the same room category.",
           "error",
         );
@@ -533,7 +603,15 @@ async function processEnhancedRoomTransfer(
     if (!response.ok) {
       const errorText = await response.text();
       console.error("Response error:", errorText);
-      throw new Error(`Server error: ${response.status}`);
+      // A 4xx is a refusal the desk can act on (no permission, room just
+      // taken, bad price) and the server words it in a JSON `message`.
+      let reason = "";
+      if (response.status < 500) {
+        try {
+          reason = JSON.parse(errorText).message || "";
+        } catch (e) { /* not JSON: fall back to the status */ }
+      }
+      throw new Error(reason || `Server error: ${response.status}`);
     }
 
     const result = await response.json();
@@ -603,18 +681,7 @@ async function processRoomTransfer(oldRoom, newRoom, modalElement = null) {
   );
 }
 
-// Initialize the quick transfer button
-document.addEventListener("DOMContentLoaded", function () {
-  setTimeout(initQuickTransferButton, 1000);
-});
-
-// Also initialize after fetchData
-const originalFetchData = window.fetchData;
-if (typeof originalFetchData === "function") {
-  window.fetchData = async function () {
-    const result = await originalFetchData.apply(this, arguments);
-    setTimeout(initQuickTransferButton, 300);
-    return result;
-  };
-}
+// Initialize the quick transfer button. The button and modal are static
+// markup that fetchData never re-renders, so wiring them once is enough.
+document.addEventListener("DOMContentLoaded", initQuickTransferButton);
 // end of shift.js

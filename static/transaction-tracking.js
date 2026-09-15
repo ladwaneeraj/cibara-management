@@ -860,7 +860,24 @@ class TransactionLogManager {
       const _canManage = window.CibaraAuth
         && typeof window.CibaraAuth.userCan === "function"
         && window.CibaraAuth.userCan("expense.manage");
-      const _rowActionable = !!(_canManage && log._doc_id);
+
+      // Payroll rows are the expense LEG of an advance, a salary payout or a
+      // meal log. The payroll record that owns the row is the other half, and
+      // the two have to move together, so these rows do not use the generic
+      // expense actions at all — /expense refuses them (routes/reports.py) and
+      // the sheet routes them to the Staff endpoints instead.
+      //
+      // They are gated on staff.manage rather than expense.manage because
+      // that is what the Staff endpoints behind them require: admin. A
+      // manager who can edit an ordinary expense cannot reverse payroll.
+      const _payKind = log.staff_advance ? "advance"
+        : log.staff_salary_payment ? "salary"
+        : log.staff_meal_log ? "meals" : "";
+      const _canStaff = window.CibaraAuth
+        && typeof window.CibaraAuth.userCan === "function"
+        && window.CibaraAuth.userCan("staff.manage");
+      const _rowActionable = !!(log._doc_id
+        && (_payKind ? _canStaff : _canManage));
 
       // Print voucher — only for a GST expense that has a receipt photo.
       let printHtml = "";
@@ -883,6 +900,22 @@ class TransactionLogManager {
           ` data-exp-doc-id="${_txnAttrEsc(log._doc_id)}"` +
           ` data-exp-amount="${_txnAttrEsc(log.amount || 0)}"` +
           ` data-exp-description="${_txnAttrEsc(expenseLabelRaw)}"`;
+        if (_payKind) {
+          // The payroll doc id, written onto the expense row when the payout
+          // was recorded. Advances given before that back-link existed have
+          // the marker but no id; the sheet resolves those through
+          // /staff/payroll_link rather than leaving the row inert.
+          const _payId = log.advance_id || log.salary_payment_id
+            || log.meal_log_id || "";
+          expenseRowAttrs +=
+            ` data-exp-payroll="${_payKind}"` +
+            ` data-exp-payroll-id="${_txnAttrEsc(_payId)}"` +
+            ` data-exp-staff-id="${_txnAttrEsc(log.staff_id || "")}"` +
+            ` data-exp-staff-name="${_txnAttrEsc(log.staff_name || log.paid_to || "")}"` +
+            ` data-exp-date="${_txnAttrEsc(log.date || "")}"` +
+            ` data-exp-method="${_txnAttrEsc(log.payment_method || "cash")}"` +
+            ` data-exp-etype="${_txnAttrEsc(log.expense_type || "transaction")}"`;
+        }
       }
     } else {
       titleContent = `Room ${log.room} - ${log.name}`;
@@ -1676,6 +1709,81 @@ const transactionTrackingStyles = `
         .txn-sheet { border-radius: 16px; }
     }
 
+    /* Payroll edit form. Sits above the action sheet's z-index: it is opened
+       from the sheet, and on a phone the sheet is still painted underneath
+       while it closes. */
+    .txn-pe-backdrop {
+        position: fixed; inset: 0; z-index: 4100;
+        background: rgba(15, 23, 42, 0.5);
+        display: none; align-items: flex-end; justify-content: center;
+    }
+    .txn-pe-backdrop.open { display: flex; }
+    .txn-pe {
+        width: 100%; max-width: 460px; background: #fff;
+        border-radius: 16px 16px 0 0;
+        padding-bottom: max(10px, env(safe-area-inset-bottom));
+        box-shadow: 0 -8px 30px rgba(0,0,0,.22);
+        animation: txn-sheet-up .18s ease-out;
+        max-height: 92vh; overflow-y: auto;
+    }
+    .txn-pe-head { padding: 16px 18px 12px; border-bottom: 1px solid #f1f5f9; }
+    .txn-pe-title { font: 700 1rem 'Inter', system-ui, sans-serif; color: #0f172a; }
+    .txn-pe-sub {
+        font: 500 .8rem 'Inter', system-ui, sans-serif; color: #64748b;
+        margin-top: 3px;
+    }
+    .txn-pe-body { padding: 14px 18px 4px; }
+    .txn-pe-field { display: block; margin-bottom: 13px; }
+    .txn-pe-lbl {
+        display: block; margin-bottom: 5px;
+        font: 600 .78rem 'Inter', system-ui, sans-serif; color: #475569;
+    }
+    .txn-pe-input {
+        width: 100%; box-sizing: border-box;
+        padding: 10px 12px; border: 1px solid #cbd5e1; border-radius: 9px;
+        font: 500 .92rem 'Inter', system-ui, sans-serif; color: #0f172a;
+        background: #fff;
+    }
+    .txn-pe-input:focus { outline: 2px solid #2563eb33; border-color: #2563eb; }
+    .txn-pe-hint {
+        display: block; margin-top: 4px;
+        font: 500 .72rem 'Inter', system-ui, sans-serif; color: #94a3b8;
+    }
+    /* What this form will not change, and why. Shown rather than hidden so
+       nobody hunts for a field that was left out on purpose. */
+    .txn-pe-locked {
+        margin: 4px 0 12px; padding: 10px 12px;
+        background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 9px;
+        font: 500 .78rem 'Inter', system-ui, sans-serif; color: #475569;
+        line-height: 1.45;
+    }
+    .txn-pe-locked b { color: #0f172a; }
+    .txn-pe-loading {
+        padding: 22px 0; text-align: center;
+        font: 500 .85rem 'Inter', system-ui, sans-serif; color: #94a3b8;
+    }
+    .txn-pe-err {
+        margin: 0 18px 10px; padding: 9px 12px;
+        background: #fef2f2; border: 1px solid #fee2e2; border-radius: 9px;
+        font: 500 .8rem 'Inter', system-ui, sans-serif; color: #7f1d1d;
+    }
+    .txn-pe-foot {
+        display: flex; gap: 10px; padding: 8px 18px 14px;
+        border-top: 1px solid #f1f5f9;
+    }
+    .txn-pe-btn {
+        flex: 1 1 0; padding: 11px 14px; border-radius: 10px; border: none;
+        font: 600 .9rem 'Inter', system-ui, sans-serif; cursor: pointer;
+    }
+    .txn-pe-btn.ghost { background: #f1f5f9; color: #475569; }
+    .txn-pe-btn.primary { background: #2563eb; color: #fff; }
+    .txn-pe-btn.primary:hover { background: #1d4ed8; }
+    .txn-pe-btn[disabled] { opacity: .6; cursor: wait; }
+    @media (min-width: 640px) {
+        .txn-pe-backdrop { align-items: center; }
+        .txn-pe { border-radius: 16px; }
+    }
+
     /* "Added by" chip on each transaction row */
     .txn-added-by {
         display: inline-flex; align-items: center; gap: 3px;
@@ -2098,10 +2206,13 @@ document.addEventListener("DOMContentLoaded", function () {
         </div>
         <div class="txn-sheet-actions">
           <button type="button" class="txn-sheet-btn" data-sheet-edit role="menuitem">
-            <i class="fas fa-pen"></i> Edit expense
+            <i class="fas fa-pen"></i> <span data-sheet-edit-label>Edit expense</span>
+          </button>
+          <button type="button" class="txn-sheet-btn" data-sheet-staff role="menuitem" hidden>
+            <i class="fas fa-user-tie"></i> <span data-sheet-staff-label>Open in Staff</span>
           </button>
           <button type="button" class="txn-sheet-btn danger" data-sheet-delete role="menuitem">
-            <i class="fas fa-trash"></i> Delete expense
+            <i class="fas fa-trash"></i> <span data-sheet-delete-label>Delete expense</span>
           </button>
           <div class="txn-sheet-sep"></div>
           <button type="button" class="txn-sheet-btn cancel" data-sheet-cancel>Cancel</button>
@@ -2116,6 +2227,7 @@ document.addEventListener("DOMContentLoaded", function () {
     el.querySelector("[data-sheet-cancel]").addEventListener("click", _closeSheet);
     el.querySelector("[data-sheet-edit]").addEventListener("click", _sheetEdit);
     el.querySelector("[data-sheet-delete]").addEventListener("click", _sheetDelete);
+    el.querySelector("[data-sheet-staff]").addEventListener("click", _sheetOpenInStaff);
 
     _sheetEl = el;
     return el;
@@ -2125,10 +2237,39 @@ document.addEventListener("DOMContentLoaded", function () {
   function _resetSheet(el) {
     const del = el.querySelector("[data-sheet-delete]");
     el.querySelector("[data-sheet-confirm]").style.display = "none";
-    del.innerHTML = '<i class="fas fa-trash"></i> Delete expense';
+    // Rebuilt rather than restored from a saved string: the delete button's
+    // innerHTML is replaced outright while it is armed and again while it is
+    // working, so there is nothing left of the label to put back.
+    del.innerHTML = '<i class="fas fa-trash"></i> <span data-sheet-delete-label>'
+      + (_sheetCtx ? _sheetLabels(_sheetCtx.kind).del : "Delete expense")
+      + "</span>";
     del.disabled = false;
     del.dataset.armed = "";
     el.querySelector("[data-sheet-edit]").disabled = false;
+  }
+
+  // What each kind of row calls its own actions. "Reverse" rather than
+  // "Delete" for a salary payout is not politeness: the payout is undone, the
+  // period opens again and the advance it deducted goes back to outstanding,
+  // which is a reversal and not a deletion of history.
+  function _sheetLabels(kind) {
+    if (kind === "advance") {
+      return { edit: "Edit advance", del: "Delete advance",
+               confirm: "Delete this advance? Its expense entry goes with it, "
+                        + "and the outstanding balance drops by the same amount." };
+    }
+    if (kind === "salary") {
+      return { edit: "Edit payment details", del: "Reverse salary payment",
+               confirm: "Reverse this salary payment? The period opens again "
+                        + "and any deducted advance becomes outstanding once more." };
+    }
+    if (kind === "meals") {
+      return { edit: "Edit meal log", del: "Delete meal log",
+               confirm: "Delete this meal log? Those days become available to "
+                        + "log again." };
+    }
+    return { edit: "Edit expense", del: "Delete expense",
+             confirm: "Delete this expense? This cannot be undone." };
   }
 
   function _openExpenseActionSheet(row) {
@@ -2138,14 +2279,106 @@ document.addEventListener("DOMContentLoaded", function () {
       docId,
       amount: row.getAttribute("data-exp-amount") || "0",
       description: row.getAttribute("data-exp-description") || "this expense",
+      // "" for an ordinary expense; "advance" | "salary" | "meals" otherwise.
+      kind: row.getAttribute("data-exp-payroll") || "",
+      payrollId: row.getAttribute("data-exp-payroll-id") || "",
+      staffId: row.getAttribute("data-exp-staff-id") || "",
+      staffName: row.getAttribute("data-exp-staff-name") || "",
+      date: row.getAttribute("data-exp-date") || "",
+      method: row.getAttribute("data-exp-method") || "cash",
+      etype: row.getAttribute("data-exp-etype") || "transaction",
     };
     const el = _buildSheet();
     _resetSheet(el);
+    const labels = _sheetLabels(_sheetCtx.kind);
+    el.querySelector("[data-sheet-edit-label]").textContent = labels.edit;
+    el.querySelector("[data-sheet-delete-label]").textContent = labels.del;
+    el.querySelector("[data-sheet-confirm]").textContent = labels.confirm;
+
+    // The jump to Staff. Shown only for payroll rows that name a staff
+    // member, because without an id there is nothing to open.
+    const staffBtn = el.querySelector("[data-sheet-staff]");
+    staffBtn.hidden = !(_sheetCtx.kind && _sheetCtx.staffId);
+    if (!staffBtn.hidden) {
+      el.querySelector("[data-sheet-staff-label]").textContent =
+        _sheetCtx.staffName
+          ? "Open " + _sheetCtx.staffName + " in Staff"
+          : "Open in Staff";
+    }
+
     el.querySelector("[data-sheet-title]").textContent = _sheetCtx.description;
     el.querySelector("[data-sheet-sub]").textContent = "₹" + _sheetCtx.amount;
     el.classList.add("open");
     // Focus the first action so the sheet is operable from a keyboard.
     setTimeout(() => el.querySelector("[data-sheet-edit]").focus(), 0);
+  }
+
+  // ── Payroll plumbing shared by Edit, Delete and Open in Staff ───────────
+
+  const _PAYROLL_PATH = { advance: "advance", salary: "salary", meals: "meals" };
+
+  function _notify(msg, kind) {
+    if (typeof showNotification === "function") showNotification(msg, kind || "info");
+  }
+
+  // Refresh after a payroll change. Not the single-row removal the generic
+  // delete uses: an edit can move the row to another date or change its
+  // amount, and a reversal changes the day's expense total, so the view is
+  // rebuilt rather than patched.
+  function _refreshAfterPayroll() {
+    if (typeof window.refreshTransactionsView === "function") {
+      window.refreshTransactionsView();
+    } else if (typeof debouncedFetchData === "function") {
+      debouncedFetchData();
+    }
+  }
+
+  /**
+   * The payroll record id for the row in `ctx`, resolving it from the server
+   * when the row does not carry one.
+   *
+   * Advances recorded before the expense row carried advance_id have the
+   * marker but no id. Rather than leave those rows inert — they are the
+   * oldest ones, the ones most likely to need a correction — ask the server,
+   * which falls back to a query on the payroll collection.
+   *
+   * @returns {Promise<string>} the id, or "" when it could not be resolved.
+   */
+  function _resolvePayrollId(ctx) {
+    if (ctx.payrollId) return Promise.resolve(ctx.payrollId);
+    return apiFetch("/staff/payroll_link/" + encodeURIComponent(ctx.docId))
+      .then((r) => r.json())
+      .then((data) => {
+        if (!data || !data.success || !data.linked) {
+          // Keep the server's sentence. It distinguishes "refresh, this row
+          // is gone" from "the payroll record behind it is missing", and the
+          // two need different things from the operator.
+          ctx.resolveError = (data && data.message) || "";
+          return "";
+        }
+        ctx.payrollId = data.id || "";
+        ctx.kind = data.kind || ctx.kind;
+        ctx.staffId = ctx.staffId || data.staff_id || "";
+        ctx.staffName = ctx.staffName || data.staff_name || "";
+        ctx.record = data.record || null;
+        return ctx.payrollId;
+      })
+      .catch(() => "");
+  }
+
+  function _sheetOpenInStaff() {
+    if (!_sheetCtx) return;
+    const staffId = _sheetCtx.staffId;
+    _closeSheet();
+    if (!staffId) { _notify("This row does not name a staff member.", "warning"); return; }
+    const nav = document.querySelector('.nav-item[data-tab="staff"]');
+    const navVisible = nav && window.getComputedStyle(nav).display !== "none";
+    if (!navVisible) { _notify("The Staff tab isn't available right now.", "warning"); return; }
+    if (typeof window.openStaffLedger !== "function") {
+      _notify("Staff isn't ready yet — try again in a moment.", "warning");
+      return;
+    }
+    window.openStaffLedger(staffId);
   }
 
   function _closeSheet() {
@@ -2158,6 +2391,20 @@ document.addEventListener("DOMContentLoaded", function () {
 
   function _sheetEdit() {
     if (!_sheetCtx) return;
+    if (_sheetCtx.kind) {
+      const ctx = _sheetCtx;
+      _closeSheet();
+      _resolvePayrollId(ctx).then((id) => {
+        if (!id) {
+          _notify(ctx.resolveError
+            || "Could not find the payroll record for this row. Open it from "
+               + "the Staff ledger instead.", "error");
+          return;
+        }
+        _openPayrollEditModal(ctx);
+      });
+      return;
+    }
     const log = _findLogByDocId(_sheetCtx.docId);
     _closeSheet();
     if (!log) {
@@ -2187,13 +2434,19 @@ document.addEventListener("DOMContentLoaded", function () {
       return;
     }
 
+    // Belt and braces behind the server: the row only carries its data-*
+    // attributes for a user who may act on it. The permission asked for has
+    // to be the one that let the row render, though — a payroll row is
+    // gated on staff.manage, and checking expense.manage here would ask the
+    // wrong question of a manager who holds one and not the other.
+    const _needed = _sheetCtx.kind ? "staff.manage" : "expense.manage";
     const canManage = window.CibaraAuth
       && typeof window.CibaraAuth.userCan === "function"
-      && window.CibaraAuth.userCan("expense.manage");
+      && window.CibaraAuth.userCan(_needed);
     if (!canManage) {
-      if (typeof showNotification === "function") {
-        showNotification("Only admins can delete expenses", "error");
-      }
+      _notify(_sheetCtx.kind
+        ? "Only admins can change staff payroll entries"
+        : "Only admins can delete expenses", "error");
       _closeSheet();
       return;
     }
@@ -2201,6 +2454,44 @@ document.addEventListener("DOMContentLoaded", function () {
     const docId = _sheetCtx.docId;
     btn.disabled = true;
     _sheetEl.querySelector("[data-sheet-edit]").disabled = true;
+
+    // Payroll rows go to the Staff endpoint, which removes the payroll record
+    // and this expense row in one batch and reverses the cash counter.
+    // /expense refuses them outright, so this is not an optimisation.
+    if (_sheetCtx.kind) {
+      const ctx = _sheetCtx;
+      btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> '
+        + (ctx.kind === "salary" ? "Reversing…" : "Deleting…");
+      _resolvePayrollId(ctx).then((id) => {
+        if (!id) {
+          _notify(ctx.resolveError
+            || "Could not find the payroll record for this row. Delete it "
+               + "from the Staff ledger instead.", "error");
+          if (_sheetEl) _resetSheet(_sheetEl);
+          return;
+        }
+        return apiFetch(
+          "/staff/" + _PAYROLL_PATH[ctx.kind] + "/" + encodeURIComponent(id),
+          { method: "DELETE" },
+        )
+          .then((r) => r.json())
+          .then((data) => {
+            if (data && data.success) {
+              _closeSheet();
+              _notify(data.message || "Reversed", "success");
+              _refreshAfterPayroll();
+            } else {
+              _notify((data && data.message) || "Delete failed", "error");
+              if (_sheetEl) _resetSheet(_sheetEl);
+            }
+          });
+      }).catch((err) => {
+        _notify("Error: " + err.message, "error");
+        if (_sheetEl) _resetSheet(_sheetEl);
+      });
+      return;
+    }
+
     btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Deleting…';
 
     apiFetch("/expense/" + encodeURIComponent(docId), { method: "DELETE" })
@@ -2255,6 +2546,284 @@ document.addEventListener("DOMContentLoaded", function () {
         if (_sheetEl) _resetSheet(_sheetEl);
       });
   }
+
+
+  // ── Payroll edit modal ──────────────────────────────────────────────────
+  //
+  // Three kinds of row, one form, and the difference between them is a line
+  // this module does not get to redraw:
+  //
+  //   advance   somebody chose the amount, so the amount is editable.
+  //   salary    gross = days worked x wage, net = gross + adjustment
+  //             - advance - meals. Retyping that here would leave a figure
+  //             on the payout that cannot be re-derived from attendance, so
+  //             only the payment details move. Changing the money means
+  //             reversing the payout and paying again, which recomputes it.
+  //   meals     amount = days present x meal rate. Same rule as salary.
+  //
+  // The server enforces exactly this (services/staff_service.py), which is
+  // why the read-only figures below are shown rather than hidden: an operator
+  // who can see what is fixed and why does not go hunting for a field that
+  // was deliberately left out.
+
+  let _peEl = null;      // the modal; built once, reused
+  let _peCtx = null;
+
+  const _PE_TITLE = {
+    advance: "Edit advance",
+    salary: "Edit payment details",
+    meals: "Edit meal log",
+  };
+  const _PE_LOCKED_HINT = {
+    salary: "The amount comes from days worked x daily wage, less any advance "
+          + "and meals. To change it, reverse this payment and pay again.",
+    meals: "The amount is days present x meal rate. To change it, delete this "
+         + "log and log the days again.",
+  };
+
+  function _peEsc(v) {
+    return String(v == null ? "" : v)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  }
+
+  function _buildPayrollModal() {
+    if (_peEl) return _peEl;
+    const el = document.createElement("div");
+    el.className = "txn-pe-backdrop";
+    el.setAttribute("role", "dialog");
+    el.setAttribute("aria-modal", "true");
+    el.innerHTML = `
+      <form class="txn-pe" data-pe-form>
+        <div class="txn-pe-head">
+          <div class="txn-pe-title" data-pe-title></div>
+          <div class="txn-pe-sub" data-pe-sub></div>
+        </div>
+        <div class="txn-pe-body" data-pe-body></div>
+        <div class="txn-pe-err" data-pe-err hidden></div>
+        <div class="txn-pe-foot">
+          <button type="button" class="txn-pe-btn ghost" data-pe-cancel>Cancel</button>
+          <button type="submit" class="txn-pe-btn primary" data-pe-save>Save changes</button>
+        </div>
+      </form>`;
+    document.body.appendChild(el);
+    el.addEventListener("click", (ev) => { if (ev.target === el) _closePayrollModal(); });
+    el.querySelector("[data-pe-cancel]").addEventListener("click", _closePayrollModal);
+    el.querySelector("[data-pe-form]").addEventListener("submit", _submitPayrollEdit);
+    _peEl = el;
+    return el;
+  }
+
+  function _closePayrollModal() {
+    if (_peEl) _peEl.classList.remove("open");
+    _peCtx = null;
+  }
+
+  function _peField(label, inner, hint) {
+    return '<label class="txn-pe-field"><span class="txn-pe-lbl">' + _peEsc(label)
+      + "</span>" + inner
+      + (hint ? '<span class="txn-pe-hint">' + _peEsc(hint) + "</span>" : "")
+      + "</label>";
+  }
+
+  function _peMoneySource(method, etype) {
+    // Cash leaves the counter and moves the day's cash total; an account
+    // payment does not. They are one choice on the form because picking the
+    // wrong one is what puts a day's cash out by the amount of a payout.
+    const opt = (v, label, cur) =>
+      '<option value="' + v + '"' + (v === cur ? " selected" : "") + ">" + label + "</option>";
+    return _peField("Paid from",
+      '<select name="money_source" class="txn-pe-input">'
+      + opt("cash|transaction", "Cash counter", method + "|" + etype)
+      + opt("online|report", "Bank / UPI", method + "|" + etype)
+      + "</select>",
+      "Cash counter moves today's cash total. Bank / UPI does not.");
+  }
+
+  function _peBody(ctx) {
+    const rec = ctx.record || {};
+    const method = rec.payment_method || ctx.method || "cash";
+    const etype = rec.expense_type || ctx.etype || "transaction";
+    const isOpening = !!rec.opening;
+
+    if (ctx.kind === "advance") {
+      return _peField("Amount",
+          '<input type="number" name="amount" class="txn-pe-input" min="1" step="1" '
+          + 'inputmode="numeric" value="' + _peEsc(rec.amount != null ? rec.amount : ctx.amount) + '" required>')
+        + _peField("Date given",
+          '<input type="date" name="date" class="txn-pe-input" value="'
+          + _peEsc(rec.date || ctx.date) + '" required>')
+        + _peField("Note", _peRecordOnly(ctx,
+          '<input type="text" name="note" class="txn-pe-input" maxlength="120" '
+          + 'placeholder="optional" value="' + _peEsc(rec.note || "") + '"'))
+        + (isOpening
+            ? '<div class="txn-pe-locked">Carried over from the paper books, '
+              + "so it has no payment method and never touched the cash counter.</div>"
+            : _peMoneySource(method, etype));
+    }
+
+    if (ctx.kind === "salary") {
+      const period = (rec.period_start && rec.period_end)
+        ? rec.period_start + "  to  " + rec.period_end : "";
+      return _peField("Payment date",
+          '<input type="date" name="paid_on" class="txn-pe-input" value="'
+          + _peEsc(rec.paid_on || ctx.date) + '" required>',
+          "The day the money left. Moves this row in the cash book.")
+        + _peMoneySource(method, etype)
+        + _peField("Adjustment note", _peRecordOnly(ctx,
+          '<input type="text" name="adjustment_note" class="txn-pe-input" maxlength="120" '
+          + 'placeholder="optional" value="' + _peEsc(rec.adjustment_note || "") + '"'),
+          ctx.recordError ? "Not loaded, so not editable here." : "")
+        + '<div class="txn-pe-locked"><b>Paid ' + _peEsc(_rup(rec.net_paid != null ? rec.net_paid : ctx.amount))
+          + "</b>" + (period ? " for " + _peEsc(period) : "") + ".<br>"
+          + _peEsc(_PE_LOCKED_HINT.salary) + "</div>";
+    }
+
+    return _peField("Date",
+        '<input type="date" name="logged_on" class="txn-pe-input" value="'
+        + _peEsc(rec.logged_on || ctx.date) + '" required>')
+      + _peMoneySource(method, etype)
+      + _peField("Note", _peRecordOnly(ctx,
+        '<input type="text" name="note" class="txn-pe-input" maxlength="120" '
+        + 'placeholder="optional" value="' + _peEsc(rec.note || "") + '"'))
+      + '<div class="txn-pe-locked"><b>' + _peEsc(_rup(rec.amount != null ? rec.amount : ctx.amount))
+        + "</b>" + (rec.meal_days ? " for " + _peEsc(rec.meal_days) + " day"
+                    + (rec.meal_days === 1 ? "" : "s") : "") + ".<br>"
+        + _peEsc(_PE_LOCKED_HINT.meals) + "</div>";
+  }
+
+  /**
+   * Close an input tag, disabling it when the payroll record could not be
+   * loaded.
+   *
+   * A note and an adjustment note live only on the payroll record; the
+   * expense row does not carry them. If the record did not load they render
+   * empty, and an empty value saved back would wipe whatever was really
+   * there. Disabled, they are also left out of the submitted body (see
+   * _submitPayrollEdit), so the field keeps its stored value.
+   */
+  function _peRecordOnly(ctx, openTag) {
+    return openTag + (ctx.recordError ? " disabled" : "") + ">";
+  }
+
+  function _rup(n) { return "₹" + Number(n || 0).toLocaleString("en-IN"); }
+
+  /**
+   * Open the edit form for a payroll row.
+   *
+   * The current values come from the payroll record when the resolver
+   * already fetched one, and from the row's data-* attributes otherwise. The
+   * record is the better source — it carries the note, the period and the
+   * adjustment, none of which the expense row has — so when it is absent the
+   * form fetches it rather than opening with half the fields blank.
+   */
+  function _openPayrollEditModal(ctx) {
+    if (!ctx || !ctx.kind || !ctx.payrollId) return;
+    const el = _buildPayrollModal();
+    _peCtx = ctx;
+    el.querySelector("[data-pe-title]").textContent = _PE_TITLE[ctx.kind] || "Edit";
+    el.querySelector("[data-pe-sub]").textContent =
+      (ctx.staffName ? ctx.staffName + " · " : "") + _rup(ctx.amount);
+    const err = el.querySelector("[data-pe-err]");
+    err.hidden = true;
+    err.textContent = "";
+    const body = el.querySelector("[data-pe-body]");
+
+    const paint = () => {
+      body.innerHTML = (ctx.recordError
+        ? '<div class="txn-pe-locked">' + _peEsc(ctx.recordError)
+          + " The fields it holds are greyed out and will keep their stored "
+          + "values; the rest still save normally.</div>"
+        : "") + _peBody(ctx);
+      el.classList.add("open");
+      const first = body.querySelector("input, select");
+      if (first) setTimeout(() => first.focus(), 0);
+    };
+
+    if (ctx.record) { paint(); return; }
+    body.innerHTML = '<div class="txn-pe-loading">Loading…</div>';
+    el.classList.add("open");
+    apiFetch("/staff/payroll_link/" + encodeURIComponent(ctx.docId))
+      .then((r) => r.json())
+      .then((data) => {
+        if (data && data.success && data.linked) {
+          ctx.record = data.record || null;
+        } else {
+          // The form still opens from the row's own attributes, but it will
+          // be missing the fields only the payroll record carries — the
+          // note, the period, the adjustment note. Say so rather than show a
+          // blank field and let it be saved back as blank.
+          ctx.recordError = (data && data.message)
+            || "Could not load the payroll record.";
+        }
+        paint();
+      })
+      .catch((e) => { ctx.recordError = "Could not load the payroll record: "
+                        + e.message; paint(); });
+  }
+
+  function _submitPayrollEdit(ev) {
+    ev.preventDefault();
+    if (!_peCtx) return;
+    const ctx = _peCtx;
+    const form = _peEl.querySelector("[data-pe-form]");
+    const err = _peEl.querySelector("[data-pe-err]");
+    const save = _peEl.querySelector("[data-pe-save]");
+    const data = new FormData(form);
+
+    // Only the fields this kind owns are sent. A stray key the server treats
+    // as derived is a 409, and sending one would turn a harmless no-op edit
+    // into an error the operator has to read.
+    // A field the form could not prefill is disabled, so FormData has no
+    // entry for it. Sending "" for those would overwrite a stored note with
+    // nothing, so the key is left out entirely and the server keeps what it
+    // has — a PATCH only changes the fields it is given.
+    const put = (key, value) => { if (data.has(key)) body[key] = value; };
+    const body = {};
+    if (ctx.kind === "advance") {
+      body.amount = Number(data.get("amount"));
+      body.date = String(data.get("date") || "");
+      put("note", String(data.get("note") || ""));
+    } else if (ctx.kind === "salary") {
+      body.paid_on = String(data.get("paid_on") || "");
+      put("adjustment_note", String(data.get("adjustment_note") || ""));
+    } else {
+      body.logged_on = String(data.get("logged_on") || "");
+      put("note", String(data.get("note") || ""));
+    }
+    const source = String(data.get("money_source") || "");
+    if (source.indexOf("|") > -1) {
+      body.payment_method = source.split("|")[0];
+      body.expense_type = source.split("|")[1];
+    }
+
+    err.hidden = true;
+    save.disabled = true;
+    save.textContent = "Saving…";
+
+    apiFetch("/staff/" + _PAYROLL_PATH[ctx.kind] + "/" + encodeURIComponent(ctx.payrollId),
+             { method: "PATCH", headers: { "Content-Type": "application/json" },
+               body: JSON.stringify(body) })
+      .then((r) => r.json())
+      .then((json) => {
+        if (json && json.success) {
+          _closePayrollModal();
+          _notify(json.message || "Saved", "success");
+          _refreshAfterPayroll();
+        } else {
+          err.textContent = (json && json.message) || "Could not save.";
+          err.hidden = false;
+        }
+      })
+      .catch((e) => { err.textContent = "Error: " + e.message; err.hidden = false; })
+      .then(() => { save.disabled = false; save.textContent = "Save changes"; });
+  }
+
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "Escape" && _peEl && _peEl.classList.contains("open")) {
+      _closePayrollModal();
+    }
+  });
 
   // Row tap → sheet. Ignore taps that landed on a control the row still
   // hosts (attach photo, view photo, print) so those keep working.

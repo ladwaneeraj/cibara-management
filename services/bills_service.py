@@ -15,7 +15,9 @@ Status field — string, one of:
     "draft"               guest checked in, not yet checked out
     "pending_settlement"  checked out, balance unpaid
     "completed"           checked out, fully paid
-    "cancelled"           stay cancelled or no-show
+    "cancelled"           stay cancelled or no-show, checkout reverted
+                          (cancelled_by_revert), or invoice cancelled by an
+                          admin (cancel_kind="manual", /cancel_bill)
     "voided"              manually voided by manager (rare; accounting reversal)
 
 Phase 1 contract
@@ -528,6 +530,155 @@ def cancel(stay_id, reason="", *, actor=None, batch=None):
     except Exception as e:
         logger.error(f"BillsService.cancel({stay_id}) failed: {e}")
         return False
+
+
+# ---------------------------------------------------------------------------
+# Manual cancellation (/cancel_bill): the decision, kept free of I/O
+# ---------------------------------------------------------------------------
+
+def _rupees(v):
+    v = v or 0
+    return f"{int(v)}" if float(v).is_integer() else f"{v:.2f}"
+
+
+def cancel_eligibility(bill, receipts, settlement=None, month_locked=False):
+    """
+    Decide whether /cancel_bill may cancel a checked-out invoice.
+    Returns (ok, code, message). Pure, so every branch is unit-tested; the
+    route gathers the inputs and performs the writes.
+
+      bill          the bill document
+      receipts      payment_service.receipt_totals() over the stay's ledger
+      settlement    the settle-later doc named by bill.settlement_id, or None
+      month_locked  whether the bill's GST period (its checkout month) is
+                    locked, i.e. that month's GSTR-1 has been filed
+
+    Codes: OK; ALREADY_CANCELLED, also ok=True because the requested end
+    state already holds, so a repeated click succeeds without writing; and
+    the refusals CANCELLED_BY_REVERT, BAD_STATUS, REVERTED, HAS_CREDIT_NOTE,
+    MONTH_LOCKED, SETTLEMENT_COLLECTED, HAS_RECEIPTS.
+
+    GST position: a cancelled invoice keeps its number (Rule 46 allows no
+    gap and no reuse) and is reported in GSTR-1 Table 13 as cancelled, at
+    zero value. That is only lawful while the invoice is not in a filed
+    return. After filing, the correction is a Section 34 credit note dated
+    today, so a locked month is refused rather than rewritten.
+    """
+    b = bill or {}
+    status = b.get("status") or ""
+    bill_no = b.get("bill_number") or "-"
+
+    if status == "cancelled":
+        if b.get("cancel_kind") == "manual":
+            return True, "ALREADY_CANCELLED", f"Bill {bill_no} is already cancelled."
+        if b.get("cancelled_by_revert"):
+            return False, "CANCELLED_BY_REVERT", (
+                f"Bill {bill_no} was already cancelled when its checkout was "
+                f"reverted; the stay continues on a new bill.")
+        return False, "BAD_STATUS", f"Bill {bill_no} is already cancelled."
+    if status not in ("completed", "pending_settlement"):
+        return False, "BAD_STATUS", (
+            f"Only a checked-out bill can be cancelled (bill {bill_no} is "
+            f"'{status or 'unknown'}').")
+
+    # Legacy revert (before revert switched to cancelling): the bill kept
+    # status "completed" and a credit note already reversed it. Cancelling
+    # it too would take the same value out of GSTR-1 twice.
+    if b.get("superseded_by_revert"):
+        return False, "REVERTED", (
+            f"Bill {bill_no} was reverted and a credit note reversed it; it "
+            f"cannot also be cancelled.")
+    # Same double reversal: the credit note already reduces output tax, and
+    # a cancelled invoice would drop out of the return on top of that.
+    if b.get("linked_credit_note_id") or b.get("linked_credit_note_ids"):
+        return False, "HAS_CREDIT_NOTE", (
+            f"A credit note has already been issued against bill {bill_no}. "
+            f"Cancelling the bill as well would reverse that amount twice in "
+            f"GSTR-1; issue a credit note for the remaining value instead.")
+
+    if month_locked:
+        period = (b.get("checkout_time") or "")[:7]
+        return False, "MONTH_LOCKED", (
+            f"GST period {period} is locked because its GSTR-1 has been filed, "
+            f"so bill {bill_no} can no longer be cancelled. Correct it with a "
+            f"GST credit note dated today (Section 34): Bills tab, Collect "
+            f"Payment, Discount, 'GST credit note'.")
+
+    s_status = ((settlement or {}).get("status") or "").lower()
+    if s_status in ("paid", "partial"):
+        return False, "SETTLEMENT_COLLECTED", (
+            f"The settle-later balance of bill {bill_no} has already been "
+            f"{'collected' if s_status == 'paid' else 'partly collected'}, so "
+            f"money has moved against it. Refund the guest and issue a GST "
+            f"credit note instead of cancelling.")
+
+    r = receipts or {}
+    cash, online, ota, refunds = (r.get(k, 0) or 0
+                                  for k in ("cash", "online", "ota", "refunds"))
+    net = cash + online + ota - refunds
+    if net != 0:
+        return False, "HAS_RECEIPTS", (
+            f"Money is still recorded against this stay: cash ₹{_rupees(cash)} "
+            f"+ online ₹{_rupees(online)} + OTA ₹{_rupees(ota)} - refunds "
+            f"₹{_rupees(refunds)} = ₹{_rupees(net)}. A bill can only be "
+            f"cancelled when this is zero. If no money was actually received "
+            f"for this bill (a duplicate entry), tick 'No money was received' "
+            f"to remove these entries and cancel. Otherwise refund the guest "
+            f"first.")
+
+    return True, "OK", ""
+
+
+def receipt_removal_check(removable, receipts, is_month_locked):
+    """
+    May /cancel_bill remove a stay's receipts because the operator declared
+    that no money was received for this bill? Returns (ok, code, message).
+
+    The case it exists for: a guest checked in to two rooms by mistake with
+    the same advance typed into both (Rs.500 online on 225 and again on 226).
+    The second bill cannot be cancelled while it shows Rs.500 received, and
+    that Rs.500 never existed. Removing the entry is what makes the books
+    true again, so it is done in the same batch as the cancellation.
+
+      removable        payment_service.receipt_rows() of the stay
+      receipts         payment_service.receipt_totals() of the same rows
+      is_month_locked  callable(period) -> bool, the GST month lock
+
+    Only cash and online receipts are removed. Everything else means money
+    really moved or is owed by someone else, and stays a manual decision:
+      * OTA-settled amounts are paid by the OTA, not typed in at the desk;
+      * a refund already paid money out, so removing the receipt alone would
+        leave the stay negative;
+      * a receipt inside a bank deposit has physically left the drawer;
+      * a receipt dated in a filed (locked) month is in that month's books.
+    """
+    r = receipts or {}
+    if r.get("ota") or r.get("refunds"):
+        return False, "RECEIPTS_NOT_REMOVABLE", (
+            "This stay has an OTA-settled amount or a refund, so its payments "
+            "cannot be removed here. Settle those first, then cancel.")
+    if not removable:
+        return False, "RECEIPTS_NOT_REMOVABLE", (
+            "The payment entries for this stay could not be read, so nothing "
+            "can be removed. Reopen the bill and try again.")
+    for p in removable:
+        label = (f"₹{_rupees(p.get('amount', 0) or 0)} {p.get('method')} "
+                 f"on {p.get('date') or 'an unknown date'}")
+        if not p.get("id"):
+            return False, "RECEIPTS_NOT_REMOVABLE", (
+                f"The payment {label} has no record id, so it cannot be "
+                f"removed safely.")
+        if p.get("cash_deposit_id"):
+            return False, "RECEIPTS_NOT_REMOVABLE", (
+                f"The payment {label} is already in bank deposit "
+                f"{p.get('cash_deposit_id')}. Reverse that deposit first "
+                f"(Banking, History, Reverse), then cancel.")
+        period = str(p.get("date") or "")[:7]
+        if period and is_month_locked(period):
+            return False, "RECEIPTS_NOT_REMOVABLE", (
+                f"The payment {label} is in GST period {period}, which is "
+                f"locked (GSTR-1 filed). It cannot be removed.")
+    return True, "OK", ""
 
 
 # ---------------------------------------------------------------------------

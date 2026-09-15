@@ -63,7 +63,14 @@ def _can_amend_attendance() -> bool:
 
 def _reject_account_source(data) -> bool:
     """True when this request tries to pay from the account without the
-    permission — the caller returns a 403."""
+    permission — the caller returns a 403.
+
+    Also used by the PATCH edits, where the body carries only the fields
+    being changed. The defaults are what make that safe: an absent
+    payment_method reads as "cash" and an absent expense_type as
+    "transaction", so an edit that says nothing about the money source is not
+    treated as moving it to the bank.
+    """
     from_account = (data.get("expense_type", "transaction") != "transaction"
                     or data.get("payment_method", "cash") != "cash")
     return from_account and not _can_pay_from_account()
@@ -229,13 +236,17 @@ def mark_all_present():
 @requires_permission("analytics.view")   # Insights = analytics → admin-only
 def analytics():
     """Insights payload: monthly cash-out trend, totals, per-staff stats.
-    Query: months=N (default 6, max 24)."""
+    Query: months=N (default 6, max 24), month=YYYY-MM (default: this
+    month; a past month is reported over its whole length)."""
     try:
         try:
             months = int(request.args.get("months", 6) or 6)
         except ValueError:
             months = 6
-        return jsonify(success=True, **svc.payroll_analytics(months))
+        month = (request.args.get("month") or "").strip()
+        return jsonify(success=True, **svc.payroll_analytics(months, month))
+    except ValueError as ve:
+        return _fail(ve)
     except Exception as e:
         logger.exception("staff/analytics failed")
         return _fail(e, 500)
@@ -542,4 +553,123 @@ def delete_salary_payment(payment_id):
         return _fail(ve, 404)
     except Exception as e:
         logger.exception("staff/salary DELETE failed")
+        return _fail(e, 500)
+
+
+# ─── Payroll rows acted on from the Transactions tab ───────────────────────
+#
+# The Transactions tab lists the `expenses` side of every payout. Acting on
+# one of those rows has to go through the payroll record that owns it, so
+# routes/reports.py keeps refusing payroll rows on the generic expense
+# endpoints and these three take over. Edits are admin-only (staff.manage),
+# the same gate reversals already use, because an edit moves the same money.
+
+@staff_bp.route("/payroll_link/<expense_doc_id>", methods=["GET"])
+@requires_permission("staff.payroll.view")
+def payroll_link(expense_doc_id):
+    """
+    Resolve one expense row to its payroll record.
+
+    linked=false is a normal answer, not an error: the row is an ordinary
+    expense and the caller should use the ordinary expense actions.
+    """
+    try:
+        found = svc.payroll_record_for_expense(expense_doc_id)
+        if not found:
+            logger.info("staff/payroll_link %s: not a payroll row",
+                        expense_doc_id)
+            return jsonify(success=True, linked=False)
+        return jsonify(success=True, linked=True, **found)
+    except ValueError as ve:
+        # The refusals here are all "this row cannot be resolved", and the
+        # 404 alone does not say which. Logged because the caller is a tap in
+        # the Transactions tab: by the time anyone asks why the sheet did
+        # nothing, the row is gone from the screen.
+        logger.warning("staff/payroll_link %s refused: %s", expense_doc_id, ve)
+        return _fail(ve, 404)
+    except Exception as e:
+        logger.exception("staff/payroll_link failed")
+        return _fail(e, 500)
+
+
+@staff_bp.route("/advance/<advance_id>", methods=["PATCH"])
+@requires_permission("staff.manage")   # edits move money — admin only
+def update_advance(advance_id):
+    """Body: any of { amount, date, note, payment_method, expense_type }."""
+    try:
+        data = request.json or {}
+        if _reject_account_source(data):
+            return _fail(_ACCOUNT_403, 403)
+        adv = svc.update_advance(advance_id, data, g.current_user)
+        invalidate_rooms_and_totals()
+        write_log("staff.advance.edit",
+                  target_collection="staff_advances", target_id=advance_id,
+                  metadata={"staff": adv.get("staff_name"),
+                            "fields": sorted(
+                                k for k in data if k in svc._ADVANCE_EDITABLE),
+                            "amount": adv.get("amount"),
+                            "date": adv.get("date")})
+        return jsonify(success=True, message="Advance updated", advance=adv)
+    except ValueError as ve:
+        return _fail(ve, 409 if "already been deducted" in str(ve) else 400)
+    except Exception as e:
+        logger.exception("staff/advance PATCH failed")
+        return _fail(e, 500)
+
+
+@staff_bp.route("/salary/<payment_id>", methods=["PATCH"])
+@requires_permission("staff.manage")
+def update_salary_payment(payment_id):
+    """
+    Body: any of { paid_on, payment_method, expense_type, adjustment_note }.
+
+    A derived figure in the body is a 409, not a silent drop: the caller is
+    told to reverse and pay again so the amount is recomputed from
+    attendance rather than retyped.
+    """
+    try:
+        data = request.json or {}
+        if _reject_account_source(data):
+            return _fail(_ACCOUNT_403, 403)
+        pay = svc.update_salary_payment(payment_id, data, g.current_user)
+        invalidate_rooms_and_totals()
+        write_log("staff.salary.edit",
+                  target_collection="staff_salary_payments",
+                  target_id=payment_id,
+                  metadata={"staff": pay.get("staff_name"),
+                            "fields": sorted(
+                                k for k in data if k in svc._SALARY_EDITABLE),
+                            "paid_on": pay.get("paid_on"),
+                            "net_paid": pay.get("net_paid")})
+        return jsonify(success=True, message="Salary payment updated",
+                       payment=pay)
+    except ValueError as ve:
+        return _fail(ve, 409 if "cannot be changed here" in str(ve) else 400)
+    except Exception as e:
+        logger.exception("staff/salary PATCH failed")
+        return _fail(e, 500)
+
+
+@staff_bp.route("/meals/<log_id>", methods=["PATCH"])
+@requires_permission("staff.manage")
+def update_meal_log(log_id):
+    """Body: any of { logged_on, payment_method, expense_type, note }."""
+    try:
+        data = request.json or {}
+        if _reject_account_source(data):
+            return _fail(_ACCOUNT_403, 403)
+        log = svc.update_meal_log(log_id, data, g.current_user)
+        invalidate_rooms_and_totals()
+        write_log("staff.meals.edit",
+                  target_collection="staff_meal_logs", target_id=log_id,
+                  metadata={"staff": log.get("staff_name"),
+                            "fields": sorted(
+                                k for k in data if k in svc._MEAL_EDITABLE),
+                            "logged_on": log.get("logged_on"),
+                            "amount": log.get("amount")})
+        return jsonify(success=True, message="Meal log updated", meal_log=log)
+    except ValueError as ve:
+        return _fail(ve, 409 if "cannot be changed here" in str(ve) else 400)
+    except Exception as e:
+        logger.exception("staff/meals PATCH failed")
         return _fail(e, 500)

@@ -2336,6 +2336,27 @@ function updateCheckoutModal(roomNumber) {
   const checkoutRoomPrice = document.getElementById("checkout-room-price");
   if (checkoutRoomPrice) {
     checkoutRoomPrice.textContent = "₹" + roomInfo.guest.price;
+    // A price set "from tomorrow" has not reached tonight yet. Say where it
+    // starts, or the tile shows a rate tonight is not being charged at.
+    const RC = window.CibaraRateChange;
+    const segs = roomInfo.guest.pre_transfer_charges || [];
+    const lastSeg = segs[segs.length - 1];
+    const frozenTo = parseInt(roomInfo.guest.transfer_day_offset, 10) || 0;
+    const charged = (parseInt(roomInfo.renewal_count, 10) || 0) + 1;
+    if (lastSeg && lastSeg.kind === RC.RATE_CHANGE_KIND && frozenTo >= charged) {
+      const from = document.createElement("span");
+      // inline-block: its own line, and clear of the tile's dotted
+      // "editable" underline, which does not reach atomic inline boxes.
+      from.style.cssText = "display:inline-block; width:100%; font-size:0.68rem;" +
+        " font-weight:500; color:#94a3b8;";
+      from.textContent = "from night " + (frozenTo + 1);
+      checkoutRoomPrice.appendChild(from);
+      const night = RC.currentNight(roomInfo.checkin_time, RC.istNow());
+      checkoutRoomPrice.title = (night === frozenTo ? "Tonight" : "Night " + frozenTo) +
+        " stays at \u20b9" + lastSeg.price;
+    } else {
+      checkoutRoomPrice.removeAttribute("title");
+    }
   }
 
   // Tariff correction — admin only. The server gates on payment.edit as well;
@@ -3684,72 +3705,257 @@ function openCheckinTimeEditor(roomNumber) {
 }
 window.openCheckinTimeEditor = openCheckinTimeEditor;
 
-// ── Admin tariff correction on an active stay ─────────────────────────────
-// Drives the #rp-backdrop modal in index.html and POSTs /edit_room_price,
-// which re-prices the nights already accrued at this room's rate and moves
-// the balance to match.
+// ── Mid-stay price change planner (twin of services/rate_segments.py) ─────
+// The Edit Room Price modal previews exactly what /edit_room_price will do:
+// the night the new price starts, the balance change, or the reason the
+// server will refuse. It is a line-for-line port so the preview cannot
+// promise one thing while the server writes another. The server stays
+// authoritative; its answer is what gets written.
+//
+// Pure and DOM-free, so tests/test_state_ports.js runs it straight out of
+// this file against tests/rate_change_cases.json, the same cases the Python
+// runs. Change both sides, and add a case, in the same commit.
+window.CibaraRateChange = (function () {
+  const EFFECTIVE_CHOICES = ["today", "tomorrow"];
+  const RATE_CHANGE_KIND = "rate_change";
+
+  function _int(v) {
+    return parseInt(v, 10) || 0;
+  }
+
+  // "YYYY-MM-DD HH:MM" (anything after the minutes is ignored) as minutes on
+  // a naive clock, or null. Accepts what the server's
+  // strptime(s[:16], "%Y-%m-%d %H:%M") accepts for every stamp this app
+  // writes, including rejecting impossible dates such as 2026-02-30.
+  function _stampMinutes(s) {
+    const m = /^(\d{4})-(\d{1,2})-(\d{1,2}) (\d{1,2}):(\d{1,2})$/
+      .exec(String(s || "").slice(0, 16));
+    if (!m) return null;
+    const y = +m[1], mo = +m[2] - 1, d = +m[3], h = +m[4], mi = +m[5];
+    if (h > 23 || mi > 59) return null;
+    const at = new Date(Date.UTC(y, mo, d, h, mi));
+    if (at.getUTCMonth() !== mo || at.getUTCDate() !== d) return null;
+    return at.getTime() / 60000;
+  }
+
+  // IST wall clock as a stamp. The server counts nights on IST, so the
+  // preview must too, whatever timezone this device is set to.
+  function istNow() {
+    return new Date(Date.now() + 330 * 60000).toISOString().slice(0, 16).replace("T", " ");
+  }
+
+  // The night the clock is in, 1-based: floor((now - check-in) / 24h) + 1.
+  // null when the check-in time is unreadable.
+  function currentNight(checkinTime, now) {
+    const ci = _stampMinutes(checkinTime);
+    const at = _stampMinutes(now);
+    if (ci === null || at === null) return null;
+    return Math.max(1, Math.floor((at - ci) / 1440) + 1);
+  }
+
+  function _copySegments(guest) {
+    return (guest.pre_transfer_charges || []).map(function (s) {
+      return Object.assign({}, s);
+    });
+  }
+
+  function _closeAt(guest, room, boundary, kind) {
+    const price = _int(guest.price);
+    const offset = _int(guest.transfer_day_offset);
+    const segments = _copySegments(guest);
+    const days = boundary - offset;
+    if (days > 0) {
+      const segment = { days: days, price: price, total: price * days, from_room: room };
+      if (kind) segment.kind = kind;
+      segments.push(segment);
+    }
+    return segments;
+  }
+
+  // Returns the plan, or { error } carrying the server's refusal wording.
+  function plan(room, guest, renewalCount, newPrice, effective, night) {
+    if (EFFECTIVE_CHOICES.indexOf(effective) === -1) {
+      throw new Error("effective must be one of " + EFFECTIVE_CHOICES.join(", "));
+    }
+    guest = guest || {};
+    const oldPrice = _int(guest.price);
+    const offset = _int(guest.transfer_day_offset);
+    let segments = _copySegments(guest);
+    const accrued = _int(renewalCount) + 1;
+    const clock = night || accrued;
+    const boundary = effective === "today" ? clock - 1 : clock;
+
+    const segDays = segments.map(function (s) { return _int(s.days); });
+    if (segDays.some(function (d) { return d < 0; }) ||
+        segDays.reduce(function (a, b) { return a + b; }, 0) !== offset) {
+      return { error: "This stay's earlier price changes do not add up, so the new " +
+        "price cannot be placed safely. Correct the tariff from the " +
+        "bill's Edit Price after checkout." };
+    }
+    if (boundary > accrued) {
+      if (effective === "tomorrow" && boundary === accrued + 1) {
+        return { error: "Tonight's rent (night " + clock + ") has not been renewed yet. " +
+          "Renew it first, then set the new price from tomorrow." };
+      }
+      return { error: "Rent has been charged up to night " + accrued + ", but the stay is " +
+        "on night " + clock + ". Renew the pending rent first, then set the " +
+        "new price." };
+    }
+    if (offset > accrued) {
+      return { error: "Earlier price changes cover " + offset + " nights, but rent has been " +
+        "charged for only " + accrued + ". Renew the pending rent first, then " +
+        "set the new price." };
+    }
+
+    let delta;
+    if (boundary >= offset) {
+      if (newPrice === oldPrice) return { error: "That is already the current price." };
+      segments = _closeAt(guest, room, boundary, RATE_CHANGE_KIND);
+      delta = (newPrice - oldPrice) * (accrued - boundary);
+    } else {
+      delta = (newPrice - oldPrice) * (accrued - offset);
+      let cursor = offset;
+      while (cursor > boundary) {
+        const seg = segments[segments.length - 1];
+        const days = _int(seg.days);
+        if (days === 0) {
+          segments.pop();
+          continue;
+        }
+        const price = _int(seg.price);
+        if (String(seg.from_room) !== String(room)) {
+          return { error: "Night " + cursor + " is billed at Room " + seg.from_room + "'s " +
+            "rate from the room shift, so the new price can start " +
+            "from night " + (cursor + 1) + " at the earliest." };
+        }
+        if (seg.kind !== RATE_CHANGE_KIND) {
+          return { error: "Night " + cursor + " was re-rated when an add-on raised the " +
+            "nightly price, so the new price can start from night " +
+            (cursor + 1) + " at the earliest." };
+        }
+        const take = Math.min(days, cursor - boundary);
+        delta += (newPrice - price) * take;
+        cursor -= take;
+        if (take === days) {
+          segments.pop();
+        } else {
+          seg.days = days - take;
+          seg.total = price * (days - take);
+        }
+      }
+    }
+
+    return {
+      boundary: boundary,
+      first_new_night: boundary + 1,
+      nights_repriced: accrued - boundary,
+      balance_delta: delta,
+      segments: segments,
+      offset: boundary,
+    };
+  }
+
+  return {
+    RATE_CHANGE_KIND: RATE_CHANGE_KIND,
+    istNow: istNow,
+    currentNight: currentNight,
+    plan: plan,
+  };
+})();
+// ── Admin tariff change on an active stay ─────────────────────────────────
+// Drives the #rp-backdrop modal in index.html and POSTs /edit_room_price.
+// The operator enters a price and chooses whether it starts today or
+// tomorrow; nights before that keep the rate they were charged at.
 //
 // This was three chained window.prompt()/confirm() dialogs. They carried the
 // browser's "127.0.0.1:5000 says" chrome into an operator-facing screen, and
 // worse, they could only state the balance impact as text in a confirm the
-// operator had already committed to reading past. The modal shows that number
-// live, recomputed on every keystroke, before anything is sent.
+// operator had already committed to reading past. The modal shows the outcome
+// live, from the same planner the server runs (CibaraRateChange above), and
+// shows the server's refusal wording before anything is sent.
 let _rpRoom = null;
 
-function _rpNightsAtRate(info) {
-  // The same count the server uses (see routes/rooms.py edit_room_price):
-  // nights consumed so far, minus those already billed at an earlier room's
-  // rate on a transferred stay. Duplicated here ONLY to preview the number —
-  // the server recomputes it and its answer is what gets written.
-  return Math.max(
-    0,
-    (parseInt(info.renewal_count, 10) || 0) + 1 -
-      (parseInt((info.guest || {}).transfer_day_offset, 10) || 0)
-  );
+function _rpEffective() {
+  const picked = document.querySelector('#rp-backdrop input[name="rp-effective"]:checked');
+  return picked ? picked.value : "";
 }
 
-function _rpRenderImpact() {
+// "Nights 1-2 stay at ₹400. " when every night before the new price shares
+// one rate (the usual case), otherwise a plain statement that each keeps its
+// own. The plan's segments cover exactly nights 1..boundary.
+function _rpKeptText(plan) {
+  if (plan.boundary < 1) return "";
+  const rates = [];
+  plan.segments.forEach(function (s) {
+    const price = parseInt(s.price, 10) || 0;
+    if ((parseInt(s.days, 10) || 0) > 0 && rates.indexOf(price) === -1) rates.push(price);
+  });
+  if (plan.boundary === 1) return "Night 1 stays at \u20b9" + rates[0] + ". ";
+  if (rates.length === 1) return "Nights 1-" + plan.boundary + " stay at \u20b9" + rates[0] + ". ";
+  return "Nights 1-" + plan.boundary + " keep the rates they were charged at. ";
+}
+
+// Re-derives everything the modal shows from its inputs: the night numbers
+// on the two choices, the outcome line, and whether Update is allowed.
+function _rpSync() {
+  const info = _rpRoom ? rooms[_rpRoom] : null;
   const box = document.getElementById("rp-impact");
   const input = document.getElementById("rp-input");
-  const info = _rpRoom ? rooms[_rpRoom] : null;
-  if (!box || !input || !info) return;
+  const saveBtn = document.getElementById("rp-save");
+  if (!info || !info.guest || !box || !input || !saveBtn) return;
 
-  const oldPrice = parseInt((info.guest || {}).price, 10) || 0;
+  const RC = window.CibaraRateChange;
+  const clockNight = RC.currentNight(info.checkin_time, RC.istNow());
+  const night = clockNight || (parseInt(info.renewal_count, 10) || 0) + 1;
+  const todaySub = document.getElementById("rp-when-today-sub");
+  const tomorrowSub = document.getElementById("rp-when-tomorrow-sub");
+  if (todaySub) todaySub.textContent = "night " + night;
+  if (tomorrowSub) tomorrowSub.textContent = "night " + (night + 1);
+
+  const effective = _rpEffective();
+  document.querySelectorAll("#rp-backdrop .rp-when-opt").forEach(function (opt) {
+    const radio = opt.querySelector("input");
+    opt.classList.toggle("is-selected", !!radio && radio.value === effective);
+  });
+
+  const show = function (bg, color, text) {
+    box.style.background = bg;
+    box.style.color = color;
+    box.textContent = text;
+  };
+  saveBtn.disabled = true;
+
   const raw = String(input.value).trim();
   const newPrice = parseInt(raw, 10);
-
   if (!raw || isNaN(newPrice) || newPrice <= 0) {
-    box.style.background = "#f8fafc";
-    box.style.color = "#64748b";
-    box.textContent = "Enter a price to see the balance impact.";
+    show("#f8fafc", "#64748b", "Enter a price to see the balance impact.");
     return;
   }
-  if (newPrice === oldPrice) {
-    box.style.background = "#f8fafc";
-    box.style.color = "#64748b";
-    box.textContent = "Same as the current price \u2014 nothing will change.";
+  if (!effective) {
+    show("#f8fafc", "#64748b", "Choose whether the new price starts today or tomorrow.");
     return;
   }
 
-  const nights = _rpNightsAtRate(info);
-  const delta = (newPrice - oldPrice) * nights;
+  const plan = RC.plan(String(_rpRoom), info.guest, info.renewal_count,
+                       newPrice, effective, clockNight);
+  if (plan.error) {
+    show("#fffbeb", "#b45309", plan.error);
+    return;
+  }
+
   const bal = parseInt(info.balance, 10) || 0;
-  const nightWord = nights === 1 ? "night" : "nights";
-
-  if (delta === 0) {
-    box.style.background = "#f8fafc";
-    box.style.color = "#64748b";
-    box.textContent = "No nights accrued yet \u2014 the balance does not change.";
-    return;
-  }
-  const up = delta > 0;
-  box.style.background = up ? "#fef2f2" : "#f0fdf4";
-  box.style.color      = up ? "#b91c1c" : "#15803d";
-  box.innerHTML =
-    "<strong>" + nights + " " + nightWord + "</strong> already accrued at \u20b9" +
-    oldPrice + ", re-priced to \u20b9" + newPrice + ".<br>" +
-    "Balance " + (up ? "increases" : "decreases") + " by <strong>\u20b9" +
-    Math.abs(delta) + "</strong> (\u20b9" + bal + " \u2192 \u20b9" + (bal + delta) + ").";
+  const delta = plan.balance_delta;
+  show(delta > 0 ? "#fef2f2" : delta < 0 ? "#f0fdf4" : "#f8fafc",
+       delta > 0 ? "#b91c1c" : delta < 0 ? "#15803d" : "#334155",
+       _rpKeptText(plan) + "Night " + plan.first_new_night + " (" + effective +
+       ") onward: \u20b9" + newPrice + ". ");
+  const outcome = document.createElement("strong");
+  outcome.textContent = delta === 0
+    ? "Balance unchanged (\u20b9" + bal + ")."
+    : "Balance " + (delta > 0 ? "increases" : "decreases") + " by \u20b9" +
+      Math.abs(delta) + " (\u20b9" + bal + " to \u20b9" + (bal + delta) + ").";
+  box.appendChild(outcome);
+  saveBtn.disabled = false;
 }
 
 function _rpClose() {
@@ -3766,25 +3972,30 @@ function startEditRoomPrice(roomNumber) {
 
   _rpRoom = roomNumber;
   const oldPrice = parseInt(info.guest.price, 10) || 0;
-  const nights = _rpNightsAtRate(info);
+  const nights = (parseInt(info.renewal_count, 10) || 0) + 1;
 
   const ctx = document.getElementById("rp-context");
   if (ctx) {
     ctx.innerHTML =
-      "<strong>Room " + roomNumber + "</strong> \u00b7 " +
-      (info.guest.name || "Guest") + "<br>" +
+      "<strong>Room " + escapeHtmlInline(roomNumber) + "</strong> \u00b7 " +
+      escapeHtmlInline(info.guest.name || "Guest") + "<br>" +
       "Currently \u20b9" + oldPrice + " per night \u00b7 " +
-      nights + " night" + (nights === 1 ? "" : "s") + " accrued";
+      nights + " night" + (nights === 1 ? "" : "s") + " charged so far";
   }
 
   const input = document.getElementById("rp-input");
   if (input) input.value = String(oldPrice);
+  // No default: today and tomorrow bill different nights, and a preselected
+  // answer would be accepted without being read.
+  document.querySelectorAll('#rp-backdrop input[name="rp-effective"]').forEach(function (r) {
+    r.checked = false;
+  });
   const reason = document.getElementById("rp-reason");
   if (reason) reason.value = "";
   const msg = document.getElementById("rp-msg");
   if (msg) msg.textContent = "";
 
-  _rpRenderImpact();
+  _rpSync();
   bd.style.display = "flex";
   if (input) { input.focus(); input.select(); }
 }
@@ -3795,18 +4006,15 @@ async function _rpSave() {
   const input = document.getElementById("rp-input");
   const msg = document.getElementById("rp-msg");
   const saveBtn = document.getElementById("rp-save");
-  if (!info || !input) return;
+  // Disabled while the preview has nothing valid to send and while a save is
+  // in flight. Enter in the price box lands here too, so check it.
+  if (!info || !input || !saveBtn || saveBtn.disabled) return;
 
   const setMsg = (t) => { if (msg) msg.textContent = t || ""; };
-  const oldPrice = parseInt(info.guest.price, 10) || 0;
-  const newPrice = parseInt(String(input.value).trim(), 10);
-
-  if (isNaN(newPrice) || newPrice <= 0) { setMsg("Enter a valid price."); return; }
-  if (newPrice === oldPrice) { setMsg("That is already the current price."); return; }
-
   const room = _rpRoom;
   setMsg("");
-  if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = "Saving\u2026"; }
+  saveBtn.disabled = true;
+  saveBtn.textContent = "Saving\u2026";
 
   try {
     const res = await apiFetch("/edit_room_price", {
@@ -3814,7 +4022,8 @@ async function _rpSave() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         room: String(room),
-        room_price_per_night: newPrice,
+        room_price_per_night: parseInt(String(input.value).trim(), 10),
+        effective: _rpEffective(),
         reason: (document.getElementById("rp-reason")?.value || "").trim(),
       }),
     });
@@ -3822,8 +4031,14 @@ async function _rpSave() {
     if (!data.success) { setMsg(data.message || "Could not update price."); return; }
 
     // Reflect locally so the checkout modal behind is correct immediately,
-    // then let the background fetch reconcile with the server.
-    info.guest.price = data.room_price_per_night;
+    // then let the background fetch reconcile with the server. The shift
+    // date fields go because the server cleared them (see /edit_room_price).
+    const guest = info.guest;
+    guest.price = data.room_price_per_night;
+    guest.pre_transfer_charges = data.pre_transfer_charges;
+    guest.transfer_day_offset = data.transfer_day_offset;
+    delete guest.last_transfer_date;
+    delete guest.transfer_day_prebilled;
     info.balance = data.balance;
     _rpClose();
     showNotification(data.message, "success");
@@ -3834,14 +4049,20 @@ async function _rpSave() {
     console.error("[Rooms] edit_room_price failed:", err);
     setMsg("Network error \u2014 the price was not changed.");
   } finally {
-    if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = "Update price"; }
+    saveBtn.textContent = "Update price";
+    // Still open means the save did not go through: re-derive the button
+    // from the inputs. A closed modal re-derives it when it next opens.
+    if (_rpRoom) _rpSync();
   }
 }
 
 // Wired once. The modal markup is static in index.html, so there is nothing
 // to re-bind when it opens.
 document.addEventListener("DOMContentLoaded", function () {
-  document.getElementById("rp-input")?.addEventListener("input", _rpRenderImpact);
+  document.getElementById("rp-input")?.addEventListener("input", _rpSync);
+  document.querySelectorAll('#rp-backdrop input[name="rp-effective"]').forEach(function (r) {
+    r.addEventListener("change", _rpSync);
+  });
   document.getElementById("rp-cancel")?.addEventListener("click", _rpClose);
   document.getElementById("rp-save")?.addEventListener("click", _rpSave);
   document.getElementById("rp-backdrop")?.addEventListener("click", function (ev) {

@@ -677,6 +677,11 @@ def create_advance(staff_id: str, amount, date: str, payment_method: str,
     exp_ref = _expenses_ref().document()
     adv_ref = _adv_ref().document()
     adv_doc["expense_doc_id"] = exp_ref.id
+    # Back-link, the mirror of expense_doc_id above. The Transactions tab
+    # holds an expense row and needs the advance that owns it; without this
+    # the only route back was a collection query. Salary and meal expenses
+    # have carried salary_payment_id / meal_log_id from the start.
+    expense_doc["advance_id"] = adv_ref.id
 
     batch = db.batch()
     batch.set(exp_ref, expense_doc)
@@ -1204,6 +1209,383 @@ def delete_meal_log(log_id: str) -> dict:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# Payroll rows seen from the Transactions tab — resolve, amend
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# Every payroll payout writes two documents in one batch: the payroll record
+# (advance / salary payment / meal log) and an `expenses` row, linked both
+# ways. The Transactions tab lists the expense side, so acting on a row there
+# means finding the payroll record that owns it and changing BOTH, or the
+# outstanding-advance arithmetic and the cash counter drift apart.
+#
+# routes/reports.py refuses to edit or delete these rows through the generic
+# expense endpoints for exactly that reason. It stays refusing: the functions
+# below are the one door, and they go through the payroll record first.
+#
+# What may be amended is not the same for all three, and the line is drawn at
+# money that was DERIVED:
+#
+#   advance    an amount somebody chose. Amount, date, note and money source
+#              are all correctable.
+#   salary     gross = days worked x wage, net = gross + adjustment - advance
+#              - meals, and period_start/period_end decide which attendance
+#              days the payment marks as paid. None of that can be retyped
+#              here without the figures ceasing to be re-derivable, so only
+#              the payment details move: when it was paid, from where, and
+#              the note. Changing the money means reversing the payout and
+#              paying again, which recomputes it from attendance.
+#   meals      amount = days present x meal rate, over a fixed set of dates.
+#              Same rule as salary: details yes, money no.
+
+_ADVANCE_EDITABLE = ("amount", "date", "note", "payment_method", "expense_type")
+_SALARY_EDITABLE = ("paid_on", "payment_method", "expense_type",
+                    "adjustment_note")
+_MEAL_EDITABLE = ("logged_on", "payment_method", "expense_type", "note")
+
+# Fields whose value is computed from attendance. Named individually so the
+# refusal can say which one was sent rather than "something is not editable".
+_DERIVED_FIELDS = (
+    "amount", "net_paid", "gross", "adjustment", "advance_deducted",
+    "meal_deducted", "days_worked", "full_days", "half_days",
+    "period_start", "period_end", "meal_dates", "meal_days", "meal_rate",
+)
+
+_REPAY_HINT = ("Reverse the payment and pay again — the amount is worked out "
+               "from attendance, so it has to be recomputed, not retyped.")
+_RELOG_HINT = ("Delete the meal log and log the days again — the amount is "
+               "the days present times the meal rate.")
+
+
+def _payroll_kinds():
+    """(kind, id field on the expense row, marker field, collection ref)."""
+    return (
+        ("advance", "advance_id", "staff_advance", _adv_ref),
+        ("salary", "salary_payment_id", "staff_salary_payment", _sal_ref),
+        ("meals", "meal_log_id", "staff_meal_log", _meal_ref),
+    )
+
+
+def payroll_record_for_expense(expense_doc_id: str) -> Optional[dict]:
+    """The payroll record behind one Transactions-tab expense row.
+
+    Returns None when the row is an ordinary expense — that is the answer,
+    not an error, and it is what tells the caller to use the normal expense
+    actions instead.
+
+    Resolution is two hops. The id stamped on the expense row when it was
+    written is the fast path. Advances recorded before that stamp existed
+    fall back to a query on the payroll collection for expense_doc_id ==
+    this row, which is a single-field equality and needs no index.
+    """
+    if not expense_doc_id:
+        return None
+    snap = _expenses_ref().document(expense_doc_id).get()
+    if not snap.exists:
+        raise ValueError("That expense row no longer exists — refresh.")
+    exp = snap.to_dict() or {}
+    exp["_doc_id"] = expense_doc_id
+
+    for kind, id_field, marker, ref in _payroll_kinds():
+        if not (exp.get(marker) or exp.get(id_field)):
+            continue
+        rec = None
+        rec_id = exp.get(id_field)
+        if rec_id:
+            rec_snap = ref().document(str(rec_id)).get()
+            if rec_snap.exists:
+                rec = _doc_with_id(rec_snap)
+        if rec is None:
+            # Legacy row, or the payroll doc was removed without its expense.
+            found = list(ref().where(
+                filter=FieldFilter("expense_doc_id", "==", expense_doc_id)
+            ).limit(1).stream())
+            if found:
+                rec = _doc_with_id(found[0])
+        if rec is None:
+            raise ValueError(
+                "This row is linked to Staff payroll but its payroll record "
+                "is missing. Delete it from the Staff ledger.")
+        return {
+            "kind": kind,
+            "id": rec["id"],
+            "staff_id": rec.get("staff_id", "") or exp.get("staff_id", ""),
+            "staff_name": rec.get("staff_name", "") or exp.get("staff_name", ""),
+            "record": rec,
+            "expense": exp,
+            "editable": list({"advance": _ADVANCE_EDITABLE,
+                              "salary": _SALARY_EDITABLE,
+                              "meals": _MEAL_EDITABLE}[kind]),
+            "locked_hint": {"advance": "",
+                            "salary": _REPAY_HINT,
+                            "meals": _RELOG_HINT}[kind],
+        }
+    return None
+
+
+def _reject_derived(fields: dict, hint: str):
+    """Refuse an attempt to retype a figure that is computed."""
+    sent = [k for k in _DERIVED_FIELDS if k in fields]
+    if sent:
+        raise ValueError("{} cannot be changed here. {}".format(
+            sent[0].replace("_", " ").capitalize(), hint))
+
+
+def _money_source_changes(fields: dict, rec: dict) -> dict:
+    """Validated payment_method / expense_type, or {} when neither was sent."""
+    if "payment_method" not in fields and "expense_type" not in fields:
+        return {}
+    method = str(fields.get("payment_method",
+                            rec.get("payment_method", "cash")) or "")
+    etype = str(fields.get("expense_type",
+                           rec.get("expense_type", "transaction")) or "")
+    _validate_money_source(method, etype)
+    return {"payment_method": method, "expense_type": etype}
+
+
+def _edit_stamp(user: Optional[dict]) -> dict:
+    return {"updated_at": _now_utc(), "updated_by": _user_stamp(user)}
+
+
+def _stage_expense_side(batch, expense_doc_id, updates, new_amount, new_type):
+    """Stage the linked expense row's update and correct the cash counter.
+
+    totals/current_totals.expenses holds only rows whose expense_type is
+    "transaction" — money that left the counter. An edit can move the amount,
+    the type, or both, so the correction is what the row contributes now minus
+    what it contributed before. Taking the amount difference alone would leave
+    the counter carrying a row that has since become an account payment.
+
+    The old figures are read from the EXPENSE row rather than the payroll
+    record: the counter was incremented from that row, and on a stay where
+    the two ever disagree the counter has to be unwound by what went in.
+    """
+    if not expense_doc_id:
+        return
+    exp_snap = _expenses_ref().document(expense_doc_id).get()
+    if not exp_snap.exists:
+        # Nothing to update and nothing in the counter to correct: this
+        # payroll record's expense row is already gone.
+        return
+    exp = exp_snap.to_dict() or {}
+    if updates:
+        batch.update(_expenses_ref().document(expense_doc_id), updates)
+    before = int(exp.get("amount", 0) or 0) if \
+        exp.get("expense_type") == "transaction" else 0
+    after = int(new_amount or 0) if new_type == "transaction" else 0
+    _counter_increment(batch, after - before)
+
+
+def update_advance(advance_id: str, fields: dict,
+                   user: Optional[dict] = None) -> dict:
+    """
+    Correct an advance and its linked expense row in one batch.
+
+    Refused when the new amount is below what salary payments have already
+    recovered from it. The outstanding advance is derived from the raw
+    advance and deduction history, never stored, so cutting an advance under
+    what was deducted makes the balance negative — which reads on the Staff
+    screen as the business owing the staff member money it does not.
+    """
+    fields = dict(fields or {})
+    snap = _adv_ref().document(advance_id).get()
+    if not snap.exists:
+        raise ValueError("Advance not found.")
+    adv = _doc_with_id(snap)
+    is_opening = bool(adv.get("opening"))
+
+    changes = {}
+    amount = int(adv.get("amount", 0) or 0)
+    if "amount" in fields:
+        try:
+            amount = int(round(float(fields["amount"])))
+        except (TypeError, ValueError):
+            raise ValueError("Advance amount must be a number.")
+        if amount <= 0:
+            raise ValueError("Advance amount must be above zero.")
+        if amount > MAX_ADVANCE:
+            raise ValueError("Advance amount looks too large — check it.")
+        changes["amount"] = amount
+
+    date = str(adv.get("date") or "")
+    if "date" in fields:
+        date = str(fields["date"] or "").strip()
+        if not _valid_date(date):
+            raise ValueError("Date must be YYYY-MM-DD.")
+        if date > _ist_today():
+            raise ValueError("An advance cannot be dated in the future.")
+        changes["date"] = date
+
+    note = str(adv.get("note") or "")
+    if "note" in fields:
+        note = str(fields["note"] or "").strip()[:120]
+        changes["note"] = note
+
+    source = {}
+    if is_opening:
+        # An opening balance came off the paper books: no expense row was
+        # written and no cash moved, so there is no money source to set.
+        if "payment_method" in fields or "expense_type" in fields:
+            raise ValueError(
+                "An opening balance was carried over from the books, so it "
+                "has no payment method.")
+    else:
+        source = _money_source_changes(fields, adv)
+        changes.update(source)
+
+    if not changes:
+        raise ValueError("Nothing to change.")
+
+    staff_id = adv.get("staff_id", "")
+    probe = [a for a in advances_for(staff_id) if a.get("id") != advance_id]
+    probe.append(dict(adv, **changes))
+    if ledger.outstanding_advance(probe, salary_payments_for(staff_id)) < 0:
+        raise ValueError(
+            "₹{} is less than what has already been deducted from this "
+            "advance in a salary payment. Reverse that payment first, then "
+            "change the advance.".format(amount))
+
+    changes.update(_edit_stamp(user))
+
+    batch = db.batch()
+    batch.update(_adv_ref().document(advance_id), changes)
+
+    exp_id = None if is_opening else adv.get("expense_doc_id")
+    if exp_id:
+        desc = "Staff Advance — {}".format(adv.get("staff_name", ""))
+        if note:
+            desc += " ({})".format(note)
+        exp_updates = {"amount": amount, "date": date, "description": desc}
+        exp_updates.update(source)
+        exp_updates.update(_edit_stamp(user))
+        _stage_expense_side(
+            batch, exp_id, exp_updates, amount,
+            source.get("expense_type", adv.get("expense_type", "transaction")))
+    batch.commit()
+
+    out = dict(adv, **changes)
+    logger.info("staff: advance %s edited (%s) -> ₹%s on %s via %s/%s",
+                advance_id, adv.get("staff_name"), amount, date,
+                out.get("payment_method"), out.get("expense_type"))
+    return out
+
+
+def update_salary_payment(payment_id: str, fields: dict,
+                          user: Optional[dict] = None) -> dict:
+    """
+    Correct a settled payout's payment DETAILS: the date the money left, the
+    source it left from, and the adjustment note.
+
+    Every figure on a payout is derived — see _DERIVED_FIELDS and the block
+    comment above — so an attempt to send one is refused with the reversal
+    route rather than quietly ignored. Changing paid_on moves the expense row
+    to that day in the cash book, which is the point: it is how a payout
+    entered on the wrong day is put right.
+    """
+    fields = dict(fields or {})
+    _reject_derived(fields, _REPAY_HINT)
+
+    snap = _sal_ref().document(payment_id).get()
+    if not snap.exists:
+        raise ValueError("Salary payment not found.")
+    pay = _doc_with_id(snap)
+
+    changes = {}
+    paid_on = str(pay.get("paid_on") or "")
+    if "paid_on" in fields:
+        paid_on = str(fields["paid_on"] or "").strip()
+        if not _valid_date(paid_on):
+            raise ValueError("Payment date must be YYYY-MM-DD.")
+        if paid_on > _ist_today():
+            raise ValueError("A salary cannot be dated in the future.")
+        changes["paid_on"] = paid_on
+
+    if "adjustment_note" in fields:
+        changes["adjustment_note"] = str(fields["adjustment_note"] or "").strip()[:120]
+
+    source = _money_source_changes(fields, pay)
+    changes.update(source)
+
+    if not changes:
+        raise ValueError("Nothing to change.")
+    changes.update(_edit_stamp(user))
+
+    batch = db.batch()
+    batch.update(_sal_ref().document(payment_id), changes)
+
+    # net_paid of 0 (a payout fully adjusted against an advance) never wrote
+    # an expense row, so there is nothing on the expense side to move.
+    exp_id = pay.get("expense_doc_id")
+    if exp_id:
+        exp_updates = {"date": paid_on}
+        exp_updates.update(source)
+        exp_updates.update(_edit_stamp(user))
+        _stage_expense_side(
+            batch, exp_id, exp_updates, int(pay.get("net_paid", 0) or 0),
+            source.get("expense_type", pay.get("expense_type", "transaction")))
+    batch.commit()
+
+    out = dict(pay, **changes)
+    logger.info("staff: salary payment %s edited (%s) paid_on=%s via %s/%s",
+                payment_id, pay.get("staff_name"), paid_on,
+                out.get("payment_method"), out.get("expense_type"))
+    return out
+
+
+def update_meal_log(log_id: str, fields: dict,
+                    user: Optional[dict] = None) -> dict:
+    """
+    Correct a meal log's payment details. The amount and the days it covers
+    are derived from attendance and the meal rate, so they are not editable
+    here — delete the log and log the days again.
+    """
+    fields = dict(fields or {})
+    _reject_derived(fields, _RELOG_HINT)
+
+    snap = _meal_ref().document(log_id).get()
+    if not snap.exists:
+        raise ValueError("Meal log not found.")
+    log = _doc_with_id(snap)
+
+    changes = {}
+    logged_on = str(log.get("logged_on") or "")
+    if "logged_on" in fields:
+        logged_on = str(fields["logged_on"] or "").strip()
+        if not _valid_date(logged_on):
+            raise ValueError("Date must be YYYY-MM-DD.")
+        if logged_on > _ist_today():
+            raise ValueError("A meal log cannot be dated in the future.")
+        changes["logged_on"] = logged_on
+
+    if "note" in fields:
+        changes["note"] = str(fields["note"] or "").strip()[:120]
+
+    source = _money_source_changes(fields, log)
+    changes.update(source)
+
+    if not changes:
+        raise ValueError("Nothing to change.")
+    changes.update(_edit_stamp(user))
+
+    batch = db.batch()
+    batch.update(_meal_ref().document(log_id), changes)
+    exp_id = log.get("expense_doc_id")
+    if exp_id:
+        exp_updates = {"date": logged_on}
+        exp_updates.update(source)
+        exp_updates.update(_edit_stamp(user))
+        _stage_expense_side(
+            batch, exp_id, exp_updates, int(log.get("amount", 0) or 0),
+            source.get("expense_type", log.get("expense_type", "transaction")))
+    batch.commit()
+
+    out = dict(log, **changes)
+    logger.info("staff: meal log %s edited (%s) on %s via %s/%s",
+                log_id, log.get("staff_name"), logged_on,
+                out.get("payment_method"), out.get("expense_type"))
+    return out
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # Combined payloads for the UI
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -1316,42 +1698,78 @@ def _month_add(ym: str, n: int) -> str:
     return "{:04d}-{:02d}".format(y, m)
 
 
-def payroll_analytics(months: int = 6) -> dict:
+def payroll_analytics(months: int = 6, month: str = "") -> dict:
     """
-    Everything the Insights tab shows, in one payload:
+    Everything the Insights tab shows for ONE month, in one payload.
 
-    months  last N months of staff cash-out — advances given plus net
-            salaries paid in that month. Advances are counted when given
-            and salaries net of deductions, so a rupee is never counted
-            twice across the two rows.
-    totals  outstanding advances, active staff, this month's cash-out,
-            today's present count.
-    staff   per active staff: this-month attendance breakdown, attendance
-            rate over elapsed days, wages EARNED so far this month (days ×
-            current wage — an estimate if the wage changed mid-month),
-            outstanding advance and paid-until.
+    month   "YYYY-MM"; defaults to the current month. A past month is
+            reported over its whole length; the current month up to today.
+            A future month is refused (there is nothing to report yet).
+    months  length of the cash-out trend ENDING at `month`, so the chart
+            always frames the month being looked at.
+
+    months_out  advances given plus net salaries paid per month. Advances
+            count when given and salaries net of deductions, so a rupee is
+            never counted twice across the two rows.
+    totals  the selected month's cash-out and wages, plus advances still
+            outstanding and today's present count (both are "as of now",
+            not month figures, and are labelled that way in the UI).
+    staff   per staff, for the selected month: attendance breakdown, rate
+            over the days elapsed in it, wages EARNED (shifts x current wage,
+            an estimate if the wage changed mid-month), advances taken and
+            salary paid in the month, current outstanding advance and
+            paid-until.
+
+            Shifts and days are deliberately separate. Wages follow SHIFTS,
+            because a day-and-night staff member who covers both is paid for
+            both. Attendance follows DAYS: the staff who rotate (two weeks of
+            days, two weeks of nights) work one shift a day and must read as
+            100% present, not 50%, and a day with both shifts covered is one
+            day present plus cover, not a 200% day.
+    highlights  who did best and what needs attention, decided here so the
+            table and the cards can never rank staff differently.
     """
+    from calendar import monthrange
     from concurrent.futures import ThreadPoolExecutor
 
     months = max(1, min(int(months or 6), 24))
     today = _ist_today()
     this_month = today[:7]
-    month_start = this_month + "-01"
+
+    sel_month = (month or "").strip() or this_month
+    try:
+        datetime.strptime(sel_month + "-01", "%Y-%m-%d")
+    except (TypeError, ValueError):
+        raise ValueError("month must be YYYY-MM.")
+    if sel_month > this_month:
+        raise ValueError("That month has not started yet.")
+
+    is_current = sel_month == this_month
+    period_start = sel_month + "-01"
+    if is_current:
+        period_end = today
+        # Days the staff could have worked so far. The denominator of every
+        # attendance rate below, so a month is never judged by days that
+        # have not happened.
+        elapsed_days = int(today[8:10])
+    else:
+        elapsed_days = monthrange(int(sel_month[:4]), int(sel_month[5:7]))[1]
+        period_end = "{}-{:02d}".format(sel_month, elapsed_days)
 
     # Independent Firestore reads run in parallel — latency, not compute,
     # dominates this endpoint.
     with ThreadPoolExecutor(max_workers=4) as ex:
         f_adv = ex.submit(_all_advances)
         f_pay = ex.submit(_all_salary_payments)
-        f_att = ex.submit(attendance_range, month_start, today)
+        f_att = ex.submit(attendance_range, period_start, period_end)
         f_staff = ex.submit(list_staff, False)
         advances = f_adv.result()
         payments = f_pay.result()
-        _month_att_pre = f_att.result()
+        month_att = f_att.result()
         _staff_pre = f_staff.result()
 
-    # ── monthly cash-out trend ──
-    month_keys = [_month_add(this_month, -(months - 1 - i))
+    # ── monthly cash-out trend, ending at the selected month ──
+    month_keys = [_month_add(sel_month, -(months - 1 - i))
                   for i in range(months)]
     trend = {m: {"month": m, "advances": 0, "salaries_net": 0}
              for m in month_keys}
@@ -1369,7 +1787,7 @@ def payroll_analytics(months: int = 6) -> dict:
         row["total"] = row["advances"] + row["salaries_net"]
         months_out.append(row)
 
-    # ── per-staff current-month stats ──
+    # ── per-staff stats for the selected month ──
     adv_by_staff: dict = {}
     for a in advances:
         adv_by_staff.setdefault(a.get("staff_id"), []).append(a)
@@ -1377,7 +1795,6 @@ def payroll_analytics(months: int = 6) -> dict:
     for p in payments:
         pay_by_staff.setdefault(p.get("staff_id"), []).append(p)
 
-    month_att = _month_att_pre
     att_by_staff: dict = {}
     for a in month_att:
         att_by_staff.setdefault(a.get("staff_id"), []).append(a)
@@ -1385,30 +1802,60 @@ def payroll_analytics(months: int = 6) -> dict:
         1 for a in month_att
         if a.get("date") == today and a.get("status") in ("full", "half"))
 
-    elapsed_days = int(today[8:10])
     staff_rows = []
     outstanding_total = 0
     for s in _staff_pre:
         sid = s["id"]
-        summary = ledger.attendance_summary(
-            att_by_staff.get(sid, []), month_start, today)
+        rows = att_by_staff.get(sid, [])
+        summary = ledger.attendance_summary(rows, period_start, period_end)
+        presence = ledger.presence_summary(rows, period_start, period_end)
         outstanding = max(0, ledger.outstanding_advance(
             adv_by_staff.get(sid, []), pay_by_staff.get(sid, [])))
         outstanding_total += outstanding
         wage = int(s.get("daily_wage", 0) or 0)
+        # Everyone is measured against the days in the period. A rotating
+        # day/night member works one shift a day and reads 100%; whoever
+        # covered a second shift shows it as double_shift_days, not as a rate
+        # above 100.
+        expected = elapsed_days
         staff_rows.append({
             "id": sid,
             "name": s.get("name", ""),
             "designation": s.get("designation", ""),
             "daily_wage": wage,
+            "is_dual_shift": bool(s.get("is_dual_shift")),
             "full_days": summary["full_days"],
             "half_days": summary["half_days"],
-            "absent_days": summary["absent_days"],
+            # Days the person was away, not shifts they did not take: a D
+            # marked absent on a day they worked the N is cover, not an
+            # absence.
+            "absent_days": presence["days_absent"],
+            "absent_shifts": summary["absent_days"],
+            # Shifts (what wages are paid on), kept under the old key so
+            # every existing caller of this payload still adds up.
             "days_worked": summary["days_worked"],
+            "shifts_worked": presence["shifts_worked"],
+            # Calendar days present, half days included as whole days —
+            # the same count the salary ledger's census prints, so the two
+            # screens cannot show different numbers for the same fortnight.
+            # half_days_present keeps the detail visible; what a half day is
+            # WORTH stays in days_worked.
+            "days_present": presence["days_present"],
+            "half_days_present": presence["half_days_present"],
+            "double_shift_days": presence["double_shift_days"],
+            "extra_shifts": presence["extra_shifts"],
+            "expected_days": expected,
             "attendance_rate": round(
-                100.0 * summary["days_worked"] / elapsed_days)
-                if elapsed_days else 0,
+                100.0 * presence["days_present"] / expected) if expected else 0,
             "wages_earned": int(round(summary["days_worked"] * wage)),
+            "advances_taken": sum(
+                int(a.get("amount", 0) or 0)
+                for a in adv_by_staff.get(sid, [])
+                if str(a.get("date") or "")[:7] == sel_month),
+            "salary_paid": sum(
+                int(p.get("net_paid", 0) or 0)
+                for p in pay_by_staff.get(sid, [])
+                if str(p.get("paid_on") or p.get("period_end") or "")[:7] == sel_month),
             "outstanding_advance": outstanding,
             "paid_until": max(
                 (p.get("period_end") or "" for p in pay_by_staff.get(sid, [])),
@@ -1416,16 +1863,80 @@ def payroll_analytics(months: int = 6) -> dict:
         })
     staff_rows.sort(key=lambda r: -r["days_worked"])
 
-    this_row = trend.get(this_month, {"advances": 0, "salaries_net": 0})
+    # ── highlights ──
+    # Ranked here rather than in the browser so the cards, the table and the
+    # register can never disagree about who did best.
+    def _card(row, *keys):
+        if not row:
+            return None
+        out = {"id": row["id"], "name": row["name"],
+               "designation": row.get("designation", "")}
+        for k in keys:
+            out[k] = row.get(k)
+        return out
+
+    worked = [r for r in staff_rows if r["days_worked"] > 0]
+    # Turning up every day wins; covering an extra shift breaks the tie.
+    top_att = max(
+        worked,
+        key=lambda r: (r["attendance_rate"], r["extra_shifts"], -r["absent_days"]),
+        default=None)
+    coverers = [r for r in staff_rows if r["double_shift_days"] > 0]
+    top_cover = max(coverers, key=lambda r: (r["double_shift_days"],
+                                             r["extra_shifts"]), default=None)
+    top_earner = max(worked, key=lambda r: r["wages_earned"], default=None)
+    top_advance = max(staff_rows, key=lambda r: r["outstanding_advance"],
+                      default=None)
+    if top_advance and top_advance["outstanding_advance"] <= 0:
+        top_advance = None
+    absentees = [r for r in staff_rows if r["absent_days"] > 0]
+    most_absent = max(absentees, key=lambda r: r["absent_days"], default=None)
+    perfect = [r for r in worked if r["absent_days"] == 0
+               and r["attendance_rate"] >= 100]
+    days_present_total = sum(r["days_present"] for r in staff_rows)
+    days_worked_total = sum(r["days_worked"] for r in staff_rows)
+    expected_total = sum(r["expected_days"] for r in staff_rows)
+
+    this_row = trend.get(sel_month, {"advances": 0, "salaries_net": 0})
     return {
+        "month": sel_month,
+        "is_current_month": is_current,
+        "period": {"start": period_start, "end": period_end,
+                   "elapsed_days": elapsed_days},
         "months": months_out,
         "totals": {
             "outstanding_advance": outstanding_total,
             "active_staff": len(staff_rows),
             "month_cash_out": this_row["advances"] + this_row["salaries_net"],
+            "month_advances": this_row["advances"],
+            "month_salaries": this_row["salaries_net"],
             "month_wages_earned": sum(r["wages_earned"] for r in staff_rows),
-            "today_present": today_present,
+            "days_worked": days_worked_total,
+            "days_present": days_present_total,
+            "half_days_present": sum(r["half_days_present"] for r in staff_rows),
+            "double_shift_days": sum(r["double_shift_days"] for r in staff_rows),
+            "extra_shifts": round(sum(r["extra_shifts"] for r in staff_rows), 2),
+            "absent_days": sum(r["absent_days"] for r in staff_rows),
+            # Days present over days available. Shifts would read over 100%
+            # for a team that covers both shifts.
+            "avg_attendance_rate": round(
+                100.0 * days_present_total / expected_total)
+                if expected_total else 0,
+            "today_present": today_present if is_current else None,
             "today_total": len(staff_rows),
+        },
+        "highlights": {
+            "top_attendance": _card(top_att, "attendance_rate", "days_present",
+                                    "expected_days", "absent_days",
+                                    "half_days_present", "double_shift_days"),
+            "top_cover": _card(top_cover, "double_shift_days", "extra_shifts"),
+            "top_earner": _card(top_earner, "wages_earned", "days_worked"),
+            "top_advance": _card(top_advance, "outstanding_advance"),
+            "most_absent": _card(most_absent, "absent_days", "attendance_rate"),
+            "perfect_attendance": {
+                "count": len(perfect),
+                "names": [r["name"] for r in perfect[:3]],
+            },
         },
         "staff": staff_rows,
     }

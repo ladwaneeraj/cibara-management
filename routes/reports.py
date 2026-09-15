@@ -917,16 +917,21 @@ def edit_expense(doc_id):
         if not old:
             return jsonify(success=False, message="Expense not found"), 404
 
-        # Staff-payroll rows are managed from the Staff module only. An
-        # inline edit here would desync the linked advance / salary-payment
-        # document (and the outstanding-advance arithmetic derived from it).
+        # Staff-payroll rows have one owner: the Staff module. Editing the
+        # expense leg here would desync the linked advance / salary-payment
+        # document and the outstanding-advance arithmetic derived from it.
+        # This refusal stays even though the Transactions tab now offers Edit
+        # on these rows — that button calls the payroll endpoints
+        # (PATCH /staff/advance|salary|meals/<id>), which move both documents
+        # and the cash counter in one batch. One door, not two.
         if (old.get("staff_advance") or old.get("staff_salary_payment")
                 or old.get("staff_meal_log")):
             return jsonify(
                 success=False,
-                message=("This entry is linked to Staff payroll. Manage it "
-                         "from the Staff section so the advance/salary "
-                         "records stay in sync."),
+                payroll_linked=True,
+                message=("This entry is linked to Staff payroll. Use Edit on "
+                         "the row itself (or the Staff section) so the "
+                         "advance/salary records stay in sync."),
             ), 409
 
         # Vendor GSTIN hygiene on edit: normalize + format-check whenever the
@@ -1059,17 +1064,20 @@ def delete_expense_route(doc_id):
         if not old:
             return jsonify(success=False, message="Expense not found"), 404
 
-        # Staff-payroll rows are managed from the Staff module only —
-        # deleting the expense leg here would orphan the linked advance /
-        # salary-payment doc and silently corrupt the outstanding-advance
-        # balance. The Staff section deletes both sides atomically.
+        # Same rule as the edit path above: deleting the expense leg here
+        # would orphan the linked advance / salary-payment doc and silently
+        # corrupt the outstanding-advance balance. The Transactions tab's
+        # Delete on a payroll row calls DELETE /staff/advance|salary|meals/
+        # <id>, which removes both sides and reverses the counter atomically.
         if (old.get("staff_advance") or old.get("staff_salary_payment")
                 or old.get("staff_meal_log")):
             return jsonify(
                 success=False,
-                message=("This entry is linked to Staff payroll. Delete it "
-                         "from the Staff section (it removes the payroll "
-                         "record and this expense together)."),
+                payroll_linked=True,
+                message=("This entry is linked to Staff payroll. Use Delete "
+                         "on the row itself (or the Staff section) — it "
+                         "removes the payroll record and this expense "
+                         "together."),
             ), 409
 
         # ── Split-group delete ───────────────────────────────────────────

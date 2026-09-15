@@ -97,20 +97,8 @@ function initSettleLater() {
     });
   }
 
-  // 6. Initialize the collect payment button
-  const collectPaymentBtn = document.getElementById("collect-payment-btn");
-  if (collectPaymentBtn) {
-    collectPaymentBtn.addEventListener("click", collectSettlementPayment);
-  }
-
-  // 7. Initialize the cancel settlement button
-  const cancelSettlementBtn = document.getElementById("cancel-settlement-btn");
-  if (cancelSettlementBtn) {
-    cancelSettlementBtn.addEventListener(
-      "click",
-      showCancelSettlementConfirmation
-    );
-  }
+  // 6/7. The collect-settlement modal's own buttons.
+  _wireCollectModalButtons();
 
   // 8. Initialize close buttons for all settlement modals
   document
@@ -149,7 +137,10 @@ function _settleDiscountType() {
 }
 
 // Initialize discount features
+let _discountFeaturesWired = false;
+
 function initDiscountFeatures() {
+  if (_discountFeaturesWired) return;
   const discountAmountInput = document.getElementById(
     "settlement-discount-amount"
   );
@@ -205,6 +196,8 @@ function initDiscountFeatures() {
       }
     });
   }
+  // Only latch once the fields were actually there to bind.
+  if (discountAmountInput) _discountFeaturesWired = true;
 }
 
 // Modify setupCheckoutConfirmation function to handle balance display in the confirmation
@@ -335,6 +328,8 @@ async function fetchPendingSettlements() {
     const result = await response.json();
     if (result.success) {
       pendingSettlements = result.settlements || [];
+      // Loaded INTO `pendingSettlements`; the return value is only "did it
+      // work". Callers must read the module list, never the resolved value.
       return true;
     } else {
       console.error("Failed to fetch pending settlements:", result.message);
@@ -348,6 +343,85 @@ async function fetchPendingSettlements() {
     );
     return false;
   }
+}
+
+// The collect-settlement modal's buttons, wired exactly once.
+//
+// initSettleLater() runs a second after DOMContentLoaded, but the modal can
+// be opened before that (the check-in modal's pending-balance banner opens it
+// as soon as a returning guest's mobile is typed). An unwired Collect Payment
+// button is the worst kind of bug here: the operator takes the cash and the
+// screen does nothing. showCollectSettlementModal() calls this too, so the
+// modal is never shown with dead buttons.
+let _collectModalWired = false;
+
+function _wireCollectModalButtons() {
+  if (_collectModalWired) return;
+  const collectBtn = document.getElementById("collect-payment-btn");
+  const cancelBtn = document.getElementById("cancel-settlement-btn");
+  if (!collectBtn) return;              // markup not in the DOM yet
+  collectBtn.addEventListener("click", collectSettlementPayment);
+  if (cancelBtn) {
+    cancelBtn.addEventListener("click", showCancelSettlementConfirmation);
+  }
+  // The amount and discount fields drive the breakdown and the button
+  // label, and they are part of "this modal works", so they are readied
+  // here too rather than only on the deferred init.
+  initDiscountFeatures();
+  // "Full amount" puts the whole balance back in the field after a part
+  // amount was typed — the common correction, one tap instead of retyping.
+  const fullBtn = document.getElementById("settlement-full-amount");
+  if (fullBtn) {
+    fullBtn.addEventListener("click", function () {
+      const settlement = pendingSettlements.find((s) => s.id === activeSettlementId);
+      const input = document.getElementById("settlement-payment-amount");
+      if (!settlement || !input) return;
+      const discount = parseInt(
+        (document.getElementById("settlement-discount-amount") || {}).value || "0", 10) || 0;
+      input.value = Math.max(0, (parseInt(settlement.amount, 10) || 0) - discount);
+      _settleSyncBreakdown();
+    });
+  }
+  _collectModalWired = true;
+}
+
+/**
+ * Wire the search box and the sort control, and put them into the state the
+ * list is about to render in.
+ *
+ * Its own function because the alternative — wiring inline where the modal
+ * opens — makes the controls untestable without driving the whole open path,
+ * and a control that is only bound on one code path is a control that stops
+ * working the day somebody opens the screen another way.
+ *
+ * Listeners are attached once: the modal element outlives every open, so
+ * binding on each open would stack them up and fire the render N times.
+ */
+function psxBindControls() {
+  const searchEl = document.getElementById("psx-search-input");
+  if (searchEl && !searchEl.dataset.psxBound) {
+    searchEl.dataset.psxBound = "1";
+    let timer = null;
+    searchEl.addEventListener("input", function () {
+      clearTimeout(timer);
+      timer = setTimeout(renderPendingSettlements, 120);
+    });
+  }
+  // The search term is per visit; the sort choice is not.
+  if (searchEl) searchEl.value = "";
+
+  const sortEl = document.getElementById("psx-sort-select");
+  if (sortEl && !sortEl.dataset.psxBound) {
+    sortEl.dataset.psxBound = "1";
+    sortEl.addEventListener("change", function () {
+      currentSettlementSort = this.value;
+      renderPendingSettlements();
+    });
+  }
+  // Reflect the remembered choice rather than resetting it: an operator who
+  // switched to Oldest first to work through the backlog should not have to
+  // choose again every time they reopen the screen.
+  if (sortEl) sortEl.value = currentSettlementSort;
 }
 
 // Show the pending settlements modal
@@ -385,31 +459,50 @@ async function showPendingSettlementsModal() {
     `;
   }
 
+  psxBindControls();
+
   // Fetch and render settlements
   await fetchPendingSettlements();
   renderPendingSettlements();
 }
 
 // Show the collect settlement modal
-function showCollectSettlementModal(settlementId) {
-  // Find the settlement — if pendingSettlements not loaded yet (called from Bills tab),
-  // fetch first then retry
-  let settlement = pendingSettlements.find((s) => s.id === settlementId);
+function showCollectSettlementModal(settlementId, _afterFetch) {
+  // The list is already loaded when this is opened from the Pending Payments
+  // screen. Opened from anywhere else (the Bills tab, the check-in modal's
+  // pending-balance banner) it has to be fetched first.
+  //
+  // fetchPendingSettlements() resolves to a BOOLEAN and loads the rows into
+  // `pendingSettlements`. This used to do `pendingSettlements = list || []`
+  // with that boolean, so the freshly loaded list was replaced by `true` and
+  // the next line threw "pendingSettlements.find is not a function" inside a
+  // promise — the modal simply never opened and nothing said why. Read the
+  // module list after awaiting, and retry exactly once.
+  const list = Array.isArray(pendingSettlements) ? pendingSettlements : [];
+  let settlement = list.find((s) => s.id === settlementId);
   if (!settlement) {
-    fetchPendingSettlements().then((list) => {
-      pendingSettlements = list || [];
-      const found = pendingSettlements.find((s) => s.id === settlementId);
-      if (found) {
-        showCollectSettlementModal(settlementId);
-      } else {
-        showNotification("Settlement not found", "error");
-      }
-    });
+    if (_afterFetch) {
+      showNotification(
+        "That balance is no longer pending — it may have just been collected. " +
+        "Reopen the guest to check.",
+        "error"
+      );
+      return;
+    }
+    fetchPendingSettlements()
+      .then(function () { showCollectSettlementModal(settlementId, true); })
+      .catch(function (err) {
+        console.error("[settle-later] could not load settlements:", err);
+        showNotification("Could not load the pending balance. Try again.", "error");
+      });
     return;
   }
 
   // Set the active settlement ID
   activeSettlementId = settlementId;
+
+  // Never show this modal with dead buttons (see _wireCollectModalButtons).
+  _wireCollectModalButtons();
 
   // Get modal elements
   const modal = document.getElementById("collect-settlement-modal");
@@ -440,10 +533,26 @@ function showCollectSettlementModal(settlementId) {
   if (guestNameEl) guestNameEl.textContent = settlement.guest_name;
   if (mobileEl) mobileEl.textContent = settlement.guest_mobile;
   if (mobileLinkEl) mobileLinkEl.href = `tel:${settlement.guest_mobile}`;
-  if (checkoutDateEl) checkoutDateEl.textContent = settlement.checkout_date;
+  // "25 Jul 2026" reads at a glance; "2026-07-25" has to be decoded.
+  if (checkoutDateEl) {
+    const _co = String(settlement.checkout_date || "");
+    let _coTxt = _co;
+    try {
+      const _d = new Date(_co + "T12:00:00");
+      if (!isNaN(_d.getTime())) {
+        _coTxt = _d.toLocaleDateString("en-IN",
+          { day: "2-digit", month: "short", year: "numeric" });
+      }
+    } catch (_e) { /* keep the raw string */ }
+    checkoutDateEl.textContent = _coTxt;
+  }
   if (roomEl) roomEl.textContent = settlement.room;
   if (amountEl) amountEl.textContent = `₹${settlement.amount}`;
-  if (notesEl) notesEl.textContent = settlement.notes || "-";
+  // An empty note is nothing to say, so the row goes rather than showing "-".
+  const noteWrap = document.getElementById("settlement-note-wrap");
+  const noteTxt = (settlement.notes || "").trim();
+  if (notesEl) notesEl.textContent = noteTxt;
+  if (noteWrap) noteWrap.style.display = noteTxt ? "" : "none";
 
   // Reset payment and discount inputs
   if (paymentAmountInput) {
@@ -634,7 +743,7 @@ async function collectSettlementPayment() {
       if (proceed) {
         _settleAckS34 = true;
         collectBtn.disabled = false;
-        collectBtn.innerHTML = "Collect Payment";
+        _syncCollectButtonLabel();
         return collectSettlementPayment();
       }
       showNotification("Settlement not collected.", "error");
@@ -673,6 +782,26 @@ async function collectSettlementPayment() {
           : result.message || "Payment collected successfully",
         "success"
       );
+
+      // Tell the rest of the app. The check-in modal's pending-balance
+      // banner listens for this and corrects itself in place; anything else
+      // showing this balance can do the same without polling. The server
+      // response is passed through as-is, so listeners read the settled
+      // state rather than guessing it.
+      try {
+        window.dispatchEvent(new CustomEvent("cibaraSettlementCollected", {
+          detail: {
+            settlement_id: activeSettlementId,
+            guest_mobile: settlement.guest_mobile || result.guest_mobile || "",
+            fully_paid: !!result.fully_paid,
+            remaining: Number(result.remaining || 0),
+            payment_amount: Number(result.payment_amount || paymentAmount || 0),
+            discount_amount: Number(result.discount_amount || discountAmount || 0),
+            bill_id: result.bill_id || null,
+            bill_status: result.bill_status || null,
+          },
+        }));
+      } catch (_e) { /* a listener that throws must not undo the collection */ }
     } else {
       showNotification(result.message || "Failed to collect payment", "error");
     }
@@ -682,7 +811,7 @@ async function collectSettlementPayment() {
   } finally {
     // Restore button state
     collectBtn.disabled = false;
-    collectBtn.innerHTML = "Collect Payment";
+    _syncCollectButtonLabel();
   }
 }
 
@@ -694,7 +823,21 @@ async function collectSettlementPayment() {
 // none of them were shown together, so a partial collection or a discount only
 // surfaced later on the printed bill — which is how a bill ends up reading
 // "Grand Total 1800 / Total Paid 1600" with nothing explaining the gap.
+// The collect button says what it will do: "Collect ₹720", not "Collect
+// Payment". Kept in step with the amount field by _settleSyncBreakdown, and
+// restored through here after a request instead of a hard-coded string.
+function _syncCollectButtonLabel() {
+  const btn = document.getElementById("collect-payment-btn");
+  if (!btn) return;
+  const el = document.getElementById("settlement-payment-amount");
+  const amt = parseInt((el && el.value) || "0", 10);
+  btn.textContent = amt > 0
+    ? "Collect ₹" + Number(amt).toLocaleString("en-IN")
+    : "Collect payment";
+}
+
 function _settleSyncBreakdown() {
+  _syncCollectButtonLabel();
   const box = document.getElementById("settlement-breakdown");
   if (!box) return;
 
@@ -937,6 +1080,291 @@ document.addEventListener("DOMContentLoaded", function () {
   }, 1000);
 });
 // Render the pending settlements list
+// ── Pending Payments list ───────────────────────────────────────────────────
+//
+// A collections screen, built like one. The old list gave each row a name, a
+// room, a checkout date and an amount in the same weight of text, so the eye
+// had nothing to land on and the two questions the desk actually asks — how
+// much, and how long has it been owed — had to be worked out by reading.
+//
+// What each row answers now, in the order it is read:
+//   the guest and their number (the call you are about to make)
+//   the amount still due, as the largest thing on the row
+//   how overdue it is, colour-coded, because a 60-day balance is a different
+//     conversation from a 2-day one
+//   the invoice number, so it can be quoted without opening the Bills tab
+//   which stay it was: room, nights, the dates, how many guests
+//   what was already paid against the bill, so a part payment is obvious
+//   the note the operator left at checkout
+//
+// Sorting follows the same logic: oldest debt first while looking at Pending,
+// most recent first everywhere else (Paid and Cancelled are history, and
+// history reads newest-first).
+
+// How the list is ordered. Latest first by default: the balance taken this
+// morning is the one the desk is asked about, and a guest who checked out an
+// hour ago is still reachable. The age chip on each row is what surfaces an
+// old debt, so ordering by date no longer has to do that job — and the
+// operator can switch to Oldest first when they sit down to chase them.
+//
+// Module-level so the choice survives closing and reopening the modal within
+// a shift, without persisting past a reload.
+let currentSettlementSort = "latest";
+
+const PSX_SORTS = {
+  latest: (a, b) => psxTime(b) - psxTime(a),
+  oldest: (a, b) => psxTime(a) - psxTime(b),
+  // Biggest debt first, and for two equal amounts the older one leads.
+  amount: (a, b) =>
+    (Number(b.amount) || 0) - (Number(a.amount) || 0) || psxTime(a) - psxTime(b),
+  name: (a, b) =>
+    String(a.guest_name || "").localeCompare(String(b.guest_name || ""),
+                                             "en", { sensitivity: "base" }),
+};
+
+/** Checkout as a sortable number, time included so two same-day rows keep
+ *  the order they happened in. Undated rows sort last under Latest. */
+function psxTime(settlement) {
+  const day = String(settlement.checkout_date || "").trim().slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return 0;
+  const time = String(settlement.checkout_time || "00:00").trim().slice(0, 5);
+  const d = new Date(day + "T" + (/^\d{2}:\d{2}$/.test(time) ? time : "00:00"));
+  return isNaN(d.getTime()) ? 0 : d.getTime();
+}
+
+const PSX_ESC_MAP = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
+function psxEsc(value) {
+  return String(value == null ? "" : value).replace(/[&<>"']/g, (c) => PSX_ESC_MAP[c]);
+}
+
+function psxRupees(n) {
+  const v = Math.round(Number(n) || 0);
+  return "₹" + v.toLocaleString("en-IN");
+}
+
+/** "2026-09-07" or "2026-09-07 14:30" → a Date at local midnight, or null. */
+function psxDate(value) {
+  const text = String(value || "").trim().slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) return null;
+  const d = new Date(text + "T12:00:00");
+  return isNaN(d.getTime()) ? null : d;
+}
+
+function psxDayLabel(value) {
+  const d = psxDate(value);
+  if (!d) return "—";
+  return d.toLocaleDateString("en-IN", { day: "2-digit", month: "short" });
+}
+
+function psxFullDate(value) {
+  const d = psxDate(value);
+  if (!d) return "—";
+  return d.toLocaleDateString("en-IN", {
+    day: "2-digit", month: "short", year: "numeric",
+  });
+}
+
+/** Whole days between a date and today. Negative dates clamp to 0. */
+function psxDaysSince(value) {
+  const d = psxDate(value);
+  if (!d) return null;
+  const today = new Date();
+  today.setHours(12, 0, 0, 0);
+  return Math.max(0, Math.round((today - d) / 86400000));
+}
+
+/**
+ * Nights of the stay.
+ *
+ * The bill's days_stayed is the billed figure and is preferred — it is what
+ * the invoice charged for, which is the number the guest will recognise. The
+ * settlement's own check-in and checkout dates are the fallback for rows
+ * whose bill could not be found.
+ */
+function psxNights(settlement) {
+  const billed = settlement.bill && Number(settlement.bill.days_stayed);
+  if (billed > 0) return billed;
+  const inDate = psxDate((settlement.bill && settlement.bill.checkin_time)
+                         || settlement.checkin_time);
+  const outDate = psxDate(settlement.checkout_date);
+  if (!inDate || !outDate) return null;
+  return Math.max(1, Math.round((outDate - inDate) / 86400000));
+}
+
+/** Overdue banding. The thresholds are the desk's, not arithmetic's: a week
+ *  is still "this week's guest", a month is a phone call, beyond that it is a
+ *  debt somebody has to decide about. */
+function psxAgeBand(days) {
+  if (days == null) return { cls: "psx-age-new", label: "—" };
+  if (days <= 7) return { cls: "psx-age-new", label: days + "d" };
+  if (days <= 30) return { cls: "psx-age-warn", label: days + "d" };
+  return { cls: "psx-age-old", label: days + "d" };
+}
+
+const PSX_STATUS = {
+  pending: { cls: "psx-st-pending", label: "Pending" },
+  partial: { cls: "psx-st-partial", label: "Part paid" },
+  paid: { cls: "psx-st-paid", label: "Paid" },
+  cancelled: { cls: "psx-st-cancelled", label: "Cancelled" },
+};
+
+function psxMatchesSearch(settlement, needle) {
+  if (!needle) return true;
+  const bill = settlement.bill || {};
+  const hay = [
+    settlement.guest_name, settlement.guest_mobile, settlement.room,
+    bill.bill_number, settlement.notes, settlement.serial_number,
+  ].join(" ").toLowerCase();
+  return hay.indexOf(needle) > -1;
+}
+
+function psxRenderCard(settlement) {
+  const bill = settlement.bill || null;
+  const status = String(settlement.status || "").toLowerCase();
+  const meta = PSX_STATUS[status]
+    || { cls: "psx-st-other", label: settlement.status || "Unknown" };
+  const open = status === "pending" || status === "partial";
+  const due = Math.max(0, Number(settlement.amount) || 0);
+  // A closed row's `amount` is what was LEFT after collecting, which is zero.
+  // Printing ₹0 as the headline figure of a settled row tells the operator
+  // nothing and reads like an error, so a paid row shows what was actually
+  // taken and a fully-adjusted one says so in words.
+  const collected = (Array.isArray(settlement.payments)
+    ? settlement.payments : []).reduce(
+      (sum, p) => sum + (Number(p.amount) || 0), 0);
+  const headline = open
+    ? psxRupees(due)
+    : (collected > 0 ? psxRupees(collected)
+       : due > 0 ? psxRupees(due)
+       : '<span class="psx-amount-nil">Settled</span>');
+  const days = psxDaysSince(settlement.checkout_date);
+  const age = psxAgeBand(days);
+  const nights = psxNights(settlement);
+  const checkIn = (bill && bill.checkin_time) || settlement.checkin_time;
+
+  // Facts about the stay, as chips. Anything unknown is left out rather than
+  // printed as a dash — a row of dashes reads as broken data.
+  const facts = [];
+  if (settlement.room) {
+    facts.push('<span class="psx-fact"><i class="fas fa-door-open"></i>Room '
+      + psxEsc(settlement.room) + "</span>");
+  }
+  if (nights) {
+    facts.push('<span class="psx-fact"><i class="fas fa-moon"></i>' + nights
+      + " night" + (nights === 1 ? "" : "s") + "</span>");
+  }
+  if (bill && bill.guest_count > 1) {
+    facts.push('<span class="psx-fact"><i class="fas fa-user-group"></i>'
+      + bill.guest_count + " guests</span>");
+  }
+  if (bill && bill.booking_source && bill.booking_source !== "normal") {
+    facts.push('<span class="psx-fact psx-fact-ota"><i class="fas fa-globe"></i>'
+      + psxEsc(bill.booking_source.toUpperCase()) + "</span>");
+  }
+
+  const stayDates = checkIn
+    ? psxDayLabel(checkIn) + " → " + psxFullDate(settlement.checkout_date)
+    : "Checked out " + psxFullDate(settlement.checkout_date);
+
+  // The money line. Shown only when the bill was found AND something was
+  // already paid against it, because that is the case a bare "due" figure
+  // misrepresents: the guest remembers paying, the row says they owe.
+  let moneyLine = "";
+  if (bill && bill.total_amount > 0 && bill.paid > 0) {
+    moneyLine =
+      '<div class="psx-money">' +
+      '<span>Bill <b>' + psxRupees(bill.total_amount) + "</b></span>" +
+      '<span class="psx-money-sep">·</span>' +
+      '<span>Paid <b>' + psxRupees(bill.paid) + "</b></span>" +
+      (bill.discounts > 0
+        ? '<span class="psx-money-sep">·</span><span>Discount <b>'
+          + psxRupees(bill.discounts) + "</b></span>"
+        : "") +
+      "</div>";
+  }
+
+  const payments = Array.isArray(settlement.payments) ? settlement.payments : [];
+  const history = payments.length
+    ? '<div class="psx-history"><div class="psx-history-hd">Collected so far</div>'
+      + payments.map((p) =>
+          '<div class="psx-history-row"><span>' + psxFullDate(p.date)
+          + '</span><span class="psx-pay-mode ' + psxEsc(p.mode || "") + '">'
+          + psxEsc(p.mode || "—") + "</span><b>" + psxRupees(p.amount)
+          + "</b></div>").join("")
+      + "</div>"
+    : "";
+
+  const discount = Number(settlement.discount_amount) > 0
+    ? '<div class="psx-note psx-note-discount"><i class="fas fa-tag"></i>'
+      + "Discount " + psxRupees(settlement.discount_amount)
+      + (settlement.discount_reason
+          ? " — " + psxEsc(settlement.discount_reason) : "")
+      + "</div>"
+    : "";
+
+  const note = settlement.notes
+    ? '<div class="psx-note"><i class="fas fa-sticky-note"></i>'
+      + psxEsc(settlement.notes) + "</div>"
+    : "";
+
+  let footer;
+  if (open) {
+    footer = '<button type="button" class="psx-collect collect-btn" data-id="'
+      + psxEsc(settlement.id) + '">'
+      + '<i class="fas fa-indian-rupee-sign"></i> Collect ' + psxRupees(due)
+      + "</button>";
+  } else if (status === "paid") {
+    footer = '<div class="psx-settled"><i class="fas fa-circle-check"></i>'
+      + "Collected " + psxFullDate(settlement.payment_date)
+      + (settlement.payment_mode
+          ? ' <span class="psx-pay-mode ' + psxEsc(settlement.payment_mode)
+            + '">' + psxEsc(settlement.payment_mode) + "</span>"
+          : "") + "</div>";
+  } else {
+    footer = '<div class="psx-settled psx-settled-void">'
+      + '<i class="fas fa-ban"></i>Written off '
+      + psxFullDate(settlement.cancel_date) + "</div>";
+  }
+
+  return (
+    '<article class="psx-card ' + (open ? "is-open" : "is-closed")
+      + '" data-id="' + psxEsc(settlement.id) + '" data-status="'
+      + psxEsc(status) + '">' +
+    '  <header class="psx-card-top">' +
+    '    <div class="psx-who">' +
+    '      <h3 class="psx-name">' + psxEsc(settlement.guest_name || "Guest") + "</h3>" +
+    (settlement.guest_mobile
+      ? '      <a class="psx-phone" href="tel:' + psxEsc(settlement.guest_mobile)
+        + '"><i class="fas fa-phone"></i>' + psxEsc(settlement.guest_mobile) + "</a>"
+      : "") +
+    "    </div>" +
+    '    <div class="psx-amount-col">' +
+    '      <div class="psx-amount">' + headline + "</div>" +
+    '      <div class="psx-badges">' +
+    '        <span class="psx-status ' + meta.cls + '">' + psxEsc(meta.label) + "</span>" +
+    (open && days != null
+      ? '        <span class="psx-age ' + age.cls + '" title="Days since checkout">'
+        + age.label + "</span>"
+      : "") +
+    "      </div>" +
+    "    </div>" +
+    "  </header>" +
+    '  <div class="psx-stay">' +
+    (bill && bill.bill_number
+      ? '    <div class="psx-billno"><i class="fas fa-file-invoice"></i>'
+        + psxEsc(bill.bill_number) + "</div>"
+      : '    <div class="psx-billno psx-billno-missing">'
+        + '<i class="fas fa-file-invoice"></i>No invoice linked</div>') +
+    '    <div class="psx-dates">' + psxEsc(stayDates) + "</div>" +
+    (facts.length ? '    <div class="psx-facts">' + facts.join("") + "</div>" : "") +
+    moneyLine +
+    "  </div>" +
+    history + discount + note +
+    '  <footer class="psx-card-foot">' + footer + "</footer>" +
+    "</article>"
+  );
+}
+
 function renderPendingSettlements() {
   const settlementsList = document.getElementById("settlements-list");
   if (!settlementsList) {
@@ -944,156 +1372,68 @@ function renderPendingSettlements() {
     return;
   }
 
-  if (pendingSettlements.length === 0) {
-    settlementsList.innerHTML = `
-      <div class="empty-state">
-        <i class="fas fa-money-bill-wave fa-3x"></i>
-        <p>No pending settlements found</p>
-      </div>
-    `;
-    return;
-  }
+  const searchEl = document.getElementById("psx-search-input");
+  const needle = (searchEl && searchEl.value || "").trim().toLowerCase();
 
-  // Filter settlements based on current filter
-  let filteredSettlements = pendingSettlements;
+  const all = Array.isArray(pendingSettlements) ? pendingSettlements : [];
+  // "Pending" means money still owed, which includes a part-paid balance.
+  // Matching the status string exactly hid those rows while the summary above
+  // still counted them, so the header said three guests owed money and the
+  // list showed two.
+  const isOpen = (s) => s.status === "pending" || s.status === "partial";
+  let rows = currentSettlementFilter === "all"
+    ? all.slice()
+    : currentSettlementFilter === "pending"
+      ? all.filter(isOpen)
+      : all.filter((s) => s.status === currentSettlementFilter);
+  rows = rows.filter((s) => psxMatchesSearch(s, needle));
 
-  if (currentSettlementFilter !== "all") {
-    filteredSettlements = pendingSettlements.filter(
-      (s) => s.status === currentSettlementFilter
-    );
-  }
+  // The summary counts what is genuinely outstanding, whatever tab is open:
+  // switching to Paid to check a receipt should not make the amount owed
+  // appear to drop to zero.
+  const outstanding = all.filter(isOpen);
+  const totalDue = outstanding.reduce(
+    (sum, s) => sum + (Number(s.amount) || 0), 0);
+  const oldest = outstanding.reduce((worst, s) => {
+    const d = psxDaysSince(s.checkout_date);
+    return d != null && d > worst ? d : worst;
+  }, 0);
 
-  if (filteredSettlements.length === 0) {
-    settlementsList.innerHTML = `
-      <div class="empty-state">
-        <i class="fas fa-filter fa-3x"></i>
-        <p>No settlements found matching the current filter</p>
-      </div>
-    `;
-    return;
-  }
-
-  // Sort by checkout date (most recent first)
-  filteredSettlements.sort((a, b) => {
-    const dateA = new Date(`${a.checkout_date} ${a.checkout_time || "00:00"}`);
-    const dateB = new Date(`${b.checkout_date} ${b.checkout_time || "00:00"}`);
-    return dateB - dateA;
-  });
-
-  // Generate HTML
-  let html = "";
-
-  filteredSettlements.forEach((settlement) => {
-    // Get status badge
-    let statusBadge = "";
-
-    switch (settlement.status) {
-      case "pending":
-        statusBadge = `<span class="status-badge" style="background-color: var(--warning);">Pending</span>`;
-        break;
-      case "partial": // New status for partial payments
-        statusBadge = `<span class="status-badge" style="background-color: var(--primary);">Partial</span>`;
-        break;
-      case "paid":
-        statusBadge = `<span class="status-badge" style="background-color: var(--success);">Paid</span>`;
-        break;
-      case "cancelled":
-        statusBadge = `<span class="status-badge" style="background-color: var(--danger);">Cancelled</span>`;
-        break;
-      default:
-        statusBadge = `<span class="status-badge" style="background-color: var(--gray);">${settlement.status}</span>`;
+  const summary = document.getElementById("psx-summary");
+  if (summary) {
+    summary.hidden = outstanding.length === 0;
+    const amtEl = document.getElementById("psx-sum-amount");
+    const cntEl = document.getElementById("psx-sum-count");
+    const oldEl = document.getElementById("psx-sum-oldest");
+    if (amtEl) amtEl.textContent = psxRupees(totalDue);
+    if (cntEl) {
+      cntEl.textContent = outstanding.length
+        + (outstanding.length === 1 ? " guest" : " guests");
     }
+    if (oldEl) {
+      oldEl.textContent = oldest > 0 ? "oldest " + oldest + " days" : "all recent";
+    }
+  }
 
-    // Create item HTML
-    html += `
-      <div class="settlement-item" data-id="${settlement.id}" data-status="${
-      settlement.status
-    }">
-        <div class="settlement-header">
-          <div class="settlement-guest">
-            <strong>${settlement.guest_name}</strong>
-            <a href="tel:${settlement.guest_mobile}" class="call-link">
-              <i class="fas fa-phone"></i> ${settlement.guest_mobile}
-            </a>
-          </div>
-          <div class="settlement-badges">
-            ${statusBadge}
-          </div>
-        </div>
-        <div class="settlement-details">
-          <div class="settlement-info">
-            <div><strong>Room:</strong> ${settlement.room}</div>
-            <div><strong>Checkout:</strong> ${settlement.checkout_date}</div>
-            <div><strong>Amount:</strong> ₹${settlement.amount}</div>
-          </div>
-          <div class="settlement-actions">
-            ${
-              settlement.status === "pending" || settlement.status === "partial"
-                ? `<button class="action-btn btn-sm btn-success collect-btn" data-id="${settlement.id}">
-                  <i class="fas fa-money-bill-wave"></i> Collect
-                </button>`
-                : settlement.status === "paid"
-                ? `<div class="settlement-paid-info">
-                  Paid on ${settlement.payment_date || "N/A"} via 
-                  <span class="payment-badge ${settlement.payment_mode}">${
-                    settlement.payment_mode || "unknown"
-                  }</span>
-                </div>`
-                : `<div class="settlement-cancelled-info">
-                  Cancelled on ${settlement.cancel_date || "N/A"}
-                </div>`
-            }
-          </div>
-        </div>
-        ${
-          // Show partial payments if they exist
-          settlement.payments && settlement.payments.length > 0
-            ? `<div class="settlement-payments">
-                <div class="settlement-payments-title">Previous Payments</div>
-                ${settlement.payments
-                  .map(
-                    (payment) => `
-                  <div class="settlement-payment-item">
-                    ₹${payment.amount} paid on ${payment.date} via 
-                    <span class="payment-badge ${payment.mode}">${payment.mode}</span>
-                  </div>
-                `
-                  )
-                  .join("")}
-              </div>`
-            : ""
-        }
-        ${
-          // Show discount if applied
-          settlement.discount_amount > 0
-            ? `<div class="settlement-discount">
-                <div class="settlement-discount-title">Discount Applied</div>
-                <div class="settlement-discount-info">
-                  ₹${settlement.discount_amount} discount (${
-                settlement.discount_reason || "No reason provided"
-              })
-                </div>
-              </div>`
-            : ""
-        }
-        ${
-          settlement.notes
-            ? `<div class="settlement-notes">
-              <i class="fas fa-sticky-note"></i> ${settlement.notes}
-            </div>`
-            : ""
-        }
-      </div>
-    `;
-  });
+  if (!rows.length) {
+    const why = needle
+      ? "Nothing matches “" + psxEsc(needle) + "”."
+      : currentSettlementFilter === "pending"
+        ? "No money is waiting to be collected."
+        : "Nothing here yet.";
+    settlementsList.innerHTML =
+      '<div class="psx-empty"><i class="fas fa-circle-check"></i><p>'
+      + why + "</p></div>";
+    return;
+  }
 
-  settlementsList.innerHTML = html;
+  rows.sort(PSX_SORTS[currentSettlementSort] || PSX_SORTS.latest);
 
-  // Add click handlers for collect buttons
-  document.querySelectorAll(".collect-btn").forEach((btn) => {
+  settlementsList.innerHTML = rows.map(psxRenderCard).join("");
+
+  settlementsList.querySelectorAll(".collect-btn").forEach((btn) => {
     btn.addEventListener("click", function () {
-      const settlementId = this.dataset.id;
-      showCollectSettlementModal(settlementId);
+      showCollectSettlementModal(this.dataset.id);
     });
   });
 }

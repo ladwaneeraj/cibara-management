@@ -7,6 +7,7 @@ Old `logs` collection is NOT used for reads anymore.
 """
 
 import re
+from html import escape as _html_escape
 from flask import Blueprint, request, jsonify
 from datetime import datetime, timedelta
 from google.cloud.firestore_v1.base_query import FieldFilter
@@ -27,6 +28,7 @@ from config import (
     recompute_bill_gst,
 )
 from services import payment_service, pdf_service, expense_service, customer_service
+from services import bills_service
 from services import system_alerts
 from services import gst_lock_service
 from services.auth_service import requires_permission
@@ -59,6 +61,56 @@ def _month_lock_response(bill, action):
             409,
         )
     return None
+
+
+def _cancelled_bill_response(bill, action):
+    """
+    Return a (response, status) tuple if the bill is cancelled, else None.
+    A cancelled invoice is reported in GSTR-1 Table 13 as a cancelled
+    document with no value, so money or tax moving on it again would put
+    figures back on a document the return says is void. Non-financial
+    edits (guest details, PDF, print) stay allowed.
+    """
+    if (bill or {}).get("status") != "cancelled":
+        return None
+    return (
+        jsonify(
+            success=False,
+            bill_cancelled=True,
+            message=(f"Bill {bill.get('bill_number') or '-'} is cancelled; "
+                     f"{action} is not allowed."),
+        ),
+        409,
+    )
+
+
+def _cancel_fields(bill):
+    """Who, when and why of a cancelled bill, for the register rows. All
+    None on a live bill; cancel_kind "manual" marks /cancel_bill."""
+    return {k: bill.get(k) for k in (
+        "cancel_kind", "cancel_reason", "cancelled_by_name", "cancelled_at_ist")}
+
+
+def _stay_payment_rows(bill_id, room, guest_name, checkin_dt):
+    """
+    Every payment row of a stay. The bill_id IS the canonical stay_id, so
+    the FK query is complete regardless of date corrections, room shifts or
+    payment-date edits; the multi-query helper covers legacy stays that
+    predate the stay_id migration.
+    """
+    rows = []
+    try:
+        rows = payment_service.query_payments_by_stay_id(bill_id) or []
+    except Exception as _qe:
+        logger.warning(
+            f"query_payments_by_stay_id({bill_id}) failed: {_qe}; "
+            f"falling back to legacy helper"
+        )
+    if not rows and room and guest_name and checkin_dt:
+        rows = payment_service.query_payments_for_stay(
+            room, guest_name, checkin_dt, stay_id=bill_id
+        ) or []
+    return rows
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -412,18 +464,23 @@ def get_register_data():
                 # "pending_settlement" = settle-later checkout; include these so
                 # the guest still appears in the register / bills module with the
                 # outstanding balance visible.
-                # Revert-cancelled bills (status="cancelled" + cancelled_by_revert)
-                # are surfaced ONLY in checkout mode (the Bills tab) so they show
-                # there with a CANCELLED badge. The Register tab (checkin mode)
-                # stays clean — it tracks live occupancy, not the bill archive.
-                _is_revert_cancel = (
-                    bill_status == "cancelled"
-                    and bill_data.get("cancelled_by_revert")
-                    and mode == "checkout"
+                # Cancelled bills keep their number, so they are listed with a
+                # CANCELLED badge at zero value (every total skips them):
+                #   * revert-cancelled (cancelled_by_revert): checkout mode (the
+                #     Bills tab) only. The stay lives on as the fresh draft, so
+                #     the Register tab (live occupancy) would show it twice.
+                #   * cancelled by an admin (cancel_kind "manual"): both modes.
+                #     The stay itself was the mistake (typically a duplicate
+                #     room entry) and has no successor row. Listing it here also
+                #     keeps its serial present, so the serial backfill below
+                #     cannot resurrect it as an ordinary "recovered" stay.
+                _is_listed_cancel = bill_status == "cancelled" and (
+                    bill_data.get("cancel_kind") == "manual"
+                    or (bill_data.get("cancelled_by_revert") and mode == "checkout")
                 )
                 if (bill_status not in ("completed", "checked_out",
                                         "pending_settlement", "")
-                        and not _is_revert_cancel):
+                        and not _is_listed_cancel):
                     skipped_count += 1
                     # Diagnostic: a checked-out stay that vanishes from the
                     # register is almost always a bill left in an unexpected
@@ -543,6 +600,7 @@ def get_register_data():
                     "superseded_by_revert":  bill_data.get("superseded_by_revert", False),
                     "revert_credit_note_number": bill_data.get("revert_credit_note_number", ""),
                     "voided_bill_number":    bill_data.get("voided_bill_number", ""),
+                    **_cancel_fields(bill_data),
                     # Cancellation-charge invoice flag (SAC 999794 / 18% — Schedule II)
                     "is_cancellation_charge": bill_data.get("is_cancellation_charge", False),
                     "sac_or_hsn":             bill_data.get("sac_or_hsn", "9963"),
@@ -730,6 +788,7 @@ def get_register_data():
                     "payment_online": online_sum,
                     "balance": bill.get("balance", 0),
                     "status": bill.get("status", "completed"),
+                    **_cancel_fields(bill),
                     "serial_number": sn,
                     "booking_source": bill.get("booking_source",
                                                "mmt" if is_mmt else "normal"),
@@ -1059,6 +1118,10 @@ def get_register_stats():
 
         for bill_doc in bills_query.stream():
             bd = bill_doc.to_dict()
+            # Cancelled / voided bills keep their amounts but are not revenue
+            # (same rule as /revenue_report).
+            if (bd.get("status") or "").strip().lower() in ("cancelled", "voided"):
+                continue
             total_entries += 1
             total_revenue += bd.get("total_amount", 0)
             cash_collected += bd.get("payment_cash", 0)
@@ -1270,6 +1333,12 @@ def add_bill_payment():
 
         bill_data       = bill_doc.to_dict()
         current_balance = int(bill_data.get("balance", 0))
+
+        # A cancelled bill keeps its stored balance for the record, but
+        # nothing is owed on it and no receipt may be booked against it.
+        _cancelled = _cancelled_bill_response(bill_data, "recording a payment or discount")
+        if _cancelled:
+            return _cancelled
 
         # ── Optional backdating of the receipt date (default: today) ──────────
         # Allowed range: bill check-in date .. today (no future dates). A date
@@ -1571,7 +1640,8 @@ def recalculate_bill():
         # GST month lock — recalculation rewrites payment_cash /
         # payment_online / balance and regenerates the PDF of an invoice
         # already reported in a filed GSTR-1. Frozen months stay frozen.
-        _locked = _month_lock_response(bill_data, "recalculating this bill")
+        _locked = (_cancelled_bill_response(bill_data, "recalculating it")
+                   or _month_lock_response(bill_data, "recalculating this bill"))
         if _locked:
             return _locked
 
@@ -1583,58 +1653,21 @@ def recalculate_bill():
             return jsonify(success=False, message="Bill is missing required fields"), 400
 
         checkin_dt = datetime.strptime(checkin_time, "%Y-%m-%d %H:%M")
+        stay_payments = _stay_payment_rows(bill_id, room, guest_name, checkin_dt)
 
-        # The bill_id IS the canonical stay_id. Use the FK query when
-        # available — it's complete regardless of date corrections, room
-        # shifts, or any payment-date edits. Multi-query fallback for legacy.
-        stay_payments = []
-        if hasattr(payment_service, "query_payments_by_stay_id"):
-            try:
-                stay_payments = (
-                    payment_service.query_payments_by_stay_id(bill_id) or []
-                )
-            except Exception as _qe:
-                logger.warning(
-                    f"recalculate_bill: query_payments_by_stay_id({bill_id}) "
-                    f"failed: {_qe}; falling back to legacy helper"
-                )
-        if not stay_payments:
-            stay_payments = payment_service.query_payments_for_stay(
-                room, guest_name, checkin_dt, stay_id=bill_id
-            ) or []
-
-        _exclude      = ("refund", "checkout_refund", "manual_refund",
-                         "booking_cancel_refund", "discount", "expense")
-        _refund_types = ("refund", "checkout_refund", "manual_refund",
-                         "booking_cancel_refund")
-
-        # is_live_charge — this route REWRITES these onto a finalised invoice
-        # and regenerates the PDF, so an unguarded sum does not just report the
-        # error, it entrenches it. Recalculating a bill to fix a void used to
-        # re-stamp the same wrong figures.
-        payment_cash = sum(
-            p.get("amount", 0) for p in stay_payments
-            if p.get("method") == "cash" and p.get("type") not in _exclude
-            and payment_service.is_live_charge(p)
-        )
-        payment_online = sum(
-            p.get("amount", 0) for p in stay_payments
-            if p.get("method") == "online" and p.get("type") not in _exclude
-            and payment_service.is_live_charge(p)
-        )
+        # receipt_totals skips voided rows. This route REWRITES these onto a
+        # finalised invoice and regenerates the PDF, so an unguarded sum does
+        # not just report the error, it entrenches it: recalculating a bill to
+        # fix a void used to re-stamp the same wrong figures.
+        _receipts      = payment_service.receipt_totals(stay_payments)
+        payment_cash   = _receipts["cash"]
+        payment_online = _receipts["online"]
         # OTA-settled (MMT prepaid room). Not a drawer receipt, but it does
         # settle the guest's liability, so it must be subtracted from the
         # balance — mirrors create_bill_record. Without this, recalculating an
         # MMT bill would show the full tariff as "balance due".
-        payment_ota = sum(
-            p.get("amount", 0) for p in stay_payments
-            if p.get("method") == "ota" and p.get("type") not in _exclude
-            and payment_service.is_live_charge(p)
-        )
-        total_refunds = sum(
-            p.get("amount", 0) for p in stay_payments
-            if p.get("type") in _refund_types
-        )
+        payment_ota    = _receipts["ota"]
+        total_refunds  = _receipts["refunds"]
 
         total_amount = bill_data.get("total_amount", 0)
         new_balance  = total_amount - payment_cash - payment_online - payment_ota + total_refunds
@@ -1729,7 +1762,8 @@ def update_bill_service():
 
         # GST month lock — editing a service price changes the taxable
         # value of an invoice already reported in a filed GSTR-1.
-        _locked = _month_lock_response(bill_data, "editing a service price")
+        _locked = (_cancelled_bill_response(bill_data, "editing a service price")
+                   or _month_lock_response(bill_data, "editing a service price"))
         if _locked:
             return _locked
 
@@ -1880,7 +1914,8 @@ def edit_bill_room_price():
         # ── Guards ────────────────────────────────────────────────────────────
         # GST month lock — changing the tariff changes the taxable value of an
         # invoice already reported in a filed GSTR-1.
-        _locked = _month_lock_response(bill, "editing the room price")
+        _locked = (_cancelled_bill_response(bill, "editing the room price")
+                   or _month_lock_response(bill, "editing the room price"))
         if _locked:
             return _locked
 
@@ -2651,6 +2686,38 @@ def _signature_block(left: str, right: str = "Authorised Signatory") -> str:
             f'</tr></table>')
 
 
+def _cancelled_banner(b: dict) -> str:
+    """CANCELLED stamp for the top of a cancelled invoice, else "".
+
+    A cancelled invoice keeps its number and figures (Rule 46), so this stamp
+    is what tells a reader, including a guest reopening an old WhatsApp link,
+    that the document has no effect. One bordered table cell with inline
+    styles and plain ASCII text: xhtml2pdf draws that faithfully, and there is
+    no rupee glyph for the PDF path's "Rs." substitution to touch.
+    """
+    if b.get("status") != "cancelled":
+        return ""
+    if b.get("cancel_kind") == "manual":
+        when = _fmt_bill_dt((b.get("cancelled_at_ist") or "")[:16])
+        by = _html_escape(b.get("cancelled_by_name") or "-")
+        detail = (f"Cancelled on {when} by {by}.<br/>"
+                  f"Reason: {_html_escape(b.get('cancel_reason') or '-')}")
+    elif b.get("cancelled_by_revert"):
+        detail = "Cancelled on checkout revert."
+    else:
+        detail = "This invoice has been cancelled."
+    return (
+        '<table class="b-cancel-banner" cellpadding="6" style="width:100%;'
+        'border:2px solid #b91c1c;background-color:#fef2f2;margin:0 0 8px 0;">'
+        '<tr><td style="text-align:center;color:#991b1b;">'
+        '<span style="font-size:15pt;font-weight:bold;letter-spacing:3px;">'
+        'CANCELLED</span><br/>'
+        f'<span style="font-size:8.5pt;">{detail}<br/>'
+        'It carries no tax and nothing is payable against it.</span>'
+        '</td></tr></table>'
+    )
+
+
 def _build_bill_html(b: dict, view: str = None) -> str:
     """Build the bill HTML fragment from a bill record dict.
 
@@ -3221,6 +3288,7 @@ def _build_bill_html(b: dict, view: str = None) -> str:
 
     return f"""
 <div class="b-bill-wrap">
+  {_cancelled_banner(b)}
   {_letterhead("TAX INVOICE")}
   <table class="b-info-outer">
     <tr>
@@ -3720,7 +3788,8 @@ def update_bill_gst():
 
         # GST month lock — recipient details decide B2B vs B2C placement
         # in a GSTR-1 that has already been filed.
-        _locked = _month_lock_response(bill, "editing GST recipient details")
+        _locked = (_cancelled_bill_response(bill, "editing GST recipient details")
+                   or _month_lock_response(bill, "editing GST recipient details"))
         if _locked:
             return _locked
 
@@ -4181,15 +4250,17 @@ def log_bill_activity():
         return jsonify(success=False, message=f"Error: {str(e)}"), 500
 
 
-def _trigger_bill_pdf_refresh(bill_id, prev_bill, fields_changed):
-    """Background-regenerate bill PDF after GST-detail change. Best-effort."""
+def _trigger_bill_pdf_refresh(bill_id, prev_bill, fields_changed,
+                              pdf_status="pending_gst_refresh"):
+    """Background-regenerate the bill PDF after a change to what it prints
+    (GST details, cancellation). `pdf_status` records why. Best-effort."""
     try:
         merged = dict(prev_bill or {})
         merged.update(fields_changed or {})
         try:
             bills_ref.document(bill_id).update({
                 "pdf_url": "",
-                "pdf_status": "pending_gst_refresh",
+                "pdf_status": pdf_status,
             })
         except Exception:
             pass
@@ -4667,6 +4738,12 @@ def issue_credit_note():
             return jsonify(success=False, message="Bill not found"), 404
         bill = snap.to_dict() or {}
 
+        # A cancelled invoice already reports zero value; a credit note
+        # against it would reverse output tax that was never declared.
+        _cancelled = _cancelled_bill_response(bill, "issuing a credit note")
+        if _cancelled:
+            return _cancelled
+
         if not bill.get("bill_number"):
             return jsonify(success=False,
                            message="Cannot issue CN against an un-finalised bill"), 400
@@ -4712,6 +4789,296 @@ def issue_credit_note():
 
     except Exception as e:
         logger.error(f"issue_credit_note error: {e}", exc_info=True)
+        return jsonify(success=False, message=f"Error: {str(e)}"), 500
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# CANCEL BILL (admin): cancel an invoice raised by mistake, GST-compliantly
+# ══════════════════════════════════════════════════════════════════════════════
+
+# The reason is printed on the cancelled invoice and kept in the audit log, so
+# it has to explain something ("dup" is not an explanation) while staying
+# short enough for the PDF banner.
+_CANCEL_REASON_MIN = 10
+_CANCEL_REASON_MAX = 500
+
+
+@billing_bp.route("/cancel_bill", methods=["POST"])
+@requires_permission("bill.cancel")
+def cancel_bill():
+    """
+    Cancel a checked-out invoice raised by mistake, e.g. a second room
+    entered for the same guest and then checked out.
+
+    Body: {bill_id, reason (10-500 chars), confirm: true,
+           remove_receipts: true (optional)}
+
+    Nothing is deleted or renumbered (Rule 46). The bill keeps its number and
+    every amount, becomes status "cancelled" with cancel_kind "manual", and
+    from then on every report that already handles revert-cancelled bills
+    lists it as a cancelled document at zero value (GSTR-1 Table 13).
+    bills_service.cancel_eligibility decides whether that is allowed; the
+    refusals that matter are a filed (locked) month, where the lawful
+    correction is a Section 34 credit note, and money still held for the
+    stay, which has to be refunded first. The exception is a duplicate
+    entry whose advance was typed in but never received: with
+    remove_receipts the operator declares that, and its cash / online
+    entries are removed in the same batch (bills_service.receipt_removal_check
+    decides which can be).
+
+    A pending settle-later balance is cancelled with the bill, and the room's
+    revert-checkout pointer is cleared so the cleaning card stops offering to
+    revert it. All three writes go in one batch.
+    """
+    from datetime import timezone as _tz
+    try:
+        data    = request.get_json(silent=True) or {}
+        bill_id = (data.get("bill_id") or "").strip()
+        reason  = (data.get("reason") or "").strip()
+        if not bill_id:
+            return jsonify(success=False, message="bill_id is required"), 400
+        if not _CANCEL_REASON_MIN <= len(reason) <= _CANCEL_REASON_MAX:
+            return jsonify(success=False, message=(
+                f"Give a reason of {_CANCEL_REASON_MIN} to {_CANCEL_REASON_MAX} "
+                f"characters; it is printed on the cancelled invoice.")), 400
+        if data.get("confirm") is not True:
+            return jsonify(success=False,
+                           message="Confirm the cancellation to continue."), 400
+        remove_receipts = data.get("remove_receipts") is True
+
+        bill_snap = bills_ref.document(bill_id).get()
+        if not bill_snap.exists:
+            return jsonify(success=False, message="Bill not found"), 404
+        bill    = bill_snap.to_dict() or {}
+        bill_no = bill.get("bill_number") or "-"
+        room    = str(bill.get("room") or "")
+        guest_name = bill.get("guest_name") or ""
+        try:
+            checkin_dt = datetime.strptime(bill.get("checkin_time") or "",
+                                           "%Y-%m-%d %H:%M")
+        except ValueError:
+            checkin_dt = None
+
+        rows = _stay_payment_rows(bill_id, room, guest_name, checkin_dt)
+        if rows:
+            receipts = payment_service.receipt_totals(rows)
+        else:
+            # Every check-in writes at least one payment row, so an empty
+            # ledger means the lookup failed (the query helpers log and return
+            # []) or the stay predates the ledger. Judge such a bill by the
+            # receipts printed on it rather than assume nothing was paid.
+            _refunds = bill.get("refunds")
+            receipts = {
+                "cash":    bill.get("payment_cash") or 0,
+                "online":  bill.get("payment_online") or 0,
+                "ota":     bill.get("payment_ota") or 0,
+                "refunds": _refunds if isinstance(_refunds, (int, float)) else 0,
+            }
+
+        settlement_id = bill.get("settlement_id")
+        settlement_snap = (settlements_ref.document(settlement_id).get()
+                           if settlement_id else None)
+        settlement = ((settlement_snap.to_dict() or {})
+                      if settlement_snap is not None and settlement_snap.exists
+                      else None)
+
+        # Same period rule as _month_lock_response: the checkout month is the
+        # GSTR-1 period the invoice was reported in.
+        period = gst_lock_service.normalize_period(bill.get("checkout_time") or "")
+        month_locked = bool(period) and gst_lock_service.is_month_locked(period)
+
+        # Receipts the operator may declare were never received (a duplicate
+        # entry's advance). Checked only when it matters: the lock lookup is
+        # a read per payment month.
+        removable = payment_service.receipt_rows(rows)
+        to_remove = []
+        if remove_receipts and (receipts["cash"] or receipts["online"]):
+            r_ok, r_code, r_msg = bills_service.receipt_removal_check(
+                removable, receipts, gst_lock_service.is_month_locked)
+            if not r_ok:
+                return jsonify(success=False, code=r_code, message=r_msg), 409
+            to_remove = removable
+            receipts = dict(receipts, cash=0, online=0)
+
+        ok, code, message = bills_service.cancel_eligibility(
+            bill, receipts, settlement, month_locked)
+        if code == "ALREADY_CANCELLED":
+            return jsonify(success=True, already_cancelled=True, message=message)
+        if not ok:
+            body = {"success": False, "code": code, "message": message}
+            if code == "MONTH_LOCKED":
+                body["month_locked"] = True
+            elif code == "HAS_RECEIPTS":
+                body.update(receipts)
+                # What the dialog lists under "No money was received", and
+                # whether that option can work for this stay at all.
+                r_ok, _r_code, r_msg = bills_service.receipt_removal_check(
+                    removable, receipts, gst_lock_service.is_month_locked)
+                body["receipt_entries"] = [
+                    {"method": p.get("method"), "amount": p.get("amount", 0) or 0,
+                     "date": p.get("date"), "time": p.get("time")}
+                    for p in removable
+                ]
+                body["can_remove_receipts"] = r_ok
+                if not r_ok:
+                    body["remove_block_reason"] = r_msg
+            return jsonify(**body), 409
+
+        user    = _safe_user() or {}
+        uid     = user.get("userId") or "system"
+        now_ist = datetime.now(IST)
+        now_utc = datetime.now(_tz.utc).isoformat()
+        prev_status = bill.get("status")
+        bill_update = {
+            "status":            "cancelled",
+            "cancel_kind":       "manual",
+            "previous_status":   prev_status,
+            "cancelled_at":      now_utc,
+            "cancelled_at_ist":  now_ist.strftime("%Y-%m-%d %H:%M:%S"),
+            "cancel_reason":     reason,
+            "cancelled_by":      uid,
+            "cancelled_by_name": user.get("name") or uid,
+            "updated_at":        now_utc,
+            **attribution_update(),
+        }
+        # The removed entries leave the ledger, so the bill keeps a copy: the
+        # invoice still reads as issued, and this says why its receipts are
+        # no longer in the books.
+        removed = [
+            {"payment_id": p["id"], "method": p.get("method"),
+             "amount": p.get("amount", 0) or 0, "type": p.get("type"),
+             "date": p.get("date"), "time": p.get("time"),
+             "receipt_no": p.get("receipt_no")}
+            for p in to_remove
+        ]
+        if removed:
+            bill_update["removed_receipts"] = removed
+
+        # Preconditions on the two docs the decision was based on: if a
+        # payment, discount or settlement collection lands on either between
+        # the reads above and this commit, the batch fails instead of
+        # cancelling a bill that is no longer eligible.
+        batch = db.batch()
+        batch.update(bills_ref.document(bill_id), bill_update,
+                     option=db.write_option(last_update_time=bill_snap.update_time))
+
+        # The settle-later balance was only ever owed on this invoice. Same
+        # shape as /cancel_settlement; eligibility refused a collected one.
+        settlement_cancelled = (settlement is not None and
+                                (settlement.get("status") or "").lower() != "cancelled")
+        if settlement_cancelled:
+            batch.update(
+                settlements_ref.document(settlement_id),
+                {
+                    "status":        "cancelled",
+                    "cancel_date":   now_ist.strftime("%Y-%m-%d"),
+                    "cancel_time":   now_ist.strftime("%H:%M"),
+                    "cancel_reason": f"Bill {bill_no} cancelled: {reason}",
+                    **attribution_update(),
+                },
+                option=db.write_option(last_update_time=settlement_snap.update_time),
+            )
+
+        # Declared-never-received entries: deleted, like the admin's own
+        # /delete_stay_payment, so every cash / UPI view drops them without
+        # having to know about voids, and the running totals move back by the
+        # same amount. The room is NOT touched: this stay is checked out and
+        # the room may already hold the next guest. A receipt voucher issued
+        # for a removed cash entry keeps its number and is marked void.
+        if to_remove:
+            by_method = {}
+            for p in to_remove:
+                batch.delete(db.collection("payments").document(p["id"]))
+                by_method[p["method"]] = (by_method.get(p["method"], 0)
+                                          + (p.get("amount", 0) or 0))
+                rv_id = p.get("cash_receipt_id")
+                if rv_id:
+                    rv_ref = db.collection("cash_receipts").document(rv_id)
+                    if rv_ref.get().exists:
+                        batch.update(rv_ref, {
+                            "voided_at":   now_ist.isoformat(),
+                            "void_reason": f"Bill {bill_no} cancelled: {reason}",
+                            "voided_by":   uid,
+                        })
+            totals_delta = {m: firestore.Increment(-a)
+                            for m, a in by_method.items() if a}
+            if totals_delta:
+                batch.update(totals_ref.document("current_totals"), totals_delta)
+
+        # The cleaning card offers "revert checkout" off these pointers. A
+        # revert of a cancelled bill is refused anyway, so stop offering it.
+        room_pointer_cleared = False
+        if room:
+            _room_snap = rooms_ref.document(room).get()
+            if (_room_snap.exists
+                    and (_room_snap.to_dict() or {}).get("last_bill_id") == bill_id):
+                batch.update(rooms_ref.document(room),
+                             {"last_bill_id": None, "last_checkout_at": None})
+                room_pointer_cleared = True
+
+        try:
+            batch.commit()
+        except Exception as _ce:
+            from google.api_core import exceptions as _gexc
+            if isinstance(_ce, _gexc.FailedPrecondition):
+                return jsonify(success=False, code="CHANGED", message=(
+                    "This bill changed while it was being cancelled, so nothing "
+                    "was changed. Reopen it and try again.")), 409
+            raise
+
+        if settlement_cancelled:
+            customer_service.clear_pending_settlement(
+                settlement.get("guest_mobile") or bill.get("guest_mobile") or "",
+                settlement_id=settlement_id)
+        invalidate_rooms_and_totals()
+
+        # Regenerate a stored PDF so the copy already shared with the guest
+        # (the link survives regeneration) shows the CANCELLED stamp. A bill
+        # never rendered to PDF has nothing stale to replace.
+        if bill.get("pdf_url") or bill.get("versions"):
+            _trigger_bill_pdf_refresh(bill_id, bill, bill_update,
+                                      pdf_status="pending_cancel_refresh")
+
+        write_log(
+            "bill.cancel",
+            target_collection="bills",
+            target_id=str(bill_id),
+            before={"status": prev_status,
+                    "total_amount": bill.get("total_amount"),
+                    "balance": bill.get("balance")},
+            after={"status": "cancelled", "cancel_kind": "manual"},
+            metadata={
+                "bill_number":          bill_no,
+                "reason":               reason,
+                "period":               period,
+                "guest_name":           guest_name,
+                "room":                 room,
+                "settlement_id":        settlement_id,
+                "settlement_cancelled": settlement_cancelled,
+                "room_pointer_cleared": room_pointer_cleared,
+                "removed_receipts":     removed,
+            },
+        )
+        logger.info(
+            f"cancel_bill: {bill_id} bill={bill_no} period={period} "
+            f"prev_status={prev_status} settlement_cancelled={settlement_cancelled} "
+            f"by={uid} reason={reason!r}"
+        )
+        _removed_total = sum(r["amount"] for r in removed)
+        return jsonify(
+            success=True,
+            message=(f"Bill {bill_no} cancelled."
+                     + (f" ₹{_removed_total:g} of duplicate payment entries removed."
+                        if removed else "")),
+            settlement_cancelled=settlement_cancelled,
+            removed_receipts=removed,
+            bill={k: bill_update[k] for k in (
+                "status", "cancel_kind", "previous_status", "cancel_reason",
+                "cancelled_by_name", "cancelled_at_ist")},
+        )
+
+    except Exception as e:
+        logger.error(f"cancel_bill error: {e}", exc_info=True)
         return jsonify(success=False, message=f"Error: {str(e)}"), 500
 
 
@@ -4843,6 +5210,10 @@ def generate_invoice(entry_id):
             return jsonify(success=False,
                            message="No bill on record for this stay."), 404
         bill = snap.to_dict() or {}
+
+        _cancelled = _cancelled_bill_response(bill, "generating its invoice")
+        if _cancelled:
+            return _cancelled
 
         checkout_time = (bill.get("checkout_time") or "").strip()
         status = (bill.get("status") or "").strip()

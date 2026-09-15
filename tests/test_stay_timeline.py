@@ -154,6 +154,22 @@ class TestMerge(unittest.TestCase):
 
 
 class TestAppendOp(unittest.TestCase):
+    """append_op hands Firestore an ArrayUnion of exactly one record.
+
+    The stand-in is bound here, at test time, rather than trusted from the
+    module-level stub at the top of this file. In a full-suite run
+    services.stay_timeline has usually been imported already, by an earlier
+    test module and against THAT module's firebase stub, so the assignment up
+    there never reaches the object append_op actually calls. Which file ran
+    first then decided whether this test passed.
+    """
+
+    def setUp(self):
+        firestore = stay_timeline.firestore
+        self.addCleanup(setattr, firestore, "ArrayUnion",
+                        getattr(firestore, "ArrayUnion", None))
+        firestore.ArrayUnion = _ArrayUnion
+
     def test_returns_an_array_union_of_one(self):
         op = stay_timeline.append_op(CLEAN_210)
         self.assertIsInstance(op, _ArrayUnion)

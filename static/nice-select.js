@@ -26,6 +26,16 @@
  * Per-option icons come from a `data-icon` attribute holding a Font Awesome
  * class, e.g. <option value="salary" data-icon="fa-user-tie">Salary</option>.
  * Optional — options without one simply render without an icon.
+ *
+ * A muted second line comes from `data-sub`, e.g.
+ * <option value="213" data-sub="₹800 due">Room 213 · Faqrudin</option>.
+ * Both lines fit inside the 44px row, so options with and without one mix.
+ *
+ * Long lists can opt into a filter box at the top of the panel. It matches
+ * the label and the second line, case-insensitively:
+ *     CibaraSelect.enhance(el, { search: true,
+ *       searchPlaceholder: "Search room or guest",
+ *       noMatchText: "No matching rooms" });
  * ==========================================================================*/
 
 (function () {
@@ -62,6 +72,11 @@
     ".ns-btn-txt{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}",
     ".ns-caret{flex:0 0 auto;color:#a0aec0;font-size:.75rem;transition:transform .15s;}",
     ".ns-wrap.ns-open .ns-caret{transform:rotate(180deg);}",
+    /* Disabled. toggle() already refuses to open a disabled select; without
+       a visual cue the trigger just looked unresponsive. */
+    ".ns-wrap.ns-disabled .ns-btn{background:#f7fafc;color:#a0aec0;",
+    "  border-color:#e2e8f0;cursor:not-allowed;}",
+    ".ns-wrap.ns-disabled .ns-btn-ico,.ns-wrap.ns-disabled .ns-caret{opacity:.5;}",
 
     /* Panel — position:fixed and parented to <body>.
        The expense form is `overflow-y:auto`, which clips absolutely-positioned
@@ -90,7 +105,37 @@
     ".ns-opt-tick{flex:0 0 auto;color:#3182ce;font-size:.82rem;visibility:hidden;}",
     ".ns-opt.ns-chosen .ns-opt-tick{visibility:visible;}",
     ".ns-opt.ns-placeholder{color:#a0aec0;}",
-    ".ns-sep{height:1px;background:#edf2f7;margin:4px 6px;}"
+    ".ns-sep{height:1px;background:#edf2f7;margin:4px 6px;}",
+
+    /* Optional second line (data-sub). Both lines together stay well inside
+       the 44px row, so snapHeight's whole-row maths still holds. */
+    ".ns-opt-main{flex:1;min-width:0;display:flex;flex-direction:column;",
+    "  justify-content:center;gap:1px;}",
+    ".ns-opt-main .ns-opt-txt{flex:0 0 auto;line-height:1.2;}",
+    ".ns-opt-sub{font-size:.76rem;font-weight:400;color:#718096;line-height:1.2;",
+    "  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}",
+    ".ns-opt.ns-chosen .ns-opt-sub{color:#4a78b0;}",
+
+    /* Filter box (opts.search). The panel becomes a column: the box stays put
+       and only the list below it scrolls. The box is exactly one row tall
+       (40px + 4px gap = ROW_H), so the rows under it still end on a whole
+       row. 16px text because iOS zooms the page into any smaller input. */
+    ".ns-panel.ns-has-search{overflow:hidden;}",
+    ".ns-panel.ns-has-search.ns-panel-open{display:flex;flex-direction:column;}",
+    ".ns-search{flex:0 0 auto;position:relative;height:40px;margin-bottom:4px;}",
+    ".ns-search-ico{position:absolute;left:.75rem;top:50%;transform:translateY(-50%);",
+    "  color:#a0aec0;font-size:.85rem;pointer-events:none;}",
+    ".ns-search-input{width:100%;height:100%;margin:0;padding:0 .7rem 0 2.1rem;",
+    "  border:1px solid #e2e8f0;border-radius:9px;background:#f7fafc;",
+    "  font:400 16px 'Inter',system-ui,sans-serif;color:#1a202c;outline:none;",
+    "  -webkit-appearance:none;appearance:none;}",
+    ".ns-search-input:focus{border-color:#3182ce;background:#fff;}",
+    ".ns-list{flex:1 1 auto;min-height:0;overflow-y:auto;",
+    "  overscroll-behavior:contain;-webkit-overflow-scrolling:touch;}",
+    ".ns-no-match{height:44px;display:flex;align-items:center;justify-content:center;",
+    "  color:#a0aec0;font:500 .9rem 'Inter',system-ui,sans-serif;}",
+    /* .ns-opt sets display:flex, which beats the browser's own [hidden] rule. */
+    ".ns-opt[hidden],.ns-no-match[hidden]{display:none;}"
   ].join("");
 
   function ensureStyles() {
@@ -104,6 +149,12 @@
   // Must match .ns-opt height / .ns-panel padding in CSS above.
   var ROW_H = 44, PANEL_PAD = 10, DEFAULT_MAX = 9;  // show 9 rows by default
   var MIN_PANEL_W = 240;                            // never narrower than this
+
+  // Primary pointer is a finger. Focusing an input there raises the on-screen
+  // keyboard, which is not something to do uninvited.
+  function isTouchPrimary() {
+    return !!(window.matchMedia && window.matchMedia("(pointer: coarse)").matches);
+  }
 
   /**
    * Snap a pixel budget down to a whole number of rows.
@@ -173,9 +224,39 @@
 
     var panel = document.createElement("div");
     panel.className = "ns-panel";
-    panel.setAttribute("role", "listbox");
     this.maxH = snapHeight(this.opts.maxHeight || (ROW_H * DEFAULT_MAX + PANEL_PAD));
     panel.style.maxHeight = this.maxH + "px";
+
+    // Rows go in `list`. Without search that is the panel itself, exactly as
+    // before; with search it is a scroller under the filter box.
+    var list = panel;
+    this.searchInput = null;
+    this.noMatch = null;
+    if (this.opts.search) {
+      panel.classList.add("ns-has-search");
+      var box = document.createElement("div");
+      box.className = "ns-search";
+      box.innerHTML =
+        '<i class="ns-search-ico fas fa-search"></i>' +
+        '<input type="text" class="ns-search-input" autocomplete="off" spellcheck="false">';
+      panel.appendChild(box);
+      list = document.createElement("div");
+      list.className = "ns-list";
+      panel.appendChild(list);
+
+      var input = box.querySelector("input");
+      input.placeholder = this.opts.searchPlaceholder || "Search…";
+      input.setAttribute("aria-label", input.placeholder);
+      input.addEventListener("input", function () { self.applyFilter(); });
+      this.searchInput = input;
+
+      // Shown when nothing matches, so an over-specific query reads as "no
+      // results" rather than as an empty, broken panel.
+      this.noMatch = document.createElement("div");
+      this.noMatch.className = "ns-no-match";
+      this.noMatch.textContent = this.opts.noMatchText || "No matches";
+    }
+    list.setAttribute("role", "listbox");
 
     wrap.appendChild(btn);
     document.body.appendChild(panel);   // see the .ns-panel comment above
@@ -183,6 +264,7 @@
     this.wrap = wrap;
     this.btn = btn;
     this.panel = panel;
+    this.list = list;
 
     this.renderOptions();
     this.syncLabel();
@@ -203,7 +285,7 @@
   NiceSelect.prototype.renderOptions = function () {
     var self = this;
     var frag = document.createDocumentFragment();
-    this.rows = [];
+    this.allRows = [];
 
     // An empty-valued option is the "Select…" prompt. On a required field it
     // is not a choice the operator can make, so it is not listed — the
@@ -228,25 +310,48 @@
       row.dataset.value = o.value;
       row.dataset.idx = String(i);
       var ico = o.getAttribute("data-icon") || "";
+      var sub = o.getAttribute("data-sub") || "";
+      var txt = '<span class="ns-opt-txt"></span>';
       row.innerHTML =
         '<i class="ns-opt-ico fas ' + ico + '"></i>' +
-        '<span class="ns-opt-txt"></span>' +
+        (sub ? '<span class="ns-opt-main">' + txt +
+               '<span class="ns-opt-sub"></span></span>' : txt) +
         '<i class="ns-opt-tick fas fa-check"></i>';
-      row.querySelector(".ns-opt-txt").textContent = o.textContent.trim();
+      var label = o.textContent.trim();
+      row.querySelector(".ns-opt-txt").textContent = label;
+      if (sub) row.querySelector(".ns-opt-sub").textContent = sub;
+      // What the filter box matches against.
+      row.dataset.search = (label + " " + sub).toLowerCase();
       row.addEventListener("click", function (e) {
         e.preventDefault();
         e.stopPropagation();
         self.choose(o.value);
       });
       frag.appendChild(row);
-      self.rows.push(row);
+      self.allRows.push(row);
     });
+    if (this.noMatch) frag.appendChild(this.noMatch);
 
-    this.panel.innerHTML = "";
-    this.panel.appendChild(frag);
-    // Rows were replaced; a stale index would index past the new array and
-    // throw on the next Enter press.
-    this.activeIdx = -1;
+    this.list.innerHTML = "";
+    this.list.appendChild(frag);
+    // Rebuilds `rows` and resets the active index. Rows were replaced; a
+    // stale index would index past the new array and throw on the next Enter.
+    this.applyFilter();
+  };
+
+  /**
+   * Show only the rows matching the filter box. `rows` is always the VISIBLE
+   * subset, so arrow keys, Enter and type-ahead walk what is on screen.
+   */
+  NiceSelect.prototype.applyFilter = function () {
+    var q = this.searchInput ? this.searchInput.value.trim().toLowerCase() : "";
+    this.rows = this.allRows.filter(function (r) {
+      r.hidden = !!q && r.dataset.search.indexOf(q) === -1;
+      return !r.hidden;
+    });
+    if (this.noMatch) this.noMatch.hidden = this.rows.length > 0;
+    // While filtering, highlight the first match so Enter takes it.
+    this.setActive(q && this.rows.length ? 0 : -1);
   };
 
   NiceSelect.prototype.syncLabel = function () {
@@ -266,9 +371,13 @@
     bIco.className = "ns-btn-ico fas " + ico;
     bIco.style.display = ico ? "" : "none";
 
-    this.rows.forEach(function (r) {
+    this.allRows.forEach(function (r) {
       r.classList.toggle("ns-chosen", !!val && r.dataset.value === val);
     });
+
+    var off = this.select.disabled;
+    this.wrap.classList.toggle("ns-disabled", off);
+    this.btn.disabled = off;
   };
 
   NiceSelect.prototype.choose = function (value) {
@@ -297,7 +406,11 @@
     p.style.width = w + "px";
     p.style.left = Math.max(4, Math.min(r.left, window.innerWidth - w - 4)) + "px";
 
-    var need = Math.min(p.scrollHeight + 10, this.maxH);
+    // With a filter box the list is the scroller, so measure the rows there
+    // and add the box row and the panel padding.
+    var content = this.list === p ? p.scrollHeight
+      : this.list.scrollHeight + ROW_H + PANEL_PAD;
+    var need = Math.min(content + 10, this.maxH);
     var below = window.innerHeight - r.bottom;
     if (below < need && r.top > below) {
       // Flip up. Cap the height to what is actually available so the panel
@@ -324,14 +437,28 @@
     var chosen = this.panel.querySelector(".ns-chosen");
     this.setActive(chosen ? this.rows.indexOf(chosen) : 0);
     if (chosen) chosen.scrollIntoView({ block: "nearest" });
+    // Straight into the filter box with a mouse and keyboard. Not on touch:
+    // the on-screen keyboard would cover the list the operator came to tap.
+    if (this.searchInput && !isTouchPrimary()) {
+      this.searchInput.focus({ preventScroll: true });
+    }
   };
 
   NiceSelect.prototype.close = function () {
+    // Focus in the filter box would fall to <body> once the panel hides.
+    var hadFocus = this.panel.contains(document.activeElement);
     this.wrap.classList.remove("ns-open", "ns-up");
     this.panel.classList.remove("ns-panel-open");
     this.btn.setAttribute("aria-expanded", "false");
+    // A filter left from the last visit would hide options the next time
+    // the panel opens, with nothing on screen to say why.
+    if (this.searchInput && this.searchInput.value) {
+      this.searchInput.value = "";
+      this.applyFilter();
+    }
     this.setActive(-1);
     if (openInstance === this) openInstance = null;
+    if (hadFocus) this.btn.focus();
   };
 
   NiceSelect.prototype.toggle = function () {
@@ -340,7 +467,8 @@
   };
 
   NiceSelect.prototype.setActive = function (i) {
-    this.rows.forEach(function (r) { r.classList.remove("ns-active"); });
+    // All rows: a highlight left on a filtered-out row would reappear with it.
+    this.allRows.forEach(function (r) { r.classList.remove("ns-active"); });
     this.activeIdx = i;
     if (i >= 0 && this.rows[i]) {
       this.rows[i].classList.add("ns-active");
@@ -358,9 +486,18 @@
 
   NiceSelect.prototype.onKey = function (e) {
     var isOpen = this.wrap.classList.contains("ns-open");
+    // Keys in the filter box edit the query; only list navigation is taken.
+    var inSearch = !!this.searchInput && e.target === this.searchInput;
 
     if (e.key === "Escape") {
       if (isOpen) { e.preventDefault(); this.close(); }
+      return;
+    }
+    if (e.key === "Tab" && inSearch) {
+      // The panel lives at the end of <body>, so the browser's next tab stop
+      // is nowhere near the form. Close and return to the trigger instead.
+      e.preventDefault();
+      this.close();
       return;
     }
     if (e.key === "ArrowDown" || e.key === "ArrowUp") {
@@ -369,20 +506,30 @@
       this.move(e.key === "ArrowDown" ? 1 : -1);
       return;
     }
-    if (e.key === "Enter" || e.key === " ") {
+    if (e.key === "Enter" || (e.key === " " && !inSearch)) {
       e.preventDefault();
       if (!isOpen) { this.open(); return; }
       if (this.activeIdx >= 0) this.choose(this.rows[this.activeIdx].dataset.value);
       return;
     }
     if (e.key === "Home" || e.key === "End") {
-      if (!isOpen) return;
+      if (!isOpen || inSearch) return;
       e.preventDefault();
       this.setActive(e.key === "Home" ? 0 : this.rows.length - 1);
       return;
     }
     // Type-ahead: typing "sa" jumps to Salary, the way a native select does.
     if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      if (inSearch) return;   // the input event does the filtering
+      if (this.searchInput) {
+        // Typing on the trigger starts the filter instead of being dropped.
+        e.preventDefault();
+        if (!isOpen) this.open();
+        this.searchInput.value += e.key;
+        this.searchInput.focus({ preventScroll: true });
+        this.applyFilter();
+        return;
+      }
       var now = Date.now();
       this.typeBuf = (now - this.typeAt > 900) ? e.key : this.typeBuf + e.key;
       this.typeAt = now;
@@ -404,8 +551,18 @@
   });
   // A panel positioned against the viewport must not linger while the modal
   // scrolls underneath it.
+  //
+  // Except while the filter box has focus: Android can resize the viewport
+  // for the on-screen keyboard, and closing would dismiss the panel the
+  // moment the operator starts typing. Follow the new size instead.
   window.addEventListener("resize", function () {
-    if (openInstance) openInstance.close();
+    if (!openInstance) return;
+    if (openInstance.searchInput &&
+        document.activeElement === openInstance.searchInput) {
+      openInstance.position();
+      return;
+    }
+    openInstance.close();
   });
   // Capture phase so scrolling INSIDE the modal body counts, not just the page.
   window.addEventListener("scroll", function () {

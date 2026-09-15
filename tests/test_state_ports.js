@@ -288,6 +288,70 @@ t('multiple rooms are keyed independently', () => {
   assert.deepStrictEqual(Object.keys(u).sort(), ['205', '207']);
 });
 
+// ══════════════════════════════════════════════════════════════════════════
+section('CibaraRateChange  <- services/rate_segments.py :: plan_rate_change');
+// ══════════════════════════════════════════════════════════════════════════
+// The Edit Room Price modal previews /edit_room_price with this port. Both
+// halves run tests/rate_change_cases.json (tests/test_rate_segments.py is the
+// Python one), so a rule changed on one side only fails here.
+
+function loadCibaraRateChange() {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'static', 'script.js'), 'utf8');
+  const startMarker = 'window.CibaraRateChange = (function () {';
+  const start = src.indexOf(startMarker);
+  if (start === -1) {
+    throw new Error(
+      'Could not find the CibaraRateChange block in static/script.js. If it ' +
+      'was renamed or moved, update loadCibaraRateChange() here.',
+    );
+  }
+  const endMarker = '\n})();';
+  const end = src.indexOf(endMarker, start);
+  if (end === -1) throw new Error('Could not find the end of the CibaraRateChange block.');
+  // The port is pure: no globals besides the window it assigns to.
+  const sandbox = { window: {} };
+  vm.createContext(sandbox);
+  vm.runInContext(src.slice(start, end + endMarker.length), sandbox,
+                  { filename: 'script.js:CibaraRateChange' });
+  return sandbox.window.CibaraRateChange;
+}
+
+const RC = loadCibaraRateChange();
+const RATE_CASES = JSON.parse(
+  fs.readFileSync(path.join(__dirname, 'rate_change_cases.json'), 'utf8'));
+// Results are built inside the vm context, whose Object.prototype differs
+// from this one; a JSON round trip compares the data and nothing else.
+const plain = (v) => JSON.parse(JSON.stringify(v));
+
+RATE_CASES.current_night.forEach((c) => {
+  t('current night: ' + c.name, () => {
+    assert.strictEqual(RC.currentNight(c.checkin_time, c.now), c.expected);
+  });
+});
+
+RATE_CASES.plan.forEach((c) => {
+  t(c.name, () => {
+    const got = plain(RC.plan(c.room, c.guest, c.renewal_count, c.new_price,
+                              c.effective, c.night));
+    assert.deepStrictEqual(got, 'error' in c ? { error: c.error } : c.expected);
+  });
+});
+
+t('the IST clock stamp is one currentNight can read', () => {
+  assert.match(RC.istNow(), /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/);
+  assert.ok(RC.currentNight('2026-01-01 00:00', RC.istNow()) >= 1);
+});
+
+t('the guest passed in is not modified', () => {
+  const guest = {
+    price: 600, transfer_day_offset: 2,
+    pre_transfer_charges: [{ days: 2, price: 400, total: 800, from_room: '213', kind: 'rate_change' }],
+  };
+  const before = JSON.stringify(guest);
+  RC.plan('213', guest, 1, 650, 'today', 2);
+  assert.strictEqual(JSON.stringify(guest), before);
+});
+
 // ── Result ────────────────────────────────────────────────────────────────
 console.log('\n' + pass + ' passed, ' + failures.length + ' failed');
 if (failures.length) {

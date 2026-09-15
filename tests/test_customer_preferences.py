@@ -21,6 +21,7 @@ from __future__ import annotations
 import sys
 import threading
 import types
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -143,15 +144,37 @@ def test_whatsapp_share_sets_it_too(db):
     assert db.docs[MOB]["wants_bill_source"] == "whatsapp"
 
 
-def test_since_is_stamped_once_and_never_moves(db):
+def test_since_is_stamped_once_and_never_moves(db, monkeypatch):
+    """since is written once; last_at is rewritten on every sighting.
+
+    The clock is injected rather than read. Comparing two real
+    datetime.now() calls was testing the operating system's timer
+    resolution, not this logic: on Windows both calls land inside the same
+    tick and come back byte-identical, so the assertion failed there and
+    passed on Linux for no reason either platform could help. A clock that
+    provably advances tests what the function is actually for.
+    """
+    base = datetime(2026, 9, 15, 12, 0, 0, tzinfo=timezone.utc)
+    calls = {"n": 0}
+
+    class _TickingClock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            calls["n"] += 1
+            return base + timedelta(minutes=calls["n"])
+
+    monkeypatch.setattr(cs, "datetime", _TickingClock)
+
     cs.remember_bill_preference(MOB, source="print")
     _join_threads()
     first_since = db.docs[MOB]["wants_bill_since"]
+    first_last_at = db.docs[MOB]["wants_bill_last_at"]
+    assert first_since == first_last_at        # both stamped by the same call
 
     cs.remember_bill_preference(MOB, source="whatsapp")
     _join_threads()
     assert db.docs[MOB]["wants_bill_since"] == first_since      # unchanged
-    assert db.docs[MOB]["wants_bill_last_at"] > first_since      # but seen again
+    assert db.docs[MOB]["wants_bill_last_at"] > first_last_at   # but seen again
     assert db.docs[MOB]["wants_bill_source"] == "whatsapp"
 
 

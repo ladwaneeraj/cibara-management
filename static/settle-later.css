@@ -182,3 +182,684 @@
   color: var(--gray);
   margin-top: 0.25rem;
 }
+
+/* The collect-settlement modal is opened from the check-in modal's
+   pending-balance banner as well as from the Pending Payments list, so it has
+   to stack above another modal that is already open. */
+#collect-settlement-modal.show {
+  z-index: 10060;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   Collect balance sheet (#collect-settlement-modal)
+   ───────────────────────────────────────────────────────────────────────
+   The sheet is scoped to this modal so the generic .modal-content,
+   .payment-btn and .action-btn rules used everywhere else are untouched.
+
+   Order follows the job: what is owed, how much is being taken, how it was
+   paid, then a collapsed section for the rare receipt-date / discount case.
+   The action bar is pinned so the amount button never scrolls out of reach
+   on a phone, which is where this is used.
+   ═══════════════════════════════════════════════════════════════════════ */
+#collect-settlement-modal .sl-sheet {
+  max-width: 420px;
+  width: 92%;
+  padding: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  max-height: 92vh;
+  border-radius: 16px;
+}
+
+#collect-settlement-modal .sl-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.9rem 1.1rem;
+  border-bottom: 1px solid #eef1f5;
+  flex-shrink: 0;
+}
+#collect-settlement-modal .sl-head h2 {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 700;
+  color: #0f172a;
+}
+#collect-settlement-modal .sl-head .close-btn {
+  background: none;
+  border: none;
+  font-size: 1.4rem;
+  line-height: 1;
+  color: #94a3b8;
+  cursor: pointer;
+  padding: 0 0.2rem;
+}
+
+#collect-settlement-modal .sl-body {
+  padding: 0 1.1rem 0.9rem;
+  overflow-y: auto;
+  flex: 1;
+}
+
+/* ── What is owed. The figure is read out to the guest, so it leads. ── */
+#collect-settlement-modal .sl-hero {
+  text-align: center;
+  padding: 1.1rem 0 0.9rem;
+  border-bottom: 1px dashed #e7ebf0;
+  margin-bottom: 0.9rem;
+}
+#collect-settlement-modal .sl-amount {
+  font-size: 2.3rem;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  color: #b45309;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+}
+#collect-settlement-modal .sl-owed {
+  font-size: 0.86rem;
+  color: #475569;
+  margin-top: 0.15rem;
+}
+#collect-settlement-modal .sl-owed b { color: #0f172a; }
+#collect-settlement-modal .sl-meta {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  font-size: 0.76rem;
+  color: #94a3b8;
+  margin-top: 0.25rem;
+}
+#collect-settlement-modal .sl-meta b { color: #64748b; font-weight: 600; }
+#collect-settlement-modal .sl-dot {
+  width: 3px; height: 3px; border-radius: 50%; background: #cbd5e1;
+}
+#collect-settlement-modal .sl-call {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin-top: 0.6rem;
+  padding: 0.3rem 0.7rem;
+  border: 1px solid #e2e8f0;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: #2563eb;
+  text-decoration: none;
+}
+#collect-settlement-modal .sl-call i { font-size: 0.72em; }
+#collect-settlement-modal .sl-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.4rem;
+  justify-content: center;
+  margin-top: 0.55rem;
+  font-size: 0.78rem;
+  color: #64748b;
+  font-style: italic;
+}
+#collect-settlement-modal .sl-note i { margin-top: 0.15rem; font-style: normal; }
+
+/* ── Fields ── */
+#collect-settlement-modal .sl-field { margin-bottom: 0.85rem; }
+#collect-settlement-modal .sl-label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.3rem;
+}
+#collect-settlement-modal .sl-label {
+  display: block;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #64748b;
+  margin-bottom: 0.3rem;
+}
+#collect-settlement-modal .sl-label-row .sl-label { margin-bottom: 0; }
+#collect-settlement-modal .sl-chip {
+  border: 1px solid #e2e8f0;
+  background: #fff;
+  color: #2563eb;
+  font-size: 0.72rem;
+  font-weight: 700;
+  padding: 0.22rem 0.55rem;
+  border-radius: 999px;
+  cursor: pointer;
+}
+#collect-settlement-modal .sl-chip:hover { background: #eff6ff; }
+
+#collect-settlement-modal .sl-money {
+  display: flex;
+  align-items: center;
+  border: 1.5px solid #cbd5e1;
+  border-radius: 10px;
+  padding: 0 0.75rem;
+  background: #fff;
+}
+#collect-settlement-modal .sl-money:focus-within {
+  border-color: #2563eb;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+}
+#collect-settlement-modal .sl-money-cur {
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: #94a3b8;
+  margin-right: 0.4rem;
+}
+#collect-settlement-modal .sl-money input {
+  flex: 1;
+  border: none;
+  outline: none;
+  padding: 0.7rem 0;
+  font-size: 1.35rem;
+  font-weight: 700;
+  color: #0f172a;
+  background: transparent;
+  font-variant-numeric: tabular-nums;
+  width: 100%;
+}
+#collect-settlement-modal .sl-money-sm input { font-size: 1rem; padding: 0.55rem 0; }
+#collect-settlement-modal .sl-money-sm .sl-money-cur { font-size: 0.95rem; }
+
+#collect-settlement-modal .sl-input {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1.5px solid #cbd5e1;
+  border-radius: 10px;
+  padding: 0.6rem 0.7rem;
+  font-size: 0.92rem;
+  color: #0f172a;
+  background: #fff;
+}
+#collect-settlement-modal .sl-input:focus {
+  outline: none;
+  border-color: #2563eb;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+}
+#collect-settlement-modal .sl-help {
+  display: block;
+  font-size: 0.72rem;
+  color: #94a3b8;
+  margin-top: 0.25rem;
+}
+
+/* ── Cash / UPI. Two buttons, one choice, both the same weight. ── */
+#collect-settlement-modal .sl-seg {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.5rem;
+}
+#collect-settlement-modal .sl-seg .payment-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  min-height: 46px;
+  padding: 0.5rem 0.4rem;
+  border: 1.5px solid #e2e8f0;
+  border-radius: 10px;
+  background: #fff;
+  color: #475569;
+  font-size: 0.88rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: none;
+}
+#collect-settlement-modal .sl-seg .payment-btn i { color: #94a3b8; }
+#collect-settlement-modal .sl-seg .payment-btn.active {
+  border-color: #0f9d58;
+  background: #ecfdf3;
+  color: #0b6b3d;
+}
+#collect-settlement-modal .sl-seg .payment-btn.active i { color: #0f9d58; }
+#collect-settlement-modal .sl-seg .payment-btn.online.active {
+  border-color: #2563eb;
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+#collect-settlement-modal .sl-seg .payment-btn.online.active i { color: #2563eb; }
+
+/* ── Breakdown ── */
+#collect-settlement-modal .sl-breakdown {
+  border: 1px solid #e7ebf0;
+  border-radius: 10px;
+  padding: 0.6rem 0.75rem;
+  background: #f8fafc;
+  font-size: 0.84rem;
+  margin-bottom: 0.85rem;
+}
+
+/* ── The rare half ── */
+#collect-settlement-modal .sl-more {
+  border-top: 1px solid #eef1f5;
+  padding-top: 0.6rem;
+}
+#collect-settlement-modal .sl-more > summary {
+  list-style: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #475569;
+  padding: 0.3rem 0;
+}
+#collect-settlement-modal .sl-more > summary::-webkit-details-marker { display: none; }
+#collect-settlement-modal .sl-more > summary i {
+  font-size: 0.7em;
+  color: #94a3b8;
+  transition: transform 0.15s ease;
+}
+#collect-settlement-modal .sl-more[open] > summary i { transform: rotate(90deg); }
+#collect-settlement-modal .sl-more[open] > summary { margin-bottom: 0.5rem; }
+
+#collect-settlement-modal .sl-radio {
+  display: flex;
+  gap: 0.5rem;
+  align-items: flex-start;
+  padding: 0.5rem 0.6rem;
+  border: 1.5px solid #e2e8f0;
+  border-radius: 10px;
+  cursor: pointer;
+  margin-bottom: 0.4rem;
+}
+#collect-settlement-modal .sl-radio-good { border-color: #a5d6a7; background: #f1f8f2; }
+#collect-settlement-modal .sl-radio input { margin-top: 0.2rem; }
+#collect-settlement-modal .sl-radio b { font-size: 0.86rem; color: #0f172a; }
+#collect-settlement-modal .sl-radio span span {
+  display: block;
+  font-size: 0.78rem;
+  color: #64748b;
+  margin-top: 0.1rem;
+}
+
+/* ── Action bar: pinned, so the amount button is always one tap away ── */
+#collect-settlement-modal .sl-foot {
+  display: flex;
+  gap: 0.6rem;
+  align-items: center;
+  padding: 0.75rem 1.1rem;
+  border-top: 1px solid #eef1f5;
+  background: #fff;
+  flex-shrink: 0;
+}
+#collect-settlement-modal .sl-btn-ghost {
+  border: 1px solid #fecaca;
+  background: #fff;
+  color: #b91c1c;
+  font-size: 0.8rem;
+  font-weight: 600;
+  padding: 0.65rem 0.7rem;
+  border-radius: 10px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+#collect-settlement-modal .sl-btn-ghost:hover { background: #fef2f2; }
+#collect-settlement-modal .sl-btn-primary {
+  flex: 1;
+  border: none;
+  background: #0f9d58;
+  color: #fff;
+  font-size: 0.95rem;
+  font-weight: 700;
+  padding: 0.75rem 0.8rem;
+  border-radius: 10px;
+  cursor: pointer;
+  min-height: 46px;
+}
+#collect-settlement-modal .sl-btn-primary:hover { background: #0c8a4c; }
+#collect-settlement-modal .sl-btn-primary:disabled { opacity: 0.65; cursor: not-allowed; }
+
+@media (max-width: 480px) {
+  #collect-settlement-modal .sl-sheet { width: 100%; max-width: 100%; max-height: 94vh; border-radius: 16px 16px 0 0; align-self: flex-end; }
+  #collect-settlement-modal .sl-amount { font-size: 2rem; }
+  #collect-settlement-modal .sl-btn-ghost { padding: 0.65rem 0.55rem; font-size: 0.76rem; }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Pending Payments — the collections list
+   ═══════════════════════════════════════════════════════════════════════════
+   Built for a phone held at arm's length behind a desk, in a room that is
+   not always well lit. That sets the type scale: the guest's name and the
+   amount owed are the two things read from a distance, so they are 1.05rem
+   and 1.45rem against a 0.8rem supporting line, and nothing meaningful is
+   smaller than 0.78rem.
+
+   One accent colour does one job. Teal is money coming in (the Collect
+   button, the paid state). Amber and red are age, never status — a red chip
+   on this screen always means "this has been owed a long time", so the
+   operator never has to ask which red they are looking at.
+   ────────────────────────────────────────────────────────────────────────── */
+
+.psx-modal {
+  max-width: 560px;
+  width: 100%;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  max-height: min(88vh, 900px);
+  overflow: hidden;
+}
+
+/* ── Header: what is owed, before anything else ── */
+.psx-head {
+  padding: 1.15rem 1.25rem 0.9rem;
+  border-bottom: 1px solid #eef2f7;
+  background: #fff;
+}
+.psx-head-row {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  gap: 1rem;
+}
+.psx-title {
+  margin: 0;
+  font: 700 1.2rem/1.2 'Inter', system-ui, sans-serif;
+  color: #0f172a;
+  letter-spacing: -0.01em;
+}
+.psx-head .close-btn {
+  background: none; border: none; cursor: pointer;
+  font-size: 1.6rem; line-height: 1; color: #94a3b8;
+  padding: 0 0.15rem; margin: -0.2rem -0.2rem 0 0;
+}
+.psx-head .close-btn:hover { color: #475569; }
+
+.psx-summary {
+  display: flex; align-items: baseline; flex-wrap: wrap;
+  gap: 0.35rem 0.6rem;
+  margin-top: 0.7rem;
+}
+.psx-summary[hidden] { display: none; }
+.psx-sum-main { display: flex; align-items: baseline; gap: 0.45rem; }
+.psx-sum-amt {
+  font: 800 1.75rem/1 'Inter', system-ui, sans-serif;
+  color: #b45309;               /* money still out, not money earned */
+  letter-spacing: -0.02em;
+}
+.psx-sum-lbl {
+  font: 600 0.82rem 'Inter', system-ui, sans-serif; color: #64748b;
+}
+.psx-sum-side {
+  font: 500 0.8rem 'Inter', system-ui, sans-serif; color: #94a3b8;
+  margin-left: auto;
+}
+.psx-sum-dot { margin: 0 0.3rem; }
+
+/* ── Controls ── */
+.psx-controls {
+  padding: 0.8rem 1.25rem;
+  border-bottom: 1px solid #eef2f7;
+  background: #fbfcfe;
+  display: flex; flex-direction: column; gap: 0.65rem;
+}
+.psx-filters {
+  display: flex; gap: 0.4rem; flex-wrap: wrap; margin: 0;
+}
+.psx-filters .filter-btn {
+  flex: 0 0 auto;
+  padding: 0.5rem 0.95rem;
+  border: 1px solid #dbe2ea; border-radius: 999px;
+  background: #fff; color: #475569; cursor: pointer;
+  font: 600 0.85rem 'Inter', system-ui, sans-serif;
+}
+.psx-filters .filter-btn:hover { background: #f1f5f9; }
+.psx-filters .filter-btn.active {
+  background: #1d4ed8; border-color: #1d4ed8; color: #fff;
+}
+/* Search and sort share a line: they are the same act — narrowing a list
+   down to the row you want — and splitting them onto two rows pushed the
+   first card below the fold on a phone. */
+.psx-search-row { display: flex; gap: 0.5rem; align-items: stretch; }
+.psx-search { position: relative; display: block; flex: 1 1 auto; min-width: 0; }
+.psx-search i {
+  position: absolute; left: 0.85rem; top: 50%; transform: translateY(-50%);
+  color: #94a3b8; font-size: 0.85rem; pointer-events: none;
+}
+.psx-search input {
+  width: 100%; box-sizing: border-box;
+  padding: 0.65rem 0.9rem 0.65rem 2.35rem;
+  border: 1px solid #dbe2ea; border-radius: 10px;
+  font: 500 0.9rem 'Inter', system-ui, sans-serif; color: #0f172a;
+  background: #fff;
+}
+.psx-search input:focus {
+  outline: 2px solid rgba(37, 99, 235, 0.18); border-color: #2563eb;
+}
+
+/* A native select, on purpose: it gets the platform's own picker — a proper
+   wheel on a phone — for free, and it is the one control here an operator
+   might use with a thumb while holding a phone in the other hand. */
+.psx-sort {
+  position: relative; display: flex; align-items: center;
+  flex: 0 0 auto;
+  border: 1px solid #dbe2ea; border-radius: 10px; background: #fff;
+  padding-left: 0.7rem; color: #475569;
+}
+.psx-sort:focus-within {
+  outline: 2px solid rgba(37, 99, 235, 0.18); border-color: #2563eb;
+}
+.psx-sort > i { font-size: 0.82rem; color: #94a3b8; pointer-events: none; }
+.psx-sort select {
+  appearance: none; -webkit-appearance: none;
+  border: none; background: transparent; outline: none;
+  padding: 0.65rem 1.9rem 0.65rem 0.45rem;
+  font: 600 0.85rem 'Inter', system-ui, sans-serif; color: #334155;
+  cursor: pointer;
+}
+/* The chevron, drawn rather than imported so it cannot go missing with the
+   icon font. */
+.psx-sort::after {
+  content: ""; position: absolute; right: 0.75rem; top: 50%;
+  width: 0.42rem; height: 0.42rem; margin-top: -0.28rem;
+  border-right: 2px solid #94a3b8; border-bottom: 2px solid #94a3b8;
+  transform: rotate(45deg); pointer-events: none;
+}
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+
+/* ── List ── */
+.psx-list {
+  flex: 1 1 auto; overflow-y: auto;
+  padding: 0.9rem 1.25rem 1.25rem;
+  background: #f6f8fb;
+  display: flex; flex-direction: column; gap: 0.8rem;
+  -webkit-overflow-scrolling: touch;
+}
+
+.psx-card {
+  background: #fff;
+  border: 1px solid #e6ecf3;
+  border-radius: 14px;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+  overflow: hidden;
+  /* The list is a flex column, and a flex item shrinks below its content by
+     default. Without this the last card was squashed by ~37px on a phone and
+     `overflow: hidden` cut the Collect button in half — the one control on
+     the row that matters. */
+  flex: 0 0 auto;
+}
+/* The left edge carries the state, so a scan down the list reads as a column
+   of colour before a single word is read. */
+.psx-card.is-open { border-left: 4px solid #f59e0b; }
+.psx-card.is-closed { border-left: 4px solid #cbd5e1; opacity: 0.92; }
+.psx-card[data-status="paid"] { border-left-color: #10b981; }
+.psx-card[data-status="cancelled"] { border-left-color: #94a3b8; }
+
+.psx-card-top {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  gap: 0.9rem; padding: 0.95rem 1rem 0.75rem;
+}
+.psx-who { min-width: 0; }
+.psx-name {
+  margin: 0 0 0.25rem;
+  font: 700 1.05rem/1.25 'Inter', system-ui, sans-serif;
+  color: #0f172a;
+  overflow-wrap: anywhere;
+}
+.psx-phone {
+  display: inline-flex; align-items: center; gap: 0.4rem;
+  font: 600 0.88rem 'Inter', system-ui, sans-serif;
+  color: #1d4ed8; text-decoration: none;
+}
+.psx-phone:hover { text-decoration: underline; }
+.psx-phone i { font-size: 0.78rem; }
+
+.psx-amount-col {
+  text-align: right; flex: 0 0 auto;
+  display: flex; flex-direction: column; align-items: flex-end; gap: 0.35rem;
+}
+.psx-amount {
+  font: 800 1.45rem/1 'Inter', system-ui, sans-serif;
+  color: #0f172a; letter-spacing: -0.02em; white-space: nowrap;
+}
+.psx-amount-nil {
+  font: 600 0.92rem 'Inter', system-ui, sans-serif; color: #64748b;
+  letter-spacing: 0;
+}
+.psx-badges { display: flex; align-items: center; gap: 0.3rem; }
+.psx-status, .psx-age {
+  display: inline-block; padding: 0.2rem 0.5rem; border-radius: 999px;
+  font: 700 0.7rem 'Inter', system-ui, sans-serif; white-space: nowrap;
+}
+.psx-st-pending { background: #fef3c7; color: #92400e; }
+.psx-st-partial { background: #dbeafe; color: #1e40af; }
+.psx-st-paid { background: #d1fae5; color: #065f46; }
+.psx-st-cancelled { background: #e2e8f0; color: #475569; }
+.psx-st-other { background: #e2e8f0; color: #475569; }
+/* Age, never status. Red here only ever means "owed a long time". */
+.psx-age-new { background: #f1f5f9; color: #64748b; }
+.psx-age-warn { background: #ffedd5; color: #9a3412; }
+.psx-age-old { background: #fee2e2; color: #991b1b; }
+
+/* ── The stay ── */
+.psx-stay {
+  padding: 0.7rem 1rem;
+  background: #fbfcfe;
+  border-top: 1px solid #f1f5f9;
+  border-bottom: 1px solid #f1f5f9;
+}
+.psx-billno {
+  display: inline-flex; align-items: center; gap: 0.42rem;
+  font: 700 0.86rem/1.2 'Inter', ui-monospace, monospace;
+  color: #0f172a; letter-spacing: 0.01em;
+}
+.psx-billno i { color: #94a3b8; font-size: 0.8rem; }
+.psx-billno-missing { color: #94a3b8; font-weight: 600; font-style: italic; }
+.psx-dates {
+  margin-top: 0.3rem;
+  font: 500 0.84rem 'Inter', system-ui, sans-serif; color: #475569;
+}
+.psx-facts {
+  display: flex; flex-wrap: wrap; gap: 0.35rem; margin-top: 0.5rem;
+}
+.psx-fact {
+  display: inline-flex; align-items: center; gap: 0.32rem;
+  padding: 0.22rem 0.55rem; border-radius: 7px;
+  background: #eef2f7; color: #334155;
+  font: 600 0.78rem 'Inter', system-ui, sans-serif; white-space: nowrap;
+}
+.psx-fact i { font-size: 0.72rem; color: #64748b; }
+.psx-fact-ota { background: #ede9fe; color: #5b21b6; }
+.psx-fact-ota i { color: #7c3aed; }
+.psx-money {
+  margin-top: 0.5rem; display: flex; flex-wrap: wrap; gap: 0.25rem;
+  font: 500 0.8rem 'Inter', system-ui, sans-serif; color: #64748b;
+}
+.psx-money b { color: #0f172a; font-weight: 700; }
+.psx-money-sep { color: #cbd5e1; }
+
+/* ── History, discount, note ── */
+.psx-history { padding: 0.6rem 1rem; border-bottom: 1px solid #f1f5f9; }
+.psx-history-hd {
+  font: 700 0.72rem 'Inter', system-ui, sans-serif;
+  text-transform: uppercase; letter-spacing: 0.06em; color: #94a3b8;
+  margin-bottom: 0.35rem;
+}
+.psx-history-row {
+  display: flex; align-items: center; gap: 0.5rem;
+  font: 500 0.82rem 'Inter', system-ui, sans-serif; color: #475569;
+  padding: 0.15rem 0;
+}
+.psx-history-row b { margin-left: auto; color: #0f172a; }
+.psx-pay-mode {
+  padding: 0.1rem 0.4rem; border-radius: 5px;
+  background: #e2e8f0; color: #475569;
+  font: 700 0.7rem 'Inter', system-ui, sans-serif; text-transform: capitalize;
+}
+.psx-pay-mode.cash { background: #d1fae5; color: #065f46; }
+.psx-pay-mode.online { background: #dbeafe; color: #1e40af; }
+
+.psx-note {
+  display: flex; align-items: flex-start; gap: 0.45rem;
+  padding: 0.55rem 1rem;
+  font: 500 0.83rem/1.4 'Inter', system-ui, sans-serif; color: #475569;
+  background: #fffbeb; border-bottom: 1px solid #fef3c7;
+  overflow-wrap: anywhere;
+}
+.psx-note i { color: #d97706; margin-top: 0.15rem; font-size: 0.8rem; }
+.psx-note-discount { background: #f5f3ff; border-bottom-color: #ede9fe; }
+.psx-note-discount i { color: #7c3aed; }
+
+/* ── Footer ── */
+.psx-card-foot { padding: 0.75rem 1rem 0.9rem; }
+.psx-collect {
+  display: flex; align-items: center; justify-content: center; gap: 0.5rem;
+  width: 100%; min-height: 48px;          /* a real tap target */
+  border: none; border-radius: 11px;
+  background: #0d9488; color: #fff;
+  font: 700 0.98rem 'Inter', system-ui, sans-serif;
+  cursor: pointer;
+}
+.psx-collect:hover { background: #0f766e; }
+.psx-collect:active { background: #115e59; }
+.psx-settled {
+  display: flex; align-items: center; gap: 0.45rem;
+  font: 600 0.85rem 'Inter', system-ui, sans-serif; color: #047857;
+}
+.psx-settled i { font-size: 0.9rem; }
+.psx-settled-void { color: #64748b; }
+
+.psx-empty {
+  text-align: center; padding: 3rem 1rem; color: #94a3b8;
+}
+.psx-empty i { font-size: 2.4rem; margin-bottom: 0.7rem; display: block; }
+.psx-empty p {
+  margin: 0; font: 500 0.92rem 'Inter', system-ui, sans-serif;
+}
+
+/* ── Phone ── */
+@media (max-width: 480px) {
+  .psx-modal { max-height: 94vh; border-radius: 14px 14px 0 0; }
+  .psx-head, .psx-controls { padding-left: 1rem; padding-right: 1rem; }
+  .psx-list { padding: 0.75rem 0.85rem 1rem; }
+  .psx-sum-amt { font-size: 1.55rem; }
+  .psx-sum-side { margin-left: 0; width: 100%; }
+  .psx-amount { font-size: 1.3rem; }
+  .psx-name { font-size: 1rem; }
+  /* All four filters fit on one line at 360px once the chips are tightened,
+     which is better than a scroller the operator has to discover. The
+     nowrap + overflow stays as the fallback for a narrower screen or a
+     larger system font. */
+  .psx-filters {
+    flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none;
+    padding-bottom: 0.15rem;
+  }
+  .psx-filters::-webkit-scrollbar { display: none; }
+  .psx-filters .filter-btn {
+    padding: 0.5rem 0.7rem; font-size: 0.82rem;
+  }
+  /* Keep the search box usable: the sort control gives up its label text
+     before the search input gives up its width. */
+  .psx-sort select {
+    padding: 0.65rem 1.7rem 0.65rem 0.35rem; font-size: 0.8rem;
+    max-width: 8.2rem;
+    text-overflow: ellipsis;
+  }
+}

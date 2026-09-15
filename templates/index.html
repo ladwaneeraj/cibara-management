@@ -33,7 +33,7 @@
     <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-auth-compat.js"></script>
     <script src="/firebase-config.js"></script>
-    <script src="/static/permissions.js"></script>
+    <script src="{{ asset_url('permissions.js') }}"></script>
     <script src="/static/auth.js"></script>
     <script src="/static/user-directory.js"></script>
     <script src="/static/attribution.js"></script>
@@ -418,7 +418,7 @@
         }
       }
     </style>
-    <link rel="stylesheet" href="/static/settle-later.css" />
+    <link rel="stylesheet" href="{{ asset_url('settle-later.css') }}" />
     <style>
       /* ── Document-camera / view-photos buttons in check-in modal header ── */
       .doc-cam-btn {
@@ -3401,11 +3401,38 @@
               <div style="display: flex; align-items: flex-start; gap: 0.5rem">
                 <span style="font-size: 1.15rem; line-height: 1">💰</span>
                 <div style="flex:1">
-                  <div style="font-weight: 700; color: #92400e; font-size: 0.88rem; margin-bottom: 0.25rem;">
+                  <div id="checkin-pending-settlement-title" style="font-weight: 700; color: #92400e; font-size: 0.88rem; margin-bottom: 0.25rem;">
                     Pending Balance from Last Stay
                   </div>
                   <div id="checkin-pending-settlement-details" style="font-size: 0.83rem; color: #78350f; margin-bottom: 0.15rem;"></div>
                   <div id="checkin-pending-settlement-date" style="font-size: 0.78rem; color: #92400e; opacity: 0.8;"></div>
+                  <!-- Collecting it opens the SAME collect-settlement modal
+                       the Pending Payments list uses (static/settle-later.js),
+                       which posts /collect_settlement. That one route applies
+                       the money to the old invoice, closes it when nothing is
+                       left, and clears this warning, so there is no second
+                       way for money to reach a bill. Hidden for roles without
+                       settlement.collect (auth.js reads data-perm). -->
+                  <button
+                    type="button"
+                    id="checkin-pending-collect"
+                    data-perm="settlement.collect"
+                    style="
+                      display: none;
+                      margin-top: 0.5rem;
+                      background: #f59e0b;
+                      color: #ffffff;
+                      border: none;
+                      border-radius: 7px;
+                      padding: 0.42rem 0.8rem;
+                      font-size: 0.82rem;
+                      font-weight: 700;
+                      cursor: pointer;
+                    "
+                  >
+                    <i class="fas fa-hand-holding-dollar"></i>
+                    <span id="checkin-pending-collect-label">Collect now</span>
+                  </button>
                 </div>
               </div>
             </div>
@@ -4442,300 +4469,339 @@
     </div>
 
     <!-- 2. Add Pending Settlements Modal -->
+    <!-- ── Pending Settlements ──────────────────────────────────────────────
+         Money owed from stays that already ended. It is a collections list,
+         so it is built like one: the total outstanding first, then the rows
+         ordered oldest debt first, each carrying what the desk needs to ask
+         for the money — who, how much, which invoice, which stay, and how
+         long it has been owed.
+
+         static/settle-later.js fills #pending-settlements-list and reads the
+         same .filter-btn[data-filter] hooks it always did. -->
     <div class="modal-backdrop" id="pending-settlements-modal">
-      <div class="modal-content">
-        <div class="modal-header">
-          <h2>Pending Settlements</h2>
-          <button class="close-btn" aria-label="Close">&times;</button>
+      <div class="modal-content psx-modal">
+        <div class="psx-head">
+          <div class="psx-head-row">
+            <h2 class="psx-title">Pending Payments</h2>
+            <button class="close-btn" aria-label="Close">&times;</button>
+          </div>
+          <div class="psx-summary" id="psx-summary" hidden>
+            <div class="psx-sum-main">
+              <span class="psx-sum-amt" id="psx-sum-amount">₹0</span>
+              <span class="psx-sum-lbl">still to collect</span>
+            </div>
+            <div class="psx-sum-side">
+              <span id="psx-sum-count">0 guests</span>
+              <span class="psx-sum-dot" aria-hidden="true">·</span>
+              <span id="psx-sum-oldest">—</span>
+            </div>
+          </div>
         </div>
 
-        <div class="filter-container">
-          <button class="filter-btn active" data-filter="pending">
-            Pending
-          </button>
-          <button class="filter-btn" data-filter="all">All</button>
-          <button class="filter-btn" data-filter="paid">Paid</button>
-          <button class="filter-btn" data-filter="cancelled">Cancelled</button>
+        <div class="psx-controls">
+          <div class="filter-container psx-filters">
+            <button class="filter-btn active" data-filter="pending">
+              Pending
+            </button>
+            <button class="filter-btn" data-filter="all">All</button>
+            <button class="filter-btn" data-filter="paid">Paid</button>
+            <button class="filter-btn" data-filter="cancelled">Cancelled</button>
+          </div>
+          <div class="psx-search-row">
+            <div class="psx-search">
+              <i class="fas fa-search" aria-hidden="true"></i>
+              <input type="search" id="psx-search-input" autocomplete="off"
+                     placeholder="Name, phone, room or bill number">
+            </div>
+            <label class="psx-sort" for="psx-sort-select">
+              <i class="fas fa-arrow-down-short-wide" aria-hidden="true"></i>
+              <span class="sr-only">Sort by</span>
+              <select id="psx-sort-select">
+                <option value="latest" selected>Latest first</option>
+                <option value="oldest">Oldest first</option>
+                <option value="amount">Highest amount</option>
+                <option value="name">Name A–Z</option>
+              </select>
+            </label>
+          </div>
         </div>
 
-        <div id="settlements-list">
+        <div id="settlements-list" class="psx-list">
           <!-- Settlements will be dynamically populated here -->
           <div class="loading-indicator">
             <span class="loader"></span>
-            <p>Loading pending settlements...</p>
+            <p>Loading pending payments...</p>
           </div>
         </div>
       </div>
     </div>
 
     <!-- 3. Add Settlement Payment Modal -->
+    <!-- ── Collect Settlement ───────────────────────────────────────────────
+         One job: take the money a guest still owes from a past stay.
+
+         The layout follows that job. The amount owed is the first thing on
+         the sheet, because it is what the operator reads out loud; the two
+         decisions (how much, cash or UPI) sit together under it; the collect
+         button carries the figure and stays put at the bottom instead of
+         scrolling away. Receipt date and discount are real but rare, so they
+         live behind "More options" rather than sitting between the operator
+         and the payment.
+
+         Every id and the .payment-btn / data-payment hooks are unchanged:
+         static/settle-later.js drives this markup as it always did. -->
     <div class="modal-backdrop" id="collect-settlement-modal">
-      <div class="modal-content" style="max-width: 450px">
-        <div class="modal-header">
-          <h2>Collect Settlement</h2>
+      <div class="modal-content sl-sheet">
+        <div class="sl-head">
+          <h2>Collect balance</h2>
           <button class="close-btn" aria-label="Close">&times;</button>
         </div>
 
-        <div class="guest-details">
-          <div class="detail-row">
-            <div class="detail-label">Guest Name</div>
-            <div class="detail-value" id="settlement-guest-name"></div>
-          </div>
-          <div class="detail-row">
-            <div class="detail-label">Mobile</div>
-            <div class="detail-value">
-              <a href="tel:" id="settlement-guest-mobile" class="call-link">
-                <i class="fas fa-phone"></i>
-                <span id="settlement-mobile-number"></span>
-              </a>
+        <div class="sl-body">
+          <!-- What is owed, and by whom -->
+          <div class="sl-hero">
+            <div class="sl-amount" id="settlement-amount">₹0</div>
+            <div class="sl-owed">
+              outstanding from <b id="settlement-guest-name"></b>
+            </div>
+            <div class="sl-meta">
+              <span>Room <b id="settlement-room"></b></span>
+              <span class="sl-dot"></span>
+              <span>Checked out <b id="settlement-checkout-date"></b></span>
+            </div>
+            <a href="tel:" id="settlement-guest-mobile" class="sl-call">
+              <i class="fas fa-phone"></i>
+              <span id="settlement-mobile-number"></span>
+            </a>
+            <div class="sl-note" id="settlement-note-wrap">
+              <i class="far fa-comment"></i>
+              <span id="settlement-notes">-</span>
             </div>
           </div>
-          <div class="detail-row">
-            <div class="detail-label">Checkout Date</div>
-            <div class="detail-value" id="settlement-checkout-date"></div>
+
+          <!-- Decision 1: how much -->
+          <div class="sl-field">
+            <div class="sl-label-row">
+              <label class="sl-label" for="settlement-payment-amount">Collecting now</label>
+              <button type="button" class="sl-chip" id="settlement-full-amount">
+                Full amount
+              </button>
+            </div>
+            <div class="sl-money">
+              <span class="sl-money-cur">₹</span>
+              <input
+                type="number"
+                id="settlement-payment-amount"
+                placeholder="0"
+                min="0"
+                inputmode="numeric"
+              />
+            </div>
           </div>
-          <div class="detail-row">
-            <div class="detail-label">Room</div>
-            <div class="detail-value" id="settlement-room"></div>
+
+          <!-- Decision 2: how -->
+          <div class="sl-field">
+            <label class="sl-label">Paid by</label>
+            <div class="payment-options sl-seg">
+              <button type="button" class="payment-btn cash active" data-payment="cash">
+                <i class="fas fa-money-bill-wave"></i> Cash
+              </button>
+              <button type="button" class="payment-btn online" data-payment="online">
+                <i class="fas fa-mobile-alt"></i> UPI / Online
+              </button>
+            </div>
+            <input type="hidden" id="settlement-payment-method" value="cash" />
           </div>
-          <div class="detail-row">
-            <div class="detail-label">Amount Due</div>
-            <div class="detail-value" id="settlement-amount">₹0</div>
-          </div>
-          <div class="detail-row">
-            <div class="detail-label">Notes</div>
-            <div class="detail-value" id="settlement-notes">-</div>
-          </div>
+
+          <!-- Live breakdown. Populated by _settleSyncBreakdown() in
+               static/settle-later.js on every input change, so the operator can
+               see original, discount, collecting and still-owed reconcile
+               BEFORE they take the money, rather than discovering a mismatch on
+               the printed bill afterwards. -->
+          <div id="settlement-breakdown" class="sl-breakdown" style="display: none"></div>
+
+          <!-- The rare half: a payment received on an earlier date, or a
+               reduction. Collapsed, because opening it is a deliberate act
+               and leaving it shut is the normal collection. -->
+          <details class="sl-more" id="settlement-more">
+            <summary>
+              <i class="fas fa-chevron-right"></i>
+              Receipt date and discount
+            </summary>
+
+            <div class="sl-field">
+              <label class="sl-label" for="settlement-payment-date">Receipt date</label>
+              <input type="date" class="sl-input" id="settlement-payment-date" />
+              <small class="sl-help">The day the money actually came in. Defaults to today.</small>
+            </div>
+
+            <div class="sl-field">
+              <label class="sl-label" for="settlement-discount-amount">Discount (₹)</label>
+              <div class="sl-money sl-money-sm">
+                <span class="sl-money-cur">₹</span>
+                <input
+                  type="number"
+                  id="settlement-discount-amount"
+                  placeholder="0"
+                  min="0"
+                  value="0"
+                  inputmode="numeric"
+                />
+              </div>
+            </div>
+
+            <!-- ── Discount treatment — decides the GST outcome ──────────────
+                 This used to be silent: the frontend never sent discount_type,
+                 so /collect_settlement defaulted to "financial" and every
+                 settlement discount became a write-off. The lodge still owed
+                 output tax on the full invoice, and the bill showed a total
+                 the guest never paid, with nothing explaining the gap.
+
+                 Price reduction  -> Section 34 credit note against the
+                                     original invoice. Taxable value and output
+                                     tax both come down.
+                 Write-off        -> goodwill. Invoice unchanged, no GST relief.
+            -->
+            <div class="sl-field" id="settlement-discount-type-container" style="display: none">
+              <label class="sl-label">What is this discount?</label>
+              <label class="sl-radio sl-radio-good">
+                <input type="radio" name="settlement-disc-type" value="credit_note" checked />
+                <span>
+                  <b>Price reduction</b>
+                  <span>The stay genuinely cost less. Issues a credit note, so your GST comes down too.</span>
+                </span>
+              </label>
+              <label class="sl-radio">
+                <input type="radio" name="settlement-disc-type" value="financial" />
+                <span>
+                  <b>Write-off</b>
+                  <span>You let it go. The invoice stays as issued and you still pay GST on the full amount.</span>
+                </span>
+              </label>
+            </div>
+
+            <div class="sl-field" id="settlement-discount-reason-container" style="display: none">
+              <label class="sl-label" for="settlement-discount-reason">Discount reason</label>
+              <select class="sl-input" id="settlement-discount-reason">
+                <option value="Regular Customer">Regular Customer</option>
+                <option value="Special Offer">Special Offer</option>
+                <option value="Long Stay">Long Stay</option>
+                <option value="Complaint Resolution">Complaint Resolution</option>
+                <option value="Other">Other</option>
+              </select>
+              <div id="settlement-other-reason-container" style="display: none; margin-top: 0.5rem">
+                <input
+                  type="text"
+                  class="sl-input"
+                  id="settlement-other-discount-reason"
+                  placeholder="Specify reason"
+                />
+              </div>
+            </div>
+          </details>
         </div>
 
-        <!-- Receipt Date (supports recording a past payment date) -->
-        <div class="form-group" style="margin-top: 1.5rem">
-          <label class="form-label" for="settlement-payment-date">Receipt Date</label>
-          <input type="date" class="form-control" id="settlement-payment-date" />
-          <small class="form-helper">Date the payment was actually received</small>
-        </div>
-
-        <!-- Add Payment Section -->
-        <div class="form-group" style="margin-top: 1.5rem">
-          <label class="form-label" for="settlement-payment-amount"
-            >Payment Amount (₹)</label
-          >
-          <input
-            type="number"
-            class="form-control"
-            id="settlement-payment-amount"
-            placeholder="Enter payment amount"
-            min="0"
-          />
-          <small class="form-helper">Leave blank for full amount</small>
-        </div>
-
-        <!-- Add Discount Section -->
-        <div class="form-group">
-          <label class="form-label" for="settlement-discount-amount"
-            >Discount Amount (₹)</label
-          >
-          <input
-            type="number"
-            class="form-control"
-            id="settlement-discount-amount"
-            placeholder="Enter discount amount"
-            min="0"
-            value="0"
-          />
-        </div>
-
-        <!-- ── Discount treatment — decides the GST outcome ──────────────────
-             This used to be silent: the frontend never sent discount_type, so
-             /collect_settlement defaulted to "financial" and every settlement
-             discount became a write-off. The lodge still owed output tax on
-             the full invoice, and the bill showed a total the guest never
-             paid, with nothing explaining the gap.
-
-             Price reduction  -> Section 34 credit note against the original
-                                 invoice. Taxable value and output tax both
-                                 come down. Bill + CN reconcile to what was
-                                 actually collected.
-             Write-off        -> goodwill. Invoice unchanged, no GST relief.
-        -->
-        <div
-          class="form-group"
-          id="settlement-discount-type-container"
-          style="display: none"
-        >
-          <label class="form-label">What is this discount?</label>
-          <label
-            style="
-              display: flex;
-              gap: 0.5rem;
-              align-items: flex-start;
-              padding: 0.5rem 0.6rem;
-              border: 1.5px solid #a5d6a7;
-              border-radius: 8px;
-              background: #f1f8f2;
-              cursor: pointer;
-              margin-bottom: 0.4rem;
-            "
-          >
-            <input
-              type="radio"
-              name="settlement-disc-type"
-              value="credit_note"
-              checked
-              style="margin-top: 0.2rem"
-            />
-            <span>
-              <b style="font-size: 0.86rem">Price reduction</b>
-              <span
-                style="display: block; font-size: 0.78rem; color: #446; margin-top: 0.1rem"
-              >
-                The stay genuinely cost less. Issues a credit note, so your GST
-                comes down too.
-              </span>
-            </span>
-          </label>
-          <label
-            style="
-              display: flex;
-              gap: 0.5rem;
-              align-items: flex-start;
-              padding: 0.5rem 0.6rem;
-              border: 1.5px solid #e0e0e0;
-              border-radius: 8px;
-              cursor: pointer;
-            "
-          >
-            <input
-              type="radio"
-              name="settlement-disc-type"
-              value="financial"
-              style="margin-top: 0.2rem"
-            />
-            <span>
-              <b style="font-size: 0.86rem">Write-off</b>
-              <span
-                style="display: block; font-size: 0.78rem; color: #446; margin-top: 0.1rem"
-              >
-                You let it go. The invoice stays as issued and you still pay
-                GST on the full amount.
-              </span>
-            </span>
-          </label>
-        </div>
-
-        <!-- Discount Reason -->
-        <div
-          class="form-group"
-          id="settlement-discount-reason-container"
-          style="display: none"
-        >
-          <label class="form-label" for="settlement-discount-reason"
-            >Discount Reason</label
-          >
-          <select class="form-control" id="settlement-discount-reason">
-            <option value="Regular Customer">Regular Customer</option>
-            <option value="Special Offer">Special Offer</option>
-            <option value="Long Stay">Long Stay</option>
-            <option value="Complaint Resolution">Complaint Resolution</option>
-            <option value="Other">Other</option>
-          </select>
-
-          <div
-            id="settlement-other-reason-container"
-            style="display: none; margin-top: 0.5rem"
-          >
-            <input
-              type="text"
-              class="form-control"
-              id="settlement-other-discount-reason"
-              placeholder="Specify reason"
-            />
-          </div>
-        </div>
-
-        <div class="form-group">
-          <label class="form-label">Payment Method</label>
-          <div class="payment-options">
-            <button
-              type="button"
-              class="payment-btn cash active"
-              data-payment="cash"
-            >
-              <i class="fas fa-money-bill"></i> Cash
-            </button>
-            <button
-              type="button"
-              class="payment-btn online"
-              data-payment="online"
-            >
-              <i class="fas fa-mobile-alt"></i> Online
-            </button>
-          </div>
-          <input type="hidden" id="settlement-payment-method" value="cash" />
-        </div>
-
-        <!-- Live breakdown. Populated by _settleSyncBreakdown() in
-             static/settle-later.js on every input change, so the operator can
-             see original, discount, collecting and still-owed reconcile
-             BEFORE they take the money, rather than discovering a mismatch on
-             the printed bill afterwards. -->
-        <div
-          id="settlement-breakdown"
-          style="
-            display: none;
-            margin: 0.6rem 0 0.2rem;
-            border: 1px solid #e0e0e0;
-            border-radius: 8px;
-            padding: 0.55rem 0.7rem;
-            background: #fafafa;
-            font-size: 0.85rem;
-          "
-        ></div>
-
-        <div class="action-row">
-          <button class="action-btn btn-secondary" id="cancel-settlement-btn">
-            Cancel Settlement
-          </button>
-          <button class="action-btn btn-success" id="collect-payment-btn">
-            Collect Payment
-          </button>
+        <div class="sl-foot">
+          <button class="sl-btn-ghost" id="cancel-settlement-btn">Cancel settlement</button>
+          <button class="sl-btn-primary" id="collect-payment-btn">Collect payment</button>
         </div>
       </div>
     </div>
 
     <!-- Quick Transfer Modal -->
+    <style>
+      /* Guest summary card between the two room pickers, filled in by
+         shift.js. The pickers themselves are CibaraSelect dropdowns styled
+         by nice-select.js; this only covers the card. */
+      #quick-transfer-modal .qt-summary {
+        display: flex;
+        align-items: center;
+        gap: 0.7rem;
+        margin: -0.25rem 0 1rem;
+        padding: 0.65rem 0.8rem;
+        background: #f7f9fc;
+        border: 1px solid #e2e8f0;
+        border-radius: 10px;
+      }
+      #quick-transfer-modal .qt-summary-ico {
+        flex: 0 0 auto;
+        font-size: 1.7rem;
+        color: #a0aec0;
+      }
+      #quick-transfer-modal .qt-summary-text {
+        flex: 1;
+        min-width: 0;
+      }
+      #quick-transfer-modal .qt-summary-name,
+      #quick-transfer-modal .qt-summary-meta {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      #quick-transfer-modal .qt-summary-name {
+        font-weight: 600;
+        color: #1a202c;
+      }
+      #quick-transfer-modal .qt-summary-meta {
+        margin-top: 1px;
+        font-size: 0.8rem;
+        color: #718096;
+      }
+      /* Balance chip: red while the guest owes, green when a refund is due. */
+      #quick-transfer-modal .qt-summary-balance {
+        flex: 0 0 auto;
+        padding: 0.25rem 0.6rem;
+        border-radius: 999px;
+        background: #edf2f7;
+        color: #4a5568;
+        font-size: 0.82rem;
+        font-weight: 600;
+        white-space: nowrap;
+      }
+      #quick-transfer-modal .qt-summary-balance[data-state="due"] {
+        background: rgba(230, 57, 70, 0.1);
+        color: var(--danger);
+      }
+      #quick-transfer-modal .qt-summary-balance[data-state="refund"] {
+        background: rgba(46, 196, 182, 0.15);
+        color: #1a9e92;
+      }
+    </style>
     <div class="modal-backdrop" id="quick-transfer-modal">
-      <div class="modal-content" style="max-width: 400px">
+      <div class="modal-content" style="max-width: 420px">
         <div class="modal-header">
           <h2>Quick Room Transfer</h2>
           <button class="close-btn" aria-label="Close">&times;</button>
         </div>
         <form id="quick-transfer-form">
+          <!-- Options, prompts and the disabled state of both pickers are
+               rewritten by shift.js every time the modal opens. -->
           <div class="form-group">
             <label class="form-label" for="quick-source-room"
-              >Source Room</label
+              >From (occupied room)</label
             >
             <select id="quick-source-room" class="form-control" required>
-              <option value="">Select source room</option>
-              <!-- Occupied rooms will be populated here -->
+              <option value="">Select occupied room</option>
             </select>
           </div>
+
+          <!-- Guest summary for the picked source room -->
+          <div class="qt-summary" id="quick-transfer-summary" style="display: none">
+            <i class="fas fa-user-circle qt-summary-ico" aria-hidden="true"></i>
+            <div class="qt-summary-text">
+              <div class="qt-summary-name" id="quick-guest-name"></div>
+              <div class="qt-summary-meta" id="quick-stay-meta"></div>
+            </div>
+            <span class="qt-summary-balance" id="quick-balance"></span>
+          </div>
+
           <div class="form-group">
             <label class="form-label" for="quick-dest-room"
-              >Destination Room</label
+              >To (vacant room)</label
             >
-            <select id="quick-dest-room" class="form-control" required>
-              <option value="">Select destination room</option>
-              <!-- Vacant rooms will be populated here -->
+            <select id="quick-dest-room" class="form-control" required disabled>
+              <option value="">Select the occupied room first</option>
             </select>
-          </div>
-          <div class="form-group" id="quick-guest-info" style="display: none">
-            <label class="form-label">Guest Information</label>
-            <div class="form-control-static" id="quick-guest-name"></div>
-          </div>
-          <div class="form-group" id="quick-balance-info" style="display: none">
-            <label class="form-label">Current Balance</label>
-            <div class="form-control-static" id="quick-balance"></div>
           </div>
 
           <!-- New Room Price Section -->
@@ -6424,7 +6490,7 @@
          and window.cibaraWrites used by the check-in / payment / service handlers. -->
     <script defer src="{{ asset_url('optimistic.js') }}"></script>
     <script defer src="{{ asset_url('script.js') }}"></script>
-    <script defer src="/static/shift.js"></script>
+    <script defer src="{{ asset_url('shift.js') }}"></script>
     <script defer src="/static/analytics.js"></script>
     <!-- Android back button closes the open modal instead of exiting the
          installed PWA. Self-contained and dependency-free; finds overlays by
@@ -6447,12 +6513,12 @@
     <!-- Rooms tab Calendar view (timeline of stays + bookings). Loads after
          script.js and booking.js because it reuses their modals and data. -->
     <script defer src="{{ asset_url('room-calendar.js') }}"></script>
-    <script defer src="/static/settle-later.js"></script>
+    <script defer src="{{ asset_url('settle-later.js') }}"></script>
     <script defer src="/static/settle-later-fix.js"></script>
     <!-- revenue-protection.js removed — revenue visibility is now governed by
          the user's role (admin only). See data-perm="revenue.view" in markup. -->
     <script defer src="{{ asset_url('transaction-tracking.js') }}"></script>
-    <script defer src="/static/room-cleaning.js"></script>
+    <script defer src="{{ asset_url('room-cleaning.js') }}"></script>
     <!-- Manager photo check for rooms 200-228 (replaces the checklist for
          that role) and the inspection-photo viewer in room details. -->
     <script defer src="{{ asset_url('room-photos.js') }}"></script>
@@ -6946,25 +7012,56 @@
          the balance impact, and gave no way back once you had answered the
          first one.
 
-         The impact line is the reason this is a form and not a prompt:
-         correcting a tariff on day 3 moves three nights of money, and the
-         operator has to see that number BEFORE committing, not in a toast
-         afterwards. It recomputes on every keystroke.
+         The impact line is the reason this is a form and not a prompt: the
+         operator has to see which nights change and what that does to the
+         balance BEFORE committing, not in a toast afterwards. It recomputes
+         on every keystroke and choice (script.js _rpSync).
+
+         "Apply new price from" has no default on purpose: today and tomorrow
+         bill different nights, and a preselected answer would get accepted
+         without being read.
 
          Inline styles, matching the Bills tab's equivalent modal, so this is
-         self-contained and does not depend on app-wide modal CSS loading. -->
+         self-contained and does not depend on app-wide modal CSS loading.
+         The choice cards need a selected state and a focus ring, which inline
+         styles cannot express, hence the small scoped <style>. -->
+    <style>
+      #rp-backdrop .rp-when-grid {
+        display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 10px;
+      }
+      #rp-backdrop .rp-when-opt {
+        position: relative; display: flex; flex-direction: column;
+        justify-content: center; gap: 2px; min-height: 58px; padding: 10px 12px;
+        box-sizing: border-box; border: 1.5px solid #cbd5e1; border-radius: 10px;
+        background: #fff; cursor: pointer; user-select: none;
+        -webkit-tap-highlight-color: transparent;
+      }
+      /* Hidden from sight only: still focusable and announced as a radio. */
+      #rp-backdrop .rp-when-opt input {
+        position: absolute; opacity: 0; width: 1px; height: 1px; margin: 0;
+      }
+      #rp-backdrop .rp-when-opt:focus-within { outline: 2px solid #99f6e4; outline-offset: 1px; }
+      #rp-backdrop .rp-when-opt.is-selected {
+        border-color: #2ec4b6; background: #f0fdfa; box-shadow: inset 0 0 0 1px #2ec4b6;
+      }
+      #rp-backdrop .rp-when-title { font-size: 14.5px; font-weight: 700; color: #0f172a; }
+      #rp-backdrop .rp-when-sub { font-size: 12px; color: #64748b; }
+      /* !important: the button's inline cursor:pointer outranks any selector. */
+      #rp-backdrop #rp-save:disabled { opacity: .45; cursor: not-allowed !important; }
+    </style>
     <div id="rp-backdrop"
          style="display:none; position:fixed; inset:0; background:rgba(15,23,42,.5);
                 z-index:10050; align-items:center; justify-content:center; padding:16px;">
-      <div style="background:#fff; width:min(420px,100%); border-radius:14px;
+      <div style="background:#fff; width:min(420px,100%); max-height:100%;
+                  overflow-y:auto; box-sizing:border-box; border-radius:14px;
                   padding:20px 22px; box-shadow:0 20px 50px rgba(0,0,0,.28);
                   font-family:'Inter',system-ui,sans-serif;">
         <h3 style="margin:0 0 4px; font-size:17px; font-weight:700; color:#0f172a;">
           Edit room price
         </h3>
         <p style="margin:0 0 14px; font-size:12.5px; color:#64748b; line-height:1.5;">
-          Sets the nightly tariff for this stay. Nights already accrued are
-          re-priced and the balance moves to match.
+          Sets the nightly tariff from today or from tomorrow. Nights before
+          that keep the price they were charged at.
         </p>
 
         <div id="rp-context"
@@ -6982,7 +7079,25 @@
                       font-size:16px; font-weight:600; color:#0f172a;
                       border:1px solid #cbd5e1; border-radius:9px; margin-bottom:10px;" />
 
-        <!-- Live balance impact. Neutral until the number actually changes. -->
+        <div id="rp-when-label"
+             style="font-size:12.5px; font-weight:600; color:#334155; margin-bottom:5px;">
+          Apply new price from
+        </div>
+        <div class="rp-when-grid" role="radiogroup" aria-labelledby="rp-when-label">
+          <label class="rp-when-opt">
+            <input type="radio" name="rp-effective" value="today" />
+            <span class="rp-when-title">Today</span>
+            <span class="rp-when-sub" id="rp-when-today-sub"></span>
+          </label>
+          <label class="rp-when-opt">
+            <input type="radio" name="rp-effective" value="tomorrow" />
+            <span class="rp-when-title">Tomorrow</span>
+            <span class="rp-when-sub" id="rp-when-tomorrow-sub"></span>
+          </label>
+        </div>
+
+        <!-- Live outcome: which nights keep their rate, where the new one
+             starts and the balance change, or why the server will refuse. -->
         <div id="rp-impact"
              style="font-size:12.5px; line-height:1.5; min-height:34px;
                     margin-bottom:12px; padding:8px 11px; border-radius:9px;
@@ -7007,7 +7122,7 @@
                   style="padding:9px 16px; font-size:13.5px; font-weight:600;
                          border:1px solid #e2e8f0; background:#fff; color:#475569;
                          border-radius:9px; cursor:pointer;">Cancel</button>
-          <button id="rp-save" type="button"
+          <button id="rp-save" type="button" disabled
                   style="padding:9px 18px; font-size:13.5px; font-weight:600;
                          border:none; background:#2ec4b6; color:#fff;
                          border-radius:9px; cursor:pointer;">Update price</button>

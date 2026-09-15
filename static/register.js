@@ -207,6 +207,7 @@ tr.reg-row-located.reg-row-located-fade > td {
 }
 .status-active    { background: #fff3cd; color: #856404; }
 .status-completed { background: #d4edda; color: #155724; }
+.status-cancelled { background: #fee2e2; color: #b91c1c; }
 
 .payment-split { display: flex; flex-direction: column; gap: 0.12rem; font-size: 0.77rem; }
 .payment-item  { display: flex; justify-content: space-between; gap: 0.4rem; align-items: center; }
@@ -260,6 +261,44 @@ tr.reg-row-located.reg-row-located-fade > td {
   position:sticky; bottom:0; background:#fff;
   border-radius: 0 0 10px 10px;
 }
+/* One row, three controls, same height and same baseline.
+   .action-btn carries a 1rem top margin for the stacked forms it was built
+   for; in this footer that pushed Print and Save down while More sat where
+   the flex line put it, so the three never lined up. Zero the margin here
+   and let every control stretch to the tallest. */
+#reg-bill-overlay .bill-actions { align-items: stretch; }
+#reg-bill-overlay .bill-actions > *,
+#reg-bill-overlay .bill-actions > .action-btn { margin-top: 0; }
+/* Share and Print split whatever More leaves, at every width. .action-btn is
+   width:100% by default, which made Print eat the row and squeezed Share to
+   its text. */
+#reg-bill-overlay .bill-actions > button { flex: 1 1 0; width: auto; min-width: 0; }
+.bill-actions .reg-more-wrap { position:relative; margin-right:auto; display:flex; }
+.bill-actions .reg-more-wrap[hidden] { display:none; }
+.bill-actions .reg-more-btn {
+  flex:none; height:auto; align-self:stretch;
+  display:flex; align-items:center; justify-content:center; gap:.4rem;
+  padding:.7rem 1.05rem; border:1px solid #d1d5db;
+  border-radius:var(--border-radius, 8px); background:#fff; color:#374151;
+  font-weight:600; font-size:.92rem; cursor:pointer; white-space:nowrap;
+}
+.bill-actions .reg-more-btn[aria-expanded="true"] { background:#f3f4f6; }
+.bill-actions .reg-more-menu {
+  position:absolute; left:0; bottom:calc(100% + 6px); min-width:200px;
+  background:#fff; border:1px solid #e5e7eb; border-radius:10px; padding:4px;
+  box-shadow:0 10px 28px rgba(15,23,42,.18); z-index:5;
+}
+.bill-actions .reg-more-menu[hidden] { display:none; }
+.bill-actions .reg-more-menu button {
+  display:flex; align-items:center; gap:.6rem; width:100%; flex:none;
+  padding:.65rem .75rem; min-height:44px; border:none; border-radius:8px;
+  background:none; color:#1f2937; font-size:.9rem; font-weight:500;
+  text-align:left; cursor:pointer;
+}
+.bill-actions .reg-more-menu button:hover { background:#f3f4f6; }
+.bill-actions .reg-more-menu button i { width:18px; text-align:center; color:#6b7280; }
+.bill-actions .reg-more-menu .reg-more-danger { color:#b91c1c; }
+.bill-actions .reg-more-menu .reg-more-danger i { color:#dc2626; }
 
 /* ── Bill view toggle (Detailed / Consolidated) — control only, not printed ── */
 .bl-view-toggle {
@@ -713,6 +752,8 @@ tr.reg-row-located.reg-row-located-fade > td {
     flex: 1 1 40%; min-width: 0;
     padding: 0.5rem 0.55rem; font-size: 0.8rem;
   }
+  /* One row on a phone too: the sizing rule above already shares the space. */
+  #reg-bill-overlay .bill-actions { flex-wrap: nowrap; }
 }
 
 /* ── Action column wrapper — keeps icons flush right and evenly spaced ── */
@@ -1429,6 +1470,49 @@ tr.rp-svc-voided .rp-actions-cell { opacity:.9; }
     _regOpenBillView = data.view;
     _regOpenBillCollapsible = !!data.collapsible;
     _syncGenInvoiceBtn();
+    _syncRegCancelBtn();
+  }
+
+  // Cancel Bill is offered only while /cancel_bill could accept the open
+  // bill. The rule and the dialog live in bills.js (window.CibaraBillCancel),
+  // shared with the Bills tab's modal.
+  function _syncRegCancelBtn() {
+    const btn = dom("reg-bill-cancel");
+    if (!btn) return;
+    const bc = window.CibaraBillCancel;
+    btn.style.display = (bc && bc.canCancel(_regOpenBillData)) ? "" : "none";
+    _syncRegMoreMenu();
+  }
+
+  // The "More" menu holds the admin tools. Edit Price has no rule of its
+  // own beyond admin, so it is decided here (never on a cancelled bill); the
+  // other two keep their own sync functions. The menu button appears only
+  // when at least one item is available, so a manager sees just Share and
+  // Print.
+  function _syncRegMoreMenu() {
+    const wrap = dom("reg-more-wrap");
+    const menu = dom("reg-more-menu");
+    if (!wrap || !menu) return;
+    const edit = dom("reg-bill-editprice");
+    const a = window.CibaraAuth;
+    const b = _regOpenBillData;
+    if (edit) {
+      edit.style.display = (b && b.status !== "cancelled" &&
+                            a && a.isAdmin && a.isAdmin()) ? "" : "none";
+    }
+    const any = Array.prototype.some.call(
+      menu.querySelectorAll("button"),
+      (el) => !el.hidden && el.style.display !== "none");
+    wrap.hidden = !any;
+    if (!any) _setRegMoreOpen(false);
+  }
+
+  function _setRegMoreOpen(open) {
+    const menu = dom("reg-more-menu");
+    const btn = dom("reg-more-btn");
+    if (!menu || !btn) return;
+    menu.hidden = !open;
+    btn.setAttribute("aria-expanded", open ? "true" : "false");
   }
 
   // Show the admin "Generate Invoice" button only when this stay needs it:
@@ -1489,6 +1573,7 @@ tr.rp-svc-voided .rp-actions-cell { opacity:.9; }
     _regOpenBillData = null;
     _regOpenBillView = null;
     _regOpenBillCollapsible = false;
+    _syncRegCancelBtn();
     area.innerHTML = `<div class="reg-state"><div class="reg-loader"></div><p>Loading…</p></div>`;
     overlay.classList.add("show");
     try {
@@ -1516,6 +1601,7 @@ tr.rp-svc-voided .rp-actions-cell { opacity:.9; }
   function _closeRegBill() {
     const overlay = dom("reg-bill-overlay");
     if (overlay) overlay.classList.remove("show");
+    _setRegMoreOpen(false);
     _regOpenBillId   = null;
     _regOpenBillData = null;
   }
@@ -1857,8 +1943,42 @@ tr.rp-svc-voided .rp-actions-cell { opacity:.9; }
     <div id="reg-bill-print-area">
       <div class="reg-state"><div class="reg-loader"></div><p>Loading…</p></div>
     </div>
+    <!-- Footer: the two things done with every bill (share, print) stay as
+         buttons. The admin corrections, used a few times a month, live in
+         the "More" menu so the footer is not six equal-weight buttons. The
+         header x, the backdrop and the Back button already close the modal,
+         so there is no separate Close button. Item IDs are unchanged; their
+         own visibility rules still apply inside the menu. -->
     <div class="bill-actions">
-      <button class="action-btn btn-secondary" id="reg-bill-close-btn">Close</button>
+      <div class="reg-more-wrap" id="reg-more-wrap" hidden>
+        <button type="button" class="reg-more-btn" id="reg-more-btn"
+                aria-haspopup="menu" aria-expanded="false" title="More actions">
+          <i class="fas fa-ellipsis-h"></i> More
+        </button>
+        <div class="reg-more-menu" id="reg-more-menu" role="menu" hidden>
+          <!-- Admin-only (data-roles). Hidden on a cancelled bill. -->
+          <button type="button" role="menuitem" id="reg-bill-editprice"
+                  data-roles="admin" style="display:none;"
+                  title="Correct the room tariff and recompute charges, GST and balance">
+            <i class="fas fa-pen"></i> Edit price
+          </button>
+          <!-- Admin-only. _syncGenInvoiceBtn shows it only for a checked-out
+               stay whose bill is finalized but has no PDF yet, within 5 days
+               of checkout. POSTs /generate_invoice. -->
+          <button type="button" role="menuitem" id="reg-bill-geninvoice"
+                  data-roles="admin" style="display:none;"
+                  title="Generate the GST invoice PDF for this checked-out stay">
+            <i class="fas fa-file-invoice"></i> Generate invoice
+          </button>
+          <!-- bill.cancel (admin). _syncRegCancelBtn shows it only while the
+               open bill can still be cancelled. -->
+          <button type="button" role="menuitem" id="reg-bill-cancel"
+                  class="reg-more-danger" data-perm="bill.cancel" style="display:none;"
+                  title="Cancel this invoice (its number stays in the series as cancelled)">
+            <i class="fas fa-ban"></i> Cancel bill
+          </button>
+        </div>
+      </div>
       <!-- Save & Share: generates PDF (or reuses stored pdf_url) and
            opens the existing WhatsApp send modal. Reuses bills.js's
            flow via window.cibaraSaveAndShareBill so there is one
@@ -1866,19 +1986,6 @@ tr.rp-svc-voided .rp-actions-cell { opacity:.9; }
       <button class="bl-bill-save-btn" id="reg-bill-save"
               title="Save PDF and share on WhatsApp">
         <i class="fab fa-whatsapp"></i> Save &amp; Share
-      </button>
-      <button class="action-btn btn-secondary" id="reg-bill-editprice"
-              data-roles="admin"
-              title="Correct the room tariff and recompute charges, GST and balance">
-        <i class="fas fa-pen"></i> Edit Price
-      </button>
-      <!-- Generate Invoice: admin-only. Shown (via _syncGenInvoiceBtn) only
-           for a checked-out stay whose bill is finalized but has no PDF yet,
-           and only within 5 days of checkout. POSTs /generate_invoice. -->
-      <button class="action-btn btn-secondary" id="reg-bill-geninvoice"
-              data-roles="admin" style="display:none;"
-              title="Generate the GST invoice PDF for this checked-out stay">
-        <i class="fas fa-file-invoice"></i> Generate Invoice
       </button>
       <button class="action-btn btn-primary" id="reg-bill-print-btn">
         <i class="fas fa-print"></i> Print
@@ -2113,8 +2220,25 @@ tr.rp-svc-voided .rp-actions-cell { opacity:.9; }
     const regBillClose = dom("reg-bill-close");
     if (regBillClose) regBillClose.addEventListener("click", _closeRegBill);
 
-    const regBillCloseBtn = dom("reg-bill-close-btn");
-    if (regBillCloseBtn) regBillCloseBtn.addEventListener("click", _closeRegBill);
+    // "More" menu: toggle on its button; any item click, a click elsewhere
+    // or Escape closes it. Items run their own handlers below.
+    const regMoreBtn = dom("reg-more-btn");
+    const regMoreMenu = dom("reg-more-menu");
+    if (regMoreBtn && regMoreMenu) {
+      regMoreBtn.addEventListener("click", function (ev) {
+        ev.stopPropagation();
+        _setRegMoreOpen(regMoreMenu.hidden);
+      });
+      regMoreMenu.addEventListener("click", function () { _setRegMoreOpen(false); });
+      document.addEventListener("click", function (ev) {
+        if (!regMoreMenu.hidden && !ev.target.closest("#reg-more-wrap")) {
+          _setRegMoreOpen(false);
+        }
+      });
+      document.addEventListener("keydown", function (ev) {
+        if (ev.key === "Escape" && !regMoreMenu.hidden) _setRegMoreOpen(false);
+      });
+    }
 
     // ── Save & Share ──────────────────────────────────────────────────
     // Delegates to bills.js's combined helper. Disables the button while
@@ -2242,6 +2366,32 @@ tr.rp-svc-voided .rp-actions-cell { opacity:.9; }
           } else { if (msg) { msg.style.color = "#b91c1c"; msg.textContent = (data && data.message) || ("Edit failed (HTTP " + res.status + ")."); } }
         } catch (err) { console.error("[Register] edit price failed:", err); if (msg) { msg.style.color = "#b91c1c"; msg.textContent = "Network error."; } }
         finally { saveB.disabled = false; saveB.innerHTML = _o; }
+      });
+    }
+
+    // ── Cancel Bill (admin, bill.cancel) ──────────────────────────────
+    // The dialog is bills.js's, which also updates the Bills tab; this
+    // patches the Register row and reloads the open bill.
+    const regBillCancel = dom("reg-bill-cancel");
+    if (regBillCancel) {
+      regBillCancel.addEventListener("click", function () {
+        if (!_regOpenBillId) return;
+        if (!window.CibaraBillCancel) {
+          alert("Cancel Bill is unavailable because the Bills module did not load. Refresh the page.");
+          return;
+        }
+        const id = _regOpenBillId;
+        window.CibaraBillCancel.open(id, _regOpenBillData, function (data) {
+          const ix = state.allEntries.findIndex((x) => x.id === id);
+          if (ix !== -1) {
+            state.allEntries[ix] = {
+              ...state.allEntries[ix],
+              ...((data && data.bill) || { status: "cancelled" }),
+            };
+            applyFilters();
+          }
+          return openRegBill(id);
+        });
       });
     }
 
@@ -2530,7 +2680,7 @@ tr.rp-svc-voided .rp-actions-cell { opacity:.9; }
           case "split":
             return c > 0 && o > 0;
           case "pending":
-            return b > 0;
+            return b > 0 && e.status !== "cancelled";
           default:
             return true;
         }
@@ -3065,8 +3215,13 @@ tr.rp-svc-voided .rp-actions-cell { opacity:.9; }
            e.serial_number !== 0
             ? e.serial_number
             : "-");
-    const billNo = e.status === "completed" ? e.bill_number || "-" : "-";
-    const stCls = e.status === "active" ? "status-active" : "status-completed";
+    // A cancelled bill keeps its number, so it stays viewable here.
+    const isCancelled = e.status === "cancelled";
+    const billNo = (e.status === "completed" || isCancelled) ? e.bill_number || "-" : "-";
+    const stCls = e.status === "active" ? "status-active"
+      : (isCancelled ? "status-cancelled" : "status-completed");
+    const stTitle = (isCancelled && window.CibaraBillCancel)
+      ? ` title="${escapeAttr(window.CibaraBillCancel.describe(e))}"` : "";
     // Make bill number clickable for completed bills with a real Firestore doc id
     const isRealBill = billNo !== "-" && e.id && !String(e.id).startsWith("active_");
     // Eligibility to MINT a GST invoice: completed stay with a real bill doc
@@ -3117,9 +3272,9 @@ tr.rp-svc-voided .rp-actions-cell { opacity:.9; }
       <td style="text-align:center;">${days}</td>
       <td>₹${inr(e.room_rent)}</td>
       <td>₹${inr(e.services_total)}</td>
-      <td><strong>₹${inr(e.total_amount)}</strong></td>
+      <td><strong${isCancelled ? ' style="text-decoration:line-through;color:#9ca3af;"' : ""}>₹${inr(e.total_amount)}</strong></td>
       <td>${paymentHTML(e)}</td>
-      <td><span class="status-badge ${stCls}">${e.status}</span></td>
+      <td><span class="status-badge ${stCls}"${stTitle}>${e.status}</span></td>
       <td style="white-space:nowrap;">
         <div class="reg-row-actions">
           ${(e.lastCheckinBy && window.CibaraUsers)
@@ -3161,7 +3316,7 @@ tr.rp-svc-voided .rp-actions-cell { opacity:.9; }
       h += `<div class="payment-item"><span class="pm-cash">Cash</span><span>₹${inr(c)}</span></div>`;
     if (o)
       h += `<div class="payment-item"><span class="pm-online">Online</span><span>₹${inr(o)}</span></div>`;
-    if (b > 0)
+    if (b > 0 && e.status !== "cancelled")
       h += `<div class="payment-item"><span class="pm-bal">Due</span><span>₹${inr(b)}</span></div>`;
     return h + "</div>";
   }

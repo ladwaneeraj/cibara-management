@@ -187,4 +187,22 @@ check("rate 0 carries the gross as value with no tax",
       r["taxable"] == 1500.0 and r["tax"] == 0.0)
 
 print(f"\n{'FAILED: ' + '; '.join(fails) if fails else 'All tax invariants hold'}")
-raise SystemExit(1 if fails else 0)
+
+
+def test_all_tax_invariants_hold():
+    """The pytest entry point.
+
+    The checks above are straight-line code that runs at import, collecting
+    into `fails`. That was the whole file: it ended in a bare module-level
+    `raise SystemExit`, which under pytest is not a failing test but an
+    INTERNALERROR during collection — it aborted the ENTIRE suite, so
+    `pytest tests/` reported "no tests ran" and every other file went
+    unexecuted. Turning the result into one assertion keeps these invariants
+    where the rest of the suite can see them.
+    """
+    assert not fails, "; ".join(fails)
+
+
+if __name__ == "__main__":
+    # Standalone mode, as the docstring promises: non-zero exit on failure.
+    raise SystemExit(1 if fails else 0)

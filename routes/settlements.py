@@ -20,6 +20,7 @@ from config import settlements_ref, bills_ref
 
 from services import payment_service
 from services.audit_log import write_log
+from services.auth_service import requires_permission
 
 settlements_bp = Blueprint('settlements', __name__)
 
@@ -34,10 +35,86 @@ def fetch_settlements():
     return settlements_list
 
 
+def _attach_bill_summary(settlements):
+    """Stamp each settlement with the invoice it belongs to.
+
+    The settlement document records what is owed; the bill records what it
+    was for. The desk needs both in one place — quoting an invoice number
+    over the phone, or telling a guest which stay the money is for, was a
+    second lookup in the Bills tab against a list that only showed a room and
+    a date.
+
+    The link is bills.settlement_id, the same field /collect_settlement uses
+    to find the invoice it must credit. Read in chunks of 30 (Firestore's
+    limit for an "in" filter) so a screen of settlements costs two or three
+    queries rather than one per row.
+
+    Missing bills are not an error: a settlement created before the invoice
+    carried the link, or one whose bill was cancelled, simply shows without
+    invoice details. Nothing here changes the settlement documents.
+    """
+    by_id = {s["id"]: s for s in settlements if s.get("id")}
+    ids = list(by_id)
+    linked = 0
+    # Ten, not thirty. Firestore raised the "in" limit to 30 only in the 2023
+    # backend; an older google-cloud-firestore rejects a longer list with
+    # InvalidArgument, and because .stream() is lazy that error does not
+    # surface until the rows are iterated. Ten works on every version and
+    # costs one extra round trip per twenty settlements.
+    for start in range(0, len(ids), 10):
+        chunk = ids[start:start + 10]
+        try:
+            # Iterated INSIDE the try on purpose: .stream() only builds the
+            # query, so a rejected filter throws here rather than at the
+            # where() call, and a try wrapped around where() alone catches
+            # nothing.
+            rows = list(bills_ref.where(
+                filter=firestore.FieldFilter("settlement_id", "in", chunk)
+            ).stream())
+        except Exception:
+            # One bad chunk is not a reason to drop the invoices from the
+            # other chunks, so this carries on rather than returning.
+            logger.warning("settlements: bill lookup failed for %d ids",
+                           len(chunk), exc_info=True)
+            continue
+        for doc in rows:
+            bill = doc.to_dict() or {}
+            target = by_id.get(bill.get("settlement_id"))
+            if not target:
+                continue
+            linked += 1
+            paid = (int(bill.get("payment_cash", 0) or 0)
+                    + int(bill.get("payment_online", 0) or 0)
+                    + int(bill.get("payment_ota", 0) or 0))
+            target["bill"] = {
+                "id": doc.id,
+                "bill_number": bill.get("bill_number") or "",
+                "status": bill.get("status") or "",
+                "total_amount": int(bill.get("total_amount", 0) or 0),
+                "paid": paid,
+                "discounts": int(bill.get("discounts", 0) or 0),
+                "days_stayed": int(bill.get("days_stayed", 0) or 0),
+                "guest_count": int(bill.get("guest_count", 1) or 1),
+                "checkin_time": bill.get("checkin_time") or "",
+                "checkout_time": bill.get("checkout_time") or "",
+                "room_price_per_night": int(
+                    bill.get("room_price_per_night", 0) or 0),
+                "booking_source": bill.get("booking_source") or "",
+                "cancelled": bool(bill.get("cancelled")),
+            }
+    # One line that answers "why does every row say no invoice linked" without
+    # a debugging session: it says how many settlements were read and how many
+    # of them found their bill.
+    logger.info("settlements: %d rows, %d linked to an invoice",
+                len(settlements), linked)
+    return settlements
+
+
 @settlements_bp.route("/get_pending_settlements", methods=["GET"])
+@requires_permission("settlement.collect")
 def get_pending_settlements_route():
     try:
-        settlements = fetch_settlements()
+        settlements = _attach_bill_summary(fetch_settlements())
         return jsonify(success=True, settlements=settlements)
     except Exception as e:
         logger.error(f"Error fetching settlements: {str(e)}")
@@ -45,6 +122,7 @@ def get_pending_settlements_route():
 
 
 @settlements_bp.route("/collect_settlement", methods=["POST"])
+@requires_permission("settlement.collect")
 def collect_settlement():
     try:
         data_json = request.json
@@ -81,6 +159,19 @@ def collect_settlement():
             return jsonify(success=False, message="Settlement not found")
 
         settlement = settlement_doc.to_dict()
+
+        # Collecting the same balance twice is the realistic failure here:
+        # the same guest is now standing at the desk checking in, so the
+        # banner, the Pending Payments list and a second operator can all
+        # reach this settlement at once. A settled or written-off balance
+        # takes no more money.
+        _cur_status = (settlement.get("status") or "").lower()
+        if _cur_status == "paid":
+            return jsonify(success=False, code="ALREADY_PAID", message=(
+                "This balance has already been collected in full.")), 409
+        if _cur_status == "cancelled":
+            return jsonify(success=False, code="CANCELLED", message=(
+                "This balance was cancelled and cannot be collected.")), 409
 
         # ── Optional backdating of the receipt date (default: today) ──────────
         # Range: checkout date .. today (no future). A date in a GST-locked
@@ -151,12 +242,15 @@ def collect_settlement():
             settlement["payment_time"] = datetime.now(IST).strftime("%H:%M")
             settlement["payment_mode"] = payment_mode
 
-            # Clear pending-settlement flag from the customer record so the
-            # next check-in no longer shows the balance warning.
+            # Clear the pending-settlement flag so the next check-in no
+            # longer shows the balance warning. Keyed to THIS settlement:
+            # the guest may owe on another stay too, and that warning has to
+            # survive.
             _settle_mobile = settlement.get("guest_mobile", "")
             if _settle_mobile:
                 from services import customer_service as _cs
-                _cs.clear_pending_settlement(_settle_mobile)
+                _cs.clear_pending_settlement(_settle_mobile,
+                                             settlement_id=settlement_id)
         else:
             settlement["status"] = "partial"
             settlement["amount"] -= payment_amount
@@ -170,6 +264,19 @@ def collect_settlement():
                 "time": datetime.now(IST).strftime("%H:%M"),
                 "mode": payment_mode,
             })
+
+            # Part-paid: the check-in warning must now show what is LEFT.
+            # Without this it kept quoting the original amount and the desk
+            # collected it twice.
+            _settle_mobile = settlement.get("guest_mobile", "")
+            if _settle_mobile:
+                from services import customer_service as _cs
+                _cs.set_pending_settlement(
+                    _settle_mobile,
+                    {"id": settlement_id, "amount": settlement["amount"],
+                     "checkout_date": settlement.get("checkout_date"),
+                     "room": settlement.get("room")},
+                    only_if_id=settlement_id)
 
         batch.set(settlements_ref.document(settlement_id), settlement)
         batch.commit()
@@ -229,7 +336,14 @@ def collect_settlement():
                 payment_service.write_payment(_settle_disc)
 
         # ── Update the linked bill record ────────────────────────────────────────
+        # This is what "the old bill is cleared" means: the payment lands on
+        # the invoice, its balance is recomputed and a fully paid bill moves
+        # to completed. Anything that skips this route leaves the settlement
+        # paid and the invoice still showing money due.
         cn_for_response = None
+        _bill_id_updated = None
+        _bill_status = None
+        _bill_balance = None
         try:
             bill_q = bills_ref \
                 .where("settlement_id", "==", settlement_id) \
@@ -349,6 +463,9 @@ def collect_settlement():
                         except Exception as _le:
                             logger.warning(f"collect_settlement: CN audit-log failed: {_le}")
 
+                _bill_id_updated = bill_doc.id
+                _bill_status = bill_update.get("status", bill_data.get("status"))
+                _bill_balance = new_balance
                 bills_ref.document(bill_doc.id).update(bill_update)
                 logger.info(f"Bill {bill_doc.id} updated after settlement collection "
                             f"(balance now Rs.{new_balance}) "
@@ -388,11 +505,24 @@ def collect_settlement():
             },
         )
 
+        _fully_paid = settlement.get("status") == "paid"
         return jsonify(
             success=True,
             message=message,
+            settlement_id=settlement_id,
+            settlement_status=settlement.get("status"),
+            fully_paid=_fully_paid,
             payment_mode=payment_mode,
-            remaining=settlement.get("amount", 0),
+            payment_amount=payment_amount,
+            discount_amount=discount_amount,
+            # 0 once it is settled: the stored amount is the invoice figure
+            # and stays put, so reading it back as "remaining" told the desk
+            # a paid balance was still owed.
+            remaining=0 if _fully_paid else settlement.get("amount", 0),
+            guest_mobile=settlement.get("guest_mobile", ""),
+            bill_id=_bill_id_updated,
+            bill_status=_bill_status,
+            bill_balance=_bill_balance,
             credit_note_number=(cn_for_response or {}).get("cn_number"),
             credit_note_id=(cn_for_response or {}).get("cn_id"),
         )
@@ -403,6 +533,7 @@ def collect_settlement():
 
 
 @settlements_bp.route("/cancel_settlement", methods=["POST"])
+@requires_permission("settlement.manage")
 def cancel_settlement():
     """
     Cancel a pending settlement (e.g. operator created one in error, or the

@@ -38,6 +38,7 @@
     payView: { name: "cards" },  // cards | add | edit | advance | pay | ledger
 
     insights: null,         // last /staff/analytics payload (SWR cache)
+    insightsMonth: "",      // month the Insights tab is showing (YYYY-MM)
     _gridLoadedMonth: null, // month whose attendance is already in gridData
 
     // Quick pay/advance panel opened from a grid row (admin only):
@@ -1390,9 +1391,10 @@
     }
     var mode = opts.mode ||
       (can("staff.salary.pay") ? "pay" : "advance");
-    // Never open a mode the user can't perform.
-    if (mode === "meals" &&
-        (!can("staff.salary.pay") || !(Number(s.meal_rate || 0) > 0))) mode = "pay";
+    // Never open a mode the user can't perform. A missing meal rate is not
+    // that: the meals panel is where it gets set, so sending the operator to
+    // the salary tab instead is what made the feature unreachable.
+    if (mode === "meals" && !can("staff.salary.pay")) mode = "pay";
     if (mode === "pay" && !can("staff.salary.pay")) mode = "advance";
     if (mode === "advance" && !can("staff.advance.give")) mode = "pay";
     // Open with NO dates pre-selected — the operator picks the range
@@ -1719,9 +1721,20 @@
         note = '<div class="stf-carry-note" style="background:#fff5f5;border-color:#fecaca;color:#991b1b;">' +
           esc(qp.error) + "</div>";
       } else if (pv && !pv.has_meal_rate) {
+        // The one screen that can fix this is one tap away, so offer it here
+        // rather than describing where to go. can() guards the button, not
+        // the message: someone without staff.manage still needs to know why
+        // the panel is empty, they just cannot be the one to set the rate.
         note = '<div class="stf-carry-note" style="background:#fff5f5;border-color:#fecaca;color:#991b1b;">' +
-          "\u26a0 No meal rate set for this person. Edit their staff record and " +
-          "set \u201cMeals per day\u201d first.</div>";
+          "\u26a0 No meal rate set for " + esc(_qpStaff() ? _qpStaff().name : "this person") +
+          ", so there is nothing to charge. Set \u201cMeals per day\u201d on " +
+          "their staff record first." +
+          (can("staff.manage")
+            ? ' <button type="button" class="stf-btn ghost stf-qp-setrate" ' +
+              'id="stf-qp-setrate" style="margin-top:.5rem;">' +
+              '<i class="fas fa-pen"></i> Set meal rate</button>'
+            : "") +
+          "</div>";
       } else if (pv && pv.already_logged_days && pv.already_logged_days.length) {
         note = '<div class="stf-carry-note">' +
           "\u2139 " + pv.already_logged_days.length + " day" +
@@ -1730,6 +1743,16 @@
           " already logged and will be skipped.</div>";
       }
       if (noteEl.innerHTML !== note) noteEl.innerHTML = note;
+      // Rebound every sync: the note is rewritten by innerHTML above, so the
+      // previous button (and its listener) is gone whenever the text changed.
+      var rateBtn = document.getElementById("stf-qp-setrate");
+      if (rateBtn) rateBtn.addEventListener("click", function () {
+        var who = _qpStaff();
+        if (!who) return;
+        closeQuickPay();
+        state.payView = { name: "edit", staff: who };
+        renderPayroll();
+      });
     }
 
     var days = pv && pv.meals ? pv.meals.meal_days : 0;
@@ -1839,8 +1862,16 @@
     if (!s) { slot.innerHTML = ""; return; }
     var today = _todayStr();
 
-    // The Meals tab only appears for staff who actually have a meal rate —
-    // most don't, and an always-visible third tab would be noise.
+    // The Meals tab used to appear only for staff who already had a meal
+    // rate. That hid the feature behind itself: with no rate there was no
+    // tab, and the panel's own "set a meal rate first" message lives INSIDE
+    // the tab, so nobody could reach the one place that says what to do. In
+    // eighteen months of this log, meal_preview was never called once.
+    //
+    // The tab is now always offered to whoever can pay salaries, and the
+    // panel explains the missing rate with a button that goes and sets it.
+    // The payroll CARD keeps its rate gate — four buttons on every row of a
+    // list is the noise this was trying to avoid, and the tab is the door.
     var hasMealRate = Number(s.meal_rate || 0) > 0;
     var switchBtns =
       (can("staff.salary.pay")
@@ -1849,8 +1880,10 @@
       (can("staff.advance.give")
         ? '<button data-qpmode="advance" class="' + (qp.mode === "advance" ? "on" : "") + '">Advance</button>'
         : "") +
-      (can("staff.salary.pay") && hasMealRate
-        ? '<button data-qpmode="meals" class="' + (qp.mode === "meals" ? "on" : "") + '">Meals</button>'
+      (can("staff.salary.pay")
+        ? '<button data-qpmode="meals" class="' + (qp.mode === "meals" ? "on" : "") +
+          '" title="' + (hasMealRate ? "Log the kitchen cost for days present"
+                                     : "No meal rate set yet") + '">Meals</button>'
         : "");
 
     var head =
@@ -2260,21 +2293,31 @@
     } catch (_) { return ym; }
   }
 
-  function loadInsights() {
+  // The Insights tab reports ONE month. `state.insightsMonth` is what the
+  // month picker selected (it survives a cache bust so a write does not
+  // throw the operator back to today); `state.insights` is the last payload
+  // fetched for it.
+  function loadInsights(month) {
     var pane = document.getElementById("stf-pane-insights");
-    var hasCache = !!state.insights;
-    // Paint the last payload instantly (numbers refresh silently below) —
-    // the tab must never sit on a spinner when we already know yesterday's
-    // answer. First-ever open shows a shimmer skeleton instead.
-    if (hasCache) renderInsights(state.insights);
+    var sel = month || state.insightsMonth || _todayStr().slice(0, 7);
+    state.insightsMonth = sel;
+    var cached = state.insights && state.insights.month === sel
+      ? state.insights : null;
+    // Paint the last payload for this month instantly (numbers refresh
+    // silently below) — the tab must never sit on a spinner when we already
+    // know yesterday's answer. A first open, or a month we have not shown
+    // yet, gets a shimmer skeleton instead.
+    if (cached) renderInsights(cached);
     else pane.innerHTML = skeletonInsights();
-    api("/staff/analytics")
+    api("/staff/analytics?month=" + encodeURIComponent(sel))
       .then(function (json) {
+        // Ignore a slow answer for a month the operator has moved off.
+        if (state.insightsMonth !== json.month) return;
         state.insights = json;
         if (_paneActive("stf-pane-insights")) renderInsights(json);
       })
       .catch(function (e) {
-        if (hasCache) notify(e.message, "error");
+        if (cached) notify(e.message, "error");
         else pane.innerHTML = '<div class="stf-empty">' + esc(e.message) + "</div>";
       });
   }
@@ -2282,7 +2325,29 @@
   function renderInsights(a) {
     var pane = document.getElementById("stf-pane-insights");
     var t = a.totals || {};
+    var hl = a.highlights || {};
     var thisMonth = _todayStr().slice(0, 7);
+    var selMonth = a.month || thisMonth;
+    var selLabel = monthLong(selMonth);
+    var isNowMonth = !!a.is_current_month;
+
+    // ── month filter — drives every figure on this tab ──
+    var html =
+      '<div class="stf-ins-head">' +
+      '  <div class="stf-ins-period">' +
+      '    <label class="stf-monthpick">' +
+      '      <i class="far fa-calendar"></i>' +
+      '      <span id="stf-ins-month-label">' + esc(selLabel) + "</span>" +
+      '      <input type="month" id="stf-ins-month" value="' + selMonth +
+             '" max="' + thisMonth + '" />' +
+      "    </label>" +
+      (isNowMonth
+        ? '<span class="stf-ins-sub">up to today, day ' +
+          ((a.period || {}).elapsed_days || 0) + "</span>"
+        : '<button type="button" class="stf-ins-now" id="stf-ins-now">' +
+          "Back to this month</button>") +
+      "  </div>" +
+      "</div>";
 
     // ── KPI tiles ──
     function kpi(icon, cls, value, label, sub) {
@@ -2294,58 +2359,133 @@
         '  <div class="s">' + sub + "</div>" +
         "</div>");
     }
-    var html =
+    html +=
       '<div class="stf-kpis">' +
       kpi("fa-wallet", "", rup(t.month_cash_out),
-          "Paid out this month", "advances + salaries") +
+          "Paid out in " + esc(selLabel),
+          "advances " + rup(t.month_advances) + " + salaries " +
+          rup(t.month_salaries)) +
       kpi("fa-coins", "", rup(t.month_wages_earned),
-          "Wages earned so far", "days worked × wage") +
+          "Wages earned" + (isNowMonth ? " so far" : ""),
+          fmtDays(t.days_worked) + " shifts worked × wage") +
       kpi("fa-hand-holding-dollar", t.outstanding_advance > 0 ? "warn" : "",
           rup(t.outstanding_advance),
-          "Advances outstanding", "to recover from salaries") +
-      kpi("fa-user-check", "",
-          (t.today_present || 0) + "<span>/" + (t.today_total || 0) + "</span>",
-          "Present today", "full or half day") +
+          "Advances outstanding", "to recover from salaries, as of now") +
+      kpi("fa-chart-simple", "", (t.avg_attendance_rate || 0) + "<span>%</span>",
+          "Team attendance",
+          (t.absent_days || 0) + " absent day" +
+          ((t.absent_days || 0) === 1 ? "" : "s") + " marked" +
+          (t.double_shift_days
+            ? " · " + t.double_shift_days + " double-shift day" +
+              (t.double_shift_days === 1 ? "" : "s")
+            : "")) +
+      (isNowMonth
+        ? kpi("fa-user-check", "",
+              (t.today_present || 0) + "<span>/" + (t.today_total || 0) + "</span>",
+              "Present today", "full or half day")
+        : "") +
       "</div>";
 
-    // ── monthly cash-out bar chart (single series — app primary hue) ──
+    // ── monthly cash-out bar chart ──
+    // Built here, printed AFTER the highlights: the cards answer "who" for
+    // the month on screen, and the trend is the slower question of where the
+    // money is going. The desk reads the cards; the trend is for the owner.
+    var chartHtml = "";
     var months = a.months || [];
     var maxV = 1;
     months.forEach(function (m) { if (m.total > maxV) maxV = m.total; });
-    html += '<div class="stf-section-title">Staff cash-out — last ' + months.length + " months</div>";
-    html += '<div class="stf-chart" role="img" aria-label="Monthly staff cash-out">';
+    chartHtml += '<div class="stf-section-title">Staff cash-out — ' + months.length +
+      " months to " + esc(monthShort(selMonth)) + "</div>";
+    chartHtml += '<div class="stf-chart" role="img" aria-label="Monthly staff cash-out">';
     months.forEach(function (m) {
       var pct = Math.round((100 * m.total) / maxV);
-      var isNow = m.month === thisMonth;
-      // Direct labels only where they earn their place: the current month
+      var isSel = m.month === selMonth;
+      // Direct labels only where they earn their place: the selected month
       // and the tallest bar; every bar carries a hover tooltip.
-      var showLabel = isNow || (m.total === maxV && m.total > 0);
-      html +=
-        '<div class="stf-chart-col' + (isNow ? " now" : "") + '"' +
+      var showLabel = isSel || (m.total === maxV && m.total > 0);
+      chartHtml +=
+        '<div class="stf-chart-col' + (isSel ? " now" : "") + '"' +
         ' title="' + esc(monthShort(m.month) + ": " + rup(m.total) +
           " (advances " + rup(m.advances) + " + salaries " + rup(m.salaries_net) + ")") + '">' +
         (showLabel ? '<div class="val">' + rup(m.total) + "</div>" : '<div class="val">&nbsp;</div>') +
         '  <div class="barwrap"><div class="bar" style="height:' + Math.max(m.total > 0 ? 4 : 0, pct) + '%"></div></div>' +
         "</div>";
     });
-    html += "</div>";
-    html += '<div class="stf-chart-labels">';
+    chartHtml += "</div>";
+    chartHtml += '<div class="stf-chart-labels">';
     months.forEach(function (m) {
-      html += '<div class="lbl' + (m.month === thisMonth ? " now" : "") + '">' +
+      chartHtml += '<div class="lbl' + (m.month === selMonth ? " now" : "") + '" ' +
+        'data-month="' + esc(m.month) + '" role="button" tabindex="0" ' +
+        'title="Show ' + esc(monthLong(m.month)) + '">' +
         esc(monthShort(m.month)) + "</div>";
     });
-    html += "</div>";
+    chartHtml += "</div>";
 
-    // ── per-staff table (this month) ──
+    // ── highlights — who did best, and what needs attention ──
+    // Ranked by the server so these cards, the table below and the register
+    // can never disagree about who did best.
+    function hlCard(cls, icon, label, name, value, sub) {
+      return (
+        '<div class="stf-hl ' + cls + '">' +
+        '  <div class="hl-top"><i class="fas ' + icon + '"></i>' + esc(label) + "</div>" +
+        '  <div class="hl-name">' + esc(name) + "</div>" +
+        '  <div class="hl-val">' + value + "</div>" +
+        (sub ? '  <div class="hl-sub">' + esc(sub) + "</div>" : "") +
+        "</div>");
+    }
+    var cards = [];
+    if (hl.top_attendance) {
+      cards.push(hlCard("good", "fa-trophy", "Best attendance",
+        hl.top_attendance.name, hl.top_attendance.attendance_rate + "%",
+        fmtDays(hl.top_attendance.days_present) + " of " +
+        hl.top_attendance.expected_days + " days" +
+        (hl.top_attendance.absent_days ? ", " + hl.top_attendance.absent_days + " absent" : "") +
+        (hl.top_attendance.half_days_present
+          ? ", " + hl.top_attendance.half_days_present + " half" : "") +
+        (hl.top_attendance.double_shift_days
+          ? ", " + hl.top_attendance.double_shift_days + " double" : "")));
+    }
+    if (hl.top_cover) {
+      cards.push(hlCard("good", "fa-clock-rotate-left", "Most cover",
+        hl.top_cover.name, hl.top_cover.double_shift_days + " double shifts",
+        "+" + fmtDays(hl.top_cover.extra_shifts) + " shifts beyond one a day"));
+    }
+    if (hl.top_earner) {
+      cards.push(hlCard("", "fa-sack-dollar", "Top wages earned",
+        hl.top_earner.name, rup(hl.top_earner.wages_earned),
+        fmtDays(hl.top_earner.days_worked) + " days worked"));
+    }
+    if (hl.perfect_attendance && hl.perfect_attendance.count) {
+      cards.push(hlCard("good", "fa-calendar-check", "Full attendance",
+        hl.perfect_attendance.count + " staff",
+        esc(hl.perfect_attendance.names.join(", ")) +
+        (hl.perfect_attendance.count > hl.perfect_attendance.names.length
+          ? " +" + (hl.perfect_attendance.count - hl.perfect_attendance.names.length)
+          : ""),
+        "no absents marked"));
+    }
+    if (hl.most_absent) {
+      cards.push(hlCard("warn", "fa-user-clock", "Most absents",
+        hl.most_absent.name, hl.most_absent.absent_days + " days",
+        hl.most_absent.attendance_rate + "% attendance"));
+    }
+    if (hl.top_advance) {
+      cards.push(hlCard("warn", "fa-hand-holding-dollar", "Largest advance",
+        hl.top_advance.name, rup(hl.top_advance.outstanding_advance),
+        "to recover from salary"));
+    }
+    if (cards.length) {
+      html += '<div class="stf-section-title">Highlights</div>' +
+        '<div class="stf-hls">' + cards.join("") + "</div>";
+    }
+    html += chartHtml;
+
+    // ── per-staff table for the selected month ──
     var rows = a.staff || [];
+    var bestId = (hl.top_attendance || {}).id;
     html += '<div class="stf-section-title" style="display:flex;align-items:center;gap:0.5rem;">' +
-      "This month by staff" +
+      esc(selLabel) + " by staff" +
       '<span style="flex:1;"></span>' +
-      '<label class="stf-monthpick sm">' +
-      '  <i class="far fa-calendar"></i>' +
-      '  <span id="stf-reg-month-label">' + esc(monthLong(thisMonth)) + "</span>" +
-      '  <input type="month" id="stf-reg-month" value="' + thisMonth + '" max="' + thisMonth + '" />' +
-      "</label>" +
       '<button class="stf-btn success" id="stf-reg-dl">' +
       '  <i class="fas fa-file-arrow-down"></i> Download register</button>' +
       "</div>";
@@ -2362,10 +2502,23 @@
         var band = rate >= 90 ? "good" : rate >= 60 ? "mid" : "low";
         html +=
           "<tr>" +
-          '<td class="nm">' + esc(r.name) +
+          '<td class="nm">' +
+          (r.id === bestId
+            ? '<i class="fas fa-trophy stf-best" title="Best attendance this month"></i> '
+            : "") +
+          esc(r.name) +
           (r.designation ? '<span class="ds">' + esc(r.designation) + "</span>" : "") + "</td>" +
-          "<td>" + fmtDays(r.days_worked) +
-          (r.absent_days ? '<span class="ds">' + r.absent_days + " absent</span>" : "") + "</td>" +
+          "<td>" + fmtDays(r.days_present) +
+          '<span class="ds">of ' + (r.expected_days || 0) + " days" +
+          // A half day counts as a day present, same as the salary screen.
+          // It is still only half a shift of pay, so name it rather than
+          // let the two numbers look like a contradiction.
+          (r.half_days_present
+            ? " · " + r.half_days_present + " half"
+            : "") +
+          (r.double_shift_days
+            ? " · " + fmtDays(r.days_worked) + " shifts"
+            : "") + "</span></td>" +
           '<td><span class="stf-rate ' + band + '"><span class="dot"></span>' + rate + "%</span></td>" +
           "<td>" + rup(r.wages_earned) + "</td>" +
           '<td class="' + (r.outstanding_advance > 0 ? "due" : "") + '">' +
@@ -2374,20 +2527,39 @@
           "</tr>";
       });
       html += "</tbody></table></div>";
-      html += '<div class="stf-cal-legend"><span>Att % = days worked ÷ days ' +
-        "elapsed this month. Wages = earned so far at the current per-day rate.</span></div>";
+      html += '<div class="stf-cal-legend"><span>Att % = days present ÷ days ' +
+        (isNowMonth ? "elapsed this month" : "in the month") +
+        ". Working a day shift, a night shift or both counts as one day " +
+        "present; the second shift shows as a double shift instead. A half " +
+        "day counts as a day present too, the same as on the salary " +
+        "screen. Wages = shifts worked at the current per-day rate, so a " +
+        "half day pays half and a double shift pays twice. Advance = still " +
+        "outstanding today, not just this month.</span></div>";
     }
 
     pane.innerHTML = html;
 
-    var regInp = document.getElementById("stf-reg-month");
-    var regLbl = document.getElementById("stf-reg-month-label");
-    if (regInp) regInp.addEventListener("change", function () {
-      if (regLbl && regInp.value) regLbl.textContent = monthLong(regInp.value);
+    // Month filter: the picker, the "back to this month" chip and a click on
+    // any bar label all load the same tab for another month.
+    var insInp = document.getElementById("stf-ins-month");
+    if (insInp) insInp.addEventListener("change", function () {
+      if (insInp.value) loadInsights(insInp.value);
+    });
+    var nowBtn = document.getElementById("stf-ins-now");
+    if (nowBtn) nowBtn.addEventListener("click", function () {
+      loadInsights(thisMonth);
+    });
+    pane.querySelectorAll(".stf-chart-labels .lbl").forEach(function (el) {
+      var m = el.getAttribute("data-month");
+      if (!m || m === selMonth) return;
+      el.addEventListener("click", function () { loadInsights(m); });
+      el.addEventListener("keydown", function (ev) {
+        if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); loadInsights(m); }
+      });
     });
     var dlBtn = document.getElementById("stf-reg-dl");
     if (dlBtn) dlBtn.addEventListener("click", function () {
-      downloadRegister((regInp && regInp.value) || thisMonth, dlBtn);
+      downloadRegister(selMonth, dlBtn);
     });
   }
 
@@ -2951,6 +3123,38 @@
     } catch (_) { /* transactions tab not loaded — nothing to refresh */ }
   }
 
+  // ── Month pickers ───────────────────────────────────────────────────────
+  // Every .stf-monthpick is a label with an invisible <input type="month">
+  // stretched across it. Tapping it focused the input, but a month input only
+  // OPENS its picker when the little calendar indicator is hit, and that
+  // indicator is invisible here — so the chip looked clickable and did
+  // nothing. showPicker() opens it from anywhere on the chip; a browser
+  // without it (or one that refuses the call) falls back to focus, which is
+  // the old behaviour rather than a dead end.
+  //
+  // Delegated once, so it covers the attendance grid's picker, the Insights
+  // month filter and any picker added later.
+  document.addEventListener("click", function (e) {
+    var wrap = e.target && e.target.closest
+      ? e.target.closest(".stf-monthpick") : null;
+    if (!wrap) return;
+    var inp = wrap.querySelector('input[type="month"]');
+    if (!inp || inp.disabled) return;
+    // A label forwards its click to the input inside it, so one tap can
+    // arrive twice. Debounced PER CHIP: a shared timer would swallow a tap
+    // on a different picker moments later.
+    var now = Date.now();
+    if (wrap.__pickerAt && now - wrap.__pickerAt < 350) return;
+    wrap.__pickerAt = now;
+    if (typeof inp.showPicker === "function") {
+      try {
+        inp.showPicker();
+        return;
+      } catch (err) { /* not allowed in this context — fall through */ }
+    }
+    inp.focus();
+  });
+
   // ── bootstrap ───────────────────────────────────────────────────────────
   // Staff now opens via the bottom nav (nav-item[data-tab="staff"] in
   // script.js), not a Quick Actions button — the old quick-staff-btn no
@@ -3014,6 +3218,38 @@
             else el.value = paidOn;
           }
         }
+        return;
+      }
+      if (tries++ < 60) setTimeout(waitReady, 100);   // give up after ~6s
+    })();
+  };
+
+  /**
+   * Deep-link to one staff member's LEDGER — their advances and salary
+   * payments, newest first.
+   *
+   * The Transactions tab's payroll rows link here. openStaffQuickPay above
+   * is the other door and lands on the payout form; this one lands on the
+   * history, because somebody arriving from a transaction row is looking at
+   * a payment that already happened.
+   *
+   * Same three steps as openStaffQuickPay, and for the same reasons: the
+   * bottom-nav click is what actually un-hides #staff-tab, openModal() is
+   * idempotent, and the staff list loads async so the ledger cannot be
+   * opened until the member is in memory.
+   *
+   * @param {string} staffId
+   */
+  window.openStaffLedger = function (staffId) {
+    if (!staffId) return;
+    var navItem = document.querySelector('.nav-item[data-tab="staff"]');
+    if (navItem) navItem.click();
+    openModal();
+    var tries = 0;
+    (function waitReady() {
+      if (state.staffLoaded &&
+          state.staff.some(function (s) { return s.id === staffId; })) {
+        openLedgerFor(staffId);
         return;
       }
       if (tries++ < 60) setTimeout(waitReady, 100);   // give up after ~6s

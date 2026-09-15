@@ -33,6 +33,7 @@ from services.gst_lock_service import is_month_locked
 from services.auth_service import requires_permission, login_required
 from services.audit_log import write_log, attribution_create, attribution_update, _safe_user
 from services import stay_timeline
+from services import rate_segments
 from services import room_photos
 from routes.billing import auto_generate_bill_pdf
 
@@ -2064,28 +2065,20 @@ def add_on():
         # _default_day_idx`, so `not is_retroactive` is `>=`. One source of
         # truth, so the stored flag can never disagree with what ran.
         if _will_bump_rate:
-            guest        = room_data.get("guest", {})
-            old_price    = guest.get("price", 0)
-            renewal_count = room_data.get("renewal_count", 0)
-            existing_offset = guest.get("transfer_day_offset", 0)
-            # For accommodation add-ons (Extra Bed, AC): use +1 formula.
-            # The service price covers TODAY at old room rate; the bumped
-            # price covers future renewals.
-            old_days     = (renewal_count + 1) - existing_offset
-
-            existing_pre = list(guest.get("pre_transfer_charges", []) or [])
-            if old_days > 0:
-                existing_pre.append({
-                    "days":      old_days,
-                    "price":     old_price,
-                    "total":     old_price * old_days,
-                    "from_room": room,          # same room — price change, not room change
-                })
-            new_price = old_price + int(unit_price)
-
-            room_update["guest.pre_transfer_charges"] = existing_pre
-            room_update["guest.transfer_day_offset"]  = existing_offset + old_days
-            room_update["guest.price"]                = new_price
+            guest = room_data.get("guest", {})
+            # Every night charged so far (renewal_count + 1: night 1 is
+            # charged at check-in) keeps the old rate. The add-on line itself
+            # covers TODAY's uplift and the raised price bills from the next
+            # renewal. The helper also clears a room shift's
+            # last_transfer_date and transfer_day_prebilled, which the folio
+            # no longer reads — see rate_segments.guest_fields.
+            _bumped = rate_segments.freeze_current_rate(
+                guest, room,
+                boundary=int(room_data.get("renewal_count", 0) or 0) + 1,
+                new_price=int(guest.get("price", 0) or 0) + int(unit_price),
+            )
+            for _field, _value in _bumped.items():
+                room_update[f"guest.{_field}"] = _value
         # Retroactive addons fall through with no guest.price change. The
         # addon row is still written to room.add_ons + payments above, and
         # picked up by the daily_folio at checkout (it knows which day to
@@ -3619,6 +3612,7 @@ def apply_discount():
         return jsonify(success=False, message=f"Error applying discount: {str(e)}")
 
 @rooms_bp.route("/transfer_room", methods=["POST"])
+@requires_permission("room.transfer")
 def transfer_room():
     try:
         data_json = request.json
@@ -3663,12 +3657,11 @@ def transfer_room():
                 ),
             ), 400
 
-        # ── Role gate: cross-category is admin-only ──────────────────────────
-        # Managers hold "room.transfer" (same-category physical moves).
-        # Re-rating a stay (upgrade/downgrade) requires
-        # "room.transfer.cross_category", granted only via the admin
-        # wildcard. Checked inline (not as a decorator) so same-category
-        # transfers keep their existing access rules.
+        # ── Role gate: cross-category needs its own permission ───────────────
+        # "room.transfer" (the decorator above) covers every physical move.
+        # Re-rating a stay (upgrade/downgrade) additionally requires
+        # "room.transfer.cross_category" — held by admin (wildcard) and
+        # manager. Checked inline because only cross-category moves need it.
         if cross_category:
             from services.auth_service import load_current_user
             from services.permissions import role_has_permission
@@ -3717,8 +3710,19 @@ def transfer_room():
         # Completed 24-hr billing cycles since original check-in
         _hours_elapsed    = (_transfer_now - _checkin_dt).total_seconds() / 3600
         _completed_cycles = int(_hours_elapsed / 24)
-        # Days in THIS (old) room = completed cycles − days already captured
-        old_days = max(0, _completed_cycles - existing_offset)
+        # Days in THIS (old) room = completed cycles − days already captured,
+        # and never more than the nights actually charged. Rent accrues on
+        # renewal clicks, not on the clock, so a stay whose renewals are
+        # behind has completed cycles nobody paid for. Freezing those into
+        # the segment would push transfer_day_offset past renewal_count + 1
+        # and leave the folio billing segments for nights the balance never
+        # carried. Clamped here, the unrenewed nights stay unbilled — the
+        # same answer a stay that never moved rooms gets.
+        _accrued_now = rate_segments.accrued_nights(
+            new_room_data.get("renewal_count", 0))
+        old_days = rate_segments.shift_segment_days(
+            new_room_data.get("renewal_count", 0), existing_offset,
+            _completed_cycles)
 
         # ── "Don't apply today's difference" (cross-category only) ──────────
         # When the operator opts NOT to charge/refund the shift-day rate
@@ -3726,9 +3730,11 @@ def transfer_room():
         # renewals) is folded into the old segment at the OLD rate — the
         # folio then bills today at the old price and the new rate starts
         # from the next cycle, keeping balance == folio with zero
-        # adjustment. transfer_day_prebilled marks that the in-progress day
-        # is already covered by the segment, so checkout's minimum-1-day
-        # rule must not double-bill it on a same-day checkout.
+        # adjustment. The fold leaves transfer_day_offset equal to the nights
+        # charged, so the folio bills 0 nights at the new rate until the next
+        # renewal — no marker needed. transfer_day_prebilled existed only to
+        # suppress the old calendar count's minimum-1-day rule and is kept
+        # below as an audit field on the shift record, not on the guest.
         # "ota" was a source that is never written ("mmt"/"agoda"/"normal" are),
         # and "agoda" was missing, so a cross-category transfer re-rated an
         # Agoda stay and moved its balance — something that never happens to
@@ -3739,8 +3745,7 @@ def transfer_room():
             new_room_data.get("booking_source") in OTA_PREPAID_SOURCES)
         transfer_day_prebilled = False
         if cross_category and not _is_ota and not apply_today_diff:
-            _renewals_now = int(new_room_data.get("renewal_count", 0) or 0)
-            _fold_days = max(0, (_renewals_now + 1) - existing_offset)
+            _fold_days = max(0, _accrued_now - existing_offset)
             if _fold_days > old_days:
                 transfer_day_prebilled = True
                 old_days = _fold_days
@@ -3756,16 +3761,17 @@ def transfer_room():
         new_room_data["guest"]["pre_transfer_charges"] = existing_pre_transfer
         # Advance the offset by the days just recorded
         new_room_data["guest"]["transfer_day_offset"] = existing_offset + old_days
-        # Store the transfer date so checkout can compute current-room days by date
+        # The date the guest moved into this room. Provenance only — the
+        # folio counts nights from renewal_count and transfer_day_offset, so
+        # nothing bills off this field.
         new_room_data["guest"]["last_transfer_date"] = _transfer_now.strftime("%Y-%m-%d")
-        # Stamp / clear the prebilled marker (clear guards against a stale
-        # flag carried over from an earlier "difference off" shift).
-        if transfer_day_prebilled:
-            new_room_data["guest"]["transfer_day_prebilled"] = \
-                _transfer_now.strftime("%Y-%m-%d")
-        else:
-            new_room_data["guest"].pop("transfer_day_prebilled", None)
-        # renewal_count carries over unchanged — still used for non-transfer stays
+        # Drop any prebilled marker left by an earlier "difference off"
+        # shift. Nothing reads it any more; clearing keeps stays that
+        # predate the folio change from carrying a field that looks live.
+        new_room_data["guest"].pop("transfer_day_prebilled", None)
+        # renewal_count carries over unchanged. It is the nights-charged
+        # counter for every stay, transferred or not, and the folio counts
+        # from it.
         # ────────────────────────────────────────────────────────────────────────
 
         # ── Tariff on transfer ───────────────────────────────────────────────
@@ -4025,45 +4031,66 @@ def transfer_room():
 @rooms_bp.route("/edit_room_price", methods=["POST"])
 @requires_permission("payment.edit")
 def edit_room_price():
-    """Correct the nightly tariff on an ACTIVE stay. Admin-gated.
+    """Change the nightly tariff of an ACTIVE stay from today or from
+    tomorrow. Admin-gated.
 
-    The finalized-bill equivalent is /edit_bill_room_price. This is its
-    in-stay counterpart: it exists because the tariff is most often found to
-    be wrong at the checkout modal, while the guest is standing there, and
-    the only way to fix it before this was to check out at the wrong price
-    and correct the bill afterwards.
+    The operator picks where the new price starts (body `effective`):
 
-    Balance arithmetic
+        "today"     the night the clock is in, counted in 24h cycles from
+                    check-in (night 2 starts 24h after check-in)
+        "tomorrow"  the night after that
+
+    Nights before it keep the price they were charged at. There is no
+    whole-stay option on purpose: a tariff that was wrong from check-in is
+    corrected on the finalized bill (/edit_bill_room_price), where every night
+    is laid out.
+
+    How it is recorded
     ──────────────────
-    Nights already accrued at the CURRENT room's rate have to be re-priced,
-    or the correction silently under- or over-charges the guest. That count
-    is the same one /transfer_room uses:
+    Rent accrues on the room one night at a time: night 1 at check-in, then
+    one /renew_rent per night, each at guest.price as it is at that moment.
+    The nights before the new price are frozen into guest.pre_transfer_charges
+    as a same-room segment marked kind="rate_change", transfer_day_offset
+    moves to that boundary and guest.price becomes the new price. Nights
+    already charged from the boundary on are re-priced, so the balance moves
+    by the difference; later renewals charge the new price by themselves.
+    The arithmetic and every refusal live in services/rate_segments.py.
 
-        accrued at this rate = (renewal_count + 1) - transfer_day_offset
+    guest.last_transfer_date is cleared too. Checkout counts
+    (renewal_count + 1) - offset for every stay, exactly what the balance was
+    charged, so balance and folio stay equal. That field used to switch
+    checkout onto a calendar count of days since the room shift, which billed
+    the nights just frozen a second time; it is provenance now and nothing
+    bills off it.
 
-    renewal_count + 1 is the nights consumed so far (day 1 is consumed at
-    check-in); transfer_day_offset is the nights already billed at an
-    earlier room's rate and captured in guest.pre_transfer_charges. Those
-    earlier nights are NOT re-priced here — they were charged at a tariff
-    that was correct for the room the guest was actually in.
+    Refusals (409) are the cases that cannot be placed without guessing: rent
+    not yet renewed up to the boundary, earlier segments that do not add up,
+    or a boundary inside a night that a room shift or a rate-raising add-on
+    already priced.
 
-    The delta moves the room balance and the global counter together, the
-    same pairing /transfer_room, /renew_rent and /shorten_stay use.
-
-    What this does NOT do
-    ─────────────────────
-    It does not touch a finalized bill, and it refuses on a room that is not
-    occupied. Nothing here recomputes GST: the per-night folio is built from
-    guest.price at checkout by config.compute_daily_folio, so correcting the
-    tariff now is enough for the slab to be picked from the corrected value.
+    Read, plan and write run in one transaction, so a renewal landing at the
+    same moment cannot be charged at one price while the plan assumed
+    another. The room balance and the global counter move together, the same
+    pairing /renew_rent and /shorten_stay use. GST needs nothing here: the
+    folio picks each night's slab from that night's own rate at checkout.
     """
     try:
         data = request.get_json(silent=True) or {}
         room = str(data.get("room") or "").strip()
         reason = str(data.get("reason") or "").strip()
+        effective = data.get("effective")
 
         if not room:
             return jsonify(success=False, message="room is required"), 400
+        # A tab opened before this choice existed posts no `effective`.
+        # Guessing would re-price nights the operator never saw on screen.
+        if effective not in rate_segments.EFFECTIVE_CHOICES:
+            return jsonify(
+                success=False,
+                message=("Choose whether the new price starts today or "
+                         "tomorrow (refresh the page if you do not see this "
+                         "option)."),
+            ), 400
 
         try:
             new_price = int(data.get("room_price_per_night"))
@@ -4074,94 +4101,126 @@ def edit_room_price():
             return jsonify(success=False, message="Price must be greater than zero"), 400
 
         room_ref = rooms_ref.document(room)
-        snap = room_ref.get()
-        if not snap.exists:
-            return jsonify(success=False, message=f"Room {room} does not exist"), 404
-
-        room_data = snap.to_dict() or {}
-        if room_data.get("status") != "occupied":
-            return jsonify(
-                success=False,
-                message=("Room is not occupied. A finalized stay's tariff is "
-                         "corrected from the bill's Edit Price instead."),
-            ), 409
-
-        guest = dict(room_data.get("guest") or {})
-        old_price = int(guest.get("price", 0) or 0)
-        if old_price == new_price:
-            return jsonify(success=False,
-                           message="That is already the current price."), 400
-
-        # Nights charged at THIS room's rate — see the docstring.
-        renewal_count = int(room_data.get("renewal_count", 0) or 0)
-        offset = int(guest.get("transfer_day_offset", 0) or 0)
-        nights_at_rate = max(0, (renewal_count + 1) - offset)
-        delta = (new_price - old_price) * nights_at_rate
-
-        old_balance = int(room_data.get("balance", 0) or 0)
-        new_balance = old_balance + delta
-
         _pu_user = (_safe_user() or {}).get("userId") or "system"
-        _pu_now = datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S")
+        _now = datetime.now(IST)
+        _pu_now = _now.strftime("%Y-%m-%d %H:%M:%S")
 
-        guest["price"] = new_price
+        # Filled by the transaction for the audit log and the reply.
+        captured = {}
 
-        batch = db.batch()
-        batch.update(room_ref, {
-            "guest": guest,
-            "balance": new_balance,
-            # Attribution for the room-history popover. The timeline record
-            # carries the amounts so the trail reads "Price 600 -> 800 by X"
-            # rather than just naming an edit that happened.
-            "lastPriceEditBy": _pu_user,
-            "lastPriceEditAt": _pu_now,
-            "stay_timeline": stay_timeline.append_op(
-                stay_timeline.make_event("room.price_update", room, at=_pu_now,
-                                         old_price=old_price,
-                                         new_price=new_price,
-                                         nights=nights_at_rate)),
-            "lastModifiedBy": _pu_user,
-            "lastModifiedAt": _pu_now,
-        })
-        if delta:
-            batch.update(totals_ref.document("current_totals"),
-                         {"balance": firestore.Increment(delta)})
+        @firestore.transactional
+        def _txn_price(txn):
+            snap = room_ref.get(transaction=txn)
+            if not snap.exists:
+                return ("err", f"Room {room} does not exist", 404)
+            rd = snap.to_dict() or {}
+            if rd.get("status") != "occupied" or not rd.get("guest"):
+                return ("err",
+                        "Room is not occupied. A finalized stay's tariff is "
+                        "corrected from the bill's Edit Price instead.", 409)
 
-        # Keep the draft stay doc in step so a checkout that reads it (or a
-        # register row rendered from it) does not show the superseded tariff.
-        _stay_id = room_data.get("active_bill_id")
-        if _stay_id:
-            batch.update(bills_ref.document(_stay_id),
-                         {"room_price_per_night": new_price})
+            guest = rd["guest"]
+            night = rate_segments.current_night(rd.get("checkin_time"),
+                                                _now.replace(tzinfo=None))
+            try:
+                plan = rate_segments.plan_rate_change(
+                    room, guest, rd.get("renewal_count"), new_price,
+                    effective, night)
+            except rate_segments.RateChangeError as e:
+                return ("err", str(e), 409)
 
-        batch.commit()
+            old_balance = int(rd.get("balance", 0) or 0)
+            delta = plan["balance_delta"]
+            update = {
+                f"guest.{field}": value
+                for field, value in rate_segments.guest_fields(
+                    new_price, plan["segments"], plan["offset"]).items()
+            }
+            update.update({
+                "balance": old_balance + delta,
+                # Attribution for the room-history popover. The timeline
+                # record carries the amounts and the starting night so the
+                # trail says what changed, not only that somebody edited it.
+                "lastPriceEditBy": _pu_user,
+                "lastPriceEditAt": _pu_now,
+                "stay_timeline": stay_timeline.append_op(
+                    stay_timeline.make_event(
+                        "room.price_update", room, at=_pu_now,
+                        old_price=int(guest.get("price", 0) or 0),
+                        new_price=new_price,
+                        nights=plan["nights_repriced"],
+                        from_night=plan["first_new_night"],
+                        effective=effective)),
+                "lastModifiedBy": _pu_user,
+                "lastModifiedAt": _pu_now,
+            })
+            txn.update(room_ref, update)
+            if delta:
+                txn.update(totals_ref.document("current_totals"),
+                           {"balance": firestore.Increment(delta)})
+            # Keep the draft stay doc in step so a checkout that reads it (or
+            # a register row rendered from it) does not show the old tariff.
+            if rd.get("active_bill_id"):
+                txn.update(bills_ref.document(rd["active_bill_id"]),
+                           {"room_price_per_night": new_price})
+
+            captured.update(guest=guest, plan=plan, old_balance=old_balance)
+            return ("ok", None, 200)
+
+        status, msg, code = _txn_price(db.transaction())
+        if status != "ok":
+            return jsonify(success=False, message=msg), code
+
         invalidate_rooms_and_totals()
+
+        guest = captured["guest"]
+        plan = captured["plan"]
+        old_price = int(guest.get("price", 0) or 0)
+        old_balance = captured["old_balance"]
+        delta = plan["balance_delta"]
+        new_balance = old_balance + delta
 
         write_log(
             "room.price_update",
             target_collection="rooms",
             target_id=str(room),
-            before={"room_price_per_night": old_price, "balance": old_balance},
-            after={"room_price_per_night": new_price, "balance": new_balance},
+            before={"room_price_per_night": old_price, "balance": old_balance,
+                    "pre_transfer_charges": guest.get("pre_transfer_charges") or [],
+                    "transfer_day_offset": int(guest.get("transfer_day_offset", 0) or 0)},
+            after={"room_price_per_night": new_price, "balance": new_balance,
+                   "pre_transfer_charges": plan["segments"],
+                   "transfer_day_offset": plan["offset"]},
             metadata={
                 "guest": guest.get("name"),
-                "nights_repriced": nights_at_rate,
+                "effective": effective,
+                "first_new_night": plan["first_new_night"],
+                "nights_repriced": plan["nights_repriced"],
                 "balance_delta": delta,
                 "reason": reason,
             },
         )
-        logger.info(f"Room {room} price {old_price} -> {new_price} by {_pu_user} "
-                    f"({nights_at_rate} nights, balance delta {delta})")
+        logger.info(f"Room {room} price {old_price} -> {new_price} from night "
+                    f"{plan['first_new_night']} ({effective}) by {_pu_user} "
+                    f"({plan['nights_repriced']} nights re-priced, balance delta {delta})")
 
+        if delta > 0:
+            impact = f"Balance increases by ₹{delta}."
+        elif delta < 0:
+            impact = f"Balance decreases by ₹{-delta}."
+        else:
+            impact = "Balance unchanged."
         return jsonify(
             success=True,
-            message=(f"Price updated to \u20b9{new_price}."
-                     + (f" Balance adjusted by \u20b9{delta}."
-                        if delta else "")),
+            message=(f"Price ₹{new_price} from night "
+                     f"{plan['first_new_night']} ({effective}). {impact}"),
             room_price_per_night=new_price,
             balance=new_balance,
             balance_delta=delta,
-            nights_repriced=nights_at_rate,
+            nights_repriced=plan["nights_repriced"],
+            first_new_night=plan["first_new_night"],
+            effective=effective,
+            pre_transfer_charges=plan["segments"],
+            transfer_day_offset=plan["offset"],
         )
 
     except Exception as e:
@@ -5078,6 +5137,42 @@ def get_stay_payments():
         return jsonify(success=False, message=f"Error: {str(e)}"), 500
 
 
+def _on_live_stay(payment: dict, room_data: dict) -> bool:
+    """
+    True when `room_data` is occupied by the SAME stay the payment row
+    belongs to. "The room is occupied" is not enough: correcting a payment of
+    a stay that has checked out must never move the balance of whoever is in
+    that room now (fixing room 226's duplicate advance used to add it to the
+    next guest's bill). Rows without a stay_id fall back to stay_room_key.
+    """
+    rd = room_data or {}
+    if rd.get("status") != "occupied":
+        return False
+    sid = (payment or {}).get("stay_id")
+    if sid:
+        return rd.get("active_bill_id") == sid
+    key = (payment or {}).get("stay_room_key")
+    return bool(key) and key == f"{payment.get('room')}_{rd.get('checkin_time')}"
+
+
+def _cancelled_stay_response(payment: dict):
+    """
+    A 409 response when the payment belongs to a stay whose bill is
+    cancelled, else None. /cancel_bill only cancels a stay whose receipts net
+    to zero (or removes the declared duplicates itself), so changing a row
+    afterwards would put money back on a cancelled invoice.
+    """
+    sid = (payment or {}).get("stay_id")
+    if not sid:
+        return None
+    snap = bills_ref.document(sid).get()
+    if snap.exists and (snap.to_dict() or {}).get("status") == "cancelled":
+        return jsonify(success=False, code="BILL_CANCELLED", message=(
+            "This stay's bill is cancelled, so its payment entries can no "
+            "longer be changed.")), 409
+    return None
+
+
 @rooms_bp.route("/update_stay_payment", methods=["POST"])
 @requires_permission("payment.edit")
 def update_stay_payment():
@@ -5096,8 +5191,9 @@ def update_stay_payment():
       - Updates the payment doc in the `payments` collection.
       - If method or amount changed: adjusts `current_totals` atomically
         (net delta applied so cash/online totals stay correct).
-      - If amount changed and room is still occupied: adjusts room balance
-        so the outstanding balance reflects the corrected payment.
+      - If amount changed and the same stay is still in the room: adjusts
+        room balance so the outstanding balance reflects the corrected payment.
+      - Refused on a cancelled bill's stay (BILL_CANCELLED).
 
     Does NOT touch the legacy `logs` collection.
     All operations are wrapped in a Firestore batch so they are atomic.
@@ -5152,6 +5248,10 @@ def update_stay_payment():
         old_method = old_data.get("method", "")
         old_amount = int(old_data.get("amount", 0))
         pay_type   = old_data.get("type", "")
+
+        _cancelled = _cancelled_stay_response(old_data)
+        if _cancelled:
+            return _cancelled
 
         # Amount editing is not allowed for refund records
         _refund_types = ("refund", "checkout_refund", "manual_refund", "booking_cancel_refund")
@@ -5252,7 +5352,7 @@ def update_stay_payment():
             _room_id_chk = str(old_data.get("room", ""))
             _rsnap = rooms_ref.document(_room_id_chk).get() if _room_id_chk else None
             if _rsnap is not None and _rsnap.exists \
-                    and (_rsnap.to_dict() or {}).get("status") == "occupied":
+                    and _on_live_stay(old_data, _rsnap.to_dict()):
                 return jsonify(
                     success=False,
                     code="USE_SERVICE_EDIT",
@@ -5359,7 +5459,7 @@ def update_stay_payment():
             room_id = str(old_data.get("room", ""))
             if room_id:
                 room_snap = rooms_ref.document(room_id).get()
-                if room_snap.exists and room_snap.to_dict().get("status") == "occupied":
+                if room_snap.exists and _on_live_stay(old_data, room_snap.to_dict()):
                     current_balance = int(room_snap.to_dict().get("balance", 0))
                     # Guest paid less than recorded → balance goes up (owes more)
                     # Guest paid more than recorded → balance goes down (owes less)
@@ -5435,8 +5535,9 @@ def delete_stay_payment():
     Side effects:
       - Removes the doc from the `payments` collection.
       - Reverses its contribution to `current_totals` (cash/online).
-      - If room is still occupied: adds the deleted amount back to room balance
-        (guest now owes that money again).
+      - If the same stay is still in the room: adds the deleted amount back
+        to room balance (guest now owes that money again).
+      - Refused on a cancelled bill's stay (BILL_CANCELLED).
     """
     try:
         data = request.json or {}
@@ -5458,6 +5559,10 @@ def delete_stay_payment():
         old_method = old_data.get("method", "")
         old_amount = int(old_data.get("amount", 0))
         room_id    = str(old_data.get("room", ""))
+
+        _cancelled = _cancelled_stay_response(old_data)
+        if _cancelled:
+            return _cancelled
 
         # ── Banking integrity guard ──────────────────────────────────────
         # Refuse to delete a payment that's already been bundled into a
@@ -5490,8 +5595,10 @@ def delete_stay_payment():
             totals_doc_ref = totals_ref.document("current_totals")
             batch.update(totals_doc_ref, {old_method: firestore.Increment(-old_amount)})
 
-        # 3. If room is still occupied, add the amount back to balance
-        #    (guest paid this, but we're removing the record → they owe it again)
+        # 3. If this stay is still in the room, add the amount back to balance
+        #    (guest paid this, but we're removing the record → they owe it again).
+        #    _on_live_stay, not "room is occupied": a later guest in the same
+        #    room must never inherit the correction.
         #
         # That reasoning holds for a RECEIPT and is exactly backwards for a
         # CHARGE. An add-on row is a charge: "Water 2L ₹60" on the balance
@@ -5513,7 +5620,7 @@ def delete_stay_payment():
         if _is_charge:
             room_snap = rooms_ref.document(room_id).get() if room_id else None
             if room_snap is not None and room_snap.exists \
-                    and (room_snap.to_dict() or {}).get("status") == "occupied":
+                    and _on_live_stay(old_data, room_snap.to_dict()):
                 return jsonify(
                     success=False,
                     code="USE_SERVICE_VOID",
@@ -5526,7 +5633,7 @@ def delete_stay_payment():
 
         if room_id and old_amount > 0 and not _is_charge:
             room_snap = rooms_ref.document(room_id).get()
-            if room_snap.exists and room_snap.to_dict().get("status") == "occupied":
+            if room_snap.exists and _on_live_stay(old_data, room_snap.to_dict()):
                 # Increment for the same reason /add_on now uses it: this read
                 # and the commit are not atomic together.
                 current_balance = int(room_snap.to_dict().get("balance", 0))

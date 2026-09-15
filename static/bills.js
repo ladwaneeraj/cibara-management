@@ -1689,6 +1689,17 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
               title="Correct the room tariff and recompute charges, GST and balance">
         <i class="fas fa-pen"></i> Edit Price
       </button>
+      <!--
+        Cancel Bill: admin-only (bill.cancel). Cancels an invoice raised by
+        mistake via /cancel_bill; the number stays in the series and GSTR-1
+        reports it as cancelled. _syncCancelBtn shows it only while the open
+        bill can still be cancelled.
+      -->
+      <button class="action-btn btn-danger" id="bl-bill-cancel"
+              data-perm="bill.cancel" style="display:none;"
+              title="Cancel this invoice (its number stays in the series as cancelled)">
+        <i class="fas fa-ban"></i> Cancel Bill
+      </button>
       <button class="bl-bill-save-btn" id="bl-bill-save-pdf" title="Save PDF to cloud &amp; share on WhatsApp">
         <i class="fab fa-whatsapp"></i> Save &amp; Share
       </button>
@@ -2331,6 +2342,14 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
       });
     }
 
+    // ── "Cancel Bill" button in bill modal (admin, bill.cancel) ──────────
+    const bCancelBill = dom("bl-bill-cancel");
+    if (bCancelBill) bCancelBill.addEventListener("click", function () {
+      if (!_openBillId) return;
+      const id = _openBillId;
+      openCancelDialog(id, _openBillData, () => openBill(id));
+    });
+
     // ── Sub-tabs: Bills / Credit Notes ────────────────────────────────────
     // _setSubTab swaps the visible pane and fires loadCreditNotes() when
     // switching to CN. Wire both segmented-control buttons to it.
@@ -2782,7 +2801,7 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
           case "split":
             return c > 0 && o > 0;
           case "pending":
-            return b > 0;
+            return b > 0 && e.status !== "cancelled";
           default:
             return true;
         }
@@ -2821,8 +2840,9 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
       totalAccomGst = 0,
       totalWaterGst = 0;
     for (const e of entries) {
-      // Cancelled (reverted) bills are listed for serial continuity but
-      // carry ZERO output tax and no collections — never count them.
+      // Cancelled bills (checkout revert or cancelled by an admin) are listed
+      // for serial continuity but carry ZERO output tax and no collections —
+      // never count them.
       if (e.status === "cancelled") continue;
       live++;
       // GST accrues on the INVOICE, not on collection. A bill with money
@@ -3511,6 +3531,7 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
   function rowHTML(e, dk, rowIndex) {
     const days = e.days_stayed || calcDays(e.checkin_time, e.checkout_time);
     const isPending = e.status === "pending_settlement";
+    const isCancelled = e.status === "cancelled";
 
     const billNo = e.bill_number || "-";
 
@@ -3522,8 +3543,9 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
     const _bt = billTax(e);
     const gstTotal = _bt.tax;
     const _rateLabel = accomRateLabel(e);
-    const gstCell =
-      gstTotal > 0
+    const gstCell = isCancelled
+      ? `<span style="color:#aaa;font-size:.73rem;">-</span>`
+      : gstTotal > 0
         ? `<span style="font-size:.73rem;">₹${inr(Math.round(gstTotal))}<br><span style="font-size:.65rem;color:#888;">${_rateLabel} GST</span></span>`
         : `<span style="color:#aaa;font-size:.73rem;">Exempt</span>`;
 
@@ -3536,7 +3558,8 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
     const srcBadge = `<span class="bl-src-badge ${srcCls}">${srcLabel}</span>`;
 
     // Any bill with outstanding balance — new (pending_settlement) or old (completed but balance > 0)
-    const hasBalance = (e.balance || 0) > 0;
+    // A cancelled bill keeps its stored balance for the record but is owed nothing.
+    const hasBalance = !isCancelled && (e.balance || 0) > 0;
     const rowCls =
       isPending || hasBalance ? "bl-date-row bl-row-pending" : "bl-date-row";
     const pendingBadge =
@@ -3612,10 +3635,11 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
     // B2B / Reverted / Cancellation-charge pills (Goal 1 / Goal 2 / SAC 999794)
     const b2bPill = (e.invoice_type === "B2B")
       ? '<span class="bl-b2b-pill" title="B2B Tax Invoice">B2B</span>' : '';
-    // Revert-cancelled bills (new flow) show CANCELLED; legacy reverted bills
-    // that pre-date the cancel-on-revert change still show REVERTED.
-    const revertedPill = (e.status === "cancelled")
-      ? '<span class="bl-reverted-pill" title="Checkout reverted — this bill was cancelled">CANCELLED</span>'
+    // Cancelled bills (checkout revert, or /cancel_bill with who, when and
+    // why in the tooltip) show CANCELLED; legacy reverted bills that pre-date
+    // the cancel-on-revert change still show REVERTED.
+    const revertedPill = isCancelled
+      ? `<span class="bl-reverted-pill" title="${_glockEsc(describeCancel(e))}">CANCELLED</span>`
       : (e.superseded_by_revert
           ? '<span class="bl-reverted-pill" title="Bill reverted - credit note issued">REVERTED</span>'
           : '');
@@ -3657,7 +3681,7 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
       <td style="font-size:.76rem;white-space:nowrap;">${fmtDT(e.checkin_time)}</td>
       <td style="font-size:.76rem;white-space:nowrap;">${fmtDT(e.checkout_time)}</td>
       <td style="text-align:center;">${days}</td>
-      <td><strong>₹${inr(e.total_amount)}</strong></td>
+      <td><strong${isCancelled ? ' style="text-decoration:line-through;color:#9ca3af;"' : ""}>₹${inr(e.total_amount)}</strong></td>
       <td>${gstCell}</td>
       <td>${paymentHTML(e)}</td>
       <td>${srcBadge}</td>
@@ -3689,7 +3713,7 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
               : "Refund";
       h += `<div class="bl-pay-item"><span class="bl-pm-bal">${rLabel}</span><span>-₹${inr(r)}</span></div>`;
     }
-    if (b > 0)
+    if (b > 0 && e.status !== "cancelled")
       h += `<div class="bl-pay-item"><span class="bl-pm-bal">Due</span><span>₹${inr(b)}</span></div>`;
     h += "</div>";
 
@@ -3829,6 +3853,7 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
     _openBillData = null;
     _openBillView = null;
     _openBillCollapsible = false;
+    _syncCancelBtn();
 
     try {
       // The bill record is still fetched: the action buttons (Save & Share,
@@ -3844,6 +3869,7 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
         // the operator's saved preference; null means let the server auto-pick.
         await _renderOpenBill(_billViewMode);
         _syncViewToggle();
+        _syncCancelBtn();
         if (saveBtn) {
           saveBtn.disabled = false;
           saveBtn.innerHTML =
@@ -3868,6 +3894,215 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
         saveBtn.innerHTML = '<i class="fab fa-whatsapp"></i> Save &amp; Share';
       }
     }
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // CANCEL BILL (admin, permission bill.cancel)
+  // ──────────────────────────────────────────────────────────────────────────
+  // One dialog for both bill modals. The Bills tab's View button opens the
+  // Register tab's modal, so register.js reaches this through
+  // window.CibaraBillCancel instead of carrying a copy. /cancel_bill decides
+  // eligibility; the dialog collects the reason and an explicit confirmation,
+  // and shows a refusal (filed month, money still recorded) in place so the
+  // admin can act on it without retyping.
+  // ══════════════════════════════════════════════════════════════════════════
+  const CANCEL_REASON_MIN = 10;
+  const CANCEL_REASON_MAX = 500;
+
+  // Mirrors the server's status gate so the button is not offered where the
+  // request could only be refused. The server re-checks everything.
+  function canCancelBill(bill) {
+    const a = window.CibaraAuth;
+    return !!(bill && a && typeof a.userCan === "function" &&
+      a.userCan("bill.cancel") &&
+      (bill.status === "completed" || bill.status === "pending_settlement") &&
+      !bill.superseded_by_revert);
+  }
+
+  function _syncCancelBtn() {
+    const btn = dom("bl-bill-cancel");
+    if (btn) btn.style.display = canCancelBill(_openBillData) ? "" : "none";
+  }
+
+  // Plain-text line for tooltips. A manual cancellation says who, when and
+  // why; a revert-cancelled bill keeps its original wording.
+  function describeCancel(e) {
+    if (!e || e.status !== "cancelled") return "";
+    if (e.cancel_kind !== "manual") return "Checkout reverted — this bill was cancelled";
+    let s = "Cancelled";
+    if (e.cancelled_by_name) s += " by " + e.cancelled_by_name;
+    if (e.cancelled_at_ist) s += " on " + fmtDT(String(e.cancelled_at_ist).slice(0, 16));
+    return e.cancel_reason ? s + ": " + e.cancel_reason : s;
+  }
+
+  function _applyCancelledToState(billId, fields) {
+    const ix = state.allEntries.findIndex((x) => x.id === billId);
+    if (ix === -1) return;
+    state.allEntries[ix] = { ...state.allEntries[ix], ...fields };
+    applyFilters();   // re-renders the table and the tally
+  }
+
+  function openCancelDialog(billId, entry, onDone) {
+    if (!billId) return;
+    const a = window.CibaraAuth;
+    if (!(a && typeof a.userCan === "function" && a.userCan("bill.cancel"))) {
+      alert("Only an admin can cancel a bill.");
+      return;
+    }
+    const e = entry || {};
+    const old = document.getElementById("bl-cancel-backdrop");
+    if (old) old.remove();
+    const statusLabel = e.status === "pending_settlement"
+      ? "Checked out, settle later (balance pending)" : "Checked out";
+
+    const back = document.createElement("div");
+    back.id = "bl-cancel-backdrop";
+    back.setAttribute("style",
+      "position:fixed; inset:0; background:rgba(0,0,0,.45); z-index:100000;" +
+      "display:flex; align-items:center; justify-content:center;");
+    back.innerHTML = `
+  <div role="dialog" aria-modal="true" aria-labelledby="bl-cancel-title"
+       style="background:#fff; width:min(460px,92vw); max-height:92vh; overflow-y:auto;
+              border-radius:12px; padding:20px 22px; box-shadow:0 10px 40px rgba(0,0,0,.25);">
+    <h3 id="bl-cancel-title" style="margin:0 0 10px; font-size:18px; color:#b91c1c;">
+      <i class="fas fa-ban"></i> Cancel bill
+    </h3>
+    <div style="font-size:13px; color:#374151; background:#f3f4f6; border-radius:8px;
+                padding:8px 10px; margin-bottom:12px; line-height:1.6;">
+      <div><b>Bill No:</b> ${_glockEsc(e.bill_number || "-")}</div>
+      <div><b>Guest:</b> ${_glockEsc(e.guest_name || "-")}</div>
+      <div><b>Room:</b> ${_glockEsc(e.room || "-")}</div>
+      <div><b>Total:</b> ₹${inr(e.total_amount)}</div>
+      <div><b>Status:</b> ${statusLabel}</div>
+    </div>
+    <p style="margin:0 0 12px; font-size:13px; color:#555; line-height:1.45;">
+      The invoice number stays in the series and is reported as cancelled in
+      GSTR-1. Only cancel an invoice that is not in a GSTR-1 you have already
+      filed; after filing, issue a credit note instead.
+    </p>
+    <label for="bl-cancel-reason" style="display:block; font-size:13px; font-weight:600; margin-bottom:4px;">
+      Reason (printed on the cancelled invoice)
+    </label>
+    <textarea id="bl-cancel-reason" rows="3" maxlength="${CANCEL_REASON_MAX}"
+              placeholder="e.g. Duplicate entry: guest was already checked in to another room"
+              style="width:100%; box-sizing:border-box; padding:9px 10px; font-size:14px;
+                     font-family:inherit; border:1px solid #cbd5e1; border-radius:8px;
+                     resize:vertical;"></textarea>
+    <div id="bl-cancel-count" style="font-size:12px; text-align:right; margin:2px 0 10px;"></div>
+    <label style="display:flex; gap:8px; align-items:flex-start; font-size:13px;
+                  color:#374151; margin-bottom:10px; cursor:pointer;">
+      <input type="checkbox" id="bl-cancel-confirm" style="margin-top:2px;" />
+      <span>I confirm invoice ${_glockEsc(e.bill_number || "")} was raised by
+        mistake and should be cancelled. This cannot be undone.</span>
+    </label>
+    <!-- Shown only when the server reports payments on this bill. A duplicate
+         room entry usually carries the same advance typed in twice; the
+         operator declares it was never received and it is removed with the
+         bill (the server re-checks every entry). -->
+    <div id="bl-cancel-receipts" hidden
+         style="font-size:13px; color:#7c2d12; background:#fff7ed; border:1px solid #fed7aa;
+                border-radius:8px; padding:8px 10px; margin-bottom:10px; line-height:1.5;">
+      <div id="bl-cancel-receipt-list" style="margin-bottom:6px;"></div>
+      <label style="display:flex; gap:8px; align-items:flex-start; cursor:pointer;">
+        <input type="checkbox" id="bl-cancel-nomoney" style="margin-top:3px;" />
+        <span><b>No money was received for this bill.</b> These entries were a
+          duplicate. Remove them and cancel the bill.</span>
+      </label>
+    </div>
+    <div id="bl-cancel-msg" style="font-size:13px; min-height:18px; margin-bottom:10px; line-height:1.45;"></div>
+    <div style="display:flex; gap:10px; justify-content:flex-end;">
+      <button id="bl-cancel-keep" class="action-btn btn-secondary" type="button">Keep bill</button>
+      <button id="bl-cancel-go" class="action-btn btn-danger" type="button" disabled>Cancel bill</button>
+    </div>
+  </div>`;
+    document.body.appendChild(back);
+
+    const txt  = back.querySelector("#bl-cancel-reason");
+    const cnt  = back.querySelector("#bl-cancel-count");
+    const chk  = back.querySelector("#bl-cancel-confirm");
+    const msg  = back.querySelector("#bl-cancel-msg");
+    const keep = back.querySelector("#bl-cancel-keep");
+    const go   = back.querySelector("#bl-cancel-go");
+    const rcpt = back.querySelector("#bl-cancel-receipts");
+    const rcptList = back.querySelector("#bl-cancel-receipt-list");
+    const noMoney  = back.querySelector("#bl-cancel-nomoney");
+
+    function refresh() {
+      const n = txt.value.trim().length;
+      const short = n < CANCEL_REASON_MIN;
+      cnt.textContent = short
+        ? `${n} / ${CANCEL_REASON_MIN} characters minimum`
+        : `${n} / ${CANCEL_REASON_MAX}`;
+      cnt.style.color = short ? "#b45309" : "#6b7280";
+      go.disabled = short || !chk.checked || (!rcpt.hidden && !noMoney.checked);
+    }
+
+    // The server's HAS_RECEIPTS answer lists the entries. Offer removal only
+    // when it says removal can work; otherwise its reason is the next step.
+    function showReceipts(data) {
+      const rows = (data.receipt_entries || []).map((r) =>
+        `₹${inr(r.amount)} ${r.method === "cash" ? "cash" : "online"}` +
+        (r.date ? ` on ${_glockEsc(r.date)}${r.time ? " " + _glockEsc(r.time) : ""}` : ""));
+      rcptList.innerHTML = "Payments recorded on this bill: <b>" +
+        (rows.join(", ") || "none listed") + "</b>";
+      rcpt.hidden = !data.can_remove_receipts;
+      noMoney.checked = false;
+      msg.style.color = "#b91c1c";
+      msg.textContent = data.can_remove_receipts
+        ? "This bill shows money received. If it is a duplicate entry and no money came in, tick the box above."
+        : (data.remove_block_reason || data.message || "");
+    }
+    const close = () => back.remove();
+    txt.addEventListener("input", refresh);
+    chk.addEventListener("change", refresh);
+    noMoney.addEventListener("change", refresh);
+    keep.addEventListener("click", close);
+    back.addEventListener("click", (ev) => { if (ev.target === back) close(); });
+
+    go.addEventListener("click", async function () {
+      const reason = txt.value.trim();
+      if (reason.length < CANCEL_REASON_MIN || !chk.checked) return;
+      const orig = go.innerHTML;
+      go.disabled = true; keep.disabled = true;
+      go.innerHTML = "Cancelling…";
+      msg.textContent = "";
+      try {
+        const res = await apiFetch("/cancel_bill", {
+          method:  "POST",
+          headers: { "Content-Type": "application/json" },
+          body:    JSON.stringify({
+            bill_id: billId, reason: reason, confirm: true,
+            remove_receipts: !rcpt.hidden && noMoney.checked,
+          }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (res.ok && data && data.success) {
+          close();
+          _applyCancelledToState(billId, data.bill || { status: "cancelled" });
+          _blNotify(data.message || "Bill cancelled.", "success");
+          if (typeof onDone === "function") await onDone(data);
+          return;
+        }
+        // Refusals (filed month, money still recorded, settlement collected)
+        // carry the next step in their message; keep the dialog open on it.
+        if (data && data.code === "HAS_RECEIPTS") {
+          showReceipts(data);
+        } else {
+          msg.style.color = "#b91c1c";
+          msg.textContent = (data && data.message) || ("Cancel failed (HTTP " + res.status + ").");
+        }
+      } catch (err) {
+        console.error("[Bills] cancel bill failed:", err);
+        msg.style.color = "#b91c1c";
+        msg.textContent = "Network error. Reopen the bill to check its status before retrying.";
+      }
+      go.innerHTML = orig;
+      keep.disabled = false;
+      refresh();
+    });
+
+    refresh();
+    txt.focus();
   }
 
   // ══════════════════════════════════════════════════════════════════════════
@@ -4145,7 +4380,7 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
     _exportEntries.forEach((e) => {
       const days = e.days_stayed || calcDays(e.checkin_time, e.checkout_time);
 
-      // ── Revert-cancelled bills ──────────────────────────────────────────
+      // ── Cancelled bills (checkout revert or cancelled by an admin) ──────
       // Listed in the Invoice Register so the CC serial sequence has no
       // unexplained gap, but at ZERO value and EXCLUDED from every tax
       // bucket / B2C summary. The invoice was cancelled before the period's
@@ -6300,6 +6535,18 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
   } else {
     bootWhenReady();
   }
+
+  // Cancel-bill dialog, shared with the Register tab's bill modal.
+  //   open(billId, entry, onDone) shows the dialog for a bill; entry supplies
+  //     bill_number / guest_name / room / total_amount / status, and onDone
+  //     runs after a successful cancel (the Bills table is already updated).
+  //   canCancel(bill) says whether to offer the action for a bill.
+  //   describe(entry) is the plain-text tooltip for a cancelled bill.
+  window.CibaraBillCancel = Object.freeze({
+    open:      openCancelDialog,
+    canCancel: canCancelBill,
+    describe:  describeCancel,
+  });
 
   // ── Public refresh contract ───────────────────────────────────────────────
   // Consumed by the global header Refresh button (static/script.js). Mirrors

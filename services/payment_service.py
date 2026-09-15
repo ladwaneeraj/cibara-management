@@ -393,6 +393,48 @@ def is_live_charge(row) -> bool:
     return not row.get("voided")
 
 
+_REFUND_TYPES = frozenset({
+    "refund", "checkout_refund", "manual_refund", "booking_cancel_refund",
+})
+
+
+def receipt_totals(rows) -> dict:
+    """
+    Money received against a stay, from its payment rows:
+    {"cash", "online", "ota", "refunds"}.
+
+    A row is a receipt under its method ("cash" / "online" / "ota") unless it
+    is a refund, discount or expense, or has been voided. Refunds are summed
+    by type whatever their method. Both rules mirror create_bill_record, the
+    checkout-time source of these figures, so a bill restamped later
+    (/recalculate_bill) or checked for money still held before it is
+    cancelled (/cancel_bill) reads the ledger exactly as the invoice did.
+    """
+    out = {"cash": 0, "online": 0, "ota": 0, "refunds": 0}
+    for p in rows or ():
+        if isinstance(p, dict) and p.get("type") in _REFUND_TYPES:
+            out["refunds"] += p.get("amount", 0) or 0
+    for p in receipt_rows(rows):
+        out[p["method"]] += p.get("amount", 0) or 0
+    return out
+
+
+def receipt_rows(rows) -> list:
+    """
+    The rows receipt_totals counts as money received, one per receipt.
+    /cancel_bill needs the rows themselves, not just the sums, when the
+    operator declares a duplicate entry's payments were never received and
+    they are removed along with the bill.
+    """
+    return [
+        p for p in rows or ()
+        if isinstance(p, dict)
+        and p.get("type") not in _STAY_AGG_EXCLUDED_TYPES
+        and is_live_charge(p)
+        and p.get("method") in ("cash", "online", "ota")
+    ]
+
+
 def refresh_room_stay_aggregates(stay_id: str) -> bool:
     """
     Recompute cash/online sums for `stay_id` and stamp them onto the room
@@ -415,19 +457,8 @@ def refresh_room_stay_aggregates(stay_id: str) -> bool:
         if room_ref is None:
             return False  # stay not live on any room — nothing to stamp
 
-        payments = query_payments_by_stay_id(stay_id)
-        cash = sum(
-            p.get("amount", 0) for p in payments
-            if p.get("method") == "cash"
-            and p.get("type") not in _STAY_AGG_EXCLUDED_TYPES
-            and is_live_charge(p)
-        )
-        online = sum(
-            p.get("amount", 0) for p in payments
-            if p.get("method") == "online"
-            and p.get("type") not in _STAY_AGG_EXCLUDED_TYPES
-            and is_live_charge(p)
-        )
+        _totals = receipt_totals(query_payments_by_stay_id(stay_id))
+        cash, online = _totals["cash"], _totals["online"]
 
         _ist = timezone(timedelta(hours=5, minutes=30))
         # Transactional re-check: a concurrent checkout may have cleared the

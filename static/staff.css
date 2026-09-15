@@ -1057,6 +1057,60 @@ td.stf-grid-name.stf-grid-foot {
 .stf-kpi.warn .ic { background: #fef2f2; color: var(--stf-danger); }
 .stf-kpi.warn .v { color: var(--stf-danger); }
 
+/* ── Insights: month filter + highlight cards ── */
+.stf-ins-head { display: flex; align-items: center; margin-bottom: 0.9rem; }
+.stf-ins-period { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; }
+.stf-ins-sub { font-size: 0.72rem; color: var(--stf-ink-3); }
+.stf-ins-now {
+  border: 1px solid var(--stf-line);
+  background: #fff;
+  color: var(--stf-primary);
+  font-size: 0.72rem;
+  font-weight: 700;
+  padding: 0.3rem 0.6rem;
+  border-radius: 999px;
+  cursor: pointer;
+}
+.stf-ins-now:hover { background: var(--stf-primary-soft); }
+
+.stf-hls {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 0.7rem;
+  margin-bottom: 1.3rem;
+}
+.stf-hl {
+  border: 1px solid var(--stf-line);
+  border-left: 3px solid var(--stf-ink-3);
+  border-radius: var(--stf-radius);
+  background: #fff;
+  box-shadow: var(--stf-shadow);
+  padding: 0.7rem 0.85rem;
+}
+.stf-hl.good { border-left-color: var(--stf-full-ink); }
+.stf-hl.warn { border-left-color: var(--stf-danger); }
+.stf-hl .hl-top {
+  display: flex; align-items: center; gap: 0.4rem;
+  font-size: 0.68rem; font-weight: 700; letter-spacing: 0.04em;
+  text-transform: uppercase; color: var(--stf-ink-3);
+}
+.stf-hl .hl-top i { font-size: 0.78em; }
+.stf-hl.good .hl-top i { color: var(--stf-full-ink); }
+.stf-hl.warn .hl-top i { color: var(--stf-danger); }
+.stf-hl .hl-name {
+  font-size: 0.95rem; font-weight: 700; color: var(--stf-ink); margin-top: 4px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.stf-hl .hl-val {
+  font-size: 0.82rem; font-weight: 600; color: var(--stf-ink-2);
+  font-variant-numeric: tabular-nums; margin-top: 1px;
+}
+.stf-hl .hl-sub { font-size: 0.66rem; color: var(--stf-ink-3); margin-top: 2px; }
+.stf-table .nm .stf-best { color: #d97706; font-size: 0.8em; margin-right: 2px; }
+/* Bar labels double as a month switch. */
+.stf-chart-labels .lbl[data-month] { cursor: pointer; }
+.stf-chart-labels .lbl[data-month]:hover { color: var(--stf-primary); }
+
 .stf-section-title {
   font-weight: 700;
   font-size: 0.92rem;

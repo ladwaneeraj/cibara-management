@@ -33,6 +33,46 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
+# Every sys.modules key this file replaces, and what was there before.
+# sys.modules is process-global and pytest runs the whole suite in one
+# process, so installing these and walking away replaced `flask`, `config`
+# and the entire `services` package for every test module collected after
+# this one. That is what made `pytest tests/` order-dependent: whichever
+# files came later lost Flask, is_live_charge, ROLE_ADMIN and the rest, and
+# failed on imports that have nothing to do with split payments.
+#
+# The stubs are still needed — routes/reports.py imports the whole app at
+# module load — so they go in, routes.reports is imported against them, and
+# then sys.modules is put back exactly as it was. `R` below keeps its own
+# references to the stubbed collaborators, which is all these tests use.
+_SAVED_MODULES = {}
+
+
+def _stub(name, module):
+    if name not in _SAVED_MODULES:
+        _SAVED_MODULES[name] = sys.modules.get(name)
+    sys.modules[name] = module
+    return module
+
+
+def _restore_import_stubs(*, drop=()):
+    """Undo _install_import_stubs, and drop modules imported against it.
+
+    `drop` is for modules that bound the stubs at their own import time.
+    Leaving routes.reports cached would hand the next test file a copy of it
+    wired to a config with db=None. No other test imports it, so dropping it
+    costs nothing and a later importer gets a clean one.
+    """
+    for name in drop:
+        sys.modules.pop(name, None)
+    for name, previous in _SAVED_MODULES.items():
+        if previous is None:
+            sys.modules.pop(name, None)
+        else:
+            sys.modules[name] = previous
+    _SAVED_MODULES.clear()
+
+
 def _install_import_stubs():
     fa = types.ModuleType("firebase_admin")
     fa_fs = types.ModuleType("firebase_admin.firestore")
@@ -55,18 +95,18 @@ def _install_import_stubs():
 
     fa_fs.FieldFilter = _FieldFilter
     fa.firestore = fa_fs
-    sys.modules["firebase_admin"] = fa
-    sys.modules["firebase_admin.firestore"] = fa_fs
+    _stub("firebase_admin", fa)
+    _stub("firebase_admin.firestore", fa_fs)
 
     gc = types.ModuleType("google")
     gc_cloud = types.ModuleType("google.cloud")
     gc_fs = types.ModuleType("google.cloud.firestore_v1")
     gc_bq = types.ModuleType("google.cloud.firestore_v1.base_query")
     gc_bq.FieldFilter = _FieldFilter
-    sys.modules["google"] = gc
-    sys.modules["google.cloud"] = gc_cloud
-    sys.modules["google.cloud.firestore_v1"] = gc_fs
-    sys.modules["google.cloud.firestore_v1.base_query"] = gc_bq
+    _stub("google", gc)
+    _stub("google.cloud", gc_cloud)
+    _stub("google.cloud.firestore_v1", gc_fs)
+    _stub("google.cloud.firestore_v1.base_query", gc_bq)
 
     flask = types.ModuleType("flask")
 
@@ -83,7 +123,7 @@ def _install_import_stubs():
     flask.request = types.SimpleNamespace(json={}, get_json=lambda *a, **kw: {})
     flask.jsonify = lambda **kw: dict(kw)
     flask.g = types.SimpleNamespace()
-    sys.modules["flask"] = flask
+    _stub("flask", flask)
 
     config = types.ModuleType("config")
     config.db = None
@@ -102,29 +142,41 @@ def _install_import_stubs():
     # Format-only boolean check in the real config; permissive stub here
     # (these tests use syntactically valid GSTINs and never test rejection).
     config.validate_gstin = lambda gstin: bool(gstin)
-    sys.modules["config"] = config
+    _stub("config", config)
 
     services_pkg = types.ModuleType("services")
     services_pkg.__path__ = []
-    sys.modules["services"] = services_pkg
+    _stub("services", services_pkg)
     for name in ("payment_service", "expense_service", "kpi_service"):
         m = types.ModuleType(f"services.{name}")
-        sys.modules[f"services.{name}"] = m
+        _stub(f"services.{name}", m)
         setattr(services_pkg, name, m)
 
     auth = types.ModuleType("services.auth_service")
     auth.requires_permission = lambda perm: (lambda fn: fn)
     auth.load_current_user = lambda: None
-    sys.modules["services.auth_service"] = auth
+    _stub("services.auth_service", auth)
 
     perms = types.ModuleType("services.permissions")
     perms.role_has_permission = lambda role, perm: False
-    sys.modules["services.permissions"] = perms
+    _stub("services.permissions", perms)
 
 
 _install_import_stubs()
 
-import routes.reports as R  # noqa: E402
+try:
+    import routes.reports as R  # noqa: E402
+finally:
+    # try/finally, not a bare sequence. If importing routes.reports raises —
+    # and on Python 3.9 it does, because reports.py uses `dict | None`
+    # annotations without `from __future__ import annotations` — a plain
+    # sequence skips the restore and leaves the stubbed flask, config and
+    # services packages installed for the whole process. Every test module
+    # collected afterwards then fails on an import that has nothing to do
+    # with split payments: "cannot import name 'Flask' from 'flask'",
+    # "cannot import name 'ROLE_ADMIN'", and so on. One real error became
+    # nine, eight of them pointing at innocent files.
+    _restore_import_stubs(drop=("routes.reports",))
 
 
 # ───────────────────────────── Pure-function tests ─────────────────────────

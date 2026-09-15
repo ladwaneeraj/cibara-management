@@ -1085,11 +1085,17 @@ def upload_document(mobile: str, image_bytes: bytes, filename: str) -> str:
 # PENDING SETTLEMENT FLAG — set / clear automatically during checkout flow
 # ---------------------------------------------------------------------------
 
-def set_pending_settlement(mobile: str, settlement_data: dict):
+def set_pending_settlement(mobile: str, settlement_data: dict,
+                           only_if_id: str = None):
     """
     Flag a customer as having a pending (unpaid) settlement from their last checkout.
     Called automatically when a guest is checked out with 'settle_later=True'.
     Runs in a background thread so it never blocks the checkout response.
+
+    With `only_if_id`, the flag is rewritten only while it still points at
+    that settlement. /collect_settlement passes it when a part payment
+    leaves a smaller balance: the warning must drop to what is really left,
+    without stealing the flag from a different stay the guest also owes on.
     """
     if _customers_ref is None:
         return
@@ -1098,13 +1104,21 @@ def set_pending_settlement(mobile: str, settlement_data: dict):
         return
     threading.Thread(
         target=_set_pending_settlement,
-        args=(clean, settlement_data),
+        args=(clean, settlement_data, only_if_id),
         daemon=True,
     ).start()
 
 
-def _set_pending_settlement(mobile: str, settlement_data: dict):
+def _set_pending_settlement(mobile: str, settlement_data: dict,
+                            only_if_id: str = None):
     try:
+        if only_if_id:
+            snap = _customers_ref.document(mobile).get()
+            current = (snap.to_dict() or {}).get("pending_settlement_id") if snap.exists else None
+            if current != only_if_id:
+                logger.info(f"CustomerService: pending settlement flag for {mobile} "
+                            f"points at {current!r}, not {only_if_id!r}; left as is")
+                return
         _customers_ref.document(mobile).set({
             "has_pending_settlement": True,
             "pending_settlement_id":     settlement_data.get("id"),
@@ -1118,11 +1132,17 @@ def _set_pending_settlement(mobile: str, settlement_data: dict):
         logger.error(f"CustomerService set_pending_settlement failed for {mobile}: {e}")
 
 
-def clear_pending_settlement(mobile: str):
+def clear_pending_settlement(mobile: str, settlement_id: str = None):
     """
     Remove the pending settlement flag after it has been fully paid.
     Called automatically from collect_settlement when status becomes 'paid'.
     Runs in a background thread.
+
+    With `settlement_id`, the flag is cleared only while it still points at
+    that settlement. /cancel_bill passes it: the guest may also owe a genuine
+    settle-later balance from another stay (a duplicate room entry is the
+    usual reason a bill gets cancelled), and cancelling the duplicate's
+    settlement must not hide that warning at their next check-in.
     """
     if _customers_ref is None:
         return
@@ -1131,13 +1151,20 @@ def clear_pending_settlement(mobile: str):
         return
     threading.Thread(
         target=_clear_pending_settlement,
-        args=(clean,),
+        args=(clean, settlement_id),
         daemon=True,
     ).start()
 
 
-def _clear_pending_settlement(mobile: str):
+def _clear_pending_settlement(mobile: str, settlement_id: str = None):
     try:
+        if settlement_id:
+            snap = _customers_ref.document(mobile).get()
+            current = (snap.to_dict() or {}).get("pending_settlement_id") if snap.exists else None
+            if current != settlement_id:
+                logger.info(f"CustomerService: pending settlement flag for {mobile} "
+                            f"points at {current!r}, not {settlement_id!r}; left as is")
+                return
         _customers_ref.document(mobile).update({
             "has_pending_settlement":    False,
             "pending_settlement_id":     None,

@@ -30,10 +30,10 @@
       "room.checkin",
       "room.checkout",
       "room.update",
-      // Same-category physical moves only. Cross-category transfers
-      // (upgrade/downgrade, permission "room.transfer.cross_category")
-      // are admin-only via the wildcard — do NOT add them here.
+      // Room shifting, including cross-category upgrades/downgrades that
+      // re-rate the stay (owner decision, Sep 2026).
       "room.transfer",
+      "room.transfer.cross_category",
       "room.cleaning.view",
       "room.cleaning.complete",
       "room.inspection.approve",
@@ -59,6 +59,10 @@
       "staff.payroll.view",
       "staff.salary.pay",
       "staff.advance.give",
+      // Collect a pending balance from a returning guest. Granting the
+      // credit (settle_later.use) and writing it off (settlement.manage)
+      // stay admin-only.
+      "settlement.collect",
       // Browse expense history across any date range — dedicated
       // expenses-only view (routes/reports.py /expenses/browse). The one
       // deliberate exception to the manager's 3-day visibility window;
@@ -66,7 +70,9 @@
       "expense.view",
       // Manager does NOT get: settings.view, discount.apply,
       // settlement.manage, transaction.history.full, payment.edit,
-      // data.export, customer.manage, booking.revert, revenue.view,
+      // data.export, customer.manage, booking.revert, bill.cancel,
+      // settlement.manage,
+      // revenue.view,
       // analytics.view, laundry.price.edit, settle_later.use,
       // logs.view, user.manage, quick_actions.use,
       // banking.deposit.confirm, banking.deposit.reconcile,

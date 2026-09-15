@@ -338,6 +338,16 @@ threading.Thread(target=initialize_data, daemon=True).start()
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
+    # Jinja compiles a template once and keeps it for the life of the
+    # process unless auto-reload is on, and auto-reload follows app.debug,
+    # which is off here. So editing index.html changed nothing on screen
+    # until the server was restarted, while edited JS and CSS appeared
+    # immediately (static files are read per request) — the same page then
+    # showed new behaviour on old markup, which reads as "my change did not
+    # apply". This is the dev entry point only; gunicorn serves production
+    # and never runs this block.
+    app.config["TEMPLATES_AUTO_RELOAD"] = True
+    app.jinja_env.auto_reload = True
     # threaded=True: the Werkzeug dev server handles ONE request at a
     # time by default, so the ~8 API calls a page fires queue single
     # file — a trivial endpoint then "takes" 9s because it spent 9s

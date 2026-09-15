@@ -708,11 +708,37 @@ function _hideFlagAlert() {
 // Pending settlement alert helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
+// The settlement the banner is currently showing, so the Collect button and
+// the "collected" event both know which one they are acting on.
+let _checkinPendingSettlementId = null;
+
 function _applyPendingSettlementAlert(customer) {
   const alertEl   = document.getElementById('checkin-pending-settlement-alert');
   const detailsEl = document.getElementById('checkin-pending-settlement-details');
   const dateEl    = document.getElementById('checkin-pending-settlement-date');
+  const btnEl     = document.getElementById('checkin-pending-collect');
+  const btnLblEl  = document.getElementById('checkin-pending-collect-label');
   if (!alertEl) return;
+
+  _checkinPendingSettlementId =
+    (customer && customer.has_pending_settlement && customer.pending_settlement_id) || null;
+
+  // The button needs a settlement to act on (older records carry the amount
+  // but no id) and the permission to take money. auth.js also hides it via
+  // data-perm; this decides the rest.
+  if (btnEl) {
+    const _auth = window.CibaraAuth;
+    const mayCollect = !!(_auth && typeof _auth.userCan === 'function' &&
+                          _auth.userCan('settlement.collect'));
+    const show = !!(_checkinPendingSettlementId && mayCollect &&
+                    customer && customer.pending_settlement_amount);
+    btnEl.style.display = show ? 'inline-flex' : 'none';
+    btnEl.disabled = false;
+    if (show && btnLblEl) {
+      btnLblEl.textContent = 'Collect ₹' +
+        Number(customer.pending_settlement_amount).toLocaleString('en-IN') + ' now';
+    }
+  }
 
   if (customer && customer.has_pending_settlement && customer.pending_settlement_amount) {
     const amt  = Number(customer.pending_settlement_amount).toLocaleString('en-IN');
@@ -747,7 +773,78 @@ function _hidePendingSettlementAlert() {
   if (detailsEl) detailsEl.textContent = '';
   const dateEl = document.getElementById('checkin-pending-settlement-date');
   if (dateEl) dateEl.textContent = '';
+  const btnEl = document.getElementById('checkin-pending-collect');
+  if (btnEl) { btnEl.style.display = 'none'; btnEl.disabled = false; }
+  _checkinPendingSettlementId = null;
 }
+
+// Collect opens the app's ONE collect-settlement modal (settle-later.js),
+// which posts /collect_settlement. That route is what applies the money to
+// the old invoice and closes it, so this button adds a doorway, not a second
+// way to take money.
+document.addEventListener('click', function (e) {
+  const btn = e.target && e.target.closest && e.target.closest('#checkin-pending-collect');
+  if (!btn) return;
+  e.preventDefault();
+  if (!_checkinPendingSettlementId) return;
+  if (typeof window.showCollectSettlementModal !== 'function') {
+    if (typeof showNotification === 'function') {
+      showNotification('Collect is unavailable because the settlements module did not load. Refresh the page.', 'error');
+    }
+    return;
+  }
+  window.showCollectSettlementModal(_checkinPendingSettlementId);
+});
+
+// After the money is taken, correct this banner in place. The event carries
+// the settled state from the server, so the banner never has to guess, and
+// the cached customer record is patched too: reopening check-in for the same
+// guest must not resurrect a balance that has been paid.
+window.addEventListener('cibaraSettlementCollected', function (ev) {
+  const d = (ev && ev.detail) || {};
+  if (!d.settlement_id || d.settlement_id !== _checkinPendingSettlementId) return;
+
+  const alertEl   = document.getElementById('checkin-pending-settlement-alert');
+  const detailsEl = document.getElementById('checkin-pending-settlement-details');
+  const dateEl    = document.getElementById('checkin-pending-settlement-date');
+  const btnEl     = document.getElementById('checkin-pending-collect');
+  const titleEl   = document.getElementById('checkin-pending-settlement-title');
+
+  if (_currentCheckinCustomer) {
+    if (d.fully_paid) {
+      _currentCheckinCustomer.has_pending_settlement = false;
+      _currentCheckinCustomer.pending_settlement_id = null;
+      _currentCheckinCustomer.pending_settlement_amount = null;
+    } else {
+      _currentCheckinCustomer.pending_settlement_amount = d.remaining;
+    }
+  }
+
+  if (d.fully_paid) {
+    _checkinPendingSettlementId = null;
+    if (btnEl) btnEl.style.display = 'none';
+    if (alertEl) {
+      alertEl.style.background = '#f0fdf4';
+      alertEl.style.borderColor = '#22c55e';
+    }
+    if (titleEl) { titleEl.textContent = 'Last stay balance cleared'; titleEl.style.color = '#166534'; }
+    if (detailsEl) {
+      detailsEl.textContent = 'Collected ₹' +
+        Number(d.payment_amount || 0).toLocaleString('en-IN') +
+        (d.discount_amount ? ' (₹' + Number(d.discount_amount).toLocaleString('en-IN') + ' discounted)' : '') +
+        '. The old bill is settled.';
+      detailsEl.style.color = '#166534';
+    }
+    if (dateEl) { dateEl.textContent = ''; }
+  } else {
+    if (detailsEl) {
+      detailsEl.textContent = 'Still outstanding: ₹' +
+        Number(d.remaining || 0).toLocaleString('en-IN') + ' after this payment.';
+    }
+    const lbl = document.getElementById('checkin-pending-collect-label');
+    if (lbl) lbl.textContent = 'Collect ₹' + Number(d.remaining || 0).toLocaleString('en-IN') + ' now';
+  }
+});
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 2.  Auto-fill + name mismatch

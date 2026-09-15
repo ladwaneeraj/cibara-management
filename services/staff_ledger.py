@@ -18,6 +18,14 @@ attendance   One record per (staff, date), or per (staff, date, shift) for
              records (so a full-D + full-N day is worth 2.0 worked-day
              units) — see attendance_summary().
 
+             Those are WORKED-DAY units, the wage base. Counting whether
+             someone turned up is a different question with a different
+             answer: presence_summary() and period_breakdown() both count
+             whole calendar days, where a half day is one day present and a
+             day covering both shifts is still one. Every screen that says
+             "days present" uses that convention; every screen that says
+             "shifts" or pays money uses the worked-day one.
+
 meals        Some staff eat at the lodge. That is a real cost to the
              business AND something the staff member does not get in cash,
              so it is modelled as a flat per-day rate on the staff record
@@ -121,7 +129,9 @@ def attendance_summary(attendance: list, start: str, end: str,
     exclude = exclude or set()
     by_key: dict = {}
     for rec in attendance or []:
-        d = str((rec or {}).get("date") or "")
+        if not isinstance(rec, dict):
+            continue
+        d = str(rec.get("date") or "")
         status = (rec or {}).get("status")
         if not _valid_date(d) or status not in ATTENDANCE_STATUSES:
             continue
@@ -143,6 +153,100 @@ def attendance_summary(attendance: list, start: str, end: str,
         "absent_days": absent,
         "days_worked": full + 0.5 * half,
         "marked_days": len(by_key),
+    }
+
+
+def presence_summary(attendance: list, start: str, end: str) -> dict:
+    """
+    The same records as attendance_summary, counted per CALENDAR DAY instead
+    of per shift.
+
+    Why both exist
+    --------------
+    attendance_summary counts SHIFTS, because that is what wages are paid on:
+    a day-and-night staff member who works both shifts is paid for two.
+    Attendance is a different question — did the person turn up — and shifts
+    answer it wrongly in both directions for the staff who rotate:
+
+      * someone on two weeks of nights works ONE shift a day. Judged against
+        two shifts a day they read 50% while never missing a day.
+      * someone who covers both shifts on a few days read over 100%, which is
+        how a night-shift manager won "best attendance" by arithmetic.
+
+    So: attendance is measured against days, and the extra shifts are
+    reported separately as what they are — cover, not attendance.
+
+    A day counts as:
+      present  when at least one shift that day was full or half. Whole days,
+               never fractions: a half day is a day the person turned up, a
+               full + half day is one day present and not 1.5, and a
+               both-shifts day is one day present and not two.
+      absent   when every shift marked that day is "absent". A day with no
+               record at all is NOT an absence: nobody marked it, and
+               guessing turns a data gap into a pay dispute.
+
+    A half day counting as a whole day present is the same rule
+    period_breakdown() uses for the salary census, and deliberately so: the
+    two were counting the same staff member on the same dates and printing
+    different numbers, 12 present on the salary screen against 11.5 in
+    Insights, with nothing on either screen to say why. Presence answers "was
+    he here". How MUCH he worked is days_worked / shifts_worked, which still
+    values a half day at 0.5 and is what wages are paid on. half_days_present
+    carries the detail so a half day is visible rather than rounded away.
+
+    Returns
+    -------
+    {days_present, days_absent, days_marked, half_days_present,
+     shifts_worked, double_shift_days, extra_shifts}
+
+      days_present      int, calendar days present, the attendance numerator
+      days_absent       int
+      days_marked       int, days with any record (present or absent)
+      half_days_present int, present days whose every worked shift was a half
+      shifts_worked     float, = attendance_summary()["days_worked"]
+      double_shift_days int, days where more than one shift was worked
+      extra_shifts      float, shifts beyond one a day (the cover above)
+    """
+    by_day: dict = {}
+    for rec in attendance or []:
+        if not isinstance(rec, dict):
+            continue
+        d = str(rec.get("date") or "")
+        status = rec.get("status")
+        if not _valid_date(d) or status not in ATTENDANCE_STATUSES:
+            continue
+        if (start and d < start) or (end and d > end):
+            continue
+        shift = rec.get("shift") or None
+        # Same last-one-wins rule as attendance_summary, so the two can never
+        # disagree about which record counts.
+        by_day.setdefault(d, {})[shift] = status
+
+    days_present = 0
+    days_absent = 0
+    half_days_present = 0
+    shifts_worked = 0.0
+    double_shift_days = 0
+    for statuses in by_day.values():
+        worked = [s for s in statuses.values() if s != STATUS_ABSENT]
+        shifts_worked += sum(_DAY_VALUE[s] for s in worked)
+        if worked:
+            days_present += 1
+            if all(s == STATUS_HALF for s in worked):
+                half_days_present += 1
+            if len(worked) > 1:
+                double_shift_days += 1
+        else:
+            days_absent += 1
+
+    return {
+        "days_present": days_present,
+        "days_absent": days_absent,
+        "days_marked": len(by_day),
+        "half_days_present": half_days_present,
+        "shifts_worked": round(shifts_worked, 2),
+        "double_shift_days": double_shift_days,
+        "extra_shifts": round(max(0.0, shifts_worked - days_present), 2),
     }
 
 

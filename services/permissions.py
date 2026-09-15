@@ -47,6 +47,10 @@ PERMISSIONS = frozenset(
         # and Section 34 credit-note issuance. Admin-only by default.
         "bill.gst.edit",
         "credit_note.issue",
+        # Cancel a finalised bill (e.g. a duplicate room entry). The invoice
+        # number is kept and reported as cancelled in GSTR-1 Table 13; refused
+        # once the month is GST-locked (credit note instead). Admin-only.
+        "bill.cancel",
         # Bill — correct the guest name / mobile on an existing bill
         # (non-financial fields only; does not touch amounts or tax heads).
         # Granted to manager as well as admin. Every edit is audit-logged.
@@ -66,8 +70,7 @@ PERMISSIONS = frozenset(
         "room.update",
         "room.transfer",
         # Cross-category transfer (upgrade/downgrade — re-rates the stay).
-        # Admin-only (wildcard); manager's room.transfer covers only
-        # same-category physical moves.
+        # Granted to admin (wildcard) and manager.
         "room.transfer.cross_category",
         # Rooms — housekeeping
         "room.cleaning.view",
@@ -84,6 +87,12 @@ PERMISSIONS = frozenset(
         "laundry.lock.manage",
         # Settle-later / OTA settlements
         "settle_later.use",
+        # Collecting a settle-later balance (money coming IN, at the desk,
+        # fully audited). Granted to manager: they meet the guest who owes
+        # it at their next check-in. Granting the credit in the first place
+        # (settle_later.use) and writing one off (settlement.manage) stay
+        # admin-only.
+        "settlement.collect",
         "settlement.manage",
         # Transaction / register
         "transaction.history.full",
@@ -172,9 +181,10 @@ ROLE_PERMISSIONS: dict[str, FrozenSet[str]] = {
             "room.checkin",
             "room.checkout",
             "room.update",
-            # Same-category physical moves only — cross-category
-            # (room.transfer.cross_category) stays admin-only.
+            # Room shifting, including cross-category upgrades/downgrades
+            # that re-rate the stay (owner decision, Sep 2026).
             "room.transfer",
+            "room.transfer.cross_category",
             "room.cleaning.view",
             "room.cleaning.complete",
             "room.inspection.approve",
@@ -206,6 +216,9 @@ ROLE_PERMISSIONS: dict[str, FrozenSet[str]] = {
             "staff.payroll.view",
             "staff.salary.pay",
             "staff.advance.give",
+            # Collect a pending balance from a returning guest (the check-in
+            # banner and the Pending Payments list).
+            "settlement.collect",
             # Browse expense history across any date range (dedicated
             # expenses-only view — see routes/reports.py /expenses/browse).
             # This is the one deliberate exception to MANAGER_VISIBLE_DAYS:
@@ -214,7 +227,9 @@ ROLE_PERMISSIONS: dict[str, FrozenSet[str]] = {
             "expense.view",
             # Manager DOES NOT get: settings.view, discount.apply,
             # settlement.manage, transaction.history.full, payment.edit,
-            # data.export, customer.manage, booking.revert, revenue.view,
+            # data.export, customer.manage, booking.revert, bill.cancel,
+            # settlement.manage (writing a balance off),
+            # revenue.view,
             # analytics.view, laundry.price.edit, settle_later.use,
             # logs.view, user.manage,
             # banking.deposit.confirm, banking.deposit.reconcile,

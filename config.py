@@ -16,13 +16,23 @@ import pytz
 import base64
 
 from services import payment_service, customer_service, pdf_service, expense_service, bills_service, expense_presets_service, ocr_service
+from services import rate_segments
 from services.banking import init_banking
 
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[logging.FileHandler("lodge.log"), logging.StreamHandler()]
+    # encoding is not optional. Without it FileHandler opens lodge.log in the
+    # platform's default codepage, which on the Windows desk machine is
+    # cp1252 — and every log line carrying a rupee sign then raises
+    # UnicodeEncodeError inside logging, which drops the record silently.
+    # That is most of the money trail: "staff: salary paid ... net=₹X",
+    # "staff: advance ₹X to ...", and every other service line that prints an
+    # amount. Twelve salary payouts had gone through with not one line in the
+    # log to show for them.
+    handlers=[logging.FileHandler("lodge.log", encoding="utf-8"),
+              logging.StreamHandler()]
 )
 logger = logging.getLogger(__name__)
 
@@ -1120,32 +1130,23 @@ def create_bill_record(room, room_data, checkout_time, batch=None,
         # Each entry was written by transfer_room() using date-based day counts.
         pre_transfer_charges  = guest.get("pre_transfer_charges", [])
         transfer_day_offset   = guest.get("transfer_day_offset", 0)
-        last_transfer_date    = guest.get("last_transfer_date")   # set by transfer_room()
 
-        if pre_transfer_charges and last_transfer_date:
-            # Transfer occurred — use calendar dates to count current-room days.
-            # last_transfer_date = the date the guest moved INTO this (current) room.
-            # days_in_current_room = checkout_date − transfer_date
-            # Minimum 1 so a same-day-checkout-after-transfer still bills 1 night.
-            try:
-                _transfer_dt = datetime.strptime(last_transfer_date, "%Y-%m-%d").date()
-                days_in_current_room = (checkout_dt.date() - _transfer_dt).days
-                # Same-day checkout after a shift normally still bills 1 night
-                # in the new room. EXCEPT when the transfer folded the
-                # in-progress day into the old segment ("apply today's
-                # difference" OFF in /transfer_room) — that day is already
-                # billed at the old rate inside pre_transfer_charges, and
-                # forcing 1 here would double-charge it.
-                _prebilled = guest.get("transfer_day_prebilled")
-                _min_days = 0 if (_prebilled and _prebilled == last_transfer_date) else 1
-                if days_in_current_room < _min_days:
-                    days_in_current_room = _min_days
-            except (ValueError, TypeError):
-                # Fallback to renewal_count logic if date is malformed
-                days_in_current_room = max(1, (renewal_count + 1) - transfer_day_offset)
-        else:
-            # No transfer — original renewal_count-based calculation (still correct).
-            days_in_current_room = (renewal_count + 1) - transfer_day_offset
+        # Nights still billed at the current rate: nights charged
+        # (renewal_count + 1) minus the nights already frozen into
+        # pre_transfer_charges. One formula for every stay, transferred or
+        # not — see services/rate_segments.nights_at_current_price.
+        #
+        # This replaced a calendar-date count that ran whenever
+        # guest.last_transfer_date was set: days since the room shift, with a
+        # minimum of one. It knew about the shift and nothing else, so a
+        # price change made "from tomorrow" followed by a room shift the same
+        # day billed that night twice — once inside the rate-change segment,
+        # once as the shift day's minimum. It also under-billed whenever
+        # renewals outpaced calendar days. guest.last_transfer_date and
+        # guest.transfer_day_prebilled are no longer read here; the shift
+        # date stays on the doc as provenance.
+        days_in_current_room = rate_segments.nights_at_current_price(
+            renewal_count, transfer_day_offset)
 
         pre_transfer_total    = sum(entry.get("total", 0) for entry in pre_transfer_charges)
         pre_transfer_days     = sum(entry.get("days",  0) for entry in pre_transfer_charges)

@@ -35,11 +35,13 @@ from services.audit_log import write_log, attribution_create, attribution_update
 from services import stay_timeline
 from services import rate_segments
 from services import room_photos
+from services.request_guard import guard_duplicate_submit
 from routes.billing import auto_generate_bill_pdf
 
 rooms_bp = Blueprint('rooms', __name__)
 
 @rooms_bp.route("/checkin", methods=["POST"])
+@guard_duplicate_submit()
 def checkin():
     try:
         data_json = request.json
@@ -362,6 +364,7 @@ def checkin():
         return jsonify(success=False, message=f"Error during check-in: {str(e)}")
 
 @rooms_bp.route("/checkout", methods=["POST"])
+@guard_duplicate_submit()
 def checkout():
     try:
         data_json = request.json
@@ -500,22 +503,20 @@ def checkout():
                 if amount >= current_balance:
                     totals_update["balance"] = firestore.Increment(-current_balance)
                     overpayment = amount - current_balance
-
                     if overpayment > 0:
-                        new_balance = -overpayment
                         message = f"Payment of ₹{amount} received. Balance cleared. Overpayment: ₹{overpayment}"
                     else:
-                        new_balance = 0
                         message = f"Payment of ₹{amount} received. Balance cleared."
                 else:
-                    new_balance = current_balance - amount
                     totals_update["balance"] = firestore.Increment(-amount)
                     message = "Payment recorded successfully."
             else:
-                new_balance = current_balance - amount
                 message = "Payment recorded successfully."
 
-            batch.update(rooms_ref.document(room), {"balance": new_balance})
+            # Increment, not an absolute set: two requests that both read the
+            # same starting balance must not both write the same end value
+            # (that is how one double-click turned 8 paid days into a refund).
+            batch.update(rooms_ref.document(room), {"balance": firestore.Increment(-amount)})
             batch.update(totals_ref.document('current_totals'), totals_update)
             batch.commit()
 
@@ -561,8 +562,7 @@ def checkout():
             refund_method = payment_mode or "cash"
             guest_name = room_data["guest"]["name"]
 
-            new_balance = current_balance + amount
-            batch.update(rooms_ref.document(room), {"balance": new_balance})
+            batch.update(rooms_ref.document(room), {"balance": firestore.Increment(amount)})
 
             batch.update(totals_ref.document('current_totals'), {"refunds": firestore.Increment(amount)})
             batch.commit()
@@ -1800,6 +1800,7 @@ def revert_checkout():
 
 
 @rooms_bp.route("/add_on", methods=["POST"])
+@guard_duplicate_submit()
 def add_on():
     try:
         data_json = request.json
@@ -2677,6 +2678,7 @@ def void_add_on():
 
 
 @rooms_bp.route("/renew_rent", methods=["POST"])
+@guard_duplicate_submit()
 def renew_rent():
     """
     Renew rent for one more 24h cycle on a room.
@@ -3533,6 +3535,7 @@ def add_room():
 
 @rooms_bp.route("/apply_discount", methods=["POST"])
 @requires_permission("discount.apply")
+@guard_duplicate_submit()
 def apply_discount():
     try:
         data_json = request.json
@@ -3613,6 +3616,7 @@ def apply_discount():
 
 @rooms_bp.route("/transfer_room", methods=["POST"])
 @requires_permission("room.transfer")
+@guard_duplicate_submit()
 def transfer_room():
     try:
         data_json = request.json
@@ -5175,6 +5179,7 @@ def _cancelled_stay_response(payment: dict):
 
 @rooms_bp.route("/update_stay_payment", methods=["POST"])
 @requires_permission("payment.edit")
+@guard_duplicate_submit()
 def update_stay_payment():
     """
     Edit the method, date, and/or amount of a single payment record.

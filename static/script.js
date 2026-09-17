@@ -4610,6 +4610,114 @@ function showCheckinModal(selectedRoomNumber) {
   });
 }
 
+// ── Checkout: payment / refund section ───────────────────────────────────
+// Design "A": no card. A small label line, then ONE row: amount ·
+// Cash|Online · action. A refund shows the same row in amber, with an
+// "or add payment" row under it. Element ids are load-bearing (addPayment,
+// processRefund, _syncPaymentBtnsForRoom and settle-later-fix.js look them
+// up), so keep them when restyling.
+const _PAY_MODES = {
+  pay: {
+    title: "Add payment", verb: "Add", icon: "fa-plus", cls: "pay-strip--pay",
+    amountId: "checkout-payment-amount", cashId: "checkout-cash-btn",
+    onlineId: "checkout-online-btn", submitId: "add-payment-btn",
+  },
+  refund: {
+    title: "Refund to guest", verb: "Refund", icon: "fa-undo",
+    cls: "pay-strip--refund refund-container",
+    amountId: "refund-amount-input", cashId: "refund-cash-btn",
+    onlineId: "refund-online-btn", submitId: "process-refund-btn",
+  },
+};
+
+function _payModeOf(submitId) {
+  return submitId === "process-refund-btn" ? _PAY_MODES.refund : _PAY_MODES.pay;
+}
+
+function _payActionLabel(mode) {
+  return `<i class="fas ${mode.icon}"></i> ${mode.verb}`;
+}
+
+function _payStripHTML(mode, { amount = "", max = null, hint = "", title = mode.title } = {}) {
+  return `
+    <div class="pay-strip ${mode.cls}">
+      <div class="pay-strip-head">
+        <span class="pay-strip-title">${title}</span>
+        ${hint ? `<span class="pay-strip-hint">${hint}</span>` : ""}
+      </div>
+      <div class="pay-strip-row">
+        <label class="pay-amount">
+          <span class="pay-amount-cur">₹</span>
+          <input type="number" inputmode="numeric" id="${mode.amountId}"
+                 placeholder="0" min="1" ${max != null ? `max="${max}"` : ""} value="${amount}" />
+        </label>
+        <div class="pay-seg" role="group" aria-label="Payment method">
+          <button type="button" class="payment-btn cash active" id="${mode.cashId}">
+            <i class="fas fa-money-bill"></i> Cash
+          </button>
+          <button type="button" class="payment-btn online" id="${mode.onlineId}">
+            <i class="fas fa-mobile-alt"></i> Online
+          </button>
+        </div>
+        <button type="button" class="pay-submit ${mode.verb === "Refund" ? "pay-submit--refund" : ""}"
+                id="${mode.submitId}">${_payActionLabel(mode)}</button>
+      </div>
+      <div class="pay-error" id="${mode.verb === "Refund" ? "refund-error-message" : "add-payment-error"}" style="display:none"></div>
+    </div>`;
+}
+
+function _wirePayStrip(mode, onSubmit) {
+  const cash = document.getElementById(mode.cashId);
+  const online = document.getElementById(mode.onlineId);
+  const amount = document.getElementById(mode.amountId);
+  const submit = document.getElementById(mode.submitId);
+  if (!cash || !online || !amount || !submit) return;
+  const pick = (on, off) => () => {
+    off.classList.remove("active");
+    on.classList.add("active");
+  };
+  cash.addEventListener("click", pick(cash, online));
+  online.addEventListener("click", pick(online, cash));
+  amount.addEventListener("keydown", (e) => { if (e.key === "Enter") onSubmit(); });
+  submit.addEventListener("click", onSubmit);
+}
+
+function _renderAddPayment(balance, { append = false, title } = {}) {
+  const html = _payStripHTML(_PAY_MODES.pay, {
+    amount: balance > 0 ? balance : "",
+    hint: balance > 0 ? `Due ₹${balance}` : "",
+    title,
+  });
+  if (append) paymentOrRefundSection.insertAdjacentHTML("beforeend", html);
+  else paymentOrRefundSection.innerHTML = html;
+  _wirePayStrip(_PAY_MODES.pay, () => {
+    const cash = document.getElementById("checkout-cash-btn");
+    addPayment(cash && cash.classList.contains("active") ? "cash" : "online");
+  });
+}
+
+// Overpaid stay: refund row first (the expected action), then the same
+// row again as "or add payment" for the rare money-in case.
+function _renderRefund(refundAmount) {
+  paymentOrRefundSection.innerHTML = _payStripHTML(_PAY_MODES.refund, {
+    amount: refundAmount, max: refundAmount, hint: `Up to ₹${refundAmount}`,
+  });
+  _wirePayStrip(_PAY_MODES.refund, processRefund);
+
+  const input = document.getElementById("refund-amount-input");
+  const error = document.getElementById("refund-error-message");
+  input.addEventListener("input", function () {
+    const value = parseInt(this.value, 10) || 0;
+    let msg = "";
+    if (value <= 0) msg = "Enter an amount greater than 0";
+    else if (value > refundAmount) msg = `Maximum refund is ₹${refundAmount}`;
+    error.textContent = msg;
+    error.style.display = msg ? "block" : "none";
+  });
+
+  _renderAddPayment(0, { append: true, title: "or add payment" });
+}
+
 function updatePaymentOrRefundUI(roomNumber) {
   if (!paymentOrRefundSection) {
     debugLog("Payment or refund section not found");
@@ -4623,249 +4731,30 @@ function updatePaymentOrRefundUI(roomNumber) {
   const isOtaGuest = roomInfo.guest && roomInfo.guest.payment === "ota";
   if (isOtaGuest) {
     paymentOrRefundSection.innerHTML = `
-      <div style="background:rgba(99,179,237,0.12);border:1px solid rgba(99,179,237,0.3);
-                  border-radius:8px;padding:0.75rem 1rem;margin-top:1rem;
-                  color:#63b3ed;font-size:0.85rem;text-align:center;">
+      <div class="pay-ota-note">
         <i class="fas fa-info-circle"></i>&nbsp;MMT Prepaid — Settlement will be received from MMT directly.
       </div>`;
     return;
   }
 
-  // Clear previous content
-  paymentOrRefundSection.innerHTML = "";
+  if (balance >= 0) _renderAddPayment(balance);
+  else _renderRefund(Math.abs(balance));
 
-  if (balance >= 0) {
-    // Show payment UI for both positive balance and zero balance
-    paymentOrRefundSection.innerHTML = `
-      <div class="form-group" style="margin-top: 1.5rem">
-        <label class="form-label">Add Payment</label>
-        <div class="payment-button-wrapper">
-          <input
-            type="number"
-            class="form-control payment-amount-input"
-            id="checkout-payment-amount"
-            placeholder="Amount"
-            value="${balance || ""}"
-            min="1"
-          />
-          <div class="payment-options" style="margin-top: 0.5rem;">
-            <button
-              type="button"
-              class="payment-btn cash active"
-              id="checkout-cash-btn"
-            >
-              <i class="fas fa-money-bill"></i> Cash
-            </button>
-            <button
-              type="button"
-              class="payment-btn online"
-              id="checkout-online-btn"
-            >
-              <i class="fas fa-mobile-alt"></i> Online
-            </button>
-            <div class="payment-button-row">
-            <button
-              type="button"
-              class="payment-add-btn"
-              id="add-payment-btn"
-            >
-              <i class="fas fa-plus-circle"></i> Add Payment
-            </button>
-          </div>
-          </div>
-        </div>
-      </div>
-    `;
-
-    // Add click handlers for the payment buttons
-    const addPaymentBtn = document.getElementById("add-payment-btn");
-    if (addPaymentBtn) {
-      addPaymentBtn.addEventListener("click", function () {
-        // Find which payment method is active
-        const activeMethod = document
-          .querySelector("#checkout-cash-btn")
-          .classList.contains("active")
-          ? "cash"
-          : "online";
-
-        addPayment(activeMethod);
-      });
-    }
-
-    // Re-attach event listeners for payment method selection
-    const cashBtn = document.getElementById("checkout-cash-btn");
-    if (cashBtn) {
-      cashBtn.addEventListener("click", function () {
-        document
-          .getElementById("checkout-online-btn")
-          .classList.remove("active");
-        cashBtn.classList.add("active");
-      });
-    }
-
-    const onlineBtn = document.getElementById("checkout-online-btn");
-    if (onlineBtn) {
-      onlineBtn.addEventListener("click", function () {
-        document.getElementById("checkout-cash-btn").classList.remove("active");
-        onlineBtn.classList.add("active");
-      });
-    }
-  } else if (balance < 0) {
-    // Show refund UI for negative balance with custom input
-    const refundAmount = Math.abs(balance);
-    paymentOrRefundSection.innerHTML = `
-      <div class="refund-container">
-        <div class="refund-title">
-          <i class="fas fa-hand-holding-usd"></i> Refund Required
-        </div>
-        <div class="detail-row">
-          <div class="detail-label">Available Refund</div>
-          <div class="detail-value negative-balance">₹${refundAmount}</div>
-        </div>
-        <div class="form-group" style="margin-top: 1rem">
-          <label class="form-label" for="refund-amount-input">Refund Amount (₹)</label>
-          <input
-            type="number"
-            class="form-control"
-            id="refund-amount-input"
-            placeholder="Enter refund amount"
-            value="${refundAmount}"
-            min="1"
-            max="${refundAmount}"
-            required
-          />
-          <div class="form-helper" style="margin-top: 0.25rem; font-size: 0.8rem; color: var(--gray);">
-            Maximum available refund: ₹${refundAmount}
-          </div>
-        </div>
-        <div class="form-group" style="margin-top: 1rem">
-          <label class="form-label">Refund Method</label>
-          <div class="payment-options">
-            <button
-              type="button"
-              class="payment-btn cash active"
-              id="refund-cash-btn"
-            >
-              <i class="fas fa-money-bill"></i> Cash
-            </button>
-            <button
-              type="button"
-              class="payment-btn online"
-              id="refund-online-btn"
-            >
-              <i class="fas fa-mobile-alt"></i> Online
-            </button>
-          </div>
-        </div>
-        <div id="refund-error-message" class="error-message" style="color: var(--danger); margin-top: 0.5rem; display: none;"></div>
-        <button id="process-refund-btn" class="action-btn btn-warning">
-          Process Refund
-        </button>
-      </div>
-
-      <div class="refund-add-payment-divider">
-        <span>or add a payment</span>
-      </div>
-
-      <div class="form-group refund-add-payment-section">
-        <label class="form-label">Add Payment</label>
-        <div class="payment-button-wrapper">
-          <input
-            type="number"
-            class="form-control payment-amount-input"
-            id="checkout-payment-amount"
-            placeholder="Amount"
-            min="1"
-          />
-          <div class="payment-options" style="margin-top: 0.5rem;">
-            <button type="button" class="payment-btn cash active" id="checkout-cash-btn">
-              <i class="fas fa-money-bill"></i> Cash
-            </button>
-            <button type="button" class="payment-btn online" id="checkout-online-btn">
-              <i class="fas fa-mobile-alt"></i> Online
-            </button>
-            <div class="payment-button-row">
-              <button type="button" class="payment-add-btn" id="add-payment-btn">
-                <i class="fas fa-plus-circle"></i> Add Payment
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-    `;
-
-    // Refund method selection
-    document
-      .querySelectorAll(".refund-container .payment-btn")
-      .forEach((btn) => {
-        btn.addEventListener("click", () => {
-          document
-            .querySelectorAll(".refund-container .payment-btn")
-            .forEach((b) => b.classList.remove("active"));
-          btn.classList.add("active");
-        });
-      });
-
-    // Process refund button
-    const processRefundBtn = document.getElementById("process-refund-btn");
-    if (processRefundBtn) {
-      processRefundBtn.addEventListener("click", processRefund);
-    }
-
-    // Add listener to validate refund amount on input change
-    const refundInput = document.getElementById("refund-amount-input");
-    if (refundInput) {
-      refundInput.addEventListener("input", function () {
-        const value = parseInt(this.value) || 0;
-        const errorElement = document.getElementById("refund-error-message");
-        if (errorElement) {
-          if (value <= 0) {
-            errorElement.textContent =
-              "Please enter a valid amount greater than 0";
-            errorElement.style.display = "block";
-          } else if (value > refundAmount) {
-            errorElement.textContent = `Maximum refund amount is ₹${refundAmount}`;
-            errorElement.style.display = "block";
-          } else {
-            errorElement.style.display = "none";
-          }
-        }
-      });
-    }
-
-    // Add payment section handlers (below refund)
-    const cashBtn = document.getElementById("checkout-cash-btn");
-    const onlineBtn = document.getElementById("checkout-online-btn");
-    const addPaymentBtn = document.getElementById("add-payment-btn");
-
-    if (cashBtn) {
-      cashBtn.addEventListener("click", function () {
-        onlineBtn && onlineBtn.classList.remove("active");
-        cashBtn.classList.add("active");
-      });
-    }
-    if (onlineBtn) {
-      onlineBtn.addEventListener("click", function () {
-        cashBtn && cashBtn.classList.remove("active");
-        onlineBtn.classList.add("active");
-      });
-    }
-    if (addPaymentBtn) {
-      addPaymentBtn.addEventListener("click", function () {
-        const activeMethod =
-          cashBtn && cashBtn.classList.contains("active") ? "cash" : "online";
-        addPayment(activeMethod);
-      });
-    }
-  }
+  // The section was just re-rendered from scratch, so freshly created
+  // buttons must inherit this room's in-flight lock. Without this line the
+  // optimistic apply() re-render handed the operator a live "Add" button
+  // while the first write was still settling — the double-payment bug.
+  _syncPaymentBtnsForRoom(roomNumber);
 }
 
 async function processRefund() {
+  const roomNumber = _checkoutModalRoom();
+  // Same per-room lock as addPayment: a refund is money out, so the
+  // buttons stay frozen until the write settles, even across re-renders.
+  if (!roomNumber || _pendingPaymentRooms.has(roomNumber)) return;
+  _pendingPaymentRooms.add(roomNumber);
+  _syncPaymentBtnsForRoom(roomNumber);
   try {
-    // Get room number
-    const roomNumberElement = document.getElementById("checkout-room-number");
-
-    const roomNumber = roomNumberElement.textContent;
 
     // Get guest information for logging
     const guestName =
@@ -4906,16 +4795,6 @@ async function processRefund() {
         ? "cash"
         : "online";
 
-    // Show loading state on button
-    const btn = document.getElementById("process-refund-btn");
-    if (!btn) {
-      showNotification("Error: Process refund button not found", "error");
-      return;
-    }
-
-    btn.disabled = true;
-    btn.innerHTML =
-      '<span class="loader" style="width: 20px; height: 20px;"></span> Processing...';
 
     // Clear any previous error messages
     const errorElement = document.getElementById("refund-error-message");
@@ -4989,12 +4868,8 @@ async function processRefund() {
 
     showNotification(`Error processing refund: ${error.message}`, "error");
   } finally {
-    // Always re-enable the button
-    const btn = document.getElementById("process-refund-btn");
-    if (btn) {
-      btn.disabled = false;
-      btn.innerHTML = "Process Refund";
-    }
+    _pendingPaymentRooms.delete(roomNumber);
+    _syncPaymentBtnsForRoom(_checkoutModalRoom());
   }
 }
 
@@ -5015,17 +4890,17 @@ function _checkoutModalRoom() {
 
 function _syncPaymentBtnsForRoom(roomNumber) {
   const pending = _pendingPaymentRooms.has(roomNumber);
-  const spinner =
-    '<span class="loader" style="width: 14px; height: 14px;"></span> Processing...';
-  [
-    ["add-payment-btn", '<i class="fas fa-plus-circle"></i> Add Payment'],
-    ["checkout-cash-btn", '<i class="fas fa-money-bill"></i> Cash'],
-    ["checkout-online-btn", '<i class="fas fa-mobile-alt"></i> Online'],
-  ].forEach(([id, idle]) => {
+  const spinner = '<span class="loader" style="width: 14px; height: 14px;"></span>';
+  ["checkout-cash-btn", "checkout-online-btn", "refund-cash-btn", "refund-online-btn"]
+    .forEach((id) => {
+      const el = document.getElementById(id);
+      if (el) el.disabled = pending;
+    });
+  ["add-payment-btn", "process-refund-btn"].forEach((id) => {
     const el = document.getElementById(id);
     if (!el) return;
     el.disabled = pending;
-    el.innerHTML = pending ? spinner : idle;
+    el.innerHTML = pending ? spinner : _payActionLabel(_payModeOf(id));
   });
 }
 
@@ -5051,6 +4926,7 @@ async function addPayment(mode) {
     // another room's checkout while this write is settling, that room's
     // updateCheckoutModal() re-syncs the shared buttons to ITS (unlocked)
     // state, so back-to-back checkouts never wait on each other.
+    if (_pendingPaymentRooms.has(roomNumber)) return; // already in flight
     _pendingPaymentRooms.add(roomNumber);
     _syncPaymentBtnsForRoom(roomNumber);
 

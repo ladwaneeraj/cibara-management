@@ -34,6 +34,7 @@ from services import gst_lock_service
 from services.auth_service import requires_permission
 from services.audit_log import write_log, attribution_update, _safe_user
 from services.role_filters import clamp_date_range
+from services.request_guard import guard_duplicate_submit
 
 billing_bp = Blueprint('billing', __name__)
 
@@ -1290,6 +1291,7 @@ def debug_bills():
 
 @billing_bp.route("/add_bill_payment", methods=["POST"])
 @requires_permission("payment.edit")
+@guard_duplicate_submit()
 def add_bill_payment():
     """
     Record a payment against a bill that has an outstanding balance.
@@ -4709,6 +4711,7 @@ def render_credit_note_pdf():
 
 @billing_bp.route("/issue_credit_note", methods=["POST"])
 @requires_permission("credit_note.issue")
+@guard_duplicate_submit()
 def issue_credit_note():
     """Manual CN issuance - rare path for goodwill / service-deficiency."""
     try:
@@ -4805,6 +4808,7 @@ _CANCEL_REASON_MAX = 500
 
 @billing_bp.route("/cancel_bill", methods=["POST"])
 @requires_permission("bill.cancel")
+@guard_duplicate_submit()
 def cancel_bill():
     """
     Cancel a checked-out invoice raised by mistake, e.g. a second room

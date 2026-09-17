@@ -46,6 +46,7 @@ from services.banking.schema import (
     AdjustmentReason,
 )
 from services.banking.cash_receipts import UnTriggerBlocked
+from services.request_guard import guard_duplicate_submit
 
 
 banking_bp = Blueprint("banking", __name__, url_prefix="/banking")
@@ -151,6 +152,7 @@ def eligible_rows():
 
 @banking_bp.route("/deposit/draft", methods=["POST"])
 @requires_permission(PERM_BANKING_DEPOSIT_CREATE)
+@guard_duplicate_submit()
 def create_draft_route():
     """
     Body:
@@ -449,6 +451,7 @@ def unofficial_route():
 
 @banking_bp.route("/adjustment", methods=["POST"])
 @requires_permission(PERM_BANKING_ADJUSTMENT_CREATE)
+@guard_duplicate_submit()
 def create_adjustment_route():
     """
     Body:

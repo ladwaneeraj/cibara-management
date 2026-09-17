@@ -221,17 +221,21 @@
       // Non-same-origin or no token: just pass through.
       if (!sameOrigin) return originalFetch(input, init);
 
-      const attachedInit = _attach(Object.assign({}, init || {}), url);
+      return _guardedSend(input, Object.assign({}, init || {}), url);
+    };
+
+    // Send with the token attached; on 401 refresh ONCE and retry.
+    // Common causes of the 401:
+    //   - cached token expired between sign-in and now (Firebase
+    //     rolled it 1h ago and our scheduled refresh hadn't run yet)
+    //   - backend revocation-check RPC blipped (transient)
+    //   - admin force-logged-out the user (refresh will fail → bounce)
+    function _sendWithAuth(input, init, url) {
+      const attachedInit = _attach(Object.assign({}, init), url);
 
       return originalFetch(input, attachedInit).then(function (resp) {
         if (resp.status !== 401) return resp;
 
-        // 401: try to refresh ONCE and retry before giving up. Common
-        // causes:
-        //   - cached token expired between sign-in and now (Firebase
-        //     rolled it 1h ago and our scheduled refresh hadn't run yet)
-        //   - backend revocation-check RPC blipped (transient)
-        //   - admin force-logged-out the user (refresh will fail → bounce)
         return _refreshToken().then(function (newToken) {
           if (!newToken) {
             // Refresh failed — account likely disabled / revoked.
@@ -244,7 +248,9 @@
           // second 401 right after a force-logout window).
           return new Promise(function (resolve) { setTimeout(resolve, 250); })
             .then(function () {
-              const retryInit = _attach(Object.assign({}, init || {}), url);
+              // Same init object → same X-Op-Id header, so the server
+              // treats this retry as the SAME operation, never a second one.
+              const retryInit = _attach(Object.assign({}, init), url);
               return originalFetch(input, retryInit).then(function (retryResp) {
                 if (retryResp.status === 401) {
                   console.warn(
@@ -259,7 +265,134 @@
             });
         });
       });
-    };
+    }
+
+    // ── Duplicate-write guard (client half) ───────────────────────────────
+    // Three things, all generic, so every money button in the app is
+    // covered without touching its handler:
+    //   1. Every mutating request carries a fresh X-Op-Id. The server keeps
+    //      the first answer, so a retry of the SAME request (the 401 path
+    //      above, a flaky network) is answered without doing the work twice.
+    //   2. An identical write already in flight (same method+url+body) is
+    //      coalesced: the second caller gets a copy of the first response.
+    //      This is what a double-click on a button that awaits fetch looks
+    //      like from here.
+    //   3. If the server still answers 409 duplicate_suspected (same intent
+    //      seconds apart, e.g. via the optimistic queue or a second device),
+    //      a sub-2s repeat is dropped as a double-click; anything older asks
+    //      the operator and re-sends with X-Force-Duplicate on "yes".
+    const _inFlight = new Map(); // key → Promise<Response> (unconsumed copy)
+    const DOUBLE_CLICK_MS = 2000;
+
+    function _mutationKey(init, url) {
+      const m = ((init && init.method) || "GET").toUpperCase();
+      if (m === "GET" || m === "HEAD") return null;
+      if (typeof init.body !== "string") return null; // uploads etc.
+      return m + " " + url + " " + init.body;
+    }
+
+    function _newOpId() {
+      if (window.crypto && typeof crypto.randomUUID === "function") {
+        return crypto.randomUUID();
+      }
+      return "op_" + Date.now() + "_" + Math.random().toString(16).slice(2);
+    }
+
+    function _jsonResponse(obj) {
+      return new Response(JSON.stringify(obj), {
+        status: 200, headers: { "Content-Type": "application/json" },
+      });
+    }
+
+    function _guardedSend(input, init, url) {
+      const key = _mutationKey(init, url);
+      if (!key) return _sendWithAuth(input, init, url);
+
+      const pending = _inFlight.get(key);
+      if (pending) {
+        console.warn("Cibara: identical write already in flight, coalescing:", url);
+        return pending.then(function (r) { return r.clone(); });
+      }
+
+      const headers = new Headers(init.headers || {});
+      if (!headers.has("X-Op-Id")) headers.set("X-Op-Id", _newOpId());
+      init.headers = headers;
+
+      const p = _sendWithAuth(input, init, url).then(function (resp) {
+        return _resolveDuplicate(resp, input, init, url);
+      });
+      // Store an unconsumed copy; each coalesced caller clones from it.
+      const stored = p.then(function (r) { return r.clone(); });
+      _inFlight.set(key, stored);
+      const clear = function () { _inFlight.delete(key); };
+      p.then(clear, clear);
+      return p;
+    }
+
+    function _resolveDuplicate(resp, input, init, url) {
+      if (resp.status !== 409) return resp;
+      return resp.clone().json().then(function (data) {
+        if (!data || !data.duplicate_suspected) return resp;
+        const ago = Number(data.seconds_ago) || 0;
+        if (ago * 1000 < DOUBLE_CLICK_MS) {
+          console.warn("Cibara: double-click dropped for", url);
+          return _jsonResponse({
+            success: false, duplicate: true,
+            message: "Duplicate click ignored — this was already recorded.",
+          });
+        }
+        return _confirmDuplicate(ago).then(function (yes) {
+          if (!yes) {
+            return _jsonResponse({
+              success: false, duplicate: true,
+              message: "Skipped — not recorded a second time.",
+            });
+          }
+          const forced = Object.assign({}, init);
+          const h = new Headers(init.headers || {});
+          h.set("X-Force-Duplicate", "1");
+          h.set("X-Op-Id", _newOpId());
+          forced.headers = h;
+          return _sendWithAuth(input, forced, url);
+        });
+      }, function () { return resp; });
+    }
+
+    // Small self-contained dialog (auth.js loads on every page, so it
+    // cannot depend on index-page CSS). Resolves false on every dismissal.
+    function _confirmDuplicate(secondsAgo) {
+      return new Promise(function (resolve) {
+        const wrap = document.createElement("div");
+        wrap.setAttribute("role", "dialog");
+        wrap.setAttribute("aria-modal", "true");
+        wrap.style.cssText =
+          "position:fixed;inset:0;z-index:100000;display:flex;align-items:center;" +
+          "justify-content:center;background:rgba(15,23,42,.55);padding:16px;";
+        wrap.innerHTML =
+          '<div style="background:#fff;border-radius:14px;max-width:360px;width:100%;' +
+          'padding:20px 20px 16px;font-family:inherit;box-shadow:0 20px 50px rgba(0,0,0,.25)">' +
+          '<div style="font-weight:700;font-size:1.05rem;color:#1a202c;margin-bottom:6px">' +
+          "Record this again?</div>" +
+          '<div style="font-size:.9rem;color:#4a5568;line-height:1.45">' +
+          "The same entry was already saved " + Math.round(secondsAgo) +
+          " seconds ago. Save it a second time?</div>" +
+          '<div style="display:flex;gap:8px;margin-top:16px">' +
+          '<button type="button" data-act="no" style="flex:1;padding:10px;border:1px solid #cbd5e0;' +
+          'background:#fff;border-radius:10px;font-weight:600;cursor:pointer">No, keep one</button>' +
+          '<button type="button" data-act="yes" style="flex:1;padding:10px;border:0;' +
+          'background:#e63946;color:#fff;border-radius:10px;font-weight:600;cursor:pointer">' +
+          "Yes, record again</button></div></div>";
+        function done(v) { wrap.remove(); document.removeEventListener("keydown", onKey); resolve(v); }
+        function onKey(e) { if (e.key === "Escape") done(false); }
+        wrap.addEventListener("click", function (e) {
+          const act = e.target && e.target.getAttribute && e.target.getAttribute("data-act");
+          if (act) done(act === "yes");
+          else if (e.target === wrap) done(false);
+        });
+        document.addEventListener("keydown", onKey);
+        document.body.appendChild(wrap);
+      });
+    }
   }
 
   // ── Role-based DOM gating ─────────────────────────────────────────────

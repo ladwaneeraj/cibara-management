@@ -499,6 +499,60 @@
     );
   }
 
+  // ── Retention (mirror of services/room_photos.py) ───────────────────────
+  // Photos are evidence for a stay, not an archive. The server keeps them
+  // while the stay is active and for GRACE_DAYS after checkout; beyond that
+  // they are pruned once RETENTION_DAYS old. So the URLs a bill record
+  // carries may point at deleted objects. This decides, without a network
+  // call, whether a completed stay's photos are still guaranteed to exist.
+  // (An <img> that fails to load anyway is dropped by the error listener
+  // below, which covers the per-room cap the server also applies.)
+  const GRACE_DAYS = 3;
+  const RETENTION_DAYS = 7;
+  const DAY_MS = 86400000;
+
+  function parseTs(v) {
+    const t = new Date(String(v || "").replace(" ", "T")).getTime();
+    return isNaN(t) ? null : t;
+  }
+
+  function stillAvailable(source) {
+    const s = source || {};
+    if (!s.checkout_time || s.status === "active") return true;   // in progress
+    const latest = photoEvents(s)[0] || s.last_inspection_photos;
+    if (!latest) return false;
+    const now = Date.now();
+    const co = parseTs(s.checkout_time);
+    const shot = parseTs(latest.at);
+    return (co != null && now < co + GRACE_DAYS * DAY_MS) ||
+           (shot != null && now < shot + RETENTION_DAYS * DAY_MS);
+  }
+
+  // A thumbnail whose object is gone: remove it, and the whole strip once
+  // it has nothing left to show. Capture phase — image errors don't bubble.
+  document.addEventListener("error", function (e) {
+    const img = e.target;
+    if (!(img instanceof HTMLImageElement) || !img.classList.contains("rp-thumb")) return;
+    // Take it out of the viewer's set too, so the lightbox never pages
+    // onto an empty frame; renumber the siblings that stay.
+    const list = lbSets[img.dataset.rpSet];
+    const idx = Number(img.dataset.rpIdx);
+    if (list && !isNaN(idx)) {
+      list.splice(idx, 1);
+      document.querySelectorAll('.rp-thumb[data-rp-set="' + img.dataset.rpSet + '"]').forEach(function (t) {
+        const i = Number(t.dataset.rpIdx);
+        if (i > idx) t.dataset.rpIdx = String(i - 1);
+      });
+    }
+    const strip = img.closest(".rp-strip");
+    img.remove();
+    if (strip && !strip.querySelector(".rp-thumb")) {
+      const host = strip.parentElement;
+      strip.remove();
+      if (host && !host.childElementCount) host.hidden = true;
+    }
+  }, true);
+
   // Compact strip for the check-in / checkout / bill modals: the latest
   // photo set with who / when and thumbnails (tap → viewer card).
   // link. `source` is anything carrying stay_timeline and/or
@@ -512,7 +566,8 @@
     const latest = events[0] || ((source || {}).last_inspection_photos &&
       Object.assign({ action: "room.inspection.approve" }, (source || {}).last_inspection_photos,
                     { photos: (source || {}).last_inspection_photos }));
-    if (!isPhotoRoom(room) || !latest || !(latest.photos.washroom || latest.photos.bed)) {
+    if (!isPhotoRoom(room) || !latest || !(latest.photos.washroom || latest.photos.bed) ||
+        !stillAvailable(source)) {
       host.innerHTML = "";
       host.hidden = true;
       return;
@@ -797,6 +852,7 @@
     detailRows: detailRows,
     detailCard: detailCard,
     renderStrip: renderStrip,
+    stillAvailable: stillAvailable,
     openLightbox: openLightbox,
   };
 })();

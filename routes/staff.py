@@ -27,6 +27,7 @@ from flask import Blueprint, request, jsonify, g
 from services import staff_service as svc
 from services.auth_service import requires_permission
 from services.audit_log import write_log
+from services.request_guard import guard_duplicate_submit
 from config import logger, invalidate_rooms_and_totals
 
 staff_bp = Blueprint("staff", __name__, url_prefix="/staff")
@@ -284,6 +285,7 @@ def staff_detail(staff_id):
 
 @staff_bp.route("/advance", methods=["POST"])
 @requires_permission("staff.advance.give")
+@guard_duplicate_submit()
 def give_advance():
     """
     Body: { staff_id, amount, date?, payment_method: cash|online,
@@ -374,6 +376,7 @@ def salary_preview(staff_id):
 
 @staff_bp.route("/<staff_id>/pay_salary", methods=["POST"])
 @requires_permission("staff.salary.pay")
+@guard_duplicate_submit()
 def pay_salary(staff_id):
     """
     Body: { period_start, period_end, advance_deduction, adjustment,

@@ -766,17 +766,18 @@ tr.reg-row-located.reg-row-located-fade > td {
    action buttons remain right-aligned regardless of badge width. */
 .reg-row-actions .reg-attr-badge { margin-right: auto; }
 
-/* ── Payments button (per register row) ── */
-.reg-pay-btn {
-  display: inline-grid; place-items: center;
-  width: 26px; height: 26px;
-  padding: 0; border: 1px solid #e2e8f0;
-  background: #fff; color: #64748b; border-radius: 6px;
-  cursor: pointer; font-size: .78rem; font-weight: 600;
-  transition: background .12s, border-color .12s, color .12s;
-  white-space: nowrap; vertical-align: middle;
+/* ── Payment cell (per register row) — opens the payment list/editor ── */
+.reg-pay-cell {
+  cursor: pointer;
+  border-radius: 6px;
+  transition: background .12s, box-shadow .12s;
 }
-.reg-pay-btn:hover { background: #f1f5f9; color: #334155; border-color: #cbd5e1; }
+.reg-pay-cell:hover,
+.reg-pay-cell:focus-visible {
+  background: #f1f5f9;
+  box-shadow: inset 0 0 0 1px #cbd5e1;
+  outline: none;
+}
 
 /* ── Bill number link (clickable in register table) ── */
 .reg-bill-link {
@@ -2087,9 +2088,16 @@ tr.rp-svc-voided .rp-actions-cell { opacity:.9; }
     const rb = dom("reg-refresh-btn");
     if (rb) rb.addEventListener("click", () => loadData(true));
 
-    // Delegated: group toggle + pay button + bill link
+    // Delegated: group toggle + payment cell + bill link
     const tbody = dom("reg-table-body");
     if (tbody) {
+      // The payment cell is focusable (role=button); Enter/Space act as a click.
+      tbody.addEventListener("keydown", (e) => {
+        if ((e.key === "Enter" || e.key === " ") && e.target.closest(".reg-pay-cell")) {
+          e.preventDefault();
+          e.target.closest(".reg-pay-cell").click();
+        }
+      });
       tbody.addEventListener("click", (e) => {
         const hdr = e.target.closest(".date-group-header");
         if (hdr) { toggleGroup(hdr); return; }
@@ -2121,12 +2129,12 @@ tr.rp-svc-voided .rp-actions-cell { opacity:.9; }
           return;
         }
 
-        const payBtn = e.target.closest(".reg-pay-btn");
-        if (payBtn) {
+        const payCell = e.target.closest(".reg-pay-cell");
+        if (payCell) {
           e.stopPropagation();
-          const room      = payBtn.dataset.room;
-          const guestName = decodeURIComponent(payBtn.dataset.guest || "");
-          const checkin   = payBtn.dataset.checkin;
+          const room      = payCell.dataset.room;
+          const guestName = decodeURIComponent(payCell.dataset.guest || "");
+          const checkin   = payCell.dataset.checkin;
           // Look up full entry so services + bill id are available in modal
           const fullEntry = state.filteredEntries.find(
             en => en.room === room && en.guest_name === guestName && en.checkin_time === checkin
@@ -2144,9 +2152,13 @@ tr.rp-svc-voided .rp-actions-cell { opacity:.9; }
           e.stopPropagation();
           const room = histBtn.dataset.room;
           const entryId = histBtn.dataset.entryId;
-          const fullEntry = state.filteredEntries.find(
-            en => (en.id && en.id === entryId) || en.room === room
-          ) || { room };
+          // Match THIS stay by id. Falling back to "same room" only when
+          // the row has no id: a room-first match picked the room's newest
+          // stay for every older row, so past stays showed today's photos.
+          const fullEntry =
+            (entryId && state.filteredEntries.find((en) => en.id === entryId)) ||
+            (!entryId && state.filteredEntries.find((en) => en.room === room)) ||
+            { room };
           if (window.CibaraRoomAttribution) {
             window.CibaraRoomAttribution.openForButton(histBtn, fullEntry);
           }
@@ -3273,7 +3285,7 @@ tr.rp-svc-voided .rp-actions-cell { opacity:.9; }
       <td>₹${inr(e.room_rent)}</td>
       <td>₹${inr(e.services_total)}</td>
       <td><strong${isCancelled ? ' style="text-decoration:line-through;color:#9ca3af;"' : ""}>₹${inr(e.total_amount)}</strong></td>
-      <td>${paymentHTML(e)}</td>
+      ${paymentCellHTML(e)}
       <td><span class="status-badge ${stCls}"${stTitle}>${e.status}</span></td>
       <td style="white-space:nowrap;">
         <div class="reg-row-actions">
@@ -3284,12 +3296,6 @@ tr.rp-svc-voided .rp-actions-cell { opacity:.9; }
                 escapeAttr(window.CibaraUsers.nameOf(e.lastCheckinBy))
               }</span>`
             : ''}
-          <button class="reg-pay-btn"
-              data-perm="payment.edit"
-              data-room="${e.room}"
-              data-guest="${encodeURIComponent(e.guest_name || '')}"
-              data-checkin="${e.checkin_time || ''}"
-              title="View / edit payments">₹</button>
           <button class="reg-history-btn"
               data-room="${e.room}"
               data-entry-id="${e.id || ''}"
@@ -3304,6 +3310,22 @@ tr.rp-svc-voided .rp-actions-cell { opacity:.9; }
         </div>
       </td>
     </tr>`;
+  }
+
+  // The Payment cell is the way into the payment list / editor. It only
+  // becomes a control for users who may edit payments; everyone else gets
+  // the same read-only figures. Row identity travels on the cell so the
+  // click handler can find the full entry (services, bill id) in state.
+  function paymentCellHTML(e) {
+    const can = window.CibaraAuth &&
+      typeof window.CibaraAuth.userCan === "function" &&
+      window.CibaraAuth.userCan("payment.edit");
+    if (!can) return `<td>${paymentHTML(e)}</td>`;
+    return `<td class="reg-pay-cell" role="button" tabindex="0"
+        data-room="${e.room}"
+        data-guest="${encodeURIComponent(e.guest_name || '')}"
+        data-checkin="${e.checkin_time || ''}"
+        title="View / edit payments">${paymentHTML(e)}</td>`;
   }
 
   function paymentHTML(e) {

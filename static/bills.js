@@ -1810,6 +1810,26 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
     </div>
   </div>
 </div>`;
+    _hoistOverlays(tab);
+  }
+
+  // The overlays above are fixed-position, but they were rendered INSIDE
+  // #bills-tab, which is display:none whenever another tab is active. A
+  // display:none ancestor hides a fixed child too, so "Save & Share" from
+  // the Register tab opened the WhatsApp modal invisibly. Move every
+  // overlay to <body> once; listeners are bound by id afterwards and move
+  // with the nodes, so nothing else changes.
+  const OVERLAY_IDS = [
+    "bl-wa-backdrop", "bl-pdf-gen-overlay", "bl-pay-modal-backdrop",
+    "bl-gst-backdrop", "bl-bill-modal", "bl-rprice-backdrop",
+  ];
+  function _hoistOverlays(tab) {
+    OVERLAY_IDS.forEach((id) => {
+      const el = tab.querySelector("#" + id);
+      if (!el) return;
+      document.querySelectorAll("body > #" + id).forEach((old) => old.remove());
+      document.body.appendChild(el);
+    });
   }
 
   // ── Date helpers ──────────────────────────────────────────────────────────────

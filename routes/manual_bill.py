@@ -16,6 +16,7 @@ from config import logger
 from services import manual_bill_service as svc
 from services.auth_service import requires_permission
 from services.audit_log import write_log
+from services.request_guard import guard_duplicate_submit
 
 manual_bill_bp = Blueprint("manual_bill", __name__, url_prefix="/manual_bill")
 
@@ -27,6 +28,7 @@ _MANUAL_BILL_PERM = "payment.edit"
 
 @manual_bill_bp.route("/create", methods=["POST"])
 @requires_permission(_MANUAL_BILL_PERM)
+@guard_duplicate_submit()
 def create():
     try:
         result = svc.create_manual_bill(request.json or {}, g.current_user)

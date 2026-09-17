@@ -46,6 +46,9 @@
         from { opacity: 0; transform: translateY(-4px); }
         to   { opacity: 1; transform: translateY(0); }
       }
+      .rm-attr-photos { margin-top: 10px; padding-top: 8px; border-top: 1px solid #eef2f7; }
+      .rm-attr-photos[hidden] { display: none; }
+      .rm-attr-photos .rp-strip { margin: 0; }
       .rm-attr-popover-header {
         display: flex; align-items: center; justify-content: space-between;
         gap: 8px;
@@ -104,6 +107,9 @@
         color: #94a3b8;
         font-size: .7rem;
         font-weight: 400;
+        white-space: nowrap;
+        text-align: right;
+        flex-shrink: 0;
       }
       .rm-attr-empty {
         color: #94a3b8; font-style: italic; font-size: .8rem;
@@ -155,25 +161,17 @@
     });
   }
 
-  function _relativeTime(ts) {
+  // Absolute time, same format as the photo strip ("14 Sept, 12:00 pm").
+  // Relative ("2 days ago") reads well in a feed but not in an audit trail,
+  // where the operator is checking WHICH stay a row belongs to. Accepts
+  // "YYYY-MM-DD HH:MM[:SS]" (IST) or ISO.
+  function _whenLabel(ts) {
     if (!ts) return "";
-    // Accept "YYYY-MM-DD HH:MM:SS" (IST) or ISO
     const d = new Date(String(ts).replace(" ", "T"));
-    if (isNaN(d.getTime())) return ts;
-    const diff = Math.floor((Date.now() - d.getTime()) / 1000);
-    if (diff < 0) return "just now";
-    if (diff < 60) return "just now";
-    if (diff < 3600) {
-      const m = Math.floor(diff / 60);
-      return m + (m === 1 ? " min ago" : " min ago");
-    }
-    if (diff < 86400) {
-      const h = Math.floor(diff / 3600);
-      return h + (h === 1 ? " hour ago" : " hours ago");
-    }
-    const days = Math.floor(diff / 86400);
-    if (days < 7) return days + (days === 1 ? " day ago" : " days ago");
-    return d.toLocaleDateString(undefined, { day: "numeric", month: "short" });
+    if (isNaN(d.getTime())) return String(ts);
+    const opts = { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" };
+    if (d.getFullYear() !== new Date().getFullYear()) opts.year = "numeric";
+    return d.toLocaleString("en-IN", opts);
   }
 
   function _resolveName(userId) {
@@ -229,7 +227,7 @@
       rows.push({
         label: label,
         name:  (e.byName && String(e.byName).trim()) || _resolveName(e.by),
-        when:  _relativeTime(e.at),
+        when:  _whenLabel(e.at),
       });
     });
     return rows;
@@ -251,7 +249,7 @@
       rows.push({
         label: label,
         name:  (typeof who === "string" && who.trim()) ? _resolveName(who) : "\u2014",
-        when:  _relativeTime(when),
+        when:  _whenLabel(when),
       });
     }
     add(info.cleanedBy,             info.cleanedAt,             "Cleaned by");
@@ -349,6 +347,14 @@
     body.innerHTML = out;
   }
 
+  // Inspection photos for this stay, the same strip the check-in modal
+  // shows. room-photos.js owns the data shape and the retention rule, so
+  // the strip simply stays empty once the photos have been pruned.
+  function _renderPhotos(roomInfo) {
+    if (!global.RoomPhotos || !roomInfo) return;
+    global.RoomPhotos.renderStrip("rm-attr-photos", roomInfo, roomInfo.room);
+  }
+
   function _openFor(anchor, roomInfo) {
     const popover = document.createElement("div");
     popover.className = "rm-attr-popover";
@@ -365,7 +371,8 @@
       '</div>' +
       '<div class="rm-attr-popover-body">' +
         '<div class="rm-attr-empty">Loading…</div>' +
-      '</div>';
+      '</div>' +
+      '<div id="rm-attr-photos" class="rm-attr-photos" hidden></div>';
 
     // Wire the explicit close button so users have a clear dismiss path
     // in addition to outside-click / Escape.
@@ -389,6 +396,7 @@
     // Rendered synchronously from data the register row already carries.
     // No fetch, no loading state that outlives a frame (see _buildRows).
     _renderBody(popover, _buildRows(roomInfo));
+    _renderPhotos(roomInfo);
     _positionPopover(popover, anchor.getBoundingClientRect());
 
     // Outside click closes. Use capture so clicks on inner elements that
@@ -396,6 +404,9 @@
     _outsideHandler = function (ev) {
       if (popover.contains(ev.target)) return;
       if (anchor.contains(ev.target)) return;
+      // The photo lightbox opens from a thumbnail inside this popover;
+      // using it must not tear the popover down underneath.
+      if (ev.target.closest && ev.target.closest(".rp-lb")) return;
       closeAll();
     };
     setTimeout(function () {

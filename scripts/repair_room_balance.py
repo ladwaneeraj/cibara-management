@@ -25,6 +25,26 @@ WHAT THIS SCRIPT DOES
   batch, because that document is the sum of the per-room counters and would
   otherwise drift in the opposite direction.
 
+DOUBLE-POSTED PAYMENT (--undo-double-payment)
+  Incident 15-09-2026, Room 27: "Add Payment" was clicked twice. The payment
+  writer's own dedup skipped the second payment DOC, but by then the request
+  had already run its batch, so room.balance was decremented twice and
+  totals/current_totals.<method> incremented twice. totals.balance was NOT
+  touched twice (the second request saw balance 0 and took the branch that
+  leaves it alone), so the generic repair above would over-correct it.
+
+  This mode restores room.balance to the ledger-derived value and takes the
+  duplicated amount back out of totals.<method> only. It refuses unless the
+  stored counter is exactly `derived - amount`, i.e. the drift is exactly the
+  double post and nothing else.
+
+      python -m scripts.repair_room_balance --room 27 --undo-double-payment 500 --method cash
+      python -m scripts.repair_room_balance --room 27 --undo-double-payment 500 --method cash --apply
+
+  If the guest has already checked out, the room counter was reset at
+  checkout and only totals.<method> still carries the error; the script
+  says so and, with --apply, corrects just that.
+
 USAGE
   # survey every occupied room (read-only):
   python -m scripts.repair_room_balance --all
@@ -169,11 +189,23 @@ def main() -> int:
                     help="Write the derived balance. Default is a dry run.")
     ap.add_argument("--force", action="store_true",
                     help="Allow a write that INCREASES the balance (real money owed)")
+    ap.add_argument("--undo-double-payment", type=int, metavar="AMOUNT",
+                    help="Reverse one double-posted payment of AMOUNT (see docstring)")
+    ap.add_argument("--method", choices=("cash", "online"), default="cash",
+                    help="Method of the double-posted payment (with --undo-double-payment)")
     args = ap.parse_args()
 
     from config import db, rooms_ref, totals_ref
     from services import payment_service
     from google.cloud import firestore as _fs
+
+    if args.undo_double_payment:
+        if not args.room:
+            print("--undo-double-payment needs --room <n>.")
+            return 2
+        return _undo_double_payment(str(args.room), int(args.undo_double_payment),
+                                    args.method, args.apply,
+                                    db, rooms_ref, totals_ref, payment_service, _fs)
 
     if args.all:
         bad = 0
@@ -254,6 +286,75 @@ def main() -> int:
     print(f"DONE. room {room_no} balance Rs.{stored} -> Rs.{derived}. "
           f"totals adjusted by Rs.{-drift}.")
     print("Reopen the room in the app; checkout should no longer be blocked.")
+    return 0
+
+
+def _undo_double_payment(room_no, amount, method, apply,
+                         db, rooms_ref, totals_ref, payment_service, _fs) -> int:
+    if amount <= 0:
+        print("Amount must be positive.")
+        return 2
+    snap = rooms_ref.document(room_no).get()
+    if not snap.exists:
+        print(f"Room {room_no} not found.")
+        return 1
+    rd = snap.to_dict() or {}
+    totals = totals_ref.document("current_totals").get().to_dict() or {}
+    print(f"totals/current_totals before: cash=Rs.{totals.get('cash')} "
+          f"online=Rs.{totals.get('online')} balance=Rs.{totals.get('balance')} "
+          f"refunds=Rs.{totals.get('refunds')}")
+
+    room_fix = None   # absolute value to write, or None when the stay is over
+    if rd.get("status") == "occupied":
+        stored = int(rd.get("balance", 0) or 0)
+        derived, bd, reason = _derive(room_no, rd, payment_service)
+        _print_report(room_no, stored, derived, bd, reason)
+        if reason:
+            return 1
+        if stored != derived - amount:
+            print(f"REFUSED: expected stored balance Rs.{derived - amount} "
+                  f"(ledger Rs.{derived} minus one double post of Rs.{amount}), "
+                  f"found Rs.{stored}. The drift is not exactly this double "
+                  f"post; investigate before writing anything.")
+            return 1
+        room_fix = derived
+    else:
+        print(f"Room {room_no} is {rd.get('status')!r}: the stay has ended and "
+              f"checkout reset the room counter. Only totals.{method} is "
+              f"still over-counted by Rs.{amount}.")
+
+    if not apply:
+        if room_fix is not None:
+            print(f"DRY RUN -- room.balance Rs.{room_fix - amount} -> Rs.{room_fix}; "
+                  f"totals.{method} -Rs.{amount}; totals.balance untouched.")
+        else:
+            print(f"DRY RUN -- totals.{method} -Rs.{amount}; nothing else.")
+        print("Re-run with --apply to write.")
+        return 0
+
+    batch = db.batch()
+    if room_fix is not None:
+        batch.update(rooms_ref.document(room_no), {"balance": room_fix})
+    batch.update(totals_ref.document("current_totals"),
+                 {method: _fs.Increment(-amount)})
+    batch.commit()
+    try:
+        db.collection("balance_repair_audit").document().set({
+            "kind":            "undo_double_payment",
+            "room":            room_no,
+            "stay_id":         rd.get("active_bill_id") or rd.get("last_bill_id"),
+            "amount":          amount,
+            "method":          method,
+            "room_balance_set": room_fix,
+            "totals_before":   {k: totals.get(k) for k in ("cash", "online", "balance", "refunds")},
+            "repaired_at":     datetime.now(timezone.utc).isoformat(),
+            "source":          "scripts.repair_room_balance --undo-double-payment",
+        })
+    except Exception as e:
+        print(f"WARNING: audit row failed to write ({e}). The repair itself "
+              f"was committed.")
+    print(f"DONE. totals.{method} reduced by Rs.{amount}"
+          + (f"; room {room_no} balance set to Rs.{room_fix}." if room_fix is not None else "."))
     return 0
 
 

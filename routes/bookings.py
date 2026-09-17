@@ -14,6 +14,7 @@ from config import (
 from services import payment_service, customer_service, bills_service, expense_service
 from services.auth_service import requires_permission
 from services.audit_log import write_log, attribution_create, attribution_update, _safe_user
+from services.request_guard import guard_duplicate_submit
 
 bookings_bp = Blueprint('bookings', __name__)
 
@@ -219,6 +220,7 @@ def get_upcoming_bookings_list():
 
 
 @bookings_bp.route("/create_booking", methods=["POST"])
+@guard_duplicate_submit()
 def create_booking():
     try:
         booking_data = request.json
@@ -342,6 +344,7 @@ def create_booking():
         return jsonify(success=False, message=f"Error creating booking: {str(e)}")
 
 @bookings_bp.route("/create_multi_booking", methods=["POST"])
+@guard_duplicate_submit()
 def create_multi_booking():
     """Create several room-bookings that share one stay (same dates, same
     check-in time) in a single submission — e.g. one group taking 4 Deluxe
@@ -672,6 +675,7 @@ def update_booking():
         return jsonify(success=False, message=f"Error updating booking: {str(e)}")
 
 @bookings_bp.route("/cancel_booking", methods=["POST"])
+@guard_duplicate_submit()
 def cancel_booking():
     """
     Cancel an advance booking.
@@ -825,6 +829,7 @@ def cancel_booking():
         return jsonify(success=False, message=f"Error cancelling booking: {str(e)}")
 
 @bookings_bp.route("/convert_booking_to_checkin", methods=["POST"])
+@guard_duplicate_submit()
 def convert_booking_to_checkin():
     try:
         booking_data = request.json
@@ -1666,6 +1671,7 @@ def apply_ota_settlement(booking_id, settlement_date, settlement_amount, *,
 
 
 @bookings_bp.route("/mark_ota_settlement", methods=["POST"])
+@guard_duplicate_submit()
 def mark_ota_settlement():
     """Manually mark an MMT booking's settlement as received (thin wrapper
     over apply_ota_settlement; the email ingestion uses the same core)."""

@@ -20,6 +20,7 @@ from config import (
 from services import payment_service, expense_service, kpi_service
 from services.auth_service import requires_permission, load_current_user
 from services.permissions import role_has_permission
+from services.request_guard import guard_duplicate_submit
 
 reports_bp = Blueprint('reports', __name__)
 
@@ -606,6 +607,7 @@ _RESTRICTED_CATEGORIES = {
 
 
 @reports_bp.route("/add_expense", methods=["POST"])
+@guard_duplicate_submit()
 def add_expense():
     """
     Add an expense.

@@ -32,8 +32,10 @@ This module owns everything about those photos:
                          it (the stay it prepared is in progress, or the room
                          is prepared and waiting) and, for GRACE_DAYS after
                          checkout, while the ended stay's bill references it.
-                         Unprotected photos are kept
-                         for RETENTION_DAYS and capped at MAX_PER_ROOM.
+                         Unprotected photo SETS (one inspection = one set
+                         of washroom/coffee/bed) are kept for RETENTION_DAYS
+                         and capped at MAX_SETS_PER_ROOM; a set is always
+                         kept or deleted whole, never half.
 
 Only objects under room_photos/<room>/ are ever listed, and only files whose
 name parses as one of ours are ever deleted. Customer documents
@@ -59,7 +61,7 @@ CONTEXTS = ("inspection", "cleaning", "service")
 SWITCH_FOR_ROLE = {"manager": "inspection_photos", "housekeeping": "cleaning_photos"}
 RETENTION_DAYS = 7
 GRACE_DAYS = 3                      # after checkout, for the stay's evidence
-MAX_PER_ROOM = 10                   # unprotected full-size photos per room
+MAX_SETS_PER_ROOM = 10              # unprotected photo sets per room (~10 stays)
 MAX_UPLOAD_BYTES = 3 * 1024 * 1024  # client compresses to ~200 KB; this is a guard
 _PREFIX = "room_photos"
 _THUMB_SUFFIX = "_t"
@@ -323,7 +325,14 @@ def _protection(room) -> set:
 
 
 def prune(room) -> int:
-    """Delete photos that are no longer evidence for any stay.
+    """Delete photo sets that are no longer evidence for any stay.
+
+    A set is every photo taken in one inspection/cleaning (same timestamp
+    and context). Sets are the unit of retention: a set with any protected
+    photo is kept whole; an unprotected set goes when it is older than
+    RETENTION_DAYS or beyond the newest MAX_SETS_PER_ROOM sets. Counting
+    per photo used to delete the washroom and coffee-maker shots of an
+    inspection while leaving its bed shot behind.
 
     Returns the number of objects deleted (thumbnails included). Safe to call
     any time; errors are logged, never raised, because this runs in a
@@ -337,23 +346,27 @@ def prune(room) -> int:
         now = datetime.now(IST).replace(tzinfo=None)
         cutoff = now - timedelta(days=RETENTION_DAYS)
 
-        # Decide per photo (thumbs follow their full-size twin).
-        fulls = sorted((p for p in items if not p["thumb"]), key=lambda p: p["at"], reverse=True)
+        sets: dict[tuple, list] = {}
+        for p in items:
+            sets.setdefault((p["stamp"], p["context"]), []).append(p)
+
         doomed = set()
         unprotected_seen = 0
-        for p in fulls:
-            if p["url"] in keep_urls:
+        for key in sorted(sets, key=lambda k: k[0], reverse=True):   # newest first
+            members = sets[key]
+            if any(p["url"] in keep_urls for p in members):
                 continue
             unprotected_seen += 1
-            if p["at"] < cutoff or unprotected_seen > MAX_PER_ROOM:
-                doomed.add((p["stamp"], p["context"], p["kind"]))
+            taken = members[0]["at"]
+            if taken < cutoff or unprotected_seen > MAX_SETS_PER_ROOM:
+                doomed.add(key)
 
-        for p in items:
-            if (p["stamp"], p["context"], p["kind"]) in doomed:
+        for key in doomed:
+            for p in sets[key]:
                 p["blob"].delete()
                 deleted += 1
         if deleted:
-            logger.info(f"room_photos: pruned {deleted} object(s) for room {room}")
+            logger.info(f"room_photos: pruned {len(doomed)} set(s), {deleted} object(s) for room {room}")
     except Exception as e:  # noqa: BLE001
         logger.warning(f"room_photos: prune failed for room {room}: {e}")
     return deleted

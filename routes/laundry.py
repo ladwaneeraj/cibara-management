@@ -38,6 +38,7 @@ from google.cloud.firestore_v1.base_query import FieldFilter
 from config import db, IST, totals_ref
 from services.auth_service import requires_permission, requires_role
 from services.laundry_ledger import compute_ledger
+from services.request_guard import guard_duplicate_submit
 
 logger = logging.getLogger(__name__)
 
@@ -420,6 +421,7 @@ def save_laundry_settings():
 # ---------------------------------------------------------------------------
 
 @laundry_bp.route("/laundry/send", methods=["POST"])
+@guard_duplicate_submit()
 def send_laundry():
     """Upsert daily entry by date -- one doc per date."""
     try:
@@ -937,6 +939,7 @@ def _record_payment(amount, method, expense_type, date_str="", note=""):
 
 @laundry_bp.route("/laundry/pay", methods=["POST"])
 @requires_role("admin")
+@guard_duplicate_submit()
 def pay_laundry():
     """
     Record a payment. Body: { amount, payment_method ("cash"|"upi"|
@@ -991,6 +994,7 @@ def pay_laundry():
 
 @laundry_bp.route("/laundry/adjust", methods=["POST"])
 @requires_permission("payment.edit")
+@guard_duplicate_submit()
 def add_laundry_adjustment():
     """
     Add a correction entry. Body: { amount (signed int, non-zero:

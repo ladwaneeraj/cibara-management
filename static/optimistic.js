@@ -108,7 +108,12 @@
       }
       var result = await resp.json();
       if (!result || !result.success) {
-        throw new Error((result && result.message) || "Server rejected the write");
+        var err = new Error((result && result.message) || "Server rejected the write");
+        // Set by apiFetch when the server judged this a repeat of a write it
+        // already has. The optimistic apply() must still be rolled back
+        // (the screen counted it twice), but it is not a failure to retry.
+        err.duplicate = !!(result && result.duplicate);
+        throw err;
       }
       return result;
     }
@@ -149,12 +154,16 @@
           console.error("optimisticWrite rollback failed:", e2);
         }
         if (onError) onError(err);
-        _toast(
-          _cap(label) + " was NOT saved (" + err.message + "). " +
-            "The screen has been reverted — please retry.",
-          "error",
-          8000
-        );
+        if (err.duplicate) {
+          _toast(_cap(label) + ": " + err.message, "info", 5000);
+        } else {
+          _toast(
+            _cap(label) + " was NOT saved (" + err.message + "). " +
+              "The screen has been reverted — please retry.",
+            "error",
+            8000
+          );
+        }
         throw err;
       }
     });

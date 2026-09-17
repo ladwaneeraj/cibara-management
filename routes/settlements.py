@@ -21,6 +21,7 @@ from config import settlements_ref, bills_ref
 from services import payment_service
 from services.audit_log import write_log
 from services.auth_service import requires_permission
+from services.request_guard import guard_duplicate_submit
 
 settlements_bp = Blueprint('settlements', __name__)
 
@@ -123,6 +124,7 @@ def get_pending_settlements_route():
 
 @settlements_bp.route("/collect_settlement", methods=["POST"])
 @requires_permission("settlement.collect")
+@guard_duplicate_submit()
 def collect_settlement():
     try:
         data_json = request.json

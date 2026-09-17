@@ -1266,46 +1266,179 @@ body {
   }
 }
 
-/* New styles for refund */
-.refund-container {
-  margin-top: 1rem;
-  padding: 1rem;
-  background-color: #f8f9fa;
-  border-radius: var(--border-radius);
-  border: 1px dashed var(--warning);
+/* ── Checkout: payment / refund strip ─────────────────────────────────
+   Rendered by updatePaymentOrRefundUI() in script.js. Design "A": no card;
+   a label line, then one row of amount · Cash|Online · action. Refund is
+   the same row in amber. Class names are deliberately unique
+   (transaction-tracking.js owns a global .pay-row). */
+#checkout-modal #payment-or-refund-section { padding-bottom: 1rem; }
+#checkout-modal .pay-strip {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin-top: 0.75rem;
+}
+#checkout-modal .pay-strip + .pay-strip { margin-top: 0.6rem; }
+#checkout-modal .pay-strip-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+#checkout-modal .pay-strip-title {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--primary);
+}
+#checkout-modal .pay-strip--refund .pay-strip-title { color: #c76d00; }
+#checkout-modal .pay-strip--refund + .pay-strip--pay .pay-strip-title { color: #94a3b8; }
+#checkout-modal .pay-strip-hint {
+  font-size: 0.74rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: #475569;
+}
+/* Fixed columns so the refund row and the add-payment row line up
+   exactly: amount takes the remainder, method and action are constant. */
+#checkout-modal .pay-strip-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 150px 104px;
+  gap: 0.5rem;
+  align-items: stretch;
+}
+#checkout-modal .pay-strip-row .pay-amount,
+#checkout-modal .pay-strip-row .pay-seg,
+#checkout-modal .pay-strip-row .pay-submit { min-width: 0; width: 100%; }
+
+/* Amount */
+#checkout-modal .pay-amount {
+  display: flex;
+  align-items: center;
+  height: 40px;
+  margin: 0;
+  padding: 0 0.7rem;
+  border: 1px solid #cbd5e0;
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+#checkout-modal .pay-amount:focus-within {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(67, 97, 238, 0.15);
+}
+#checkout-modal .pay-amount-cur {
+  color: #94a3b8;
+  font-weight: 500;
+  font-size: 1rem;
+  margin-right: 0.3rem;
+}
+#checkout-modal .pay-amount > input {
+  flex: 1;
+  width: 100%;
+  min-width: 0;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  box-shadow: none;
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--dark);
+  -moz-appearance: textfield;
+}
+#checkout-modal .pay-amount > input::-webkit-outer-spin-button,
+#checkout-modal .pay-amount > input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
 }
 
-.refund-title {
-  font-weight: 500;
-  margin-bottom: 0.5rem;
-  color: var(--warning);
+/* Method */
+#checkout-modal .pay-seg {
+  display: flex;
+  height: 40px;
+  border: 1px solid #cbd5e0;
+  border-radius: 10px;
+  overflow: hidden;
+  background: #fff;
+}
+#checkout-modal .pay-seg .payment-btn {
+  flex: 1 1 0;
+  min-width: 0;
+  height: 100%;
+  margin: 0;
+  padding: 0 0.4rem;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--gray);
+  font-size: 0.85rem;
+  font-weight: 600;
+  white-space: nowrap;
+  transform: none;
+  transition: background 0.15s, color 0.15s;
+}
+#checkout-modal .pay-seg .payment-btn + .payment-btn { border-left: 1px solid #cbd5e0; }
+#checkout-modal .pay-seg .payment-btn i { display: none; }
+#checkout-modal .pay-seg .payment-btn.active { transform: none; }
+#checkout-modal .pay-seg .payment-btn.cash.active { background: #27ae60; color: #fff; }
+#checkout-modal .pay-seg .payment-btn.online.active { background: #2980b9; color: #fff; }
+#checkout-modal .pay-seg .payment-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+
+/* Action */
+#checkout-modal .pay-submit {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  height: 40px;
+  margin: 0;
+  padding: 0 0.5rem;
+  border: 0;
+  border-radius: 10px;
+  background: var(--primary);
+  color: #fff;
+  font-size: 0.92rem;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s;
+}
+#checkout-modal .pay-submit:hover { background: var(--secondary); }
+#checkout-modal .pay-submit:disabled { opacity: 0.7; cursor: not-allowed; }
+#checkout-modal .pay-submit--refund { background: #f39c12; }
+#checkout-modal .pay-submit--refund:hover { background: #e08e0b; }
+
+#checkout-modal .pay-error {
+  color: var(--danger);
+  font-size: 0.78rem;
+}
+#checkout-modal .pay-error[style*="none"] + * { margin-top: 0; }
+
+/* Narrow phones: action drops to its own full-width line. */
+@media (max-width: 400px) {
+  #checkout-modal .pay-strip-row { grid-template-columns: minmax(0, 1fr) 150px; }
+  #checkout-modal .pay-strip-row .pay-submit { grid-column: 1 / -1; }
+}
+
+#checkout-modal .pay-ota-note {
+  background: rgba(99, 179, 237, 0.12);
+  border: 1px solid rgba(99, 179, 237, 0.3);
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+  margin-top: 1rem;
+  color: #2b6cb0;
+  font-size: 0.85rem;
+  text-align: center;
 }
 
 .negative-balance {
   color: var(--success);
-}
-
-.refund-add-payment-divider {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-  margin: 1.25rem 0 0.75rem;
-  color: var(--gray);
-  font-size: 0.8rem;
-}
-.refund-add-payment-divider::before,
-.refund-add-payment-divider::after {
-  content: "";
-  flex: 1;
-  height: 1px;
-  background: var(--border-color);
-}
-
-.refund-add-payment-section {
-  background: var(--card-bg);
-  border: 1px solid var(--border-color);
-  border-radius: var(--border-radius);
-  padding: 0.85rem 1rem;
 }
 
 /* Renewal styles */
@@ -4952,7 +5085,7 @@ body.incognito-mode #profile-menu-settings {
 
 #checkout-modal .modal-content {
   max-width: 440px;
-  max-height: 68vh;
+  max-height: 84vh;
 }
 
 #checkout-confirm-modal .modal-content {
@@ -5057,21 +5190,13 @@ body.incognito-mode #profile-menu-settings {
   gap: 0.4rem;
 }
 
-#checkout-modal .payment-btn,
+#checkout-modal .payment-options .payment-btn,
 #checkout-confirm-modal .payment-btn {
   padding: 0.85rem;
   font-size: 0.95rem;
   border-radius: 10px;
 }
 
-/* Add Payment button (rendered inline next to Cash/Online in the
-   payment-or-refund section) — keep it the same height as the
-   Cash/Online buttons it sits beside. */
-#checkout-modal .payment-add-btn {
-  padding: 0.85rem;
-  font-size: 0.95rem;
-  border-radius: 10px;
-}
 
 /* ---------- Guest profile card: avatar (photo or coloured initials) +
    name + phone. The avatar/chevron are only made clickable by JS for
@@ -5700,7 +5825,7 @@ body.incognito-mode #profile-menu-settings {
 @media (max-width: 560px) {
   #checkout-modal .modal-content {
     width: 94%;
-    max-height: 72vh;
+    max-height: 86vh;
   }
   #checkout-confirm-modal .modal-content {
     width: 94%;
@@ -5710,7 +5835,7 @@ body.incognito-mode #profile-menu-settings {
 
 @media (max-height: 640px) {
   #checkout-modal .modal-content {
-    max-height: 80vh;
+    max-height: 90vh;
   }
   #checkout-confirm-modal .modal-content {
     max-height: 78vh;

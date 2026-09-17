@@ -725,21 +725,20 @@ def add_expense():
             }
             expense_entry.update(commission_fields)
 
-        # ── Primary write → expenses collection (sync so doc exists before counter) ──
-        # write_expense(sync=True) returns the new doc ID — echoed back in the
-        # response so the client can smooth-insert the row (with working
-        # edit/delete buttons) without waiting for a refetch.
-        _new_doc_id = expense_service.write_expense(expense_entry, sync=True)
-
-        # ── Update totals counter for transaction expenses ───────────────────
-        # Done AFTER the expense doc is confirmed written (sync=True above),
-        # so the counter never gets ahead of the actual data.
+        # ── Expense doc + totals counter in ONE atomic batch ─────────────────
+        # Previously a blocking write followed by a second commit: two
+        # sequential Firestore round trips on the request path. A batch
+        # lands both in one, and atomically, so the counter can never get
+        # ahead of (or drift from) the document. The doc ID is minted
+        # client-side by the SDK, so it is known before the commit and is
+        # echoed back for the smooth-insert.
+        batch = db.batch()
+        _new_doc_id = expense_service.write_expense(expense_entry, batch=batch)
         if expense_type == "transaction":
-            batch = db.batch()
             batch.update(totals_ref.document('current_totals'), {
                 "expenses": firestore.Increment(amount),
             })
-            batch.commit()
+        batch.commit()
 
         invalidate_rooms_and_totals()
 

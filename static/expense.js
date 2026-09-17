@@ -1732,6 +1732,7 @@ async function submitExpense(e) {
     submitBtn.innerHTML = '<span class="loader" style="width:20px;height:20px;"></span> Saving...';
   }
 
+  let rollback = null;   // set once the optimistic insert has happened
   try {
     // ── Staff Advance → routed through the Staff payroll ledger ──────────────
     // POSTs to /staff/advance instead of /add_expense: the server writes the
@@ -1886,6 +1887,59 @@ async function submitExpense(e) {
 
     console.log("Submitting expense:", payload, "editMode:", _expenseEditMode);
 
+    // ── Optimistic submit ──────────────────────────────────────────────────
+    // The form is valid and the photo (if any) is already uploaded, so the
+    // operator is done: close the modal NOW, show the row NOW, and persist
+    // in the background. Entering a day's expenses is a batch of quick
+    // entries; waiting on a 1-2 s server round trip per row with the modal
+    // frozen on "Saving…" was the slowness. If the server refuses, the row
+    // is pulled back out, the modal reopens with the values still in it,
+    // and the error says why.
+    const wasEdit = _expenseEditMode;
+    const editDocId = _expenseEditDocId;
+    const modalEl = document.getElementById("expense-modal");
+    modalEl?.classList.remove("show");
+    _expenseEditMode = false;
+    _expenseEditDocId = null;
+    if (!wasEdit) _pinExpenseDate(date);
+    if (submitBtn) {
+      submitBtn.disabled = false;
+      submitBtn.innerHTML = '<i class="fas fa-check"></i> Save Expense';
+    }
+
+    let tempRow = null;
+    if (!wasEdit && !payload.split) {
+      const now = new Date();
+      tempRow = Object.assign({}, payload, {
+        expense_type: type,
+        time: String(now.getHours()).padStart(2, "0") + ":" + String(now.getMinutes()).padStart(2, "0"),
+        _doc_id: "pending_" + now.getTime(),
+        _pending: true,
+      });
+      try {
+        if (typeof logs !== "undefined" && logs && Array.isArray(logs.expenses)) {
+          logs.expenses.push(tempRow);
+        }
+        const ok = typeof window.txnInsertExpenseRow === "function" && window.txnInsertExpenseRow(tempRow);
+        if (!ok && typeof window.renderEnhancedLogs === "function") window.renderEnhancedLogs();
+      } catch (err) {
+        console.warn("Expense optimistic insert skipped:", err);
+      }
+    }
+    showNotification(wasEdit ? "Expense updated" : `Expense of ₹${amount} added`, "success", 2500);
+
+    rollback = (why) => {
+      if (tempRow && typeof logs !== "undefined" && logs && Array.isArray(logs.expenses)) {
+        const i = logs.expenses.indexOf(tempRow);
+        if (i >= 0) logs.expenses.splice(i, 1);
+        if (typeof window.renderEnhancedLogs === "function") window.renderEnhancedLogs();
+      }
+      _expenseEditMode = wasEdit;
+      _expenseEditDocId = editDocId;
+      modalEl?.classList.add("show");
+      showNotification("Expense was NOT saved: " + why + ". Check the form and save again.", "error", 8000);
+    };
+
     // ── Edit mode → PATCH /expense/<doc_id> ─────────────────────────────────
     // When editing, we send the same payload shape but to the PATCH
     // endpoint. The server's _EDITABLE_FIELDS whitelist filters anything
@@ -1893,7 +1947,7 @@ async function submitExpense(e) {
     // can clear them when admin un-checks the box during edit; the
     // associated fields default to "" so they get blanked too.
     let response;
-    if (_expenseEditMode && _expenseEditDocId) {
+    if (wasEdit && editDocId) {
       // Force-include the toggles so unchecking actually clears them
       payload.has_bill = !!document.getElementById("expense-has-bill")?.checked;
       payload.has_gst  = !!document.getElementById("expense-has-gst")?.checked;
@@ -1903,7 +1957,7 @@ async function submitExpense(e) {
       // switch never persisted. The server accepts the alias too, so a cached
       // client still works, but the request says what it means.
       payload.expense_type = type;
-      response = await apiFetch("/expense/" + encodeURIComponent(_expenseEditDocId), {
+      response = await apiFetch("/expense/" + encodeURIComponent(editDocId), {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
@@ -1923,74 +1977,39 @@ async function submitExpense(e) {
     if (!result) throw new Error(`Server error: ${response.status}`);
 
     if (result.success) {
-      document.getElementById("expense-modal")?.classList.remove("show");
-      // Clear edit-mode now that submit succeeded
-      const wasEdit = _expenseEditMode;
-      _expenseEditMode = false;
-      _expenseEditDocId = null;
+      // Swap the placeholder for the stored row (real _doc_id, server time,
+      // created_by) so edit / delete on it work before the listener
+      // rebuilds today's list from Firestore a moment later.
+      if (tempRow && result.expense) {
+        Object.assign(tempRow, result.expense);
+        delete tempRow._pending;
+      }
 
-      // Keep the form on this date for the next entry. Entering a day's
-      // expenses is a batch; see the expense-date lock block at the top.
-      if (!wasEdit) _pinExpenseDate(date);
-
-      // ── Smooth-insert: splice the new row into the list ──────────────────
-      // The server echoes the stored row (incl. _doc_id, so the row's
-      // edit/delete actions work immediately). Patch the in-memory logs cache,
-      // then try the incremental insert: one row grows into place and only the
-      // EXPENSES tile moves. It used to call renderEnhancedLogs(), which
-      // rebuilt every row into innerHTML for the sake of one addition.
-      //
-      // txnInsertExpenseRow returns false when the row belongs to a date group
-      // or filter that is not on screen; that is the signal to do the full
-      // render after all.
-      let _insertedIncrementally = false;
-      if (!wasEdit && result.expense && result.expense._doc_id) {
-        try {
-          if (typeof logs !== "undefined" && logs && Array.isArray(logs.expenses)) {
-            logs.expenses.push(result.expense);
-          }
-          if (typeof window.txnInsertExpenseRow === "function") {
-            _insertedIncrementally = window.txnInsertExpenseRow(result.expense);
-          }
-          if (!_insertedIncrementally && typeof window.renderEnhancedLogs === "function") {
-            window.renderEnhancedLogs();
-          }
-        } catch (e) {
-          console.warn("Expense smooth-insert skipped:", e);
+      // Legacy (non listener-first) mode still needs the authoritative
+      // refresh; in listener-first mode the expenses listener repaints from
+      // the server snapshot on its own and these calls are no-ops.
+      if (!(window.CibaraState && CibaraState.listenerFirst)) {
+        if (tempRow && typeof window.reconcileTransactionsView === "function") {
+          window.reconcileTransactionsView();
+        } else if (typeof window.refreshTransactionsView === "function") {
+          window.refreshTransactionsView();
+        } else {
+          debouncedFetchData();
         }
       }
 
-      // Extended-range aware refresh so an edit/add to a PAST day (Last 3 days /
-      // custom range) re-pulls from the server instead of leaving the stale row
-      // on screen. When the row was spliced in, the refresh is deferred past the
-      // insert animation so the authoritative re-render lands invisibly instead
-      // of stomping the animation halfway through.
-      if (_insertedIncrementally && typeof window.reconcileTransactionsView === "function") {
-        window.reconcileTransactionsView();
-      } else if (typeof window.refreshTransactionsView === "function") {
-        window.refreshTransactionsView();
-      } else {
-        debouncedFetchData();
-      }
-
       // Refresh the Reports view when a report has been generated, so the
-      // add/edit shows up there immediately. Any expense type — the Reports
-      // list shows both Daily and Report expenses. (Replaces a call to the
-      // undefined generateReport(), which used to throw here.)
+      // add/edit shows up there immediately.
       if (typeof window.refreshReportsView === "function") {
         window.refreshReportsView();
       }
-
-      showNotification(
-        result.message || (wasEdit ? "Expense updated" : "Expense added"),
-        "success"
-      );
     } else {
-      showNotification(result.message || "Error saving expense", "error");
+      rollback(result.message || "server rejected it");
     }
   } catch (error) {
     console.error("Expense submit error:", error);
-    showNotification(`Error: ${error.message}`, "error");
+    if (typeof rollback === "function") rollback(error.message);
+    else showNotification(`Error: ${error.message}`, "error");
   } finally {
     if (submitBtn) {
       submitBtn.disabled = false;

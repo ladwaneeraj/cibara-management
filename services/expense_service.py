@@ -36,10 +36,14 @@ def init(db):
 # WRITE
 # ---------------------------------------------------------------------------
 
-def write_expense(expense_data: dict, *, sync: bool = False):
+def write_expense(expense_data: dict, *, sync: bool = False, batch=None):
     """
     Write a single expense document to the `expenses` collection.
 
+    batch=...  → the set() is added to the caller's WriteBatch and the new
+                 doc ID (str) is returned at once; the caller commits. Lets a
+                 route land the expense and its counter update in ONE round
+                 trip instead of two sequential ones.
     sync=True  → blocking write; returns the new Firestore doc ID (str) on
                  success so the caller can echo the stored row back to the
                  client (smooth-insert without a refetch), or False on
@@ -51,6 +55,11 @@ def write_expense(expense_data: dict, *, sync: bool = False):
         return False
 
     doc = _normalise(expense_data)
+
+    if batch is not None:
+        ref = _expenses_ref.document()
+        batch.set(ref, doc)
+        return ref.id
 
     if sync:
         try:

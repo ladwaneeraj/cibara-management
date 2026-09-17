@@ -507,14 +507,16 @@ _UI_CONFIG_DEFAULTS = {
     #           billed reads) and the listeners deliver only what changed.
     #           Cuts Firestore reads roughly in half by removing the
     #           server-side duplicate of data the listeners already carry.
-    #   False → default; legacy path. The dashboard is painted from /get_data
-    #           and the listeners skip their first snapshot.
+    #   False → legacy path. The dashboard is painted from /get_data and the
+    #           listeners skip their first snapshot. After every local write
+    #           the client also re-downloads /get_data (2-3 s) and repaints,
+    #           which is the "wobble" staff saw after each action.
     #
-    #   This is a kill switch. Flipping it to False from any device restores
-    #   the legacy path on the next page load with no redeploy. Individual
-    #   devices can override it for testing via
+    #   Default True since 17-09-2026. This is a kill switch: flipping it to
+    #   False in Settings restores the legacy path on the next page load with
+    #   no redeploy. Individual devices can override it for testing via
     #   localStorage.cibara_listener_first = "1" | "0".
-    "listener_first": False,
+    "listener_first": True,
     # inspection_photos (bool, default True):
     #   True  → a MANAGER approving a room in 200-228 as ready for check-in
     #           must attach washroom + room photos (services/room_photos);

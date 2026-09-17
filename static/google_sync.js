@@ -694,7 +694,14 @@ function _smoothInsertPaymentRow(p) {
 }
 
 // ─── Toast helper ──────────────────────────────────────────────────────────
+// Off by default. A live screen should simply be current; announcing every
+// remote change made each update feel like an event, and after a local
+// write the same toast fired for the operator's own action a second later.
+// Kept behind a flag for debugging: localStorage.cibara_sync_toast = "1".
+let _syncToastOn = false;
+try { _syncToastOn = localStorage.getItem("cibara_sync_toast") === "1"; } catch (_) {}
 function showSyncToast(message = "☁️ Data Updated Automatically") {
+  if (!_syncToastOn) return;
   const toast = document.createElement("div");
   toast.innerHTML = message;
   toast.style.cssText = `

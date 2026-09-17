@@ -3432,6 +3432,102 @@ tr.rp-svc-voided .rp-actions-cell { opacity:.9; }
     _patchBillFromEvent(e.detail);
   });
 
+  // ── Active stays, live from the room documents ─────────────────────────
+  // A completed stay is a bill, and bills arrive above. An ACTIVE stay is a
+  // room document plus the stay's payments, and until now those rows only
+  // changed on a reload. The rooms listener in google_sync.js patches
+  // `window.rooms` and fires `cibaraRoomUpdate`; the payments listener fires
+  // `cibaraPaymentAdded` per new payment. Together they carry everything
+  // config._build_active_entry_fast derives server-side, so the row is
+  // rebuilt here from the same inputs, with no fetch:
+  //   from the room  : days, rent, services, total, balance, guest, check-in
+  //   from payments  : cash / online sums (server figure + live deltas)
+  // Serial stays "-" for a stay that appeared live; renderTable numbers rows
+  // by check-in order anyway, so the visible position is still right.
+  const _REFUND_TYPES = new Set(["refund", "checkout_refund", "manual_refund",
+                                 "booking_cancel_refund"]);
+  const _NON_MONEY_TYPES = new Set(["discount", "expense"]);
+  const _isLive = (row) => row && !row.voided;   // payment_service.is_live_charge
+
+  function _activeIdFor(room, checkinTime) {
+    const t = Date.parse(String(checkinTime || "").replace(" ", "T"));
+    return isNaN(t) ? null : `active_${room}_${Math.floor(t / 1000)}`;
+  }
+
+  function _activeEntryFromRoom(room, info, prev) {
+    const g = info.guest || {};
+    const days = (info.renewal_count || 0) + 1;
+    const rent = Number(g.price) || 0;
+    const services = (info.add_ons || []).filter(_isLive)
+      .reduce((n, a) => n + (Number(a.price) || 0), 0);
+    return Object.assign({}, prev || {}, {
+      id:             prev?.id || _activeIdFor(room, info.checkin_time),
+      bill_number:    "-",
+      guest_name:     g.name || "",
+      guest_mobile:   g.mobile || "",
+      room:           String(room),
+      checkin_time:   info.checkin_time,
+      checkout_time:  null,
+      days_stayed:    days,
+      room_rent:      rent,
+      room_charges:   rent * days,
+      services_total: services,
+      total_amount:   rent * days + services,
+      payment_cash:   prev?.payment_cash || 0,
+      payment_online: prev?.payment_online || 0,
+      balance:        info.balance || 0,
+      status:         "active",
+      serial_number:  prev?.serial_number ?? null,
+      lastCheckinBy:  info.lastCheckinBy,
+      stay_timeline:  info.stay_timeline || [],
+    });
+  }
+
+  function _syncActiveRowsFromRooms() {
+    const roomsMap = window.rooms;
+    if (!roomsMap || !state.lastLoadedRange) return;
+    let changed = false;
+    const keep = [];
+    for (const e of state.allEntries) {
+      if (e.status !== "active") { keep.push(e); continue; }
+      const info = roomsMap[e.room];
+      const same = info && info.status === "occupied" && info.guest &&
+        info.checkin_time === e.checkin_time;
+      if (!same) { changed = true; continue; }        // checked out / moved
+      const next = _activeEntryFromRoom(e.room, info, e);
+      if (JSON.stringify(next) !== JSON.stringify(e)) changed = true;
+      keep.push(next);
+    }
+    // Rooms occupied since the last load that have no row yet.
+    const seen = new Set(keep.filter((e) => e.status === "active")
+                             .map((e) => e.room + "|" + e.checkin_time));
+    for (const [room, info] of Object.entries(roomsMap)) {
+      if (info.status !== "occupied" || !info.guest || !info.checkin_time) continue;
+      if (seen.has(room + "|" + info.checkin_time)) continue;
+      if (!_rgDateInRange(String(info.checkin_time).slice(0, 10))) continue;
+      keep.push(_activeEntryFromRoom(room, info, null));
+      changed = true;
+    }
+    if (changed) { state.allEntries = keep; applyFilters(); }
+  }
+
+  function _applyPaymentToActiveRow(p) {
+    if (!p || !state.lastLoadedRange) return;
+    if (!_isLive(p) || _REFUND_TYPES.has(p.type) || _NON_MONEY_TYPES.has(p.type)) return;
+    const field = p.method === "cash" ? "payment_cash"
+                : p.method === "online" ? "payment_online" : null;
+    if (!field) return;
+    const row = state.allEntries.find((e) =>
+      e.status === "active" && e.room === String(p.room) &&
+      (!p.stay_room_key || p.stay_room_key === `${e.room}_${e.checkin_time}`));
+    if (!row) return;
+    row[field] = (row[field] || 0) + (Number(p.amount) || 0);
+    applyFilters();
+  }
+
+  window.addEventListener("cibaraRoomUpdate", _syncActiveRowsFromRooms);
+  window.addEventListener("cibaraPaymentAdded", (e) => _applyPaymentToActiveRow(e.detail));
+
   // ══════════════════════════════════════════════════════════════════════════════
   // ID DOCUMENTS MODAL — view customer docs, no password required
   // ══════════════════════════════════════════════════════════════════════════════

@@ -672,13 +672,47 @@ function vacantPrepRows(info) {
   );
 }
 
+// Minimal DOM diff for the room grid, keyed by element id. Walks the freshly
+// built cards in order; an existing card with identical markup is kept in
+// place, a changed one is swapped for its new node, a missing one is
+// inserted, and leftovers are removed. Element count is ~40, so comparing
+// outerHTML is cheaper than any smarter scheme and has no edge cases.
+function _reconcileRoomGrid(live, next) {
+  const wanted = Array.from(next.childNodes);
+  const keep = new Set();
+  let cursor = live.firstElementChild;
+  wanted.forEach((node) => {
+    keep.add(node.id);
+    const existing = node.id ? document.getElementById(node.id) : null;
+    if (existing && existing.parentNode === live) {
+      if (existing.outerHTML !== node.outerHTML) {
+        live.replaceChild(node, existing);
+        cursor = node.nextElementSibling;
+      } else if (existing === cursor) {
+        cursor = existing.nextElementSibling;
+      } else {
+        live.insertBefore(existing, cursor);
+      }
+    } else {
+      live.insertBefore(node, cursor);
+    }
+  });
+  Array.from(live.children).forEach((el) => {
+    if (!keep.has(el.id)) el.remove();
+  });
+}
+
 function renderRooms() {
   if (!roomsGrid) {
     debugLog("roomsGrid element not found");
     return;
   }
 
-  roomsGrid.innerHTML = "";
+  // Build the new grid off-screen, then reconcile it into the live grid one
+  // card at a time (see _reconcileRoomGrid). A card whose markup did not
+  // change is left untouched, so a payment on room 27 repaints room 27 and
+  // nothing else: no flash, no lost hover, no scroll jump.
+  const nextGrid = document.createDocumentFragment();
   let roomCount = 0;
 
   Object.entries(rooms).forEach(([roomNumber, info]) => {
@@ -984,15 +1018,19 @@ function renderRooms() {
       // Housekeeping users never open modals from a card tap.
       if (_isHousekeepingUser) return;
 
+      // Read the room at click time: a card whose markup did not change is
+      // kept across renders (see _reconcileRoomGrid), so `info` may be stale.
+      const live = rooms[roomNumber] || info;
+
       // Prevent interaction with cleaning rooms
-      if (info.status === "cleaning") {
+      if (live.status === "cleaning") {
         showNotification("Room is being cleaned", "info");
         return;
       }
 
-      if (info.status === "vacant") {
+      if (live.status === "vacant") {
         showCheckinModal(roomNumber);
-      } else if (info.status === "occupied") {
+      } else if (live.status === "occupied") {
         // Prefetch payment history as soon as user taps the room card
         // so data is ready (or loading) by the time the modal opens.
         if (typeof prefetchPaymentLogs === "function") prefetchPaymentLogs(roomNumber);
@@ -1041,18 +1079,21 @@ function renderRooms() {
     // (Attribution chip on the room card was removed. Per-row history
     // remains accessible from the Register tab via the history icon.)
 
-    roomsGrid.appendChild(roomCard);
+    nextGrid.appendChild(roomCard);
   });
 
   if (roomCount === 0) {
     const emptyState = document.createElement("div");
     emptyState.className = "empty-state";
+    emptyState.id = "room-grid-empty";
     emptyState.innerHTML = `
       <i class="fas fa-search fa-3x"></i>
       <p>No rooms match your filter criteria</p>
     `;
-    roomsGrid.appendChild(emptyState);
+    nextGrid.appendChild(emptyState);
   }
+
+  _reconcileRoomGrid(roomsGrid, nextGrid);
 
   // Keep the Vacant/Occupied/Cleaning/Balances filter counts in lock-step
   // with the grid. updateStats() only recomputes from the in-memory
@@ -1569,6 +1610,12 @@ function debouncedFetchData(delay = 2000, roomNumber = null) {
   if (roomNumber && typeof invalidatePayHistoryCache === "function") {
     invalidatePayHistoryCache(roomNumber);
   }
+  // Listener-first: the write we just made lands on the Firestore listeners
+  // in google_sync.js within a few hundred ms and they patch rooms, totals
+  // and today's transactions themselves. The /get_data round trip (2-3 s
+  // server time, then a full repaint) was the visible "wobble" after every
+  // action, and it re-read documents the listeners already paid for.
+  if (window.CibaraState && CibaraState.listenerFirst) return;
   clearTimeout(_fetchDebounceTimer);
   _fetchDebounceTimer = setTimeout(fetchData, delay);
 }

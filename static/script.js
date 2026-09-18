@@ -4883,6 +4883,7 @@ async function processRefund() {
       if (rooms[roomNumber]) {
         rooms[roomNumber].balance = (rooms[roomNumber].balance || 0) + refundAmount;
       }
+      _payHistoryOptimistic(roomNumber, refundAmount, refundMethod, "manual_refund");
       debouncedFetchData(2000, roomNumber); // background sync + bust pay history cache
 
       // Update the checkout modal with new data
@@ -4948,6 +4949,33 @@ function _syncPaymentBtnsForRoom(roomNumber) {
     if (!el) return;
     el.disabled = pending;
     el.innerHTML = pending ? spinner : _payActionLabel(_payModeOf(id));
+  });
+}
+
+// Build the row /get_history would return for a payment made right now and
+// drop it into the cached history (transaction-tracking.js::payHistoryInsert).
+// `type` follows routes/rooms.py::checkout: a payment on a later calendar day
+// than check-in is a renewal payment.
+function _payHistoryOptimistic(roomNumber, amount, method, type) {
+  if (typeof window.payHistoryInsert !== "function") return;
+  const info = rooms[roomNumber] || {};
+  const now = new Date();
+  const pad = (n) => String(n).padStart(2, "0");
+  if (!type) {
+    const ci = String(info.checkin_time || "").slice(0, 10);
+    const today = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+    type = ci && today > ci ? "renewal" : "payment";
+  }
+  const me = window.CibaraAuth && window.CibaraAuth.currentUser && window.CibaraAuth.currentUser();
+  window.payHistoryInsert(roomNumber, {
+    room: String(roomNumber),
+    name: (info.guest && info.guest.name) || "",
+    amount: amount,
+    method: method,
+    type: type,
+    date: `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`,
+    time: `${pad(now.getHours())}:${pad(now.getMinutes())}`,
+    createdBy: me ? me.userId : undefined,
   });
 }
 
@@ -5034,6 +5062,11 @@ async function addPayment(mode) {
         if (rooms[roomNumber]) {
           rooms[roomNumber].balance = balanceBeforePayment - amount;
         }
+        // The new row goes into the Payment History cache before the modal
+        // repaints, so it is on screen with the rest of the list, not after
+        // a spinner and a round trip. Mirrors the server's row shape; the
+        // listener replaces it with the stored copy a moment later.
+        _payHistoryOptimistic(roomNumber, amount, mode);
         updateCheckoutModal(roomNumber);
         showNotification(`Payment of ₹${amount} added`, "success");
         return snap;
@@ -5042,6 +5075,7 @@ async function addPayment(mode) {
         if (rooms[roomNumber]) {
           rooms[roomNumber].balance = snap.balance;
         }
+        if (typeof window.prefetchPayHistory === "function") window.prefetchPayHistory(roomNumber);
         updateCheckoutModal(roomNumber);
       },
       request(opId) {

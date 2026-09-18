@@ -705,7 +705,7 @@
     if (_qpRangeMode(_qpB) && _qpB.host === "attendance") {
       var _qpS = state.staff.find(function (x) { return x.id === _qpB.staffId; });
       var _qpName = _qpS ? esc(_qpS.name) : "this staff member";
-      var _qpWhat = _qpB.mode === "meals" ? "meal days" : "salary period";
+      var _qpWhat = "salary period";
       var _qpText, _qpTone;
       if (!_qpB.start) {
         _qpText = "Tap the <b>first day</b> of the " + _qpWhat + " for " + _qpName + ".";
@@ -1391,10 +1391,10 @@
     }
     var mode = opts.mode ||
       (can("staff.salary.pay") ? "pay" : "advance");
-    // Never open a mode the user can't perform. A missing meal rate is not
-    // that: the meals panel is where it gets set, so sending the operator to
-    // the salary tab instead is what made the feature unreachable.
-    if (mode === "meals" && !can("staff.salary.pay")) mode = "pay";
+    // Never open a mode the user can't perform. "meals" was a separate
+    // kitchen-cost log; meals are now withheld inside the salary payout, so
+    // any old caller asking for it lands on Salary.
+    if (mode === "meals") mode = "pay";
     if (mode === "pay" && !can("staff.salary.pay")) mode = "advance";
     if (mode === "advance" && !can("staff.advance.give")) mode = "pay";
     // Open with NO dates pre-selected — the operator picks the range
@@ -1464,7 +1464,7 @@
       var mine = state.quickPay;
       if (!mine || mine !== qp) return;
       api("/staff/" + encodeURIComponent(qp.staffId) +
-          (qp.mode === "meals" ? "/meal_preview?start=" : "/salary_preview?start=") +
+          "/salary_preview?start=" +
           qp.start + "&end=" + qp.end)
         .then(function (json) {
           if (state.quickPay !== qp) return;
@@ -1505,7 +1505,7 @@
   }
 
   function _qpRangeMode(qp) {
-    return !!(qp && (qp.mode === "pay" || qp.mode === "meals"));
+    return !!(qp && qp.mode === "pay");
   }
 
   // Toggle the calendar-range highlight on the grid IN PLACE — no grid
@@ -1545,7 +1545,7 @@
     if (!span) return;
     var st = state.staff.find(function (x) { return x.id === qp.staffId; });
     var nm = st ? esc(st.name) : "this staff member";
-    var what = qp.mode === "meals" ? "meal days" : "salary period";
+    var what = "salary period";
     el.classList.remove("wait", "done");
     if (!qp.start) {
       span.innerHTML = "Tap the <b>first day</b> of the " + what + " for " + nm + ".";
@@ -1604,8 +1604,6 @@
     var qp = state.quickPay;
     if (!_qpRangeMode(qp)) return;
     var pv = qp.preview;
-    if (qp.mode === "meals") { _qpSyncDates(qp); _mealSync(qp); return; }
-
     _qpSyncDates(qp);
     // Note area (skipped days / fully-paid warning / error).
     var noteEl = document.getElementById("stf-qp-notearea");
@@ -1707,81 +1705,6 @@
     }
   }
 
-  // Meals mode: same shape as the salary sync, far less arithmetic. The
-  // amount is entirely server-derived (rate x days present, minus days an
-  // earlier log already covered), so there is nothing to recompute here —
-  // only to display.
-  function _mealSync(qp) {
-    var pv = qp.preview;
-
-    var noteEl = document.getElementById("stf-qp-notearea");
-    if (noteEl) {
-      var note = "";
-      if (qp.error) {
-        note = '<div class="stf-carry-note" style="background:#fff5f5;border-color:#fecaca;color:#991b1b;">' +
-          esc(qp.error) + "</div>";
-      } else if (pv && !pv.has_meal_rate) {
-        // The one screen that can fix this is one tap away, so offer it here
-        // rather than describing where to go. can() guards the button, not
-        // the message: someone without staff.manage still needs to know why
-        // the panel is empty, they just cannot be the one to set the rate.
-        note = '<div class="stf-carry-note" style="background:#fff5f5;border-color:#fecaca;color:#991b1b;">' +
-          "\u26a0 No meal rate set for " + esc(_qpStaff() ? _qpStaff().name : "this person") +
-          ", so there is nothing to charge. Set \u201cMeals per day\u201d on " +
-          "their staff record first." +
-          (can("staff.manage")
-            ? ' <button type="button" class="stf-btn ghost stf-qp-setrate" ' +
-              'id="stf-qp-setrate" style="margin-top:.5rem;">' +
-              '<i class="fas fa-pen"></i> Set meal rate</button>'
-            : "") +
-          "</div>";
-      } else if (pv && pv.already_logged_days && pv.already_logged_days.length) {
-        note = '<div class="stf-carry-note">' +
-          "\u2139 " + pv.already_logged_days.length + " day" +
-          (pv.already_logged_days.length > 1 ? "s" : "") +
-          " in this range " + (pv.already_logged_days.length > 1 ? "are" : "is") +
-          " already logged and will be skipped.</div>";
-      }
-      if (noteEl.innerHTML !== note) noteEl.innerHTML = note;
-      // Rebound every sync: the note is rewritten by innerHTML above, so the
-      // previous button (and its listener) is gone whenever the text changed.
-      var rateBtn = document.getElementById("stf-qp-setrate");
-      if (rateBtn) rateBtn.addEventListener("click", function () {
-        var who = _qpStaff();
-        if (!who) return;
-        closeQuickPay();
-        state.payView = { name: "edit", staff: who };
-        renderPayroll();
-      });
-    }
-
-    var days = pv && pv.meals ? pv.meals.meal_days : 0;
-    var total = pv && pv.meals ? pv.meals.meal_total : 0;
-
-    var calcEl = document.getElementById("stf-qp-calc");
-    if (calcEl) {
-      if (!qp.start || !qp.end) {
-        calcEl.textContent = "Select the days to see the meal total.";
-      } else if (pv) {
-        calcEl.innerHTML = "<b>" + days + "</b> day" + (days === 1 ? "" : "s") +
-          " present \u00d7 " + rup(pv.meal_rate) + " = <b>" + rup(total) + "</b>";
-      } else if (qp.loading) {
-        calcEl.textContent = "Calculating\u2026";
-      } else {
-        calcEl.textContent = "\u2014";
-      }
-      calcEl.classList.toggle("updating", !!qp.loading);
-    }
-
-    var netEl = document.getElementById("stf-qp-net");
-    if (netEl) netEl.textContent = rup(total);
-    var lbl = document.getElementById("stf-qp-paylbl");
-    if (lbl) lbl.textContent = total > 0 ? "Log " + rup(total) + " meals" : "Log meals";
-
-    var btn = document.getElementById("stf-qp-confirm");
-    if (btn) btn.disabled = !!(qp.loading || !pv || !pv.has_meal_rate || total <= 0);
-  }
-
   function _qpRecalcNet() {
     var qp = state.quickPay;
     var pv = qp && qp.preview;
@@ -1862,17 +1785,9 @@
     if (!s) { slot.innerHTML = ""; return; }
     var today = _todayStr();
 
-    // The Meals tab used to appear only for staff who already had a meal
-    // rate. That hid the feature behind itself: with no rate there was no
-    // tab, and the panel's own "set a meal rate first" message lives INSIDE
-    // the tab, so nobody could reach the one place that says what to do. In
-    // eighteen months of this log, meal_preview was never called once.
-    //
-    // The tab is now always offered to whoever can pay salaries, and the
-    // panel explains the missing rate with a button that goes and sets it.
-    // The payroll CARD keeps its rate gate — four buttons on every row of a
-    // list is the noise this was trying to avoid, and the tab is the door.
-    var hasMealRate = Number(s.meal_rate || 0) > 0;
+    // Two modes only. Meals are not a third thing to log: they are
+    // withheld inside the salary payout (rate x days present), shown as
+    // their own line there, in the ledger and on the slip.
     var switchBtns =
       (can("staff.salary.pay")
         ? '<button data-qpmode="pay" class="' + (qp.mode === "pay" ? "on" : "") + '">Salary</button>'
@@ -1880,11 +1795,7 @@
       (can("staff.advance.give")
         ? '<button data-qpmode="advance" class="' + (qp.mode === "advance" ? "on" : "") + '">Advance</button>'
         : "") +
-      (can("staff.salary.pay")
-        ? '<button data-qpmode="meals" class="' + (qp.mode === "meals" ? "on" : "") +
-          '" title="' + (hasMealRate ? "Log the kitchen cost for days present"
-                                     : "No meal rate set yet") + '">Meals</button>'
-        : "");
+      "";
 
     var head =
       '<div class="stf-qp-head">' +
@@ -1921,32 +1832,7 @@
         (qp.host === "payroll" ? "" :
          '  <span class="stf-qp-help stf-qp-taphint">or tap the days on ' + esc(s.name) + "&rsquo;s row</span>");
 
-    if (qp.mode === "meals") {
-      // One expense covering a week of food, after the fact. The amount is
-      // never entered by hand — it is rate x days present, computed by the
-      // server, so it always matches what the salary payout withheld.
-      body +=
-        '<div class="stf-qp-field">' +
-        '  <label class="stf-qp-lbl">1 \u00b7 Days to charge</label>' + rangeField +
-        "</div>" +
-        '<div id="stf-qp-notearea"></div>' +
-        '<div class="stf-qp-calcbox" id="stf-qp-calc">Select the days to see the meal total.</div>' +
-        '<div class="stf-qp-field">' +
-        '  <label class="stf-qp-lbl">Note (optional)</label>' +
-        '  <input type="text" id="stf-qp-note" class="stf-qp-input" maxlength="120" placeholder="e.g. week 2 mess bill">' +
-        "</div>" +
-        '<div class="stf-qp-netcard">' +
-        '  <span class="stf-qp-netlbl">Meal cost</span>' +
-        '  <span class="stf-qp-netval" id="stf-qp-net">\u20b90</span>' +
-        "</div>" +
-        '<div class="stf-qp-field">' +
-        '  <label class="stf-qp-lbl">2 \u00b7 Paid from</label>' + srcInnerShared +
-        "</div>" +
-        '<button class="stf-btn primary stf-qp-paybtn" id="stf-qp-confirm" disabled>' +
-        '<i class="fas fa-utensils"></i> <span id="stf-qp-paylbl">Log meals</span></button>' +
-        '<div class="stf-qp-help" style="margin-top:0.5rem;">Counts one meal per day present ' +
-        '(a half day still eats). Days already logged are skipped automatically.</div>';
-    } else if (qp.mode === "pay") {
+    if (qp.mode === "pay") {
       // The FULL structure is always present; _qpSync() fills the dynamic
       // parts. Nothing here is ever swapped for a loading placeholder.
       // One "Pick date range" input opening the flatpickr calendar — the
@@ -2146,7 +2032,6 @@
     if (confirmBtn) confirmBtn.addEventListener("click", function () {
       var m = state.quickPay && state.quickPay.mode;
       if (m === "advance") return submitQuickAdvance(confirmBtn);
-      if (m === "meals") return submitMealLog(confirmBtn);
       submitQuickPay(confirmBtn);
     });
 
@@ -2204,43 +2089,6 @@
             _refreshMoneyViews();
           }
           loadGrid(true);       // force — the paid-period locks just changed
-        })
-        .catch(function (e) { btn.disabled = false; notify(e.message, "error"); });
-    });
-  }
-
-  function submitMealLog(btn) {
-    var qp = state.quickPay;
-    var s = _qpStaff();
-    if (!qp || !s || !qp.preview) return;
-    var pv = qp.preview;
-    var total = pv.meals ? pv.meals.meal_total : 0;
-    var days = pv.meals ? pv.meals.meal_days : 0;
-    if (!(total > 0)) return notify("Nothing to log for these days", "error");
-    var src = readSource("stf-qp-source");
-    stfConfirm(
-      "Log " + rup(total) + " of meals for " + s.name + "? (" + days +
-      " day" + (days === 1 ? "" : "s") + " × " + rup(pv.meal_rate) + ")",
-      { okText: "Log meals" }
-    ).then(function (ok) {
-      if (!ok) return;
-      btn.disabled = true;
-      // The amount is NOT sent — the server recomputes it from the staff
-      // member's meal rate and the attendance in this range.
-      post("/staff/" + encodeURIComponent(qp.staffId) + "/log_meals", {
-        period_start: qp.start,
-        period_end: qp.end,
-        note: (document.getElementById("stf-qp-note")?.value || "").trim(),
-        payment_method: src.payment_method,
-        expense_type: src.expense_type,
-      })
-        .then(function (json) {
-          notify(json.message || "Meals logged", "success");
-          state.quickPay = null;
-          state.staffLoaded = false;
-          state.insights = null;
-          _refreshMoneyViews();
-          loadGrid(true);       // force — a new expense row just landed
         })
         .catch(function (e) { btn.disabled = false; notify(e.message, "error"); });
     });
@@ -2625,6 +2473,10 @@
       (p.advance_deducted
         ? '<tr class="minus"><td>Advance deducted</td><td>− ' + e(rup(p.advance_deducted)) + "</td></tr>"
         : "") +
+      (p.meal_deducted
+        ? '<tr class="minus"><td>Meals (' + e(String(p.meal_days)) + " day" + (p.meal_days === 1 ? "" : "s") +
+          " × " + e(rup(p.meal_rate)) + ")</td><td>− " + e(rup(p.meal_deducted)) + "</td></tr>"
+        : "") +
       '<tr class="net"><td>Net paid</td><td>' + e(rup(p.net_paid)) + "</td></tr>" +
       "<tr><td>Paid on</td><td>" + e(fmtD(p.paid_on)) +
       (p.expense_type === "report" ? " · from account" : " · cash") + "</td></tr>" +
@@ -2734,10 +2586,6 @@
           (can("staff.salary.pay") && s.active !== false
             ? '<button class="stf-btn primary" data-act="pay" data-sid="' + esc(s.id) + '"><i class="fas fa-money-bill-wave"></i> Pay Salary</button>'
             : "") +
-          // Only for staff who actually eat here — see meal_rate.
-          (can("staff.salary.pay") && s.active !== false && Number(s.meal_rate || 0) > 0
-            ? '<button class="stf-btn ghost" data-act="meals" data-sid="' + esc(s.id) + '"><i class="fas fa-utensils"></i> Meals</button>'
-            : "") +
           '    <button class="stf-btn ghost" data-act="ledger" data-sid="' + esc(s.id) + '"><i class="fas fa-book-open"></i> Ledger</button>' +
           (can("staff.manage")
             ? '<button class="stf-btn ghost iconbtn" data-act="edit" data-sid="' + esc(s.id) + '" title="Edit"><i class="fas fa-pen"></i></button>'
@@ -2768,7 +2616,7 @@
         var act = btn.dataset.act;
         // Pay Salary / Advance open the shared quick panel in this pane.
         // Edit and Ledger are still their own full-screen views.
-        if (act === "pay" || act === "advance" || act === "meals") {
+        if (act === "pay" || act === "advance") {
           openQuickPay(s.id, { mode: act, host: "payroll" });
           return;
         }
@@ -2837,7 +2685,7 @@
       '    <div class="form-group"><label class="form-label">Meals per day (\u20b9)</label>' +
       '      <input class="form-control" type="number" min="0" id="stf-f-meal" value="' + (s.meal_rate || 0) + '" placeholder="0"></div>' +
       '    <div class="form-group" style="display:flex;align-items:flex-end;">' +
-      '      <span style="font-size:0.72rem;color:#718096;line-height:1.35;">Leave 0 if they don&rsquo;t eat here.</span></div>' +
+      '      <span style="font-size:0.72rem;color:#718096;line-height:1.35;">Withheld from each salary: this amount for every day present. Leave 0 if they don&rsquo;t eat here.</span></div>' +
       "  </div>" +
       '  <div class="form-group"><label class="form-label">Notes</label>' +
       '    <input class="form-control" id="stf-f-notes" maxlength="300" value="' + esc(s.notes || "") + '" placeholder="Optional"></div>' +
@@ -3036,6 +2884,11 @@
                 (p.advance_deducted
                   ? '<span class="chip cut">− ' + rup(p.advance_deducted) +
                     " advance cut</span>"
+                  : "") +
+                (p.meal_deducted
+                  ? '<span class="chip cut" title="Meals withheld: ' + p.meal_days +
+                    ' day(s) present × ' + rup(p.meal_rate) + '">− ' + rup(p.meal_deducted) +
+                    " meals (" + p.meal_days + " × " + rup(p.meal_rate) + ")</span>"
                   : "") +
                 // Period census as chips: present / paid / absent / already
                 // paid / unmarked, plus the date the cash left the counter.

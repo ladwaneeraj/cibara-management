@@ -438,6 +438,13 @@ def pay_salary(staff_id):
 
 
 # ─── Meals ─────────────────────────────────────────────────────────────────
+# LEGACY ENTRY POINT. Since 18-09-2026 the Staff UI has no "Meals" tab: the
+# meal charge is withheld inside pay_salary (meal_rate x days present,
+# stored on the payment as meal_rate / meal_days / meal_deducted and shown
+# as its own line in the ledger and on the slip). These routes stay so that
+# meal logs written before that date remain viewable, editable and
+# reversible from the ledger; nothing in the client creates new ones.
+#
 # Staff who eat at the lodge are charged a per-day meal rate. pay_salary
 # withholds it from the payout; these routes record the matching kitchen cost
 # as one expense covering a range of days (in practice, once a week).

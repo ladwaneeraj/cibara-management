@@ -1214,18 +1214,29 @@ class TransactionLogManager {
       return;
     }
 
-    // ── Cache hit: render instantly, no network call ──────────────────────
-    const cacheKey = `${roomNumber}:${roomInfo.checkin_time || ""}`;
-    const cached = _payCache[cacheKey];
-    if (cached && Date.now() - cached.ts < _PAY_CACHE_TTL) {
+    // ── Cached (fresh or stale): render instantly, no spinner ─────────────
+    const cached = _payCacheGet(roomNumber);
+    if (cached && cached.data) {
       this._renderPaymentData(paymentLogsContainer, cached.data, roomNumber);
+      if (_payCacheFresh(cached)) return;
+      // Stale: revalidate behind the rendered list and repaint only if the
+      // server's answer differs from what is on screen.
+      const before = JSON.stringify(cached.data);
+      _startPayFetch(roomNumber, true)
+        .then((data) => {
+          if (!data || !data.success || JSON.stringify(data) === before) return;
+          const still = document.getElementById("checkout-room-number");
+          if (still && still.textContent.trim() === String(roomNumber)) {
+            this._renderPaymentData(paymentLogsContainer, data, roomNumber);
+          }
+        })
+        .catch(() => {});
       return;
     }
 
-    // Cache miss: show spinner. The fetch may already be in flight from
-    // a prefetch fired right before showCheckoutModal; _startPayFetch
-    // de-dupes so we share the same network round-trip instead of
-    // racing it.
+    // Never seen this stay: show the spinner once. A prefetch fired on the
+    // card tap usually means the request is already in flight; the
+    // in-flight map shares it.
     paymentLogsContainer.innerHTML = `<div class="loading-indicator"><span class="loader"></span></div>`;
 
     _startPayFetch(roomNumber)
@@ -3172,16 +3183,25 @@ window.renderEnhancedLogs = function () {
 };
 
 // ── Payment history cache ─────────────────────────────────────────────────────
-// Key: "${room}:${checkin_time}"   Value: { data, ts }
-// TTL: 5 minutes. Invalidated on any write via invalidatePayHistoryCache().
+// Key: "${room}:${checkin_time}"   Value: { data, ts, stale }
 //
-// Also tracks an in-flight Promise per key so that
-//   prefetchPaymentLogs(123) + updatePaymentLogs(123)
-// fired back-to-back share a single network round-trip instead of
-// each starting their own. Previously they raced and we paid twice.
+// Stale-while-revalidate. The list is rendered from whatever is cached the
+// moment the modal opens (no spinner unless this stay has never been seen),
+// and a fetch runs behind it only when the entry is stale or older than the
+// TTL. Writes do not clear the cache any more; they mark it stale AND patch
+// it locally (see payHistoryInsert), so the row the operator just added is
+// on screen before the server has answered. Payments arriving from other
+// devices come in through cibaraPaymentAdded and are patched the same way.
+//
+// Entries are mirrored to sessionStorage so a reload still opens a stay's
+// history instantly. Bounded: one small entry per occupied room.
+//
+// An in-flight Promise per key means prefetchPaymentLogs(123) and
+// updatePaymentLogs(123) fired back-to-back share one network round trip.
 const _payCache = {};
 const _payInflight = new Map();
 const _PAY_CACHE_TTL = 5 * 60 * 1000;
+const _PAY_STORE = "cibara_payhist_v1";
 
 function _payCacheKey(roomNumber) {
   const r =
@@ -3189,42 +3209,91 @@ function _payCacheKey(roomNumber) {
   return `${roomNumber}:${r.checkin_time || ""}`;
 }
 
+function _payStoreLoad() {
+  try {
+    const raw = sessionStorage.getItem(_PAY_STORE);
+    if (!raw) return;
+    const obj = JSON.parse(raw);
+    Object.keys(obj).forEach((k) => {
+      // Restored entries are always stale: they render at once and revalidate.
+      _payCache[k] = { data: obj[k], ts: 0, stale: true };
+    });
+  } catch (_) { /* private mode / disabled storage — memory cache only */ }
+}
+function _payStoreSave() {
+  try {
+    const out = {};
+    Object.keys(_payCache).forEach((k) => { if (_payCache[k].data) out[k] = _payCache[k].data; });
+    sessionStorage.setItem(_PAY_STORE, JSON.stringify(out));
+  } catch (_) { /* ignore quota / disabled storage */ }
+}
+_payStoreLoad();
+
+function _payCacheGet(roomNumber) {
+  return _payCache[_payCacheKey(roomNumber)] || null;
+}
+function _payCacheFresh(entry) {
+  return !!(entry && entry.data && !entry.stale && Date.now() - entry.ts < _PAY_CACHE_TTL);
+}
+
+// Kept for callers: a write happened, the cached list may be behind.
+// The data stays (it is shown immediately); the next read revalidates.
 window.invalidatePayHistoryCache = function (roomNumber) {
-  delete _payCache[_payCacheKey(roomNumber)];
+  const e = _payCache[_payCacheKey(roomNumber)];
+  if (e) e.stale = true;
   _payInflight.delete(_payCacheKey(roomNumber));
 };
 
-// Drop the cached history AND immediately start refilling it, without waiting
-// for anyone to look at it.
-//
-// The problem this solves: correcting a service invalidates this cache, and
-// the checkout modal's Payment History only re-reads it when the editor
-// closes. So the operator saved a change, closed the editor, and then sat
-// watching a spinner for a round trip that could have run while they were
-// still reading the confirmation. Kicking the fetch off here means the data
-// is normally already in the cache by the time the list re-renders.
-//
-// Fire-and-forget on purpose: the caller must not block on it, and a failure
-// is harmless — the cache stays empty and the next read fetches normally.
+// Drop-and-refill: mark stale and start the fetch now, so the list is
+// normally current by the time anyone looks at it again.
 window.prefetchPayHistory = function (roomNumber) {
   window.invalidatePayHistoryCache(roomNumber);
   try {
-    const p = _startPayFetch(roomNumber);
+    const p = _startPayFetch(roomNumber, true);
     if (p && typeof p.catch === "function") p.catch(() => {});
-  } catch (e) {
-    /* nothing to do — the next read will fetch */
+  } catch (e) { /* the next read will fetch */ }
+};
+
+// Same fingerprint the renderer de-duplicates on, so a locally inserted
+// row and its server copy collapse into one.
+function _payFingerprint(p) {
+  return `${p.date}-${p.time}-${p.amount || 0}-${p.type || ""}-${p.item || ""}`;
+}
+
+// Insert one payment into the cached history for a room and repaint the
+// modal if it is showing that room. Used by the optimistic add-payment path
+// and by the live payments listener; both are safe to call for the same
+// payment because of the fingerprint check.
+window.payHistoryInsert = function (roomNumber, payment) {
+  const entry = _payCacheGet(roomNumber);
+  if (!entry || !entry.data || !payment) return false;
+  const bucket = (new Set(["refund", "checkout_refund", "manual_refund", "booking_cancel_refund"]).has(payment.type))
+    ? "refunds" : payment.type === "addon" ? "addons"
+    : payment.method === "online" ? "online" : "cash";
+  const list = entry.data[bucket] = entry.data[bucket] || [];
+  const fp = _payFingerprint(payment);
+  const all = ["cash", "online", "refunds", "addons"].flatMap((b) => entry.data[b] || []);
+  if (all.some((p) => _payFingerprint(p) === fp)) return false;
+  list.push(payment);
+  entry.stale = true;               // the server copy is authoritative; revalidate
+  _payStoreSave();
+  const shown = document.getElementById("checkout-room-number");
+  const modal = document.getElementById("checkout-modal");
+  if (shown && modal && modal.classList.contains("show") &&
+      shown.textContent.trim() === String(roomNumber) && transactionLogManager) {
+    transactionLogManager.updatePaymentLogs(roomNumber);
   }
+  return true;
 };
 
 // Internal — start (or reuse) a fetch. Returns the Promise so callers
-// can await the result without forcing a second request.
-function _startPayFetch(roomNumber) {
+// can await the result without forcing a second request. `force` skips
+// the freshness check (used to revalidate a stale entry in the background).
+function _startPayFetch(roomNumber, force) {
   const key = _payCacheKey(roomNumber);
 
   const cached = _payCache[key];
-  if (cached && Date.now() - cached.ts < _PAY_CACHE_TTL) {
-    return Promise.resolve(cached.data);
-  }
+  if (!force && _payCacheFresh(cached)) return Promise.resolve(cached.data);
   const inflight = _payInflight.get(key);
   if (inflight) return inflight;
 
@@ -3248,7 +3317,10 @@ function _startPayFetch(roomNumber) {
   })
     .then((r) => r.json())
     .then((data) => {
-      if (data && data.success) _payCache[key] = { data, ts: Date.now() };
+      if (data && data.success) {
+        _payCache[key] = { data, ts: Date.now(), stale: false };
+        _payStoreSave();
+      }
       return data;
     })
     .finally(() => {
@@ -4498,6 +4570,9 @@ window.reconcileTransactionsView = function (delayMs) {
 
   window.addEventListener("cibaraPaymentAdded", (e) => {
     const p = e.detail || {};
+    if (p.room && typeof window.payHistoryInsert === "function") {
+      window.payHistoryInsert(String(p.room), p);
+    }
     if (p.date) _refreshTxnView(p.date);
   });
 

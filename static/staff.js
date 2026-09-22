@@ -267,16 +267,6 @@
       console.error("staff.js: #staff-tab placeholder not found in DOM");
       return;
     }
-    var tabs =
-      '<button class="stf-tab-btn active" data-stab="attendance"><i class="fas fa-calendar-check"></i> Attendance</button>' +
-      // Insights is analytics — admin-only, same as the rest of the app's
-      // analytics surfaces. Managers get Attendance + Staff & Salary only.
-      (can("analytics.view")
-        ? '<button class="stf-tab-btn" data-stab="insights"><i class="fas fa-chart-line"></i> Insights</button>'
-        : "") +
-      (can("staff.payroll.view")
-        ? '<button class="stf-tab-btn" data-stab="payroll"><i class="fas fa-users"></i> Staff &amp; Salary</button>'
-        : "");
     var html =
       '<div class="modal-content stf-shell" id="staff-modal">' +
       '    <div class="stf-head">' +
@@ -287,7 +277,7 @@
       "      </div>" +
       '      <button class="stf-close" aria-label="Close">&times;</button>' +
       "    </div>" +
-      '    <div class="stf-tabs">' + tabs + "</div>" +
+      '    <div class="stf-tabs"></div>' +
       '    <div class="modal-body">' +
       '      <div class="stf-tab-pane active" id="stf-pane-attendance"></div>' +
       '      <div class="stf-tab-pane" id="stf-pane-insights"></div>' +
@@ -299,10 +289,36 @@
     var modal = document.getElementById("staff-modal");
     // × now backs out to Rooms — there's no "closed" state for a tab.
     modal.querySelector(".stf-close").addEventListener("click", closeModal);
-    modal.querySelectorAll(".stf-tab-btn").forEach(function (btn) {
+    renderTabs();
+  }
+
+  // The tab strip depends on the user's role. It is rebuilt (not just built
+  // once) because the Staff tab can open before /api/auth/me has resolved —
+  // e.g. the app restoring the last-open tab on load — and at that moment
+  // can() answers false for everything, which silently dropped Insights and
+  // Staff & Salary for admins until a full reload. auth.js fires
+  // cibaraAuthReady once the role is known; the listener below repaints.
+  function renderTabs() {
+    var strip = document.querySelector("#staff-modal .stf-tabs");
+    if (!strip) return;
+    var active = (strip.querySelector(".stf-tab-btn.active") || {}).dataset;
+    active = (active && active.stab) || "attendance";
+    strip.innerHTML =
+      '<button class="stf-tab-btn" data-stab="attendance"><i class="fas fa-calendar-check"></i> Attendance</button>' +
+      // Insights is analytics — admin-only, same as the rest of the app's
+      // analytics surfaces. Managers get Attendance + Staff & Salary only.
+      (can("analytics.view")
+        ? '<button class="stf-tab-btn" data-stab="insights"><i class="fas fa-chart-line"></i> Insights</button>'
+        : "") +
+      (can("staff.payroll.view")
+        ? '<button class="stf-tab-btn" data-stab="payroll"><i class="fas fa-users"></i> Staff &amp; Salary</button>'
+        : "");
+    strip.querySelectorAll(".stf-tab-btn").forEach(function (btn) {
+      btn.classList.toggle("active", btn.dataset.stab === active);
       btn.addEventListener("click", function () { switchTab(btn.dataset.stab); });
     });
   }
+  window.addEventListener("cibaraAuthReady", renderTabs);
 
   function switchTab(tab) {
     var modal = document.getElementById("staff-modal");

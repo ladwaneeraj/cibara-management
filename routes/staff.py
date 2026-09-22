@@ -11,7 +11,8 @@ enforced here via @requires_permission; see services/permissions.py:
                                              back-fill a day nobody marked)
     staff.manage           admin             add/edit staff, wages, REVERSALS
     staff.payroll.view     manager + admin   wages, advances, salary figures
-    staff.advance.give     manager + admin   record advances
+    staff.advance.give     manager + admin   record advances and cash
+                                             repayments against them
     staff.salary.pay       manager + admin   pay salaries, log staff meals
     staff.pay.account      admin             pay from bank/UPI — managers are
                                              limited to counter cash (enforced
@@ -346,9 +347,68 @@ def delete_advance(advance_id):
                           "date": adv.get("date")})
         return jsonify(success=True, message="Advance deleted")
     except ValueError as ve:
-        return _fail(ve, 409 if "already deducted" in str(ve) else 400)
+        return _fail(ve, 409 if "already recovered" in str(ve) else 400)
     except Exception as e:
         logger.exception("staff/advance DELETE failed")
+        return _fail(e, 500)
+
+
+@staff_bp.route("/advance/repay", methods=["POST"])
+@requires_permission("staff.advance.give")
+@guard_duplicate_submit()
+def repay_advance():
+    """
+    Body: { staff_id, amount, date?, payment_method: cash|online, note? }
+
+    Cash the staff member hands back against their outstanding advance.
+    Ledger only: no expense row, no counter change (the expenses collection
+    is money out, and this is money in). Refused if it exceeds the balance.
+    Same permission as giving an advance — the operator at the counter is
+    the one who receives the cash.
+    """
+    try:
+        data = request.json or {}
+        out = svc.create_repayment(
+            data.get("staff_id", ""), data.get("amount"),
+            data.get("date", ""), data.get("payment_method", "cash"),
+            data.get("note", ""), g.current_user)
+        rec = out["repayment"]
+        write_log("staff.advance.repay",
+                  target_collection="staff_advance_repayments",
+                  target_id=rec["id"],
+                  metadata={"staff": rec["staff_name"],
+                            "amount": rec["amount"],
+                            "advance_remaining": out["advance_remaining"]})
+        msg = "₹{} repaid by {}".format(rec["amount"], rec["staff_name"])
+        if out["advance_remaining"] > 0:
+            msg += " · ₹{} advance still due".format(out["advance_remaining"])
+        else:
+            msg += " · advance fully cleared"
+        return jsonify(success=True, message=msg, repayment=rec,
+                       advance_remaining=out["advance_remaining"])
+    except ValueError as ve:
+        return _fail(ve)
+    except Exception as e:
+        logger.exception("staff/advance/repay failed")
+        return _fail(e, 500)
+
+
+@staff_bp.route("/advance/repay/<repayment_id>", methods=["DELETE"])
+@requires_permission("staff.manage")   # reversals stay admin-only
+def delete_repayment(repayment_id):
+    try:
+        rec = svc.delete_repayment(repayment_id)
+        write_log("staff.advance.repay.delete",
+                  target_collection="staff_advance_repayments",
+                  target_id=repayment_id,
+                  before={"staff": rec.get("staff_name"),
+                          "amount": rec.get("amount"),
+                          "date": rec.get("date")})
+        return jsonify(success=True, message="Repayment deleted")
+    except ValueError as ve:
+        return _fail(ve)
+    except Exception as e:
+        logger.exception("staff/advance/repay DELETE failed")
         return _fail(e, 500)
 
 

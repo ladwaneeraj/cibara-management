@@ -271,3 +271,40 @@ def test_census_buckets_always_sum_to_the_length_of_the_period():
         c = _census(recs, dates[0], dates[-1], covered)
         assert c["days"] == n
         assert c["present"] + c["absent"] + c["carried"] + c["unmarked"] == n
+
+
+# ── advance repayments ─────────────────────────────────────────────────────
+
+def test_outstanding_advance_subtracts_repayments():
+    advances = [{"amount": 5000}, {"amount": 1000}]
+    payments = [{"advance_deducted": 1500}]
+    repayments = [{"amount": 2000}, {"amount": 500}]
+    assert ledger.outstanding_advance(advances, payments) == 4500
+    assert ledger.outstanding_advance(advances, payments, repayments) == 2000
+    # Signed on purpose: callers refuse the state, they do not clamp it.
+    assert ledger.outstanding_advance(advances, payments,
+                                      [{"amount": 9000}]) < 0
+
+
+def test_outstanding_advance_repayments_optional_and_tolerant():
+    assert ledger.outstanding_advance([{"amount": 100}], [], None) == 100
+    assert ledger.outstanding_advance([{"amount": 100}], [],
+                                      [None, {}, {"amount": "x"}]) == 100
+
+
+def test_validate_repayment():
+    ok = ledger.validate_repayment(2000, 5000, "2026-09-20", "2026-09-22")
+    assert ok is None
+    assert "future" in ledger.validate_repayment(
+        100, 5000, "2026-09-23", "2026-09-22")
+    assert "YYYY-MM-DD" in ledger.validate_repayment(
+        100, 5000, "2026-9-1", "2026-09-22")
+    assert "above zero" in ledger.validate_repayment(
+        0, 5000, "2026-09-20", "2026-09-22")
+    assert "nothing to repay" in ledger.validate_repayment(
+        100, 0, "2026-09-20", "2026-09-22")
+    assert "exceeds" in ledger.validate_repayment(
+        5001, 5000, "2026-09-20", "2026-09-22")
+    # Repaying the whole balance is allowed.
+    assert ledger.validate_repayment(
+        5000, 5000, "2026-09-20", "2026-09-22") is None

@@ -54,6 +54,23 @@ staff_advances                      (one doc per advance given)
     expense_doc_id linked expenses-collection doc (same batch, never orphaned)
     created_at, created_by {userId, name}
 
+staff_advance_repayments            (one doc per cash-back against an advance)
+    staff_id, staff_name
+    date "YYYY-MM-DD", amount int ₹ (always positive)
+    note           str
+    payment_method "cash" | "online"   (how the money came back — recorded
+                                        for the ledger only; see below)
+    created_at, created_by {userId, name}
+
+    A repayment is money the staff member hands BACK outside a payout
+    ("cut this ₹2,000 from my advance"). It reduces the outstanding
+    balance exactly like a salary deduction. Deliberately NOT stored as a
+    negative advance: every sum over staff_advances still means money
+    given, and no expense-row/counter code ever sees a negative amount.
+    It writes NO expense row and does NOT touch the cash counter — the
+    expenses collection is money out, and there is no "money in" row for
+    it to mirror. The physical cash is the operator's to account for.
+
 staff_salary_payments               (one doc per settled payout)
     staff_id, staff_name
     period_start / period_end   "YYYY-MM-DD" (inclusive)
@@ -89,8 +106,9 @@ Invariants
   payable in a later period. Without this a forgotten day would be consumed
   by the payout — locked, worth nothing, and skipped forever after.
 * Attendance on a day a payment actually covered is locked.
-* outstanding_advance (Σ advances − Σ deductions) never goes negative:
-  deleting an advance that was already recovered is refused.
+* outstanding_advance (Σ advances − Σ deductions − Σ repayments) never goes
+  negative: deleting or shrinking an advance that was already recovered is
+  refused, and a repayment can never exceed what is outstanding.
 """
 
 from __future__ import annotations
@@ -109,6 +127,7 @@ _staff_ref = lambda: db.collection("staff")
 _att_ref = lambda: db.collection("staff_attendance")
 _adv_ref = lambda: db.collection("staff_advances")
 _sal_ref = lambda: db.collection("staff_salary_payments")
+_rep_ref = lambda: db.collection("staff_advance_repayments")
 _meal_ref = lambda: db.collection("staff_meal_logs")
 _expenses_ref = lambda: db.collection("expenses")
 
@@ -526,9 +545,17 @@ def salary_payments_for(staff_id: str) -> list:
     return out
 
 
+def repayments_for(staff_id: str) -> list:
+    q = _rep_ref().where(filter=FieldFilter("staff_id", "==", staff_id))
+    out = [_doc_with_id(s) for s in q.stream()]
+    out.sort(key=lambda r: (r.get("date") or "", r.get("created_at") or ""))
+    return out
+
+
 def outstanding_advance(staff_id: str) -> int:
     return ledger.outstanding_advance(advances_for(staff_id),
-                                      salary_payments_for(staff_id))
+                                      salary_payments_for(staff_id),
+                                      repayments_for(staff_id))
 
 
 def paid_periods_by_staff() -> dict:
@@ -710,11 +737,11 @@ def delete_advance(advance_id: str) -> dict:
     staff_id = adv.get("staff_id", "")
 
     remaining = [a for a in advances_for(staff_id) if a["id"] != advance_id]
-    if ledger.outstanding_advance(remaining,
-                                  salary_payments_for(staff_id)) < 0:
+    if ledger.outstanding_advance(remaining, salary_payments_for(staff_id),
+                                  repayments_for(staff_id)) < 0:
         raise ValueError(
-            "This advance was already deducted in a salary payment — "
-            "delete that salary payment first.")
+            "This advance was already recovered (salary deduction or cash "
+            "repayment) — reverse that entry first.")
 
     batch = db.batch()
     batch.delete(_adv_ref().document(advance_id))
@@ -733,6 +760,65 @@ def delete_advance(advance_id: str) -> dict:
     logger.info("staff: advance %s deleted (₹%s, counter reversal ₹%s)",
                 advance_id, adv.get("amount"), reversal)
     return adv
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Advance repayments — cash handed back against the balance
+# ═══════════════════════════════════════════════════════════════════════════
+
+def create_repayment(staff_id: str, amount, date: str, payment_method: str,
+                     note: str, user: Optional[dict]) -> dict:
+    """
+    Record cash a staff member handed back against their advance. One doc,
+    no expense row, no counter touch (see the schema note at the top).
+    Refused when it would take the outstanding balance below zero.
+    """
+    staff = get_staff(staff_id)
+    if not staff:
+        raise ValueError("Staff member not found.")
+    date = str(date or "").strip() or _ist_today()
+    if payment_method not in VALID_METHODS:
+        raise ValueError("payment_method must be cash or online.")
+    try:
+        amt = int(round(float(amount)))
+    except (TypeError, ValueError):
+        raise ValueError("Repayment amount must be a number.")
+    outstanding = outstanding_advance(staff_id)
+    err = ledger.validate_repayment(amt, outstanding, date, _ist_today())
+    if err:
+        raise ValueError(err)
+    name = staff.get("name", "")
+    doc = {
+        "staff_id": staff_id,
+        "staff_name": name,
+        "date": date,
+        "amount": amt,
+        "note": str(note or "").strip()[:120],
+        "payment_method": payment_method,
+        "created_at": _now_utc(),
+        "created_by": _user_stamp(user),
+    }
+    ref = _rep_ref().document()
+    ref.set(doc)
+    doc["id"] = ref.id
+    logger.info("staff: advance repayment ₹%s from %s (%s) via %s",
+                amt, name, staff_id, payment_method)
+    return {"repayment": doc, "advance_remaining": outstanding - amt}
+
+
+def delete_repayment(repayment_id: str) -> dict:
+    """
+    Remove a repayment. The outstanding balance goes UP by its amount, so
+    this can never break the non-negative invariant; nothing else to unwind.
+    """
+    snap = _rep_ref().document(repayment_id).get()
+    if not snap.exists:
+        raise ValueError("Repayment not found.")
+    rec = _doc_with_id(snap)
+    _rep_ref().document(repayment_id).delete()
+    logger.info("staff: advance repayment %s deleted (%s, ₹%s)",
+                repayment_id, rec.get("staff_name"), rec.get("amount"))
+    return rec
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -769,7 +855,7 @@ def salary_preview(staff_id: str, period_start: str, period_end: str,
                                      period_start, period_end, adjustment,
                                      exclude=skipped)
     outstanding = max(0, ledger.outstanding_advance(
-        advances_for(staff_id), payments))
+        advances_for(staff_id), payments, repayments_for(staff_id)))
     payable = computed["payable_before_advance"]
     # Meals for the same days the salary covers. Not optional the way the
     # advance deduction is: if the staff member eats here, the food has
@@ -838,7 +924,7 @@ def pay_salary(staff_id: str, period_start: str, period_end: str,
         if valid_range else []
     payments = salary_payments_for(staff_id)
     outstanding = max(0, ledger.outstanding_advance(
-        advances_for(staff_id), payments))
+        advances_for(staff_id), payments, repayments_for(staff_id)))
     covered = ledger.covered_dates(period_start, period_end, payments) \
         if valid_range else set()
     # Days with no attendance record. A payout must not consume them: they
@@ -1438,11 +1524,12 @@ def update_advance(advance_id: str, fields: dict,
     staff_id = adv.get("staff_id", "")
     probe = [a for a in advances_for(staff_id) if a.get("id") != advance_id]
     probe.append(dict(adv, **changes))
-    if ledger.outstanding_advance(probe, salary_payments_for(staff_id)) < 0:
+    if ledger.outstanding_advance(probe, salary_payments_for(staff_id),
+                                  repayments_for(staff_id)) < 0:
         raise ValueError(
-            "₹{} is less than what has already been deducted from this "
-            "advance in a salary payment. Reverse that payment first, then "
-            "change the advance.".format(amount))
+            "₹{} is less than what has already been recovered from this "
+            "advance (salary deduction or cash repayment). Reverse that "
+            "entry first, then change the advance.".format(amount))
 
     changes.update(_edit_stamp(user))
 
@@ -1611,22 +1698,19 @@ def staff_overview(include_inactive: bool = False,
         f_att = ex.submit(attendance_range, month_start, today)
         f_adv = ex.submit(_all_advances) if include_payroll else None
         f_pay = ex.submit(_all_salary_payments) if include_payroll else None
+        f_rep = ex.submit(_all_repayments) if include_payroll else None
         staff = f_staff.result()
         month_att = f_att.result()
         advances = f_adv.result() if f_adv else []
         payments = f_pay.result() if f_pay else []
+        repayments = f_rep.result() if f_rep else []
     if not staff:
         return []
 
-    att_by_staff: dict = {}
-    for a in month_att:
-        att_by_staff.setdefault(a.get("staff_id"), []).append(a)
-    adv_by_staff: dict = {}
-    for a in advances:
-        adv_by_staff.setdefault(a.get("staff_id"), []).append(a)
-    pay_by_staff: dict = {}
-    for p in payments:
-        pay_by_staff.setdefault(p.get("staff_id"), []).append(p)
+    att_by_staff = _by_staff(month_att)
+    adv_by_staff = _by_staff(advances)
+    pay_by_staff = _by_staff(payments)
+    rep_by_staff = _by_staff(repayments)
 
     out = []
     for s in staff:
@@ -1652,7 +1736,7 @@ def staff_overview(include_inactive: bool = False,
             row["meal_rate"] = int(s.get("meal_rate") or 0)
             row["notes"] = s.get("notes", "")
             row["outstanding_advance"] = max(0, ledger.outstanding_advance(
-                adv_by_staff.get(sid, []), s_pay))
+                adv_by_staff.get(sid, []), s_pay, rep_by_staff.get(sid, [])))
             row["paid_until"] = max(
                 (p.get("period_end") or "" for p in s_pay), default="")
             row["suggested_period_start"] = ledger.suggest_period_start(s_pay)
@@ -1667,13 +1751,15 @@ def staff_detail(staff_id: str) -> dict:
         raise ValueError("Staff member not found.")
     advances = advances_for(staff_id)
     payments = salary_payments_for(staff_id)
+    repayments = repayments_for(staff_id)
     return {
         "staff": staff,
         "advances": advances,
         "salary_payments": payments,
+        "repayments": repayments,
         "meal_logs": meal_logs_for(staff_id),
         "outstanding_advance": max(
-            0, ledger.outstanding_advance(advances, payments)),
+            0, ledger.outstanding_advance(advances, payments, repayments)),
         "suggested_period_start": ledger.suggest_period_start(payments),
     }
 
@@ -1688,6 +1774,18 @@ def _all_advances() -> list:
 
 def _all_salary_payments() -> list:
     return [_doc_with_id(s) for s in _sal_ref().stream()]
+
+
+def _all_repayments() -> list:
+    return [_doc_with_id(s) for s in _rep_ref().stream()]
+
+
+def _by_staff(docs: list) -> dict:
+    """{staff_id: [doc, …]} — the grouping every whole-collection read needs."""
+    out: dict = {}
+    for d in docs:
+        out.setdefault(d.get("staff_id"), []).append(d)
+    return out
 
 
 def _month_add(ym: str, n: int) -> str:
@@ -1761,10 +1859,12 @@ def payroll_analytics(months: int = 6, month: str = "") -> dict:
     with ThreadPoolExecutor(max_workers=4) as ex:
         f_adv = ex.submit(_all_advances)
         f_pay = ex.submit(_all_salary_payments)
+        f_rep = ex.submit(_all_repayments)
         f_att = ex.submit(attendance_range, period_start, period_end)
         f_staff = ex.submit(list_staff, False)
         advances = f_adv.result()
         payments = f_pay.result()
+        repayments = f_rep.result()
         month_att = f_att.result()
         _staff_pre = f_staff.result()
 
@@ -1788,16 +1888,10 @@ def payroll_analytics(months: int = 6, month: str = "") -> dict:
         months_out.append(row)
 
     # ── per-staff stats for the selected month ──
-    adv_by_staff: dict = {}
-    for a in advances:
-        adv_by_staff.setdefault(a.get("staff_id"), []).append(a)
-    pay_by_staff: dict = {}
-    for p in payments:
-        pay_by_staff.setdefault(p.get("staff_id"), []).append(p)
-
-    att_by_staff: dict = {}
-    for a in month_att:
-        att_by_staff.setdefault(a.get("staff_id"), []).append(a)
+    adv_by_staff = _by_staff(advances)
+    pay_by_staff = _by_staff(payments)
+    rep_by_staff = _by_staff(repayments)
+    att_by_staff = _by_staff(month_att)
     today_present = sum(
         1 for a in month_att
         if a.get("date") == today and a.get("status") in ("full", "half"))
@@ -1810,7 +1904,8 @@ def payroll_analytics(months: int = 6, month: str = "") -> dict:
         summary = ledger.attendance_summary(rows, period_start, period_end)
         presence = ledger.presence_summary(rows, period_start, period_end)
         outstanding = max(0, ledger.outstanding_advance(
-            adv_by_staff.get(sid, []), pay_by_staff.get(sid, [])))
+            adv_by_staff.get(sid, []), pay_by_staff.get(sid, []),
+            rep_by_staff.get(sid, [])))
         outstanding_total += outstanding
         wage = int(s.get("daily_wage", 0) or 0)
         # Everyone is measured against the days in the period. A rotating
@@ -1958,19 +2053,10 @@ def month_register(month: str) -> dict:
     end = month + "-31"          # string bound — safe for lexicographic dates
     today = _ist_today()
 
-    advances = _all_advances()
-    payments = _all_salary_payments()
-    adv_by_staff: dict = {}
-    for a in advances:
-        adv_by_staff.setdefault(a.get("staff_id"), []).append(a)
-    pay_by_staff: dict = {}
-    for p in payments:
-        pay_by_staff.setdefault(p.get("staff_id"), []).append(p)
-
-    att = attendance_range(start, end)
-    att_by_staff: dict = {}
-    for a in att:
-        att_by_staff.setdefault(a.get("staff_id"), []).append(a)
+    adv_by_staff = _by_staff(_all_advances())
+    pay_by_staff = _by_staff(_all_salary_payments())
+    rep_by_staff = _by_staff(_all_repayments())
+    att_by_staff = _by_staff(attendance_range(start, end))
 
     rows = []
     for s in list_staff(include_inactive=True):
@@ -1985,10 +2071,13 @@ def month_register(month: str) -> dict:
         paid_net = sum(int(p.get("net_paid", 0) or 0) for p in pays_month)
         deducted = sum(int(p.get("advance_deducted", 0) or 0)
                        for p in pays_month)
+        repaid_month = sum(int(r.get("amount", 0) or 0)
+                           for r in rep_by_staff.get(sid, [])
+                           if str(r.get("date") or "").startswith(month))
         # Skip rows with zero activity for inactive staff — keeps the
         # register clean without hiding anyone who worked or was paid.
         if (not s.get("active", True) and summary["marked_days"] == 0
-                and adv_month == 0 and not pays_month):
+                and adv_month == 0 and repaid_month == 0 and not pays_month):
             continue
         wage = int(s.get("daily_wage", 0) or 0)
         rows.append({
@@ -2004,7 +2093,9 @@ def month_register(month: str) -> dict:
             "advances_taken": adv_month,
             "salary_paid_net": paid_net,
             "advance_recovered": deducted,
+            "advance_repaid": repaid_month,
             "outstanding_advance": max(0, ledger.outstanding_advance(
-                adv_by_staff.get(sid, []), pay_by_staff.get(sid, []))),
+                adv_by_staff.get(sid, []), pay_by_staff.get(sid, []),
+                rep_by_staff.get(sid, []))),
         })
     return {"month": month, "generated_on": today, "rows": rows}

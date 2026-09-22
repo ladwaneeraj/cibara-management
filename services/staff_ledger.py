@@ -49,6 +49,14 @@ advance      Money handed to a staff member ahead of salary:
                  {id, staff_id, date, amount (int ₹)}
              Advances accumulate into an outstanding balance.
 
+repayment    Cash a staff member hands BACK against that balance, outside
+             of a salary payout ("here is ₹2,000, cut it from my advance"):
+                 {id, staff_id, date, amount (int ₹)}
+             Positive amounts only — a repayment is never stored as a
+             negative advance, so any sum over the advances list still
+             means "money given". It reduces the outstanding balance the
+             same way a salary deduction does, and can never exceed it.
+
 salary payment
              One settled payout for a period:
                  {id, staff_id, period_start, period_end,
@@ -57,8 +65,8 @@ salary payment
              advance_deducted reduces the outstanding advance; whatever
              remains carries forward automatically (it is never re-entered
              anywhere — the outstanding is always derived from the raw
-             advance / deduction history, so it cannot drift or be
-             double-counted).
+             advance / deduction / repayment history, so it cannot drift
+             or be double-counted).
 
 Money is whole rupees (int) throughout, matching the expenses collection.
 """
@@ -254,22 +262,51 @@ def presence_summary(attendance: list, start: str, end: str) -> dict:
 # Advances — outstanding balance & carry-forward
 # ───────────────────────────────────────────────────────────────────────────
 
-def outstanding_advance(advances: list, salary_payments: list) -> int:
+def outstanding_advance(advances: list, salary_payments: list,
+                        repayments: list = None) -> int:
     """
     The advance balance still to be recovered from the staff member:
 
-        Σ advance.amount  −  Σ payment.advance_deducted
+        Σ advance.amount  −  Σ payment.advance_deducted  −  Σ repayment.amount
 
     Derived from raw history every time — nothing is carried in a mutable
-    counter, so a deleted advance or reversed payment self-corrects.
-    A healthy ledger never goes negative; the (signed) value is returned
-    as-is so callers can detect and refuse a state that would break the
-    invariant (e.g. deleting an advance that was already deducted).
+    counter, so a deleted advance, reversed payment or deleted repayment
+    self-corrects. A healthy ledger never goes negative; the (signed) value
+    is returned as-is so callers can detect and refuse a state that would
+    break the invariant (e.g. deleting an advance that was already
+    deducted or repaid).
     """
     given = sum(_to_int((a or {}).get("amount")) for a in advances or [])
     recovered = sum(_to_int((p or {}).get("advance_deducted"))
                     for p in salary_payments or [])
-    return given - recovered
+    repaid = sum(_to_int((r or {}).get("amount")) for r in repayments or [])
+    return given - recovered - repaid
+
+
+def validate_repayment(amount, outstanding: int, date: str,
+                       today: str) -> Optional[str]:
+    """
+    Validate a cash repayment against an advance. Returns an error message
+    (str) or None when the repayment is sound.
+
+    The only money rule: it must be positive and must not exceed what is
+    outstanding — a staff member cannot "repay" more than they owe, because
+    the ledger has no way to hold money the lodge owes them.
+    """
+    if not _valid_date(date):
+        return "Date must be YYYY-MM-DD."
+    if _valid_date(today) and date > today:
+        return "A repayment cannot be dated in the future."
+    amt = _to_int(amount)
+    if amt <= 0:
+        return "Repayment amount must be above zero."
+    due = max(0, _to_int(outstanding))
+    if due <= 0:
+        return "No advance is outstanding — nothing to repay."
+    if amt > due:
+        return ("Repayment (₹{}) exceeds the outstanding advance "
+                "(₹{}).").format(amt, due)
+    return None
 
 
 # ───────────────────────────────────────────────────────────────────────────

@@ -42,7 +42,7 @@
     _gridLoadedMonth: null, // month whose attendance is already in gridData
 
     // Quick pay/advance panel opened from a grid row (admin only):
-    // { staffId, mode: "pay"|"advance", start, end, anchor, preview }
+    // { staffId, mode: "pay"|"advance"|"repay", start, end, anchor, preview }
     quickPay: null,
   };
 
@@ -1373,7 +1373,7 @@
     renderGrid();
   }
 
-  // opts: { mode: "pay"|"advance", host: "attendance"|"payroll", keepOpen: bool }
+  // opts: { mode: "pay"|"advance"|"repay", host: "attendance"|"payroll", keepOpen: bool }
   // `keepOpen` suppresses the tap-again-to-close toggle (used by the
   // programmatic salary redirect from the expense modal).
   function openQuickPay(staffId, opts) {
@@ -1396,7 +1396,7 @@
     // any old caller asking for it lands on Salary.
     if (mode === "meals") mode = "pay";
     if (mode === "pay" && !can("staff.salary.pay")) mode = "advance";
-    if (mode === "advance" && !can("staff.advance.give")) mode = "pay";
+    if ((mode === "advance" || mode === "repay") && !can("staff.advance.give")) mode = "pay";
     // Open with NO dates pre-selected — the operator picks the range
     // (calendar or by tapping days on the grid) before anything calculates.
     state.quickPay = {
@@ -1795,6 +1795,12 @@
       (can("staff.advance.give")
         ? '<button data-qpmode="advance" class="' + (qp.mode === "advance" ? "on" : "") + '">Advance</button>'
         : "") +
+      // Repay = staff hands cash back against their advance. Only offered
+      // while something is actually outstanding; the server refuses it
+      // otherwise, so the button would only ever produce an error.
+      (can("staff.advance.give") && Number(s.outstanding_advance || 0) > 0
+        ? '<button data-qpmode="repay" class="' + (qp.mode === "repay" ? "on" : "") + '">Repay</button>'
+        : "") +
       "";
 
     var head =
@@ -1883,6 +1889,34 @@
         "</div>" +
         '<button class="stf-btn primary stf-qp-paybtn" id="stf-qp-confirm" disabled>' +
         '<i class="fas fa-check"></i> <span id="stf-qp-paylbl">Pay salary</span></button>';
+    } else if (qp.mode === "repay") {
+      var due = Number(s.outstanding_advance || 0);
+      body +=
+        '<div class="stf-qp-fieldrow">' +
+        '  <div class="stf-qp-field">' +
+        '    <label class="stf-qp-lbl">Amount received (₹)</label>' +
+        '    <input type="number" id="stf-qp-amount" class="stf-qp-input big" min="1" max="' + due + '" placeholder="0">' +
+        "  </div>" +
+        '  <div class="stf-qp-field">' +
+        '    <label class="stf-qp-lbl">Date</label>' +
+        '    <input type="date" id="stf-qp-adv-date" class="stf-qp-input" value="' + today + '" max="' + today + '">' +
+        "  </div>" +
+        "</div>" +
+        '<div class="stf-qp-field">' +
+        '  <label class="stf-qp-lbl">Note (optional)</label>' +
+        '  <input type="text" id="stf-qp-note" class="stf-qp-input" maxlength="120" placeholder="e.g. returned in cash">' +
+        "</div>" +
+        '<div class="stf-qp-field">' +
+        '  <label class="stf-qp-lbl">Received as</label>' +
+        sourceHtml("stf-qp-source", { receive: true })
+          .replace('<div class="form-group"><label class="form-label">Paid from</label>', "")
+          .replace(/<\/div>$/, "") +
+        "</div>" +
+        '<button class="stf-btn primary stf-qp-paybtn" id="stf-qp-confirm">' +
+        '<i class="fas fa-rotate-left"></i> Record repayment</button>' +
+        '<div class="stf-qp-help" style="margin-top:0.5rem;">Cuts ' + rup(due) +
+        ' advance due. Up to the full amount can be repaid. Ledger entry only — ' +
+        'no expense row is written and the cash counter is not changed.</div>';
     } else {
       var srcInnerA = srcInnerShared;
       body +=
@@ -2032,6 +2066,7 @@
     if (confirmBtn) confirmBtn.addEventListener("click", function () {
       var m = state.quickPay && state.quickPay.mode;
       if (m === "advance") return submitQuickAdvance(confirmBtn);
+      if (m === "repay") return submitQuickRepay(confirmBtn);
       submitQuickPay(confirmBtn);
     });
 
@@ -2117,6 +2152,35 @@
         state.insights = null;
         _refreshMoneyViews();
         loadGrid(true);         // force — the advance ledger just changed
+      })
+      .catch(function (e) { btn.disabled = false; notify(e.message, "error"); });
+  }
+
+  function submitQuickRepay(btn) {
+    var qp = state.quickPay;
+    var s = _qpStaff();
+    if (!qp || !s) return;
+    var amount = parseInt(document.getElementById("stf-qp-amount")?.value, 10);
+    if (!(amount > 0)) return notify("Enter the amount received", "error");
+    var due = Number(s.outstanding_advance || 0);
+    if (amount > due) return notify("Only " + rup(due) + " is outstanding", "error");
+    var src = readSource("stf-qp-source");
+    btn.disabled = true;
+    post("/staff/advance/repay", {
+      staff_id: qp.staffId,
+      amount: amount,
+      date: document.getElementById("stf-qp-adv-date")?.value || "",
+      note: (document.getElementById("stf-qp-note")?.value || "").trim(),
+      payment_method: src.payment_method,
+    })
+      .then(function (json) {
+        notify(json.message || "Repayment recorded", "success");
+        state.quickPay = null;
+        state.staffLoaded = false;
+        state.insights = null;
+        // No expense row was written, so the transaction views need no
+        // nudge — only the staff cards / ledger carry the new balance.
+        loadGrid(true);
       })
       .catch(function (e) { btn.disabled = false; notify(e.message, "error"); });
   }
@@ -2425,7 +2489,8 @@
         var head = ["Name", "Designation", "Wage/day (Rs)", "Full days",
           "Half days", "Absent", "Days worked", "Wages earned (Rs)",
           "Advances taken (Rs)", "Salary paid net (Rs)",
-          "Advance recovered (Rs)", "Advance outstanding (Rs)"];
+          "Advance recovered (Rs)", "Advance repaid (Rs)",
+          "Advance outstanding (Rs)"];
         var lines = [csvCell("Staff payroll register — " + json.month +
           " (generated " + json.generated_on + ")"), head.map(csvCell).join(",")];
         (json.rows || []).forEach(function (r) {
@@ -2433,7 +2498,8 @@
             r.name + (r.active === false ? " (inactive)" : ""),
             r.designation, r.daily_wage, r.full_days, r.half_days,
             r.absent_days, r.days_worked, r.wages_earned, r.advances_taken,
-            r.salary_paid_net, r.advance_recovered, r.outstanding_advance,
+            r.salary_paid_net, r.advance_recovered, r.advance_repaid || 0,
+            r.outstanding_advance,
           ].map(csvCell).join(","));
         });
         // ﻿ BOM so Excel opens it as UTF-8 (₹-free headers regardless).
@@ -2768,6 +2834,22 @@
         '    <span><i class="fas fa-book"></i> Books (opening)</span><small>old advance — no expense entry</small>' +
         "  </button>"
       : "";
+    // Money coming IN (advance repayment). The custody rule is about
+    // paying out of the account, so both options are open to every role
+    // that can record it; readSource() maps them to cash / online as usual.
+    if (opts && opts.receive) {
+      return (
+        '<div class="form-group"><label class="form-label">Paid from</label>' +
+        '<div class="stf-source" id="' + id + '">' +
+        '  <button type="button" data-src="counter" class="sel">' +
+        '    <span><i class="fas fa-store"></i> Cash</span><small>handed over at the counter</small>' +
+        "  </button>" +
+        '  <button type="button" data-src="account">' +
+        '    <span><i class="fas fa-university"></i> Account / UPI</span><small>bank or online</small>' +
+        "  </button>" +
+        "</div></div>"
+      );
+    }
     return (
       '<div class="form-group"><label class="form-label">Paid from</label>' +
       '<div class="stf-source" id="' + id + '">' +
@@ -2822,6 +2904,12 @@
             sort: (p.paid_on || p.period_end || "") + "S",
           });
         });
+        (json.repayments || []).forEach(function (r) {
+          items.push({
+            kind: "repay", id: r.id, date: r.date, repayment: r,
+            sort: (r.date || "") + "R" + (r.created_at || ""),
+          });
+        });
         items.sort(function (a, b) { return a.sort < b.sort ? 1 : -1; });
 
         // ── advance totals for the summary strip ──
@@ -2830,6 +2918,9 @@
         }, 0);
         var advRecovered = (json.salary_payments || []).reduce(function (t, p) {
           return t + (Number(p.advance_deducted) || 0);
+        }, 0);
+        var advRepaid = (json.repayments || []).reduce(function (t, r) {
+          return t + (Number(r.amount) || 0);
         }, 0);
 
         var outstanding = Number(json.outstanding_advance || 0);
@@ -2841,6 +2932,10 @@
           '  <div><span>Advance given</span><b>' + rup(advGiven) + "</b></div>" +
           '  <div class="arrow">−</div>' +
           '  <div><span>Cut from salaries</span><b>' + rup(advRecovered) + "</b></div>" +
+          (advRepaid
+            ? '  <div class="arrow">−</div>' +
+              '  <div><span>Repaid in cash</span><b>' + rup(advRepaid) + "</b></div>"
+            : "") +
           '  <div class="arrow">=</div>' +
           '  <div class="' + (outstanding > 0 ? "due" : "clear") + '">' +
           '    <span>Still to recover</span><b>' + rup(outstanding) + "</b></div>" +
@@ -2866,6 +2961,17 @@
                 "</span>";
               amtHtml = '<div class="amt adv-amt">' + rup(a.amount) + "</div>" +
                 '<div class="amt-lbl">to recover</div>';
+            } else if (it.kind === "repay") {
+              var r = it.repayment;
+              var rBy = _byLine(r.created_by);
+              title = "Advance repaid" + (r.note ? " — " + esc(r.note) : "");
+              detail = '<span class="muted">' + esc(fmtD(r.date)) +
+                (r.payment_method === "online" ? " · account" : " · cash") +
+                " · ledger only" +
+                (rBy ? " · " + esc(rBy) : "") +
+                "</span>";
+              amtHtml = '<div class="amt sal-amt">− ' + rup(r.amount) + "</div>" +
+                '<div class="amt-lbl">handed back</div>';
             } else {
               var p = it.payment;
               var dayWord = Number(p.days_worked) === 1 ? "day" : "days";
@@ -2906,7 +3012,8 @@
             html +=
               '<div class="stf-ledger-item">' +
               '  <div class="ic ' + (it.kind === "advance" ? "adv" : "sal") + '">' +
-              '    <i class="fas ' + (it.kind === "advance" ? "fa-hand-holding-usd" : "fa-money-bill-wave") + '"></i></div>' +
+              '    <i class="fas ' + (it.kind === "advance" ? "fa-hand-holding-usd"
+                : it.kind === "repay" ? "fa-rotate-left" : "fa-money-bill-wave") + '"></i></div>' +
               '  <div class="what"><div class="l1">' + title + "</div>" +
               '    <div class="l2">' + detail + "</div></div>" +
               '  <div class="amt-col">' + amtHtml + "</div>" +
@@ -2936,12 +3043,16 @@
             var kind = btn.dataset.kind, id = btn.dataset.id;
             var q = kind === "advance"
               ? "Delete this advance? Its expense entry is removed too."
+              : kind === "repay"
+              ? "Delete this repayment? The amount becomes outstanding again."
               : "Reverse this salary payment? The period opens again and " +
                 "any deducted advance becomes outstanding once more.";
-            stfConfirm(q, { okText: kind === "advance" ? "Delete" : "Reverse", danger: true }).then(function (ok) {
+            stfConfirm(q, { okText: kind === "salary" ? "Reverse" : "Delete", danger: true }).then(function (ok) {
               if (!ok) return;
               var url = kind === "advance"
                 ? "/staff/advance/" + encodeURIComponent(id)
+                : kind === "repay"
+                ? "/staff/advance/repay/" + encodeURIComponent(id)
                 : "/staff/salary/" + encodeURIComponent(id);
               del(url)
                 .then(function (json) {

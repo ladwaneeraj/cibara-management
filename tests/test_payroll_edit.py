@@ -384,7 +384,7 @@ class TestAdvanceEdit(_PayrollCase):
         self.add_salary(net_paid=1000, advance_deducted=1500)
         with self.assertRaises(ValueError) as ctx:
             svc.update_advance(adv_id, {"amount": 800})
-        self.assertIn("already been deducted", str(ctx.exception))
+        self.assertIn("already been recovered", str(ctx.exception))
         # Nothing was written: the guard runs before the batch commits.
         self.assertEqual(self.db.data("staff_advances")[adv_id]["amount"], 2000)
         self.assertEqual(self.counter(), 10000)

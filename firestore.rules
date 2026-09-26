@@ -18,10 +18,11 @@ service cloud.firestore {
 
     // ─── Helpers ───────────────────────────────────────────────────────
     function isSignedIn()      { return request.auth != null; }
+    function hasRole()         { return isSignedIn() && 'role' in request.auth.token; }
     function role()            { return request.auth.token.role; }
-    function isAdmin()         { return isSignedIn() && role() == 'admin'; }
-    function isManager()       { return isSignedIn() && role() == 'manager'; }
-    function isHousekeeping()  { return isSignedIn() && role() == 'housekeeping'; }
+    function isAdmin()         { return hasRole() && role() == 'admin'; }
+    function isManager()       { return hasRole() && role() == 'manager'; }
+    function isHousekeeping()  { return hasRole() && role() == 'housekeeping'; }
     function isStaff()         { return isAdmin() || isManager(); }
     function isAnyAuthed()     { return isAdmin() || isManager() || isHousekeeping(); }
 
@@ -113,7 +114,9 @@ service cloud.firestore {
     // These are written by the backend only; clients never touch them
     // directly. Lock them down to backend-only (admin token suffices in
     // the rare case a manual fix is needed via the admin console).
-    match /daily_counters/{id}        { allow read, write: if isAdmin(); }
+    // daily_counters is also streamed by the dashboard (google_sync.js,
+    // listener-first mode) for the next check-in serial, so manager reads it.
+    match /daily_counters/{id}        { allow read: if isStaff(); allow write: if isAdmin(); }
     match /transaction_metadata/{id}  { allow read: if isStaff(); allow write: if isAdmin(); }
     match /totals/{id}                { allow read: if isStaff(); allow write: if isAdmin(); }
     match /logs/{id}                  { allow read: if isStaff(); allow write: if isAdmin(); }
@@ -135,6 +138,297 @@ service cloud.firestore {
       allow create: if isAdmin();
       allow update: if false;
       allow delete: if false;
+    }
+
+    // ─────────────────────────────────────────────────────────────────
+    // Guest portal (QR in every room, same code everywhere)
+    //
+    // A guest is a phone signed in ANONYMOUSLY: no role claim, so every
+    // staff check above is false for it. It can reach exactly the
+    // documents below, in exactly the states below.
+    //
+    // The chain every guest read or write has to survive, every time:
+    //
+    //   the phone's uid
+    //     -> has guestSessions/{uid}, status active, not expired
+    //       -> naming a room that is still `occupied`
+    //         -> whose guest mobile STILL ends with the 10 digits the phone
+    //            proved (so the next guest in that room, with a different
+    //            number, silently ends the previous phone)
+    //           -> with the portal switched on in settings/guest_portal
+    //
+    // The stay is identified by the room's live `active_bill_id`. Requests
+    // carry it, and a phone may only read requests whose stayId equals the
+    // one its room is on RIGHT NOW: a previous stay in the same room is a
+    // different id, so it is invisible. The Flask checkout also stamps the
+    // session `closed`, so the phone finds out immediately, not on its
+    // next tap. Nothing in the chain comes from the request.
+    // ─────────────────────────────────────────────────────────────────
+
+    function isGuestUser() {
+      return isSignedIn()
+        && !hasRole()
+        && request.auth.token.firebase.sign_in_provider == 'anonymous';
+    }
+
+    function portalSettings() {
+      return get(/databases/$(database)/documents/settings/guest_portal).data;
+    }
+
+    function portalOn() {
+      return exists(/databases/$(database)/documents/settings/guest_portal)
+        && portalSettings().enabled == true;
+    }
+
+    function portalSetting(key, fallback) {
+      let s = portalSettings();
+      return key in s ? s[key] : fallback;
+    }
+
+    function roomPath(roomNo) {
+      return /databases/$(database)/documents/rooms/$(roomNo);
+    }
+
+    function sessionPath() {
+      return /databases/$(database)/documents/guestSessions/$(request.auth.uid);
+    }
+
+    function attemptsPath() {
+      return /databases/$(database)/documents/guestLoginAttempts/$(request.auth.uid);
+    }
+
+    /**
+     * The mobile stored on the room (any format staff typed: "98765 43210",
+     * "+91-9876543210", "09876543210", or a bare number) ends with the 10
+     * digits the phone sent. The key is digits-only by construction, so it
+     * is safe inside the regex.
+     */
+    function mobileMatches(room, key) {
+      let raw = room.guest.mobile;
+      let digits = (raw is string ? raw : string(raw)).replace('[^0-9]', '');
+      return key is string
+        && key.matches('^[0-9]{10}$')
+        && digits.size() >= 10
+        && digits.matches('.*' + key);
+    }
+
+    /** Room still occupied, on a stay, by the guest whose number was proven. */
+    function roomOpenFor(roomNo, key) {
+      let r = get(roomPath(roomNo)).data;
+      return r.status == 'occupied'
+        && r.active_bill_id is string
+        && r.guest is map
+        && mobileMatches(r, key);
+    }
+
+    function guestSession() { return get(sessionPath()).data; }
+
+    function sessionLive(cs) {
+      return cs.status == 'active'
+        && cs.expiresAtMs > request.time.toMillis()
+        && portalOn()
+        && roomOpenFor(cs.room, cs.mobileKey);
+    }
+
+    /** A phone that has proven the number, for a stay that is still open. */
+    function guest() {
+      return isGuestUser()
+        && exists(sessionPath())
+        && sessionLive(guestSession());
+    }
+
+    /** The stay the proven phone's room is on right now. */
+    function guestStayId() {
+      return get(roomPath(guestSession().room)).data.active_bill_id;
+    }
+
+    /**
+     * Sliding expiry the phone proposes and the server bounds: in the
+     * future, and no further ahead than sessionHours (default 24) plus a
+     * minute for clock drift.
+     */
+    function guestExpiryOk(expiresAtMs) {
+      return expiresAtMs is number
+        && expiresAtMs > request.time.toMillis()
+        && expiresAtMs <= request.time.toMillis()
+             + portalSetting('sessionHours', 24) * 3600000 + 300000;
+    }
+
+    /** Phone clocks drift; five minutes either side of Google's clock. */
+    function nearNow(ms) {
+      return ms is number
+        && ms >= request.time.toMillis() - 300000
+        && ms <= request.time.toMillis() + 300000;
+    }
+
+    /** Which staff screen handles a request kind. Mirrors services/guest_portal.py. */
+    function teamFor(kind) {
+      return kind in ['housekeeping', 'extra_items', 'laundry', 'do_not_disturb']
+        ? 'housekeeping' : 'desk';
+    }
+
+    function kindAllowed(kind) {
+      let s = portalSettings();
+      return kind in ['room_service', 'housekeeping', 'extra_items', 'laundry',
+                      'maintenance', 'wake_up', 'late_checkout', 'taxi',
+                      'do_not_disturb', 'complaint']
+        && (!('kinds' in s) || !(kind in s.kinds) || s.kinds[kind] == true);
+    }
+
+    // Portal settings: hotel name, reception phone, Wi-Fi, house rules,
+    // which request kinds are on. Read by staff and by a PROVEN guest
+    // (never by a phone that has only scanned the code: the Wi-Fi
+    // password must not leak to anyone holding the URL). Admin writes.
+    match /settings/guest_portal {
+      allow read:  if isAnyAuthed() || guest();
+      allow write: if isAdmin();
+    }
+
+    // A proven guest reads ITS OWN room document (guest name, check-in
+    // time, the stay id it files requests under). No other room, ever.
+    match /rooms/{roomId} {
+      allow read: if guest() && guestSession().room == roomId;
+    }
+
+    // Wrong-number counter, one per phone. The phone bumps it BEFORE each
+    // login try; the session create below refuses once it passes 5.
+    match /guestLoginAttempts/{uid} {
+      allow read:   if isStaff() || (isGuestUser() && request.auth.uid == uid);
+      allow create: if isGuestUser()
+        && request.auth.uid == uid
+        && request.resource.data.keys().hasOnly(['count', 'updatedAtMs'])
+        && request.resource.data.count == 1
+        && nearNow(request.resource.data.updatedAtMs);
+      allow update: if isGuestUser()
+        && request.auth.uid == uid
+        && request.resource.data.keys().hasOnly(['count', 'updatedAtMs'])
+        && request.resource.data.count == resource.data.count + 1
+        && request.resource.data.count <= 6
+        && nearNow(request.resource.data.updatedAtMs);
+      allow delete: if false;
+    }
+
+    match /guestSessions/{uid} {
+      function joinValid(d) {
+        return portalOn()
+          && d.keys().hasOnly(['uid', 'room', 'mobileKey', 'status', 'createdAtMs',
+                               'lastActivityAtMs', 'expiresAtMs', 'requestCount',
+                               'lastRequestAtMs'])
+          && d.uid == request.auth.uid
+          && d.room is string
+          && d.room.size() > 0
+          && d.room.size() <= 10
+          && exists(roomPath(d.room))
+          && roomOpenFor(d.room, d.mobileKey)
+          && d.status == 'active'
+          && nearNow(d.createdAtMs)
+          && nearNow(d.lastActivityAtMs)
+          && guestExpiryOk(d.expiresAtMs)
+          && d.requestCount == 0
+          && d.lastRequestAtMs == 0
+          && exists(attemptsPath())
+          && get(attemptsPath()).data.count <= 5;
+      }
+
+      function touchValid() {
+        let d = request.resource.data;
+        return d.diff(resource.data).affectedKeys()
+             .hasOnly(['lastActivityAtMs', 'expiresAtMs', 'requestCount', 'lastRequestAtMs'])
+          && sessionLive(resource.data)
+          && nearNow(d.lastActivityAtMs)
+          && guestExpiryOk(d.expiresAtMs)
+          && (
+            (d.requestCount == resource.data.requestCount
+              && d.lastRequestAtMs == resource.data.lastRequestAtMs)
+            || (
+              d.requestCount == resource.data.requestCount + 1
+              && nearNow(d.lastRequestAtMs)
+              // At most one request every 15 seconds from one phone.
+              && resource.data.lastRequestAtMs <= request.time.toMillis() - 15000
+            )
+          );
+      }
+
+      allow read: if isStaff() || (isSignedIn() && request.auth.uid == uid);
+      allow create: if isGuestUser() && request.auth.uid == uid && joinValid(request.resource.data);
+      // A phone whose previous session is dead (checked out, moved rooms,
+      // expired) signs in again under the same uid: that is a full
+      // replacement, held to exactly the same bar as a first login.
+      allow update: if isGuestUser() && request.auth.uid == uid
+        && (touchValid()
+            || (!sessionLive(resource.data)
+                && request.resource.data.createdAtMs > resource.data.createdAtMs
+                && joinValid(request.resource.data)));
+      allow delete: if false;
+    }
+
+    match /guestRequests/{requestId} {
+      function createValid(d) {
+        let s = guestSession();
+        let sa = getAfter(sessionPath()).data;
+        return d.keys().hasOnly(['uid', 'room', 'stayId', 'guestName', 'kind', 'team',
+                                 'note', 'status', 'active', 'createdAt', 'createdAtMs'])
+          && d.uid == request.auth.uid
+          && d.room == s.room
+          && d.stayId == guestStayId()
+          // The name shown to the desk is the room's, never the phone's.
+          && d.guestName == get(roomPath(s.room)).data.guest.name
+          && kindAllowed(d.kind)
+          && d.team == teamFor(d.kind)
+          && d.note is string
+          && d.note.size() <= 300
+          && d.status == 'open'
+          && d.active == true
+          && d.createdAt is string
+          && nearNow(d.createdAtMs)
+          // Same batch must bump the session's counter to this request.
+          && sa.requestCount == s.requestCount + 1
+          && sa.lastRequestAtMs == d.createdAtMs;
+      }
+
+      function cancelValid() {
+        let d = request.resource.data;
+        return resource.data.uid == request.auth.uid
+          && resource.data.status == 'open'
+          && d.diff(resource.data).affectedKeys().hasOnly(['status', 'active', 'cancelledAtMs'])
+          && d.status == 'cancelled'
+          && d.active == false
+          && nearNow(d.cancelledAtMs);
+      }
+
+      // Staff see every request; housekeeping only its own team's.
+      // A proven guest sees the requests of the stay its room is on now,
+      // and nothing from the stay before it in the same room.
+      allow read: if isStaff()
+        || (isHousekeeping() && resource.data.team == 'housekeeping')
+        || (guest() && resource.data.stayId == guestStayId());
+      allow create: if guest() && createValid(request.resource.data);
+      // Guests may withdraw a request nobody has picked up yet. Staff
+      // changes go through Flask (audited), never straight from a browser.
+      allow update: if guest() && cancelValid();
+      allow delete: if false;
+    }
+
+    // One rating per stay, written once by the proven phone, read by the
+    // desk. The document id IS the stay id, which is what makes it once.
+    match /guestFeedback/{stayId} {
+      allow read: if isStaff();
+      allow create: if guest()
+        && stayId == guestStayId()
+        && request.resource.data.keys().hasOnly(['uid', 'room', 'stayId', 'guestName',
+                                                 'rating', 'comment', 'createdAt', 'createdAtMs'])
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.room == guestSession().room
+        && request.resource.data.stayId == stayId
+        && request.resource.data.guestName == get(roomPath(guestSession().room)).data.guest.name
+        && request.resource.data.rating is int
+        && request.resource.data.rating >= 1
+        && request.resource.data.rating <= 5
+        && request.resource.data.comment is string
+        && request.resource.data.comment.size() <= 500
+        && request.resource.data.createdAt is string
+        && nearNow(request.resource.data.createdAtMs);
+      allow update, delete: if false;
     }
 
     // ─── Default deny for anything else ───────────────────────────────

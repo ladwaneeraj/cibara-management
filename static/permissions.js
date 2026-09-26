@@ -59,6 +59,9 @@
       "staff.payroll.view",
       "staff.salary.pay",
       "staff.advance.give",
+      // Guest portal: act on room-service requests. Portal settings and the
+      // QR print stay admin-only.
+      "guest_request.handle",
       // Collect a pending balance from a returning guest. Granting the
       // credit (settle_later.use) and writing it off (settlement.manage)
       // stay admin-only.
@@ -88,6 +91,7 @@
       "app.access",
       "room.cleaning.view",
       "room.cleaning.complete",
+      "guest_request.handle",
     ]),
   });
 

@@ -1,0 +1,59 @@
+@import 'tailwindcss';
+@import '@fontsource-variable/inter';
+
+@theme {
+  /* Same soft palette as the Swaada guest app; the accent is the hotel's
+     deep green rather than the café's red. */
+  --color-surface-50: #ffffff;
+  --color-surface-100: #f5f6f9;
+  --color-surface-200: #ecedf2;
+  --color-surface-300: #dcdee7;
+  --color-surface-400: #b6bac7;
+
+  --color-ink-900: #171a21;
+  --color-ink-700: #3d4453;
+  --color-ink-500: #6d7486;
+  --color-ink-300: #a2a8b8;
+
+  --color-accent-700: #0b5e56;
+  --color-accent-600: #0f766e;
+  --color-accent-500: #159a8f;
+  --color-accent-100: #d6f3ef;
+  --color-accent-50: #f0faf9;
+
+  --color-ok-600: #17804a;
+  --color-ok-100: #dbf3e5;
+  --color-warn-600: #96650d;
+  --color-warn-100: #fdf0cd;
+  --color-info-600: #1f6dc0;
+  --color-info-100: #ddebfb;
+  --color-danger-600: #c72a2a;
+  --color-danger-100: #fce3e3;
+
+  --font-sans: 'Inter Variable', ui-sans-serif, system-ui, 'Segoe UI', Roboto, sans-serif;
+
+  --shadow-card: 0 1px 2px rgb(23 26 33 / 0.04), 0 4px 14px rgb(23 26 33 / 0.05);
+  --shadow-lift: 0 2px 4px rgb(23 26 33 / 0.05), 0 10px 26px rgb(23 26 33 / 0.09);
+  --shadow-pop: 0 8px 20px rgb(23 26 33 / 0.10), 0 28px 60px rgb(23 26 33 / 0.16);
+  --shadow-accent: 0 2px 10px rgb(15 118 110 / 0.32);
+}
+
+html {
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+body {
+  margin: 0;
+  background-color: var(--color-surface-100);
+  color: var(--color-ink-900);
+}
+* { scrollbar-width: thin; scrollbar-color: var(--color-surface-300) transparent; }
+.no-scrollbar { scrollbar-width: none; }
+.no-scrollbar::-webkit-scrollbar { display: none; }
+
+@keyframes rise-in { from { transform: translateY(6px); opacity: 0; } to { transform: none; opacity: 1; } }
+.rise-in { animation: rise-in 180ms ease-out both; }
+@keyframes sheet-in { from { transform: translateY(100%); } to { transform: none; } }
+.sheet-in { animation: sheet-in 220ms cubic-bezier(0.2, 0.8, 0.2, 1) both; }
+@media (prefers-reduced-motion: reduce) { .rise-in, .sheet-in { animation: none; } }

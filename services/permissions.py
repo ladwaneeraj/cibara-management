@@ -160,6 +160,13 @@ PERMISSIONS = frozenset(
                                          # and REVERSING advances/salaries
         "staff.payroll.view",            # see ₹ figures (manager + admin)
         "staff.advance.give",            # record advances (manager + admin)
+        # Guest portal (QR room service). Acknowledging / completing a
+        # guest's request goes to manager and housekeeping (housekeeping only
+        # ever sees its own team's requests: firestore.rules + routes/guest.py).
+        # Switching the portal on, Wi-Fi and reception details, and printing
+        # the QR stay admin-only (wildcard).
+        "guest_request.handle",
+        "guest_portal.manage",
         "staff.salary.pay",              # pay salaries (manager + admin)
         "staff.pay.account",             # admin-only — pay from bank/UPI;
                                          # managers pay from counter cash only
@@ -216,6 +223,7 @@ ROLE_PERMISSIONS: dict[str, FrozenSet[str]] = {
             "staff.payroll.view",
             "staff.salary.pay",
             "staff.advance.give",
+            "guest_request.handle",
             # Collect a pending balance from a returning guest (the check-in
             # banner and the Pending Payments list).
             "settlement.collect",
@@ -242,6 +250,7 @@ ROLE_PERMISSIONS: dict[str, FrozenSet[str]] = {
             "app.access",
             "room.cleaning.view",
             "room.cleaning.complete",
+            "guest_request.handle",
         }
     ),
 }

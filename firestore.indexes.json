@@ -6,9 +6,18 @@
       "collectionGroup": "audit_logs",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "targetCollection", "order": "ASCENDING" },
-        { "fieldPath": "targetId", "order": "ASCENDING" },
-        { "fieldPath": "server_ts", "order": "DESCENDING" }
+        {
+          "fieldPath": "targetCollection",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "targetId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "server_ts",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
@@ -16,8 +25,14 @@
       "collectionGroup": "payments",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "room", "order": "ASCENDING" },
-        { "fieldPath": "date", "order": "ASCENDING" }
+        {
+          "fieldPath": "room",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "date",
+          "order": "ASCENDING"
+        }
       ]
     },
     {
@@ -25,9 +40,33 @@
       "collectionGroup": "payments",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "room", "order": "ASCENDING" },
-        { "fieldPath": "name", "order": "ASCENDING" },
-        { "fieldPath": "date", "order": "ASCENDING" }
+        {
+          "fieldPath": "room",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "name",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "date",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "//": "services/guest_portal.py :: request_history for housekeeping (team == X AND createdAtMs >= since). Equality + range on different fields.",
+      "collectionGroup": "guestRequests",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "team",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAtMs",
+          "order": "ASCENDING"
+        }
       ]
     }
   ],

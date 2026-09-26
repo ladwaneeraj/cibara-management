@@ -1,76 +1,63 @@
-import { initializeApp } from "https://www.gstatic.com/firebasejs/9.15.0/firebase-app.js";
-import {
-  getFirestore,
-  enableMultiTabIndexedDbPersistence,
-  collection,
-  doc,
-  query,
-  where,
-  onSnapshot,
-} from "https://www.gstatic.com/firebasejs/9.15.0/firebase-firestore.js";
+// Live sync: Firestore listeners that keep every open screen current.
+//
+// AUTH: this file used to start its own Firebase app (modular SDK) that never
+// saw the staff sign-in, so every listener ran as an anonymous client. That
+// only worked while the database had no security rules. It now uses the SAME
+// compat app that auth.js signs in (firebase-app-compat + firebase-auth-compat
+// in index.html, plus firebase-firestore-compat added alongside), and nothing
+// subscribes until CibaraAuth.ready() resolves. Listeners are therefore
+// evaluated by firestore.rules with the user's role, and a role that a rule
+// refuses simply does not subscribe to that collection (see startListeners).
+//
+// The Firebase web config comes from window.FIREBASE_CONFIG, populated by
+// <script src="/firebase-config.js"> in templates/, which reads env vars on
+// the server so prod / dev can be switched without editing client code.
 
-// Read the Firebase web config from window.FIREBASE_CONFIG, which is populated
-// by the inline <script src="/firebase-config.js"></script> in templates/.
-// That endpoint reads FIREBASE_* env vars on the server so prod / dev /
-// staging can be switched without editing client code. The hardcoded fallback
-// here matches the prod project — used only when this script is opened in a
-// page that didn't load /firebase-config.js (defensive, shouldn't happen).
-const firebaseConfig = (typeof window !== "undefined" && window.FIREBASE_CONFIG) || {
-  apiKey: "AIzaSyAj_K8Bq8IA0mYH94pu03s3DeDxc2pyCF4",
-  authDomain: "cibara-software-61512.firebaseapp.com",
-  projectId: "cibara-software-61512",
-  storageBucket: "cibara-software-61512.firebasestorage.app",
-  messagingSenderId: "117552649945",
-  appId: "1:117552649945:web:5d4983739b1a8c077e50c8",
-  measurementId: "G-5VY26JYPN0",
-};
-
-const app = initializeApp(firebaseConfig);
-const db = getFirestore(app);
+if (!firebase.apps.length) {
+  firebase.initializeApp(window.FIREBASE_CONFIG);
+}
+const db = firebase.firestore();
 
 // ─── Offline persistence (READ-COST CRITICAL) ──────────────────────────────
 // Without this, the Firestore SDK keeps its cache in memory only. Every page
-// load / PWA resume therefore starts cold: each onSnapshot below re-downloads
+// load / PWA resume therefore starts cold: each listener below re-downloads
 // its ENTIRE result set and every one of those documents is a billed read.
-// With ~175 documents across the listeners in this file, a device that
-// reloads the app 50 times a day burns ~9 000 reads/day on its own — and we
-// have several devices.
-//
 // With IndexedDB persistence the SDK stores the previous query results plus a
-// resume token. On re-attach it replays the token and the backend sends only
-// what changed since, so a reload costs a handful of reads instead of ~175.
-//
-// enableMultiTabIndexedDbPersistence (rather than the single-tab variant)
-// also makes several open tabs on the same device share ONE backend
+// resume token, so a reload costs a handful of reads instead of ~175.
+// synchronizeTabs: several open tabs on the same device share ONE backend
 // connection instead of one listener set each.
 //
-// Constraints, deliberately handled:
-//   • Must be called before any other Firestore operation. It is — the
-//     onSnapshot calls below run later in this module.
-//   • Returns a promise that rejects on 'failed-precondition' (another tab
-//     already owns a *single*-tab lease) or 'unimplemented' (Safari private
-//     mode, IndexedDB disabled). Both are non-fatal: the SDK silently falls
-//     back to the in-memory cache and every listener still works exactly as
-//     before. We swallow the rejection so it never surfaces as an unhandled
-//     promise error in the console.
-//   • Resume tokens are not infinitely valid server-side. A device that has
-//     been closed for a long stretch still pays a full re-read on its first
-//     attach. The saving is on the many reloads WITHIN a working session,
-//     which is where the volume actually is.
-//
-// Migration note: this API is deprecated in favour of
-//   initializeFirestore(app, { localCache: persistentLocalCache({
-//     tabManager: persistentMultipleTabManager() }) })
-// which needs Firebase JS SDK >= 9.22. We are pinned to 9.15 above, so the
-// deprecated call is used here to keep this change to a single file with no
-// SDK version bump. Switch when the pin moves.
-enableMultiTabIndexedDbPersistence(db).catch((err) => {
+// Rejections ('failed-precondition': another tab already owns a single-tab
+// lease; 'unimplemented': Safari private mode, IndexedDB disabled) are
+// non-fatal: the SDK falls back to the in-memory cache and every listener
+// still works. Must be called before any other Firestore operation.
+db.enablePersistence({ synchronizeTabs: true }).catch((err) => {
   const code = (err && err.code) || "unknown";
   console.warn(
     "Cibara: Firestore offline persistence unavailable (" + code + "). " +
       "Live sync still works; read costs will be higher on this device.",
   );
 });
+
+// A listener the rules refuse dies for good (the SDK does not retry), so
+// every subscription below reports that loudly instead of leaving a tile
+// silently frozen. One notice per collection, not one per retry.
+const _deniedOnce = new Set();
+function onListenerError(name) {
+  return (err) => {
+    const code = (err && err.code) || "unknown";
+    console.error("Cibara sync: listener '" + name + "' failed (" + code + ")", err);
+    if (code !== "permission-denied" || _deniedOnce.has(name)) return;
+    _deniedOnce.add(name);
+    if (typeof showNotification === "function") {
+      showNotification(
+        "Live updates for " + name + " are not available for your role. " +
+          "The screen may need a manual refresh.",
+        "warning", 8000,
+      );
+    }
+  };
+}
 
 // ─── Listener-first mode ───────────────────────────────────────────────────
 // Resolved by script.js from settings/ui_config.listener_first, with a
@@ -171,13 +158,25 @@ const _horizonStr = _localYMD(_horizonDate);
   }, msUntil);
 })();
 
+// ─── Subscriptions ─────────────────────────────────────────────────────────
+// Nothing here runs before the staff sign-in has resolved its role claim.
+// Housekeeping's role may read rooms, settings and its own team's guest
+// requests only; subscribing it to bills or payments would just be refused
+// by the rules and logged as an error, so those listeners are skipped.
+window.CibaraAuth.ready().then((user) => {
+  if (!user || !user.role) return;
+  startListeners(user.role !== "housekeeping");
+});
+
+function startListeners(fullAccess) {
+
 // ─── Rooms listener ────────────────────────────────────────────────────────
 // Skip the first snapshot (page already loaded via fetchData on startup).
 // For subsequent snapshots, patch only the changed docs into the global
 // `rooms` object and re-render — no full round-trip to Flask needed.
 let roomsInitialLoad = true;
 
-onSnapshot(collection(db, "rooms"), (snapshot) => {
+db.collection("rooms").onSnapshot((snapshot) => {
   if (roomsInitialLoad) {
     roomsInitialLoad = false;
     if (!LISTENER_FIRST) return;
@@ -232,17 +231,17 @@ onSnapshot(collection(db, "rooms"), (snapshot) => {
     window.dispatchEvent(new CustomEvent("cibaraRoomUpdate", { detail: { type: "remote_sync" } }));
     showSyncToast();
   }
-});
+}, onListenerError("rooms"));
 
 // ─── Totals listener ───────────────────────────────────────────────────────
 // Keeps the dashboard stats bar in sync without a full fetchData() call.
 let totalsInitialLoad = true;
 
-onSnapshot(doc(db, "totals", "current_totals"), (snap) => {
+if (fullAccess) db.collection("totals").doc("current_totals").onSnapshot((snap) => {
   if (totalsInitialLoad) {
     totalsInitialLoad = false;
     if (!LISTENER_FIRST) return;
-    if (snap.exists()) {
+    if (snap.exists) {
       // /get_data fills in any missing keys with 0; do the same so the stats
       // bar never renders "undefined".
       const t = Object.assign(
@@ -256,14 +255,14 @@ onSnapshot(doc(db, "totals", "current_totals"), (snap) => {
     return;
   }
 
-  if (!snap.exists() || snap.metadata.fromCache) return;
+  if (!snap.exists || snap.metadata.fromCache) return;
 
   if (typeof totals !== "undefined" && snap.data()) {
     Object.assign(totals, snap.data());
     if (typeof updateStats === "function") updateStats();
     console.log("⚡ Remote totals update — stats refreshed");
   }
-});
+}, onListenerError("totals"));
 
 // ─── UI config listener ───────────────────────────────────────────────────
 // Single-doc listener on settings/ui_config. Carries flags like
@@ -277,20 +276,41 @@ onSnapshot(doc(db, "totals", "current_totals"), (snap) => {
 // fromCache: SDK restoring offline state — ignore.
 let uiConfigInitialLoad = true;
 
-onSnapshot(doc(db, "settings", "ui_config"), (snap) => {
+db.collection("settings").doc("ui_config").onSnapshot((snap) => {
   if (uiConfigInitialLoad) {
     uiConfigInitialLoad = false;
     return;
   }
   if (snap.metadata.hasPendingWrites || snap.metadata.fromCache) return;
 
-  const cfg = snap.exists() ? snap.data() : {};
+  const cfg = snap.exists ? snap.data() : {};
   console.log("⚡ Remote ui_config change", cfg);
   // Hand off to script.js — it owns DOM mutation + active-tab switching.
   window.dispatchEvent(
     new CustomEvent("cibaraUIConfigChanged", { detail: cfg || {} }),
   );
-});
+}, onListenerError("settings"));
+
+// ─── Guest requests (room-service portal) ─────────────────────────────────
+// Every open request from every occupied room, live. Housekeeping's role may
+// only read its own team's documents (firestore.rules), so its query carries
+// the same filter the rule checks; without it the whole listener is refused.
+// Each snapshot is the complete current set, so guest-requests.js repaints
+// from it wholesale and works out what is new by comparing ids.
+let guestRequestsQuery = db.collection("guestRequests").where("active", "==", true);
+if (!fullAccess) guestRequestsQuery = guestRequestsQuery.where("team", "==", "housekeeping");
+guestRequestsQuery.onSnapshot((snapshot) => {
+  const items = snapshot.docs.map((d) => Object.assign({ id: d.id }, d.data()));
+  window.dispatchEvent(new CustomEvent("cibaraGuestRequests", {
+    detail: {
+      items,
+      fromCache: snapshot.metadata.fromCache,
+      added: snapshot.docChanges()
+        .filter((c) => c.type === "added")
+        .map((c) => Object.assign({ id: c.doc.id }, c.doc.data())),
+    },
+  }));
+}, onListenerError("guest requests"));
 
 // ─── Payments listener (today only) ───────────────────────────────────────
 // Filtered to today's date so only ~today's docs are transferred on load.
@@ -313,8 +333,7 @@ function _rebuildLogs() {
   S().paint({ txns: true });
 }
 
-onSnapshot(
-  query(collection(db, "payments"), where("date", "==", _todayStr)),
+if (fullAccess) db.collection("payments").where("date", "==", _todayStr).onSnapshot(
   (snapshot) => {
     if (LISTENER_FIRST) {
       _todayPayments = snapshot.docs.map((d) => d.data());
@@ -389,7 +408,7 @@ onSnapshot(
       showSyncToast();
     });
   }
-);
+, onListenerError("payments"));
 
 // ─── Bills listener (today only) ──────────────────────────────────────────
 // Filtered to bills checked out today. `checkout_time` is stored as
@@ -397,12 +416,10 @@ onSnapshot(
 // Previously listened to all historical bills — very costly.
 let billsInitialLoad = true;
 
-onSnapshot(
-  query(
-    collection(db, "bills"),
-    where("checkout_time", ">=", _todayStr + " 00:00"),
-    where("checkout_time", "<=", _todayStr + " 23:59")
-  ),
+if (fullAccess) db.collection("bills")
+  .where("checkout_time", ">=", _todayStr + " 00:00")
+  .where("checkout_time", "<=", _todayStr + " 23:59")
+  .onSnapshot(
   (snapshot) => {
     if (billsInitialLoad) {
       billsInitialLoad = false;
@@ -424,7 +441,7 @@ onSnapshot(
       }
     });
   }
-);
+, onListenerError("bills"));
 
 // ─── Bookings listener (today .. +BOOKINGS_HORIZON_DAYS) ──────────────────
 // Watches bookings checking in between today and the horizon so that any new
@@ -437,12 +454,10 @@ onSnapshot(
 // composite index, so this is a query-shape change only.
 let bookingsInitialLoad = true;
 
-onSnapshot(
-  query(
-    collection(db, "bookings"),
-    where("check_in_date", ">=", _todayStr),
-    where("check_in_date", "<=", _horizonStr)
-  ),
+if (fullAccess) db.collection("bookings")
+  .where("check_in_date", ">=", _todayStr)
+  .where("check_in_date", "<=", _horizonStr)
+  .onSnapshot(
   (snapshot) => {
     if (LISTENER_FIRST) {
       // Rebuild the arrival-indicator map from the documents this listener
@@ -503,15 +518,14 @@ onSnapshot(
 
     if (hasModified && !hasAdded) showSyncToast("📋 Booking Updated");
   }
-);
+, onListenerError("bookings"));
 
 // ─── Expenses listener (today only) ───────────────────────────────────────
 // Expenses are written to the `expenses` collection (not `payments`).
 // Listen for new expenses so the transaction tab stays current on all devices.
 let expensesInitialLoad = true;
 
-onSnapshot(
-  query(collection(db, "expenses"), where("date", "==", _todayStr)),
+if (fullAccess) db.collection("expenses").where("date", "==", _todayStr).onSnapshot(
   (snapshot) => {
     if (LISTENER_FIRST) {
       // `_doc_id` is NOT optional. The server adds it in
@@ -565,7 +579,7 @@ onSnapshot(
       showSyncToast("🧾 Expense Added");
     });
   }
-);
+, onListenerError("expenses"));
 
 // ─── Daily serial counter (listener-first only) ───────────────────────────
 // Replaces the /get_transaction_metadata call that lived inside fetchData().
@@ -573,13 +587,15 @@ onSnapshot(
 // { [today]: count }, which is exactly what this listener delivers — except it
 // also stays live, so the next check-in serial is correct on every device
 // without a refresh. One document: the cheapest listener in this file.
-if (LISTENER_FIRST) {
-  onSnapshot(doc(db, "daily_counters", _todayStr), (snap) => {
-    const count = snap.exists() ? ((snap.data() || {}).count || 0) : 0;
+if (LISTENER_FIRST && fullAccess) {
+  db.collection("daily_counters").doc(_todayStr).onSnapshot((snap) => {
+    const count = snap.exists ? ((snap.data() || {}).count || 0) : 0;
     const map = {};
     map[_todayStr] = count;
     S().setDailyCounters(map);
-  });
+  }, onListenerError("daily counter"));
+}
+
 }
 
 // ─── Helpers ───────────────────────────────────────────────────────────────

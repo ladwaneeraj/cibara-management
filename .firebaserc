@@ -1,0 +1,7 @@
+{
+  "projects": {
+    "default": "cibara-dev",
+    "dev": "cibara-dev",
+    "prod": "cibara-software-61512"
+  }
+}

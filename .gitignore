@@ -82,3 +82,10 @@ _to_delete/
 lodge.log
 name_backup_*.csv
 _to_delete/
+
+# Firebase CLI / rules tests
+tests/rules/node_modules/
+firestore-debug.log
+.firebase/
+guest/node_modules/
+guest/dist/

@@ -12,3 +12,6 @@ pypdf==6.11.0
 # Pinned. If GEMINI_API_KEY is not set the service degrades gracefully
 # and the OCR endpoint returns "ocr disabled" instead of crashing.
 google-generativeai==0.8.3
+# qrcode — renders the guest-portal QR (routes/guest.py /api/guest-portal/qr.png).
+# Pillow comes in via the [pil] extra; xhtml2pdf already pulls Pillow too.
+qrcode[pil]==8.0

@@ -24,6 +24,7 @@ from routes.maintenance import maintenance_bp
 from routes.insights import insights_bp
 from routes.staff import staff_bp
 from routes.manual_bill import manual_bill_bp
+from routes.guest import guest_bp
 from services.auth_service import load_current_user
 from flask import g
 import os
@@ -310,6 +311,7 @@ app.register_blueprint(customers_bp,   url_prefix="")
 app.register_blueprint(utils_bp,       url_prefix="")
 app.register_blueprint(laundry_bp,    url_prefix="")
 app.register_blueprint(users_bp,      url_prefix="")
+app.register_blueprint(guest_bp)         # /api/guest-portal/*, /api/guest-requests/* (prefix set in the blueprint)
 app.register_blueprint(banking_bp)    # /banking/* — owns its url_prefix
 app.register_blueprint(mmt_ingest_bp, url_prefix="")  # /mmt/ingest, /mmt/ingest_status
 app.register_blueprint(agoda_ingest_bp, url_prefix="")  # /agoda/ingest, /agoda/ingest_status

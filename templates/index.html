@@ -32,6 +32,9 @@
     -->
     <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-auth-compat.js"></script>
+    <!-- Firestore on the SAME signed-in app: google_sync.js subscribes through
+         it, so firestore.rules see the staff role on every listener. -->
+    <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore-compat.js"></script>
     <script src="/firebase-config.js"></script>
     <script src="{{ asset_url('permissions.js') }}"></script>
     <script src="/static/auth.js"></script>
@@ -1064,6 +1067,19 @@
       <header class="header">
         <h1>CIBARA COMFORTS</h1>
         <div class="header-actions">
+          <!-- Guest requests (room-service portal). guest-requests.js fills
+               the badge from the live guestRequests listener and opens the
+               panel. Every role sees it; housekeeping's list is its own team. -->
+          <button
+            id="guest-requests-btn"
+            class="header-icon-btn"
+            aria-label="Guest requests"
+            title="Guest requests"
+            data-perm="guest_request.handle"
+          >
+            <i class="fas fa-concierge-bell"></i>
+            <span id="guest-requests-badge" class="guest-requests-badge" hidden>0</span>
+          </button>
           <button
             id="refresh-btn"
             class="header-icon-btn"
@@ -3167,6 +3183,78 @@
                 "
               >
                 Manage preset names &amp; default amounts per category
+              </div>
+            </div>
+            <i
+              class="fas fa-chevron-right"
+              style="color: #bbb; font-size: 0.8rem"
+            ></i>
+          </div>
+
+          <!-- Guest portal card — QR room-service settings + print the QR.
+               Admin only (guest_portal.manage); guest-requests.js owns the
+               modal it opens. -->
+          <div
+            id="settings-guest-portal-card"
+            data-perm="guest_portal.manage"
+            onclick="if (window.CibaraGuestRequests) window.CibaraGuestRequests.openSettings();"
+            style="
+              display: flex;
+              align-items: center;
+              gap: 1rem;
+              padding: 0.85rem 1rem;
+              border-radius: 12px;
+              border: 1.5px solid var(--border);
+              cursor: pointer;
+              margin-top: 0.65rem;
+              transition:
+                background 0.15s,
+                border-color 0.15s;
+            "
+            onmouseover="
+              this.style.background = '#f0fdf4';
+              this.style.borderColor = '#16a34a';
+            "
+            onmouseout="
+              this.style.background = '';
+              this.style.borderColor = '';
+            "
+          >
+            <div
+              style="
+                width: 44px;
+                height: 44px;
+                border-radius: 12px;
+                flex-shrink: 0;
+                background: rgba(22, 163, 74, 0.1);
+                display: flex;
+                align-items: center;
+                justify-content: center;
+              "
+            >
+              <i
+                class="fas fa-qrcode"
+                style="color: #16a34a; font-size: 1.1rem"
+              ></i>
+            </div>
+            <div style="flex: 1">
+              <div
+                style="
+                  font-weight: 600;
+                  font-size: 0.92rem;
+                  color: var(--text-primary);
+                "
+              >
+                Guest Portal (QR room service)
+              </div>
+              <div
+                style="
+                  font-size: 0.75rem;
+                  color: var(--text-secondary);
+                  margin-top: 2px;
+                "
+              >
+                Switch on, Wi-Fi &amp; reception details, print the room QR
               </div>
             </div>
             <i
@@ -6538,6 +6626,8 @@
     <script defer src="/static/housekeeping-mode.js"></script>
     <!-- Admin: user management page (admin-only; UI does its own role check) -->
     <script defer src="/static/admin-users.js"></script>
+    <!-- Guest requests panel + portal settings (listens to google_sync events) -->
+    <script defer src="{{ asset_url('guest-requests.js') }}"></script>
     <!-- Firebase config served from env vars — must load before google_sync module -->
     <script src="/firebase-config.js"></script>
     <script

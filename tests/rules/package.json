@@ -1,0 +1,14 @@
+{
+  "name": "cibara-rules-tests",
+  "private": true,
+  "description": "Firestore security-rules tests. Run from the repo root: npm --prefix tests/rules test",
+  "scripts": {
+    "test": "firebase emulators:exec --only firestore --project cibara-rules-test --config ../../firebase.json \"node --test\"",
+    "test:direct": "node --test"
+  },
+  "devDependencies": {
+    "@firebase/rules-unit-testing": "^5.0.2",
+    "firebase": "^12.19.0",
+    "firebase-tools": "^14.27.0"
+  }
+}

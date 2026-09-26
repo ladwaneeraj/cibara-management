@@ -35,6 +35,7 @@ from services.audit_log import write_log, attribution_create, attribution_update
 from services import stay_timeline
 from services import rate_segments
 from services import room_photos
+from services import guest_portal
 from services.request_guard import guard_duplicate_submit
 from routes.billing import auto_generate_bill_pdf
 
@@ -1194,6 +1195,10 @@ def checkout():
             )
 
             invalidate_rooms_and_totals()
+            # The guest's phone: the rules already refuse it now that the
+            # room is no longer occupied by this stay; stamping the session
+            # closed makes the phone show "stay ended" immediately.
+            guest_portal.close_sessions_for_room(room, "checkout")
 
             if refund_processed:
                 refund_amount = abs(balance)
@@ -3934,6 +3939,10 @@ def transfer_room():
             })
 
         batch.commit()
+        # The phone logged in for the OLD room number is no longer valid
+        # (the rules check room + stay together). Close it; the guest logs
+        # in again with the new room number and the same mobile.
+        guest_portal.close_sessions_for_room(old_room, "room_transfer")
         # Use invalidate_rooms_and_totals (the monkey-patched version below)
         # so the 30-second /get_data payload cache is also busted. The plain
         # invalidate_cache() only clears the @cached function-level cache and

@@ -68,6 +68,21 @@
           "order": "ASCENDING"
         }
       ]
+    },
+    {
+      "//": "Existed in the cibara-dev console before the indexes file was deployed (bookings by check_in_date + check_out_date). Declared here so deploys stop offering to delete it and prod matches dev.",
+      "collectionGroup": "bookings",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "check_in_date",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "check_out_date",
+          "order": "ASCENDING"
+        }
+      ]
     }
   ],
   "fieldOverrides": []

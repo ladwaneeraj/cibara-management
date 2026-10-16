@@ -27,8 +27,10 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.gzip import GZipMiddleware
 
 from . import legacy
+from .core import observability
 from .core.middleware import RequestContextMiddleware
-from .routers import admin, auth, bills, customer_docs, dashboard, guest, reports, rooms, invoice_settings
+from .routers import (admin, auth, bills, client_errors, customer_docs, dashboard,
+                      guest, reports, rooms, invoice_settings)
 from .settings import get_settings
 
 log = logging.getLogger("cibara_api")
@@ -42,6 +44,9 @@ def _error_body(message: str, **extra) -> dict:
 
 def create_app() -> FastAPI:
     s = get_settings()
+    # Error monitoring: no-op unless SENTRY_DSN is set. Done before the app and
+    # routers are built so the framework integrations hook in cleanly.
+    observability.init_sentry(s)
     app = FastAPI(
         title="Cibara ERP API", version=VERSION,
         docs_url="/api/v2/docs", openapi_url="/api/v2/openapi.json", redoc_url=None,
@@ -66,6 +71,9 @@ def create_app() -> FastAPI:
     @app.exception_handler(Exception)
     async def _unhandled(request: Request, exc: Exception):  # pragma: no cover - safety net
         log.exception("unhandled error on %s %s", request.method, request.url.path)
+        # Registering this handler means Starlette treats the error as handled,
+        # so Sentry's integration won't auto-capture it — report it explicitly.
+        observability.capture_exception(exc)
         return JSONResponse(_error_body("Internal server error"), status_code=500)
 
     # ── API ───────────────────────────────────────────────────────────────
@@ -86,7 +94,8 @@ def create_app() -> FastAPI:
         return {"success": True, "env": legacy.legacy_config.CIBARA_ENV, "version": VERSION, "firebase": cfg}
 
     for r in (auth.router, dashboard.router, rooms.router, bills.router, reports.router,
-              admin.router, guest.router, invoice_settings.router, customer_docs.router):
+              admin.router, guest.router, invoice_settings.router, customer_docs.router,
+              client_errors.router):
         app.include_router(r)
 
     @app.api_route("/api/v2/{rest:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"],

@@ -94,6 +94,20 @@ class Settings(BaseSettings):
     # extended past this, however often it is rotated.
     SESSION_MAX_DAYS: int = 30
 
+    # ── Error monitoring (Sentry) ─────────────────────────────────────────
+    # OFF unless SENTRY_DSN is set, so it is silent locally and in tests. When
+    # set, unhandled exceptions (FastAPI + the mounted legacy Flask app), 5xx
+    # responses and browser errors (forwarded to /api/v2/client-errors) are
+    # reported — with PII scrubbed (see core/observability.py). Never sends
+    # request bodies, cookies or credentials.
+    SENTRY_DSN: str = ""
+    # Tag for events; defaults to CIBARA_ENV when empty.
+    SENTRY_ENVIRONMENT: str = ""
+    # Release identifier (e.g. the Cloud Run revision or a git sha). Optional.
+    SENTRY_RELEASE: str = ""
+    # Performance tracing sample rate. 0.0 = error monitoring only (default).
+    SENTRY_TRACES_SAMPLE_RATE: float = 0.0
+
     @property
     def on_cloud_run(self) -> bool:
         return bool(os.environ.get("K_SERVICE"))

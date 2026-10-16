@@ -43,6 +43,11 @@ PERMISSIONS = frozenset(
         # Discounts / payments
         "discount.apply",
         "payment.edit",
+        # Refunding money to a guest (manual refund or checkout overpay).
+        # Split out of payment.edit so money-OUT is a distinct permission that
+        # the Phase 2 step-up re-auth gate keys on, and so it can be delegated
+        # separately later. Admin-only (absent from ROLE_MANAGER below).
+        "payment.refund",
         # Bill — GST recipient details (B2B GSTIN/legal name) editing
         # and Section 34 credit-note issuance. Admin-only by default.
         "bill.gst.edit",
@@ -94,6 +99,11 @@ PERMISSIONS = frozenset(
         # admin-only.
         "settlement.collect",
         "settlement.manage",
+        # Writing OFF a pending balance (goodwill / bad debt — money the lodge
+        # will never collect). Split out of settlement.manage so the write-off
+        # (money-OUT) is distinct from the rest of settlement administration and
+        # the Phase 2 step-up re-auth gate keys on it. Admin-only.
+        "settlement.writeoff",
         # Transaction / register
         "transaction.history.full",
         "register.view",

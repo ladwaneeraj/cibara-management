@@ -491,7 +491,8 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
 .bl-wa-backdrop.bl-wa-open { display: flex; }
 .bl-wa-modal {
   background: #fff; border-radius: 14px;
-  padding: 1.5rem 1.4rem; width: 390px; max-width: 94vw;
+  padding: 1.25rem 1.3rem; width: 420px; max-width: 94vw;
+  max-height: calc(100vh - 2rem); overflow-y: auto;
   box-shadow: 0 8px 32px rgba(0,0,0,.2);
   animation: bl-modal-in .18s ease;
 }
@@ -499,12 +500,45 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
   font-size: 1rem; font-weight: 700; color: #128C7E;
   margin-bottom: 1rem; display: flex; align-items: center; gap: .45rem;
 }
-.bl-wa-msg-preview {
-  background: #e8f5e9; border-radius: 10px;
-  padding: .7rem .9rem; font-size: .78rem; line-height: 1.55;
-  color: #333; margin-bottom: 1rem; border: 1px solid #c8e6c9;
-  white-space: pre-wrap; word-break: break-word;
+.bl-wa-guest {
+  display: flex; align-items: center; gap: .7rem;
+  padding: .7rem .8rem; margin-bottom: .9rem;
+  background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px;
 }
+.bl-wa-avatar {
+  width: 38px; height: 38px; border-radius: 50%; flex-shrink: 0;
+  background: #128C7E; color: #fff; font-weight: 700; font-size: .95rem;
+  display: flex; align-items: center; justify-content: center;
+}
+.bl-wa-guest-main { flex: 1; min-width: 0; }
+.bl-wa-guest-name {
+  font-weight: 700; font-size: .9rem; color: #0f172a;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.bl-wa-guest-sub { font-size: .72rem; color: #64748b; font-family: monospace; }
+.bl-wa-guest-amt { font-weight: 800; font-size: 1rem; color: #0f172a; }
+.bl-wa-filename {
+  font-size: .7rem; color: #334155; font-family: monospace;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 180px;
+}
+.bl-wa-chat {
+  background: #e5ddd5; border-radius: 10px; padding: .8rem;
+  margin-bottom: 1rem;
+}
+.bl-wa-msg-preview {
+  background: #dcf8c6; border-radius: 10px 10px 10px 2px;
+  padding: .7rem .85rem; font-size: .8rem; line-height: 1.5;
+  color: #111b21; white-space: pre-wrap; word-break: break-word;
+  box-shadow: 0 1px 1px rgba(0,0,0,.1);
+}
+.bl-wa-attach {
+  display: flex; align-items: center; gap: .45rem; margin-top: .5rem;
+  background: #fff; border-radius: 8px; padding: .4rem .6rem;
+  font-size: .72rem; color: #334155; font-family: monospace;
+  box-shadow: 0 1px 1px rgba(0,0,0,.08); min-width: 0;
+}
+.bl-wa-attach i { color: #e11d48; flex-shrink: 0; }
+.bl-wa-attach span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bl-wa-section-label {
   font-size: .73rem; font-weight: 700; color: #555;
   text-transform: uppercase; letter-spacing: .04em; margin-bottom: .4rem;
@@ -542,6 +576,13 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
   gap: .4rem; transition: opacity .15s;
 }
 .bl-wa-send-btn:hover { opacity: .88; }
+.bl-wa-send-btn:disabled, .bl-wa-link-btn:disabled { opacity: .55; cursor: not-allowed; }
+.bl-wa-link-btn {
+  flex: 1.4; padding: .5rem; border: 1.5px solid #25D366; border-radius: 8px;
+  background: #fff; color: #128C7E; cursor: pointer; font-size: .8rem; font-weight: 700;
+  display: flex; align-items: center; justify-content: center; gap: .35rem;
+}
+.bl-wa-hint { font-size: .72rem; color: #64748b; margin-top: .45rem; line-height: 1.35; }
 
 /* ── Bill modal "Save & Share" button — matches action-btn sizing in flex context ── */
 .bl-bill-save-btn {
@@ -1358,6 +1399,7 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
       <div class="bl-note" title="Includes advance payments received before checkout date">
         incl. advances *
       </div>
+      <div class="bl-exp-line" id="bl-tc-cash-exp" style="display:none;"></div>
     </div>
     <div class="bl-card bl-upi">
       <div class="bl-label">UPI (Period)</div>
@@ -1365,6 +1407,7 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
       <div class="bl-note" title="Includes advance payments received before checkout date">
         incl. advances *
       </div>
+      <div class="bl-exp-line" id="bl-tc-upi-exp" style="display:none;"></div>
     </div>
     <div class="bl-card bl-rev">
       <div class="bl-label">Revenue (Period)</div>
@@ -1385,6 +1428,7 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
         <span id="bl-tc-gst-accom">Accom: ₹0</span> &nbsp;|&nbsp;
         <span id="bl-tc-gst-water">Water: ₹0</span>
       </div>
+      <div class="bl-exp-line bl-exp-itc" id="bl-tc-gst-itc" style="display:none;"></div>
     </div>
   </div>
 
@@ -1767,7 +1811,16 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
 <div class="bl-wa-backdrop" id="bl-wa-backdrop">
   <div class="bl-wa-modal">
     <div class="bl-wa-modal-title">
-      <i class="fab fa-whatsapp" style="font-size:1.2rem;"></i> Send Invoice via WhatsApp
+      <i class="fab fa-whatsapp" style="font-size:1.25rem;"></i> Send invoice to guest
+    </div>
+
+    <div class="bl-wa-guest">
+      <div class="bl-wa-avatar" id="bl-wa-avatar">G</div>
+      <div class="bl-wa-guest-main">
+        <div class="bl-wa-guest-name" id="bl-wa-guest">Guest</div>
+        <div class="bl-wa-guest-sub" id="bl-wa-invno"></div>
+      </div>
+      <div class="bl-wa-guest-amt" id="bl-wa-amount"></div>
     </div>
 
     <!-- Only the Consolidated invoice is ever generated or stored. The old
@@ -1775,13 +1828,17 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
          v{n}.pdf to Storage, so a bill accumulated both variants. -->
     <div class="bl-view-toggle" id="bl-wa-pdf-row" style="margin-bottom:.9rem;">
       <span class="bl-view-toggle-label">Invoice PDF</span>
+      <span class="bl-wa-filename" id="bl-wa-filename"></span>
       <span class="bl-vt-hint" id="bl-wa-pdf-status"></span>
       <button type="button" class="bl-vt-btn" id="bl-wa-regen"
               title="Only needed if the bill changed after the PDF was saved">Regenerate</button>
     </div>
 
-    <div class="bl-wa-section-label">Message Preview</div>
-    <div class="bl-wa-msg-preview" id="bl-wa-preview"></div>
+    <div class="bl-wa-section-label">Message</div>
+    <div class="bl-wa-chat">
+      <div class="bl-wa-msg-preview" id="bl-wa-preview"></div>
+      <div class="bl-wa-attach"><i class="fas fa-file-pdf"></i><span id="bl-wa-attach-name"></span></div>
+    </div>
 
     <div class="bl-wa-section-label">Send To</div>
     <div class="bl-wa-options">
@@ -1804,9 +1861,15 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
 
     <div class="bl-wa-actions">
       <button class="bl-wa-cancel-btn" id="bl-wa-cancel">Cancel</button>
-      <button class="bl-wa-send-btn" id="bl-wa-send">
-        <i class="fab fa-whatsapp"></i> Send via WhatsApp
+      <button class="bl-wa-link-btn" id="bl-wa-send" style="display:none;" title="Credit notes: send a download link">
+        <i class="fas fa-link"></i> Send link
       </button>
+      <button class="bl-wa-send-btn" id="bl-wa-share" title="Send the invoice PDF to the guest on WhatsApp">
+        <i class="fab fa-whatsapp"></i> Send PDF
+      </button>
+    </div>
+    <div class="bl-wa-hint" id="bl-wa-hint">
+      On a phone the PDF is attached from the share sheet. On a PC, WhatsApp opens on the guest's chat with a link to download the invoice PDF.
     </div>
   </div>
 </div>`;
@@ -2541,6 +2604,8 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
 
     if (waCancel) waCancel.addEventListener("click", closeWhatsAppModal);
     if (waSend) waSend.addEventListener("click", sendWhatsApp);
+    const waShare = dom("bl-wa-share");
+    if (waShare) waShare.addEventListener("click", shareWhatsAppPdf);
     if (waBackdrop)
       waBackdrop.addEventListener("click", (e) => {
         if (e.target === waBackdrop) closeWhatsAppModal();
@@ -2658,6 +2723,7 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
         state.allEntries = data.entries || [];
         state.lastLoadedRange = rangeKey;
         applyFilters();
+        loadExpenseSummary(start, end);
       } else {
         showError(data.message || "Failed to load");
       }
@@ -2668,6 +2734,83 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
     } finally {
       if (myReqId === state._reqId) state.loading = false;
     }
+  }
+
+  // ── Period expenses + GST input credit (Cash / UPI / GST cards) ─────────────
+  // Read-only: /expenses/period_summary sums expenses by payment method and
+  // the GST on purchase bills that carry a vendor GSTIN. Needs expense.view
+  // (admin, manager); for anyone else the lines simply stay hidden.
+  let _expSummaryReq = 0;
+  let _expSummary = null;   // last /expenses/period_summary response
+  let _tallyBase = null;    // cash / UPI / GST collected for the same filtered view
+  async function loadExpenseSummary(start, end) {
+    const ids = ["bl-tc-cash-exp", "bl-tc-upi-exp", "bl-tc-gst-itc"];
+    const hideAll = () => {
+      _expSummary = null;
+      ids.forEach((id) => { const el = dom(id); if (el) el.style.display = "none"; });
+    };
+    const auth = window.CibaraAuth;
+    if (!auth || typeof auth.userCan !== "function" || !auth.userCan("expense.view")) {
+      hideAll();
+      return;
+    }
+    const myReq = ++_expSummaryReq;
+    try {
+      const res = await apiFetch("/expenses/period_summary", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ start_date: start, end_date: end }),
+      });
+      if (myReq !== _expSummaryReq) return;
+      const d = res.ok ? await res.json() : null;
+      if (myReq !== _expSummaryReq) return;
+      if (!d || !d.success) { hideAll(); return; }
+
+      _expSummary = d;
+      paintExpenseLines();
+    } catch (err) {
+      if (myReq === _expSummaryReq) hideAll();
+    }
+  }
+
+  // Thin progress line under each card. The bar shows how much of the card's
+  // money went back out (expenses, or GST credit against GST collected); the
+  // amounts appear only in the hover tooltip, so the card stays uncluttered.
+  function paintExpenseLines() {
+    const ids = ["bl-tc-cash-exp", "bl-tc-upi-exp", "bl-tc-gst-itc"];
+    const d = _expSummary;
+    const base = _tallyBase;
+    if (!d || !base) {
+      ids.forEach((id) => { const el = dom(id); if (el) el.style.display = "none"; });
+      return;
+    }
+    const money = (v) => "₹" + inr(Math.round(Number(v) || 0));
+    const paint = (id, amount, collected, tip, tone) => {
+      const el = dom(id);
+      if (!el) return;
+      const pct = collected > 0
+        ? Math.min(100, (amount / collected) * 100)
+        : (amount > 0 ? 100 : 0);
+      el.innerHTML = `<div class="bl-exp-fill ${tone}" style="width:${pct.toFixed(1)}%"></div>`;
+      el.dataset.tip = tip;
+      el.style.display = "";
+    };
+
+    const home = Math.max(0, (d.cash || 0) - (d.counter_cash || 0));
+    paint("bl-tc-cash-exp", d.cash || 0, base.cash,
+      `Expenses ${money(d.cash)}` +
+        (home > 0 ? ` · ${money(d.counter_cash)} counter, ${money(home)} home` : ""),
+      "is-out");
+    paint("bl-tc-upi-exp", d.online || 0, base.upi,
+      `Expenses ${money(d.online)}`,
+      "is-out");
+
+    let itcTip = `GST credit ${money(d.itc)}` +
+      (d.itc_bills ? ` on ${d.itc_bills} bill${d.itc_bills > 1 ? "s" : ""}` : "");
+    if (d.itc_unclaimable > 0) {
+      itcTip += ` · ${money(d.itc_unclaimable)} GST on bills without GSTIN (not claimable)`;
+    }
+    paint("bl-tc-gst-itc", d.itc || 0, base.gst, itcTip, "is-in");
   }
 
   // ── Silent refresh (no spinner) — used by remote-sync event handlers ─────────
@@ -2690,6 +2833,7 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
       _diffAndPatch(newEntries);
       state.allEntries = newEntries;
       state.lastLoadedRange = `${start}_${end}`;
+      loadExpenseSummary(start, end);
     } catch (err) {
       console.warn("[Bills] silent refresh failed:", err.message);
     }
@@ -2892,6 +3036,8 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
     set("bl-tc-upi", upi);
     set("bl-tc-rev", revenue);
     set("bl-tc-gst", totalGst);
+    _tallyBase = { cash, upi, gst: totalGst };
+    paintExpenseLines();
 
     const gstAccomEl = dom("bl-tc-gst-accom");
     const gstWaterEl = dom("bl-tc-gst-water");
@@ -3247,16 +3393,204 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
     return `Hi ${guestName || "Guest"}, your invoice #${invoiceNo} for ₹${inr(amount)} from Cibara Comforts is ready.\n\nView / Download: ${pdfUrl}\n\nThank you for staying with us!`;
   }
 
+  // pdfUrl: when given, the message carries a download link (used on a PC,
+  // where a browser cannot attach the file). Without it the message says the
+  // invoice is attached, which is only true when the file itself is shared.
+  function _buildWaFileMessage(guestName, invoiceNo, amount, isCN, pdfUrl) {
+    if (isCN) {
+      return `Hi ${guestName || "Guest"}, please find attached credit note ${invoiceNo || ""} for ₹${inr(amount)} from Cibara Comforts. It reverses the GST charged on the original invoice; keep both documents for your records.`;
+    }
+    const intro = pdfUrl ? "Your invoice is ready." : "Your invoice is attached to this message.";
+    const link = pdfUrl ? `\n\n*Download invoice (PDF):* ${pdfUrl}` : "";
+    return `Dear *${guestName || "Guest"}*,\n\nThank you for staying with Cibara Comforts. ${intro}\n\n*Invoice no:* ${invoiceNo}\n*Total:* ₹${inr(amount)}${link}\n\nFor any questions about this invoice, please contact us.\n\nWarm regards,\nCibara Comforts`;
+  }
+
+  function _isPhone() {
+    return /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+  }
+
+  function _pdfFileName(s) {
+    const base = String(s.invoiceNo || (s._isCN ? "credit-note" : "invoice")).replace(/[^A-Za-z0-9_.-]+/g, "_");
+    return (s._isCN ? "CreditNote-" : "Invoice-") + base + ".pdf";
+  }
+
+  // Enable/disable the "Send PDF" button and show whether the file is still
+  // loading. The button must only be clickable once s.pdfFile is in hand:
+  //   * on a phone, the native share sheet can attach the file ONLY if it is
+  //     already fetched at tap time (browsers forbid sharing after an await),
+  //     so tapping early silently skipped the attach;
+  //   * and when the modal had to generate the PDF on open (e.g. a bill with a
+  //     balance due that had no stored invoice yet), the button was left
+  //     disabled forever because the prefetch never re-enabled it — the
+  //     reported "Send PDF doesn't work".
+  function _setSharePrepping(prepping) {
+    const s = state.waModal;
+    const btn = dom("bl-wa-share");
+    if (!btn || s._isCN) return;
+    if (!btn.dataset.idleHtml) btn.dataset.idleHtml = btn.innerHTML;
+    if (prepping) {
+      btn.disabled = true;
+      btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Preparing PDF…';
+    } else {
+      btn.disabled = false;
+      btn.innerHTML = btn.dataset.idleHtml;
+    }
+  }
+
+  // Fetch the stored PDF bytes through our own origin (Storage links are not
+  // fetchable cross-origin) so the share sheet can attach the file. Called as
+  // soon as the PDF is ready, so the click that opens the share sheet does not
+  // have to wait for the network (browsers only allow sharing right after a tap).
+  function _prefetchWaPdf() {
+    const s = state.waModal;
+    if (!s.pdfUrl || s._isCN) return Promise.resolve(null);
+    if (s._pdfFileUrl === s.pdfUrl && s._pdfFilePromise) return s._pdfFilePromise;
+    const seq = (s._pdfSeq = (s._pdfSeq || 0) + 1);   // newest request wins
+    s._pdfFileUrl = s.pdfUrl;
+    s.pdfFile = null;
+    _setSharePrepping(true);   // hold the Send PDF button until the file is in
+    s._pdfFilePromise = apiFetch("/api/v2/bills/" + encodeURIComponent(s.billId) + "/pdf-file")
+      .then(function (r) {
+        if (!r.ok) throw new Error("PDF download failed (" + r.status + ")");
+        return r.blob();
+      })
+      .then(function (blob) {
+        if (seq !== s._pdfSeq) return null;   // superseded (e.g. Regenerate)
+        s.pdfFile = new File([blob], _pdfFileName(s), { type: "application/pdf" });
+        _setSharePrepping(false);   // file is ready — the button can send now
+        return s.pdfFile;
+      })
+      .catch(function (err) {
+        console.warn("[Bills] PDF prefetch failed:", err);
+        if (seq === s._pdfSeq) {
+          s._pdfFileUrl = null;
+          // Re-enable so the fallback path (open chat + download the PDF) can
+          // still run, and a retry can re-fetch, rather than leaving a dead button.
+          _setSharePrepping(false);
+        }
+        return null;
+      })
+      ;
+    return s._pdfFilePromise;
+  }
+
+  // The number chosen in the modal, or "" after showing the validation error.
+  function _waTargetMobile() {
+    const s = state.waModal;
+    const errEl = dom("bl-wa-error");
+    const customInp = dom("bl-wa-custom-number");
+    if (s.numberMode === "registered") {
+      if (!s.guestMobile) {
+        if (errEl) errEl.textContent = "No registered mobile number found for this guest.";
+        return "";
+      }
+      const digits = s.guestMobile.replace(/\D/g, "");
+      return digits.length >= 10 ? digits.slice(-10) : digits;
+    }
+    const raw = (customInp?.value || "").trim().replace(/\D/g, "");
+    if (!/^\d{10}$/.test(raw)) {
+      if (errEl) errEl.textContent = "Please enter a valid 10-digit Indian mobile number.";
+      if (customInp) customInp.classList.add("input-error");
+      return "";
+    }
+    return raw;
+  }
+
+  async function shareWhatsAppPdf() {
+    const s = state.waModal;
+    const errEl = dom("bl-wa-error");
+    const customInp = dom("bl-wa-custom-number");
+    if (errEl) errEl.textContent = "";
+    if (customInp) customInp.classList.remove("input-error");
+    if (!s.pdfUrl) {
+      if (errEl) errEl.textContent = "PDF isn't ready yet — wait a moment and try again.";
+      return;
+    }
+    // Validate the number first. Everything below starts straight from this
+    // tap: browsers only allow window.open and the share sheet inside a click,
+    // so nothing is awaited before them.
+    const target = _waTargetMobile();
+    if (!target) return;
+    // The share sheet attaches the file, so its text says "attached". The chat
+    // link carries the download URL, because a PC cannot attach the file.
+    const attachedText = _buildWaFileMessage(s.guestName, s.invoiceNo, s.amount, s._isCN, null);
+    const linkText = _buildWaFileMessage(s.guestName, s.invoiceNo, s.amount, s._isCN, s.pdfUrl);
+    const waUrl = `https://wa.me/91${target}?text=${encodeURIComponent(linkText)}`;
+    const ready = s._pdfFileUrl === s.pdfUrl ? s.pdfFile : null;
+    const isPhone = _isPhone();
+
+    // 1) Phone: the native share sheet carries the PDF itself into WhatsApp.
+    if (isPhone && ready && navigator.canShare && navigator.share) {
+      let ok = false;
+      try { ok = navigator.canShare({ files: [ready] }); } catch (_) { ok = false; }
+      if (ok) {
+        try {
+          await navigator.share({ files: [ready], title: ready.name, text: attachedText });
+          if (!s._isCN) _logBillActivity(s.billId, "whatsapp", "share-sheet");
+          closeWhatsAppModal();
+          return;
+        } catch (err) {
+          if (err && err.name === "AbortError") return;   // operator closed the sheet
+          console.warn("[Bills] share failed, opening chat instead:", err);
+        }
+      }
+    }
+
+    // 2) Open the guest's WhatsApp chat right away, message filled in
+    //    (WhatsApp desktop app or WhatsApp Web).
+    window.open(waUrl, "_blank", "noopener,noreferrer");
+    if (!s._isCN) _logBillActivity(s.billId, "whatsapp", target);
+    closeWhatsAppModal();
+
+    // 3) Deliver the PDF. A web page cannot attach a file to a WhatsApp chat by
+    //    itself, so the PDF is saved to Downloads for a single attach in the chat.
+    const file = ready || await _prefetchWaPdf();
+    if (!file) {
+      if (typeof showNotification === "function")
+        showNotification("Couldn't load the PDF. Use Regenerate, then send again.", "error", 7000);
+      return;
+    }
+    const objUrl = URL.createObjectURL(file);
+    const a = document.createElement("a");
+    a.href = objUrl;
+    a.download = file.name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(function () { URL.revokeObjectURL(objUrl); }, 60000);
+    if (typeof showNotification === "function")
+      showNotification(`The invoice link is in the WhatsApp message. A copy of the PDF is in Downloads.`, "info", 9000);
+  }
+
   function _updateWaPreview() {
     const s = state.waModal;
     const preview = dom("bl-wa-preview");
     if (!preview) return;
-    preview.textContent = _buildWaMessage(
-      s.guestName,
-      s.invoiceNo,
-      s.amount,
-      s.pdfUrl || "(PDF URL)",
-    );
+    // Show what will be sent: the attached-file wording on a phone, the download
+    // link on a PC (where no file can be attached). The long signed URL is shown
+    // as a short label here only; the full link is what goes into the message.
+    const phone = _isPhone();
+    const sentText = _buildWaFileMessage(s.guestName, s.invoiceNo, s.amount, s._isCN,
+                                         phone ? null : s.pdfUrl);
+    preview.textContent = (!phone && s.pdfUrl)
+      ? sentText.split(s.pdfUrl).join("invoice PDF link")
+      : sentText;
+    const attachRow = preview.parentNode && preview.parentNode.querySelector(".bl-wa-attach");
+    if (attachRow) attachRow.style.display = (phone || s._isCN) ? "" : "none";
+    const fname = _pdfFileName(s);
+    const setText = (id, v) => { const el = dom(id); if (el) el.textContent = v; };
+    setText("bl-wa-attach-name", fname);
+    setText("bl-wa-filename", fname);
+    setText("bl-wa-guest", s.guestName || "Guest");
+    setText("bl-wa-avatar", (s.guestName || "G").trim().charAt(0).toUpperCase() || "G");
+    setText("bl-wa-invno", s.invoiceNo ? "Invoice " + s.invoiceNo : "");
+    setText("bl-wa-amount", "₹" + inr(s.amount || 0));
+    // Credit notes have no file path here, so they keep the link send instead.
+    const linkBtn = dom("bl-wa-send");
+    if (linkBtn) linkBtn.style.display = s._isCN ? "" : "none";
+    const shareBtnEl = dom("bl-wa-share");
+    if (shareBtnEl) shareBtnEl.style.display = s._isCN ? "none" : "";
+    if (s.pdfUrl) _prefetchWaPdf();
   }
 
   // PDF status line inside the WhatsApp send modal. Replaces the old
@@ -3310,6 +3644,8 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
     }
 
     _syncWaPdfStatus("generating");
+    const shareBtn = dom("bl-wa-share");
+    if (shareBtn) shareBtn.disabled = true;
     if (sendBtn) {
       sendBtn.disabled = true;
       sendBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Preparing…';
@@ -3329,6 +3665,7 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
       const url = await generateAndUploadPDF(s.billId, s.billData, true, force);
       if (myReq !== s._waReqSeq) return;     // a newer request already fired
       if (!url) throw new Error("PDF generation failed.");
+      s._pdfFileUrl = null;   // regenerated in place: same URL, new bytes
       s.pdfUrl = url;
       _syncWaPdfStatus("fresh");
       _updateWaPreview();
@@ -3340,8 +3677,12 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
     } finally {
       if (myReq === s._waReqSeq && sendBtn) {
         sendBtn.disabled = false;
-        sendBtn.innerHTML = '<i class="fab fa-whatsapp"></i> Send via WhatsApp';
+        sendBtn.innerHTML = '<i class="fas fa-link"></i> Send link';
       }
+      // Re-enable unless a file download for the current PDF is still running
+      // (that download re-enables the button itself when it finishes).
+      const _pdfLoading = s.pdfUrl && s._pdfFileUrl === s.pdfUrl && !s.pdfFile;
+      if (myReq === s._waReqSeq && shareBtn && !_pdfLoading) shareBtn.disabled = false;
     }
   }
 
@@ -3359,6 +3700,9 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
     s.numberMode = "registered";
     s.billData = billData || null;
     s.viewMode = "consolidated";   // the only variant ever generated or stored
+    s.pdfFile = null;
+    s._pdfFileUrl = null;
+    s._pdfFilePromise = null;
     // Reuse the bill's saved PDF when one exists, so opening the modal does not
     // mint another Storage version. Two URLs are treated as absent:
     //   - anything under the shared bills/-/ folder, which was overwritten by
@@ -3806,14 +4150,20 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
   // WhatsApp copy are the same document. This function used to call a local
   // buildBillHTML(), which is how the Bills tab came to print a different
   // invoice than the one it uploaded to Storage.
-  async function _renderOpenBill(view) {
+  // `prefetched` (optional): a parsed /bill_html response fetched elsewhere
+  // (openBill fires it in parallel with /generate_bill). When given, its HTML
+  // is used directly instead of making a second, sequential round-trip.
+  async function _renderOpenBill(view, prefetched) {
     const area = dom("bl-bill-print-area");
     if (!area || !_openBillId) return;
 
-    const qs = (view === "detailed" || view === "consolidated")
-      ? `?view=${view}` : "";
-    const res = await apiFetch(`/bill_html/${_openBillId}${qs}`);
-    const data = await res.json();
+    let data = prefetched;
+    if (!data) {
+      const qs = (view === "detailed" || view === "consolidated")
+        ? `?view=${view}` : "";
+      const res = await apiFetch(`/bill_html/${_openBillId}${qs}`);
+      data = await res.json();
+    }
     if (!data.success) throw new Error(data.message || "Could not render bill.");
 
     area.innerHTML = data.html;
@@ -3879,6 +4229,17 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
       // The bill record is still fetched: the action buttons (Save & Share,
       // Recalculate, Edit Price) act on its fields. The rendered invoice comes
       // separately from /bill_html so the browser never re-derives layout.
+      //
+      // Both run IN PARALLEL: /bill_html loads the bill itself server-side, so
+      // it does not depend on /generate_bill's response. Firing them together
+      // halves the open latency (it used to wait for the first round-trip to
+      // finish before starting the second).
+      const _view = (_billViewMode === "detailed" || _billViewMode === "consolidated")
+        ? _billViewMode : "";
+      const _htmlPromise = apiFetch(`/bill_html/${id}${_view ? `?view=${_view}` : ""}`)
+        .then((r) => r.json())
+        .catch((e) => ({ success: false, message: e.message }));
+
       const res = await apiFetch(`/generate_bill/${id}`);
       const data = await res.json();
       if (data.success) {
@@ -3887,7 +4248,7 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
         // Render the bill body with its inline attribution banner, then show
         // the view toggle when the server reports a collapsible folio. Honour
         // the operator's saved preference; null means let the server auto-pick.
-        await _renderOpenBill(_billViewMode);
+        await _renderOpenBill(_billViewMode, await _htmlPromise);
         _syncViewToggle();
         _syncCancelBtn();
         if (saveBtn) {

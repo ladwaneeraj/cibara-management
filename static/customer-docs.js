@@ -14,7 +14,12 @@
  *  10.  Checkout modal: ID doc viewer in header
  */
 
-const MAX_DOC_PHOTOS = 3;
+const MAX_DOC_PHOTOS = 4;
+// Single source of truth for the per-guest photo cap. register.js reads this
+// off window so the Register viewer can never disagree with the check-in /
+// checkout camera about how many photos a guest may have (the old mismatch —
+// 4 here, 3 in register.js — made a 4-photo guest show "3 of 3 photos").
+window.MAX_DOC_PHOTOS = MAX_DOC_PHOTOS;
 
 // ── Module state ─────────────────────────────────────────────────────────────
 let _currentCheckinCustomer = null;
@@ -24,6 +29,61 @@ let _mobileDebounceTimer     = null;
 let _nameDebounceTimer       = null;
 let _viewerCurrentIdx        = 0;
 let _viewerUrls              = [];
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Secure ID images. ID photos are private: their links point at
+// /api/v2/customers/<mobile>/id-docs/<id>/image and only work with the
+// signed-in session, so they are fetched with apiFetch and shown as blob: URLs.
+// `remember(customer)` keeps who-captured-what for the viewer caption.
+// ─────────────────────────────────────────────────────────────────────────────
+window.CibaraSecureImg = (function () {
+  const cache = new Map();
+  const meta  = {};
+  const isSecure = (u) => typeof u === 'string' && u.startsWith('/api/v2/customers/');
+  function src(url, variant) {
+    if (!isSecure(url)) return Promise.resolve(url);
+    const key = url + '|' + (variant || 'view');
+    if (!cache.has(key)) {
+      const p = apiFetch(url + '?variant=' + (variant || 'view')).then(async (r) => {
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return URL.createObjectURL(await r.blob());
+      });
+      p.catch(() => cache.delete(key));
+      cache.set(key, p);
+    }
+    return cache.get(key);
+  }
+  function apply(img, url, variant) {
+    if (!isSecure(url)) { img.src = url; return; }
+    img.dataset.secureSrc = url;
+    src(url, variant).then((u) => { if (img.dataset.secureSrc === url) img.src = u; })
+      .catch(() => { img.alt = 'Could not load'; });
+  }
+  function open(url) {
+    if (!isSecure(url)) { window.open(url, '_blank'); return; }
+    const w = window.open('', '_blank');
+    src(url, 'view').then((u) => { if (w) w.location.href = u; }).catch(() => { if (w) w.close(); });
+  }
+  function remember(customer) {
+    ((customer && customer.id_doc_meta) || []).forEach((m) => { meta[m.url] = m; });
+  }
+  function caption(url) {
+    const m = meta[url];
+    if (!m) return '';
+    let when = '';
+    try {
+      when = new Date(m.captured_at).toLocaleString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+    } catch (_) {}
+    return m.legacy ? `Older upload${when ? ' · ' + when : ''}`
+                    : `Captured by ${m.captured_by || '—'}${when ? ' · ' + when : ''}`;
+  }
+  return { isSecure, src, apply, open, remember, caption };
+})();
+
+// Check-in and checkout keep SEPARATE trays. Sharing one array let a checkout
+// wipe photos captured in an open check-in, or save one guest's photo to
+// another guest.
+let _checkoutTray = [];
 
 // Fix 14: upload re-entrancy guards — prevents double-submit on rapid clicks
 let _checkinUploadLock  = false;
@@ -46,43 +106,68 @@ const SCAN_INTERVAL_MS = 200;
 // Public API — called by script.js check-in submit
 // ─────────────────────────────────────────────────────────────────────────────
 
-window.uploadPendingDocIfAny = async function (mobile) {
+window.uploadPendingDocIfAny = async function (mobile, room) {
   if (!_docCapturedBlobs.length) return true;
-  // Fix 14: prevent re-entry if a previous call is still in-flight
-  if (_checkinUploadLock) return false;
   const digits = (mobile || '').replace(/\D/g, '');
-  if (digits.length !== 10) return true;
-
-  _checkinUploadLock = true;
+  if (digits.length !== 10) {
+    _notify('ID photo not saved — the mobile number must have 10 digits', 'error');
+    return false;
+  }
+  // Take this guest's photos out of the tray NOW. Clearing it only after the
+  // uploads finished also threw away photos already taken for the next guest.
+  const items = _docCapturedBlobs.splice(0, _docCapturedBlobs.length);
+  try { renderThumbStrip(); _updateAddMoreBtn(); } catch (_) {}
   try {
-    const items = [..._docCapturedBlobs];
     // Parallel uploads are safe now: the server appends URLs with an atomic
     // ArrayUnion (create/AlreadyExists handles the brand-new-customer race),
     // so concurrent photos can no longer drop each other's URL. Wall-clock
     // for a multi-photo check-in is max(photo) instead of sum(photos).
     const results = await Promise.all(items.map(async (item, i) => {
-      const form = new FormData();
-      form.append('mobile',   digits);
-      form.append('document', item.blob, `doc_${Date.now()}_${i}.jpg`);
-      const res  = await apiFetch('/upload_customer_document', { method: 'POST', body: form });
-      const data = await res.json();
-      if (!data.success) {
-        _notify('ID document upload failed: ' + (data.message || 'unknown'), 'error');
-        return false;
-      }
-      URL.revokeObjectURL(item.url);
-      return true;
+      const ok = await _postIdDoc(digits, item.blob, 'checkin', room, i);
+      if (ok) URL.revokeObjectURL(item.url);
+      return ok ? null : item;
     }));
-    if (results.some(ok => !ok)) return false;
-    _docCapturedBlobs = [];
-    return true;
+    const failed = results.filter(Boolean);
+    if (!failed.length) return true;
+    _retryIdDocs(digits, room, failed, 1);
+    return false;
   } catch (err) {
     _notify('ID document upload error: ' + err.message, 'error');
+    _retryIdDocs(digits, room, items, 1);
     return false;
-  } finally {
-    _checkinUploadLock = false;
   }
 };
+
+async function _postIdDoc(mobile, blob, context, room, i) {
+  try {
+    const form = new FormData();
+    form.append('mobile',   mobile);
+    form.append('document', blob, `doc_${Date.now()}_${i || 0}.jpg`);
+    form.append('context',  context);
+    if (room) form.append('room', String(room));
+    const res  = await apiFetch('/upload_customer_document', { method: 'POST', body: form });
+    const data = await res.json();
+    return !!data.success;
+  } catch (_) { return false; }
+}
+
+// A failed ID upload is retried in the background (3 s, 10 s, 30 s) so a
+// moment of bad Wi-Fi no longer loses the guest's Aadhaar.
+function _retryIdDocs(mobile, room, items, attempt) {
+  if (attempt > 3) {
+    _notify(`ID photo for …${mobile.slice(-4)} could not be saved. Add it again from the guest's documents.`, 'error');
+    return;
+  }
+  setTimeout(async () => {
+    const still = [];
+    for (const item of items) {
+      if (await _postIdDoc(mobile, item.blob, 'checkin', room)) URL.revokeObjectURL(item.url);
+      else still.push(item);
+    }
+    if (!still.length) _notify(`ID photo for …${mobile.slice(-4)} saved after retry ✓`, 'success');
+    else _retryIdDocs(mobile, room, still, attempt + 1);
+  }, [3000, 10000, 30000][attempt - 1]);
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Public API — called by script.js when checkout modal opens
@@ -102,6 +187,7 @@ window.populateCheckoutDocView = async function (mobile) {
     const res  = await apiFetch(`/get_customer/${digits}`);
     const data = await res.json();
     if (data.success && data.customer) {
+      window.CibaraSecureImg.remember(data.customer);
       const urls = data.customer.id_doc_urls || [];
       if (urls.length > 0) {
         btn._docUrls      = urls;
@@ -168,76 +254,48 @@ window.initCheckoutDocAttach = function(mobile) {
   });
 
   // File(s) selected → add to pending strip (up to MAX_DOC_PHOTOS total)
-  newInput?.addEventListener('change', function() {
+  newInput?.addEventListener('change', async function() {
     const files = Array.from(this.files || []);
+    this.value = '';                       // allow re-selecting the same file
     if (!files.length) return;
 
-    let added = 0;
-    for (const file of files) {
-      if (_docCapturedBlobs.length >= MAX_DOC_PHOTOS) break;
-      const url = URL.createObjectURL(file);
-      _docCapturedBlobs.push({ blob: file, url });
+    let added = 0, blocked = false;
+    for (const picked of files) {
+      if (_checkoutTray.length >= MAX_DOC_PHOTOS) { blocked = true; break; }
+      // Auto-detect → adjust → deskew → magic colour, one document at a time.
+      const scanned = await _scanIdDoc(picked);
+      if (!scanned) continue;              // cancelled this one in the editor
+      const url = URL.createObjectURL(scanned);
+      _checkoutTray.push({ blob: scanned, url, scanned: scanned !== picked });
       added++;
+      _renderCheckoutPendingStrip();
     }
 
-    if (added === 0) {
+    if (added === 0 && blocked) {
       _notify(`Maximum ${MAX_DOC_PHOTOS} photos already selected`, 'warning');
-    } else if (_docCapturedBlobs.length >= MAX_DOC_PHOTOS && files.length > added) {
+    } else if (blocked) {
       _notify(`Maximum ${MAX_DOC_PHOTOS} photos reached — only ${added} added`, 'warning');
     }
-
     _renderCheckoutPendingStrip();
-    // Reset so the same file can be re-selected if needed
-    this.value = '';
   });
 };
 
 /**
- * Apply a scanned-document effect to a canvas in-place.
- *
- * Steps (all done in a single pixel loop):
- *   1. Grayscale — removes colour noise from phone photos of documents.
- *   2. Contrast boost — makes text darker and background whiter,
- *      mimicking the output of a real document scanner.
- *   3. Brightness nudge — lifts midtones so off-white paper reads as white.
- */
-function _applyScanEffect(canvas) {
-  const ctx  = canvas.getContext('2d');
-  const imgd = ctx.getImageData(0, 0, canvas.width, canvas.height);
-  const d    = imgd.data;
-
-  // Tuning constants
-  const CONTRAST   = 1.9;   // >1 = more contrast; 1.0 = no change
-  const BRIGHTNESS = 18;    // additive lift in [0,255]; 0 = no change
-
-  for (let i = 0; i < d.length; i += 4) {
-    // 1. Perceptual grayscale (ITU-R BT.601 luma coefficients)
-    let v = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
-
-    // 2. Contrast: pivot around 128
-    v = (v - 128) * CONTRAST + 128;
-
-    // 3. Brightness nudge
-    v += BRIGHTNESS;
-
-    // Clamp to [0, 255]
-    v = v < 0 ? 0 : v > 255 ? 255 : v;
-
-    d[i] = d[i + 1] = d[i + 2] = v;
-    // d[i+3] (alpha) is left unchanged
-  }
-
-  ctx.putImageData(imgd, 0, 0);
-}
-
-/**
- * Resize, apply scan effect, and compress an image Blob to JPEG.
+ * Resize, enhance, and compress an image Blob to JPEG.
  * Caps the longest side at MAX_SIDE px.
+ *
+ * Enhancement is the colour-preserving sharpen + mild contrast from
+ * `_applyScannedLook` — NOT the old grayscale pass, which (as its own former
+ * comment admitted) greyed out and muddied small print and made a colour
+ * Aadhaar look like a bad photocopy. This is only the fallback for when the
+ * document scanner (magic colour) is unavailable; the scanner's output is
+ * never passed through here.
+ *
  * Falls back to the original Blob on any error.
  */
 async function _compressImage(blob) {
-  const MAX_SIDE = 1280;
-  const QUALITY  = 0.88;   // slightly higher — grayscale compresses well anyway
+  const MAX_SIDE = 1600;   // a touch larger so a 10-digit ID number stays crisp
+  const QUALITY  = 0.9;
   return new Promise((resolve) => {
     const img    = new Image();
     const tmpUrl = URL.createObjectURL(blob);
@@ -256,10 +314,11 @@ async function _compressImage(blob) {
       const canvas = document.createElement('canvas');
       canvas.width  = width;
       canvas.height = height;
-      canvas.getContext('2d').drawImage(img, 0, 0, width, height);
+      const cctx = canvas.getContext('2d');
+      cctx.drawImage(img, 0, 0, width, height);
 
-      // Apply scan effect after drawing
-      _applyScanEffect(canvas);
+      // Colour-preserving crisp-up (sharpen + mild contrast), not grayscale.
+      try { _applyScannedLook(cctx, width, height); } catch (_) {}
 
       canvas.toBlob(
         (compressed) => resolve(compressed || blob),
@@ -272,12 +331,15 @@ async function _compressImage(blob) {
   });
 }
 
-async function _uploadCheckoutDoc(file) {
-  // Compress before sending — reduces a 5 MB phone photo to ~200–350 KB
-  const compressed = await _compressImage(file);
+async function _uploadCheckoutDoc(file, alreadyProcessed) {
+  // The scanner already cropped, deskewed, enhanced and sized the image, so
+  // only compress (and apply the legacy grayscale look) when it did NOT run —
+  // otherwise we would grayscale away the magic-colour output.
+  const compressed = alreadyProcessed ? file : await _compressImage(file);
   const form = new FormData();
   form.append('mobile',   _checkoutMobile);
   form.append('document', compressed, `checkout_doc_${Date.now()}.jpg`);
+  form.append('context',  'checkout');
 
   try {
     const res  = await apiFetch('/upload_customer_document', { method: 'POST', body: form });
@@ -300,18 +362,18 @@ function _renderCheckoutPendingStrip() {
   const countBadge = document.getElementById('checkout-pending-count');
   if (!strip || !thumbEl) return;
 
-  if (!_docCapturedBlobs.length) {
+  if (!_checkoutTray.length) {
     strip.style.display = 'none';
     thumbEl.innerHTML   = '';
     return;
   }
 
   // Update count badge
-  const n = _docCapturedBlobs.length;
+  const n = _checkoutTray.length;
   if (countBadge) countBadge.textContent = `${n} photo${n !== 1 ? 's' : ''}`;
 
   thumbEl.innerHTML = '';
-  _docCapturedBlobs.forEach((item, i) => {
+  _checkoutTray.forEach((item, i) => {
     const wrapper = document.createElement('div');
     wrapper.style.cssText = 'position: relative; flex-shrink: 0;';
 
@@ -326,7 +388,7 @@ function _renderCheckoutPendingStrip() {
     img.title = 'Click to preview';
     img.addEventListener('mouseover', () => { img.style.borderColor = '#4338ca'; img.style.transform = 'scale(1.05)'; img.style.boxShadow = '0 4px 14px rgba(67,56,202,0.25)'; });
     img.addEventListener('mouseout',  () => { img.style.borderColor = '#c7d2fe'; img.style.transform = ''; img.style.boxShadow = '0 2px 8px rgba(67,56,202,0.12)'; });
-    img.addEventListener('click', () => openPhotoViewer(_docCapturedBlobs.map(b => b.url), i, ''));
+    img.addEventListener('click', () => openPhotoViewer(_checkoutTray.map(b => b.url), i, ''));
 
     // Remove button
     const del = document.createElement('button');
@@ -343,7 +405,7 @@ function _renderCheckoutPendingStrip() {
     del.addEventListener('mouseout',  () => { del.style.background = '#6366f1'; });
     del.addEventListener('click', () => {
       URL.revokeObjectURL(item.url);
-      _docCapturedBlobs.splice(i, 1);
+      _checkoutTray.splice(i, 1);
       _renderCheckoutPendingStrip();
     });
 
@@ -360,25 +422,26 @@ async function _commitCheckoutPending() {
   // Fix 14: prevent re-entry on rapid clicks
   if (_checkoutUploadLock) return;
   if (!_checkoutMobile) { _notify('No mobile linked — cannot save document', 'error'); return; }
-  if (!_docCapturedBlobs.length) return;
+  if (!_checkoutTray.length) return;
 
   _checkoutUploadLock = true;
   const uploadBtn = document.getElementById('checkout-pending-upload-btn');
   if (uploadBtn) { uploadBtn.disabled = true; uploadBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Saving…'; }
 
   try {
-    const items = [..._docCapturedBlobs];
+    const items = [..._checkoutTray];
     // Upload all files in parallel — the Firestore transaction inside
     // upload_document uses ArrayUnion + optimistic retry, so concurrent
     // writes to the same customer doc are safe and much faster than sequential.
-    const results = await Promise.all(items.map(item => _uploadCheckoutDoc(item.blob)));
+    const results = await Promise.all(items.map(item => _uploadCheckoutDoc(item.blob, item.scanned)));
     const allOk   = results.every(Boolean);
 
     // Revoke object URLs for successfully uploaded items
     items.forEach((item, i) => { if (results[i]) URL.revokeObjectURL(item.url); });
 
+    // Keep only the photos that failed, so a retry never re-uploads a success.
+    _checkoutTray = items.filter((_, i) => !results[i]);
     if (allOk) {
-      _docCapturedBlobs = [];
       _renderCheckoutPendingStrip();
       _notify('Documents saved to guest record ✓', 'success');
       if (typeof window.populateCheckoutDocView === 'function') {
@@ -401,8 +464,8 @@ function _endCheckoutDocSession() {
 
 /** Discard all pending checkout blobs without uploading. */
 function _discardCheckoutPending() {
-  _docCapturedBlobs.forEach(item => URL.revokeObjectURL(item.url));
-  _docCapturedBlobs = [];
+  _checkoutTray.forEach(item => URL.revokeObjectURL(item.url));
+  _checkoutTray = [];
   _renderCheckoutPendingStrip();
 }
 
@@ -511,6 +574,7 @@ async function lookupAndFillCustomer(mobile) {
     const data = await res.json();
 
     if (data.success && data.customer) {
+      window.CibaraSecureImg.remember(data.customer);
       _currentCheckinCustomer = data.customer;
       autoFillFromCustomer(data.customer);
       _applyIndicator(data.customer);
@@ -740,7 +804,35 @@ function _applyPendingSettlementAlert(customer) {
     }
   }
 
-  if (customer && customer.has_pending_settlement && customer.pending_settlement_amount) {
+  // A previous "cleared" state may have recoloured the banner; start fresh.
+  const titleEl = document.getElementById('checkin-pending-settlement-title');
+  alertEl.style.background = '';
+  alertEl.style.borderColor = '';
+  if (detailsEl) detailsEl.style.color = '';
+  if (titleEl) titleEl.style.color = '';
+
+  const _rows = (customer && Array.isArray(customer.pending_settlements))
+    ? customer.pending_settlements : [];
+  if (titleEl) {
+    titleEl.textContent = _rows.length > 1
+      ? `Pending Balance from ${_rows.length} Earlier Stays`
+      : 'Pending Balance from Last Stay';
+  }
+
+  if (_rows.length > 1) {
+    const inr = (n) => '₹' + Number(n || 0).toLocaleString('en-IN');
+    const parts = _rows.map(r => {
+      const where = r.room ? `Room ${r.room}` : 'stay';
+      const when  = r.checkout_date ? `, ${_fmtSettlementDate(r.checkout_date)}` : '';
+      return `${inr(r.amount)} (${where}${when})`;
+    });
+    if (detailsEl) {
+      detailsEl.textContent = `Outstanding: ${inr(customer.pending_settlement_total)} in total — ` +
+        parts.join(' + ') + '. Please collect before check-in.';
+    }
+    if (dateEl) dateEl.textContent = 'Collect takes the oldest first.';
+    alertEl.style.display = 'block';
+  } else if (customer && customer.has_pending_settlement && customer.pending_settlement_amount) {
     const amt  = Number(customer.pending_settlement_amount).toLocaleString('en-IN');
     const room = customer.pending_settlement_room ? ` (Room ${customer.pending_settlement_room})` : '';
     if (detailsEl) detailsEl.textContent = `Outstanding: ₹${amt}${room} — please collect before check-in.`;
@@ -764,6 +856,15 @@ function _applyPendingSettlementAlert(customer) {
     if (detailsEl) detailsEl.textContent = '';
     if (dateEl)    dateEl.textContent    = '';
   }
+}
+
+function _fmtSettlementDate(raw) {
+  try {
+    const d = new Date(raw);
+    if (isNaN(d.getTime())) return String(raw);
+    return String(d.getDate()).padStart(2, '0') + ' ' +
+      d.toLocaleString('en-IN', { month: 'short' }) + ' ' + d.getFullYear();
+  } catch (e) { return String(raw); }
 }
 
 function _hidePendingSettlementAlert() {
@@ -818,6 +919,14 @@ window.addEventListener('cibaraSettlementCollected', function (ev) {
     } else {
       _currentCheckinCustomer.pending_settlement_amount = d.remaining;
     }
+  }
+
+  // Other stays still owed: reload so the banner moves on to the next one
+  // instead of announcing that everything is cleared.
+  const _left = (_currentCheckinCustomer && _currentCheckinCustomer.pending_settlement_count) || 0;
+  if (d.fully_paid && _left > 1 && _currentCheckinCustomer.mobile) {
+    lookupAndFillCustomer(_currentCheckinCustomer.mobile);
+    return;
   }
 
   if (d.fully_paid) {
@@ -970,7 +1079,7 @@ function _showCheckinStoredDocs(customer) {
   thumbs.innerHTML = '';
   urls.forEach((url, idx) => {
     const img         = document.createElement('img');
-    img.src           = url;
+    window.CibaraSecureImg.apply(img, url, 'thumb');
     img.alt           = `ID doc ${idx + 1}`;
     img.style.cssText = 'width:64px;height:44px;object-fit:cover;border-radius:5px;border:1px solid #a5d6a7;cursor:pointer';
     img.title         = `View document ${idx + 1}`;
@@ -1069,6 +1178,35 @@ function initDocCamera() {
 
   // Delete stored photo from viewer
   document.getElementById('doc-viewer-delete-btn')?.addEventListener('click', _deleteViewerPhoto);
+
+  // Add another photo straight from the viewer — delegates to whichever screen
+  // registered an add handler (the Register sets window.CibaraDocAddHandler).
+  document.getElementById('doc-viewer-add-btn')?.addEventListener('click', () => {
+    if (typeof window.CibaraDocAddHandler === 'function' && _viewerMobile) {
+      window.CibaraDocAddHandler(_viewerMobile, Math.max(0, MAX_DOC_PHOTOS - _viewerUrls.length));
+    }
+  });
+
+  // Keyboard: ← / → to flip between photos, Esc to close. Only acts while the
+  // lightbox is actually open so it never swallows keys on the page behind.
+  document.addEventListener('keydown', (e) => {
+    const viewer = document.getElementById('doc-photo-viewer');
+    if (!viewer || viewer.style.display !== 'flex') return;
+    if (e.key === 'Escape')      { closePhotoViewer(); }
+    else if (e.key === 'ArrowLeft'  && _viewerUrls.length > 1) { e.preventDefault(); navigateViewer(-1); }
+    else if (e.key === 'ArrowRight' && _viewerUrls.length > 1) { e.preventDefault(); navigateViewer(+1); }
+  });
+
+  // Click the main image to toggle a 1:1 zoom (an ID number is often too small
+  // to read in the fitted view). Pan by scrolling while zoomed.
+  const mainImg = document.getElementById('doc-viewer-main-img');
+  if (mainImg) {
+    mainImg.style.cursor = 'zoom-in';
+    mainImg.addEventListener('click', () => {
+      const zoomed = mainImg.classList.toggle('doc-zoomed');
+      mainImg.style.cursor = zoomed ? 'zoom-out' : 'zoom-in';
+    });
+  }
 }
 
 function _setDocType(type) {
@@ -1306,6 +1444,48 @@ function _setScanStatus(state) {
   el.style.background   = s.bg;
 }
 
+// Pure geometry: the guide rectangle inside a W×H box for a given doc type.
+// Shared by the on-screen overlay (_drawGuide) AND the capture crop
+// (_mapGuideToSource) so the saved region is EXACTLY what the operator framed.
+// On a portrait phone frame (W < H) cards get their width from W; pages from H.
+function _guideRect(W, H, docType) {
+  let gW, gH;
+  if (docType === 'card') {
+    // ID / Aadhaar card: landscape credit-card ratio 85.6 × 53.98 mm = 1.586 : 1
+    gW = W * 0.86;
+    gH = gW / 1.586;
+    if (gH > H * 0.78) { gH = H * 0.78; gW = gH * 1.586; }   // too tall → height-led
+  } else {
+    // A4 / long document: portrait 0.707 : 1  (width : height)
+    gH = H * 0.88;
+    gW = gH * 0.707;
+    if (gW > W * 0.80) { gW = W * 0.80; gH = gW / 0.707; }   // too wide → width-led
+  }
+  return { gX: (W - gW) / 2, gY: (H - gH) / 2, gW, gH };
+}
+
+// Map the guide rectangle (display/box coordinates) to a crop rectangle in the
+// camera's native pixels. The <video> is object-fit: cover, so the displayed
+// frame is the source scaled up by max(boxW/vW, boxH/vH) and centre-cropped;
+// this inverts that mapping. `marginFrac` grows the crop on every side so a
+// card edge sitting just outside the guide is not clipped. Pure + testable.
+function _mapGuideToSource(boxW, boxH, videoW, videoH, docType, marginFrac) {
+  const g = _guideRect(boxW, boxH, docType);
+  const scale = Math.max(boxW / videoW, boxH / videoH);   // object-fit: cover
+  const offsetX = (videoW * scale - boxW) / 2;
+  const offsetY = (videoH * scale - boxH) / 2;
+  let sx = (g.gX + offsetX) / scale;
+  let sy = (g.gY + offsetY) / scale;
+  let sw = g.gW / scale;
+  let sh = g.gH / scale;
+  const mx = sw * (marginFrac || 0), my = sh * (marginFrac || 0);
+  sx -= mx; sy -= my; sw += 2 * mx; sh += 2 * my;
+  // Clamp to the real frame so we never read outside the video buffer.
+  sx = Math.max(0, sx); sy = Math.max(0, sy);
+  sw = Math.min(sw, videoW - sx); sh = Math.min(sh, videoH - sy);
+  return { sx, sy, sw, sh };
+}
+
 function _drawGuide(progress) {
   const overlay = document.getElementById('doc-scan-overlay');
   if (!overlay) return;
@@ -1315,33 +1495,7 @@ function _drawGuide(progress) {
 
   ctx.clearRect(0, 0, W, H);
 
-  // Guide rectangle — computed so it always fits and keeps the correct shape.
-  // On a portrait phone frame (W < H) cards get their width from W; pages from H.
-  let gW, gH;
-  if (_docType === 'card') {
-    // ID / Aadhaar card: landscape credit-card ratio 85.6 × 53.98 mm = 1.586 : 1
-    // Try width-led first
-    gW = W * 0.86;
-    gH = gW / 1.586;
-    // If card is taller than 78% of frame, shrink height-led instead
-    if (gH > H * 0.78) {
-      gH = H * 0.78;
-      gW = gH * 1.586;
-    }
-  } else {
-    // A4 / long document: portrait 0.707 : 1  (width : height)
-    // Try height-led first so it fills the vertical space
-    gH = H * 0.88;
-    gW = gH * 0.707;
-    // If wider than 80% of frame, shrink width-led
-    if (gW > W * 0.80) {
-      gW = W * 0.80;
-      gH = gW / 0.707;
-    }
-  }
-
-  const gX = (W - gW) / 2;
-  const gY = (H - gH) / 2;
+  const { gX, gY, gW, gH } = _guideRect(W, H, _docType);
 
   // Dim area outside guide
   ctx.fillStyle = 'rgba(0,0,0,0.42)';
@@ -1402,31 +1556,52 @@ function captureDocPhoto() {
   const feed = document.getElementById('doc-camera-feed');
   if (!feed) return;
 
-  // Downscale at capture: ID documents stay perfectly readable at 1280px
-  // on the long edge, and upload time scales with pixel count. A 4K camera
-  // frame at q=0.90 produced 1.5-4 MB JPEGs; capped at 1280px the same shot
-  // is ~150-350 KB — the upload stops dominating check-in time.
-  const MAX_EDGE = 1280;
-  const srcW = feed.videoWidth  || 1280;
-  const srcH = feed.videoHeight || 720;
-  const _scale = Math.min(1, MAX_EDGE / Math.max(srcW, srcH));
+  const videoW = feed.videoWidth  || 1280;
+  const videoH = feed.videoHeight || 720;
+
+  // Capture the WHOLE frame so the detector has the surrounding context it needs
+  // to find the document's edges. Cap the long side so the JPEG encodes fast.
+  const MAX_EDGE = 2200;
+  const scale   = Math.min(1, MAX_EDGE / Math.max(videoW, videoH));
   const canvas  = document.createElement('canvas');
-  canvas.width  = Math.round(srcW * _scale);
-  canvas.height = Math.round(srcH * _scale);
-  const ctx     = canvas.getContext('2d');
-  ctx.drawImage(feed, 0, 0, canvas.width, canvas.height);
+  canvas.width  = Math.max(1, Math.round(videoW * scale));
+  canvas.height = Math.max(1, Math.round(videoH * scale));
+  canvas.getContext('2d').drawImage(feed, 0, 0, canvas.width, canvas.height);
 
-  // Apply scanned-document look
-  _applyScannedLook(ctx, canvas.width, canvas.height);
+  // The guide box the operator framed into, as fractions of the frame. This is
+  // the fallback crop when auto-detect misses, so we still keep exactly "the
+  // area you framed" — never the whole desk.
+  let fallbackCrop = null;
+  const rect = feed.getBoundingClientRect();
+  const boxW = Math.round(rect.width)  || feed.clientWidth  || videoW;
+  const boxH = Math.round(rect.height) || feed.clientHeight || videoH;
+  if (boxW > 0 && boxH > 0) {
+    const g = _mapGuideToSource(boxW, boxH, videoW, videoH, _docType, 0.04);
+    fallbackCrop = { x: g.sx / videoW, y: g.sy / videoH, w: g.sw / videoW, h: g.sh / videoH };
+  }
 
-  canvas.toBlob(blob => {
-    if (!blob) return;
-    const url = URL.createObjectURL(blob);
+  // Free the camera (phones only allow one user of it at a time).
+  stopDocStream();
 
-    // Push to blobs array immediately (so "Add Another" works)
-    _docCapturedBlobs.push({ blob, url });
+  canvas.toBlob(async (blob) => {
+    if (!blob) { _notify('Could not capture the photo — try again', 'error'); _retakeDocPhoto(); return; }
 
-    // Show in modal preview
+    // ONE TAP: auto-detect the document → deskew → magic colour, with NO crop
+    // editor. On a detection miss it crops to the guide box the operator framed.
+    // The preview below (with Retake) is the review step.
+    const captured = new File([blob], `id_${Date.now()}.jpg`, { type: 'image/jpeg' });
+    let scanned = captured;
+    if (window.CibaraDocScan && typeof window.CibaraDocScan.autoScan === 'function') {
+      try {
+        scanned = await window.CibaraDocScan.autoScan(captured, {
+          autoDetect: true, enhance: 'magic', fallbackCrop,
+        }) || captured;
+      } catch (e) { console.warn('[customer-docs] autoScan failed, keeping frame:', e); scanned = captured; }
+    }
+
+    const url = URL.createObjectURL(scanned);
+    _docCapturedBlobs.push({ blob: scanned, url });
+
     const prevImg = document.getElementById('doc-preview-img');
     if (prevImg) prevImg.src = url;
 
@@ -1435,30 +1610,61 @@ function captureDocPhoto() {
     if (feedSec)    feedSec.style.display    = 'none';
     if (previewSec) { previewSec.style.display = 'flex'; previewSec.style.flexDirection = 'column'; }
 
-    stopDocStream();
-
     // Update "Add Another" button visibility in preview
     const addAnotherBtn = document.getElementById('doc-add-photo-btn');
     if (addAnotherBtn) {
       addAnotherBtn.style.display = _docCapturedBlobs.length < MAX_DOC_PHOTOS ? 'flex' : 'none';
     }
-  }, 'image/jpeg', 0.85);
+  }, 'image/jpeg', 0.92);
 }
 
+// Unsharp-mask sharpen + mild contrast. The old version only desaturated and
+// over-boosted contrast, which greyed out and muddied small print. Here a 3×3
+// box-blur is subtracted back from the original (unsharp mask) to crisp up the
+// edges of text and the QR, followed by a gentle contrast lift. Colour is kept
+// so the photo still looks like the card. Runs once per capture on the cropped
+// region (≤1600–2000px), so the cost is a few tens of ms.
 function _applyScannedLook(ctx, w, h) {
-  const d        = ctx.getImageData(0, 0, w, h);
-  const px       = d.data;
-  const contrast = 1.35;
-  for (let i = 0; i < px.length; i += 4) {
-    const lum  = px[i] * 0.299 + px[i + 1] * 0.587 + px[i + 2] * 0.114;
-    px[i]      = px[i]     * 0.7 + lum * 0.3;
-    px[i + 1]  = px[i + 1] * 0.7 + lum * 0.3;
-    px[i + 2]  = px[i + 2] * 0.7 + lum * 0.3;
-    px[i]      = Math.min(255, Math.max(0, (px[i]     - 128) * contrast + 128));
-    px[i + 1]  = Math.min(255, Math.max(0, (px[i + 1] - 128) * contrast + 128));
-    px[i + 2]  = Math.min(255, Math.max(0, (px[i + 2] - 128) * contrast + 128));
+  const img = ctx.getImageData(0, 0, w, h);
+  const s   = img.data;
+  const blur = new Uint8ClampedArray(s.length);
+
+  // Separable 3×3 box blur (horizontal pass then vertical) into `blur`.
+  const tmp = new Float32Array(s.length);
+  for (let y = 0; y < h; y++) {
+    const row = y * w;
+    for (let x = 0; x < w; x++) {
+      const i = (row + x) * 4;
+      const xl = x > 0 ? i - 4 : i;
+      const xr = x < w - 1 ? i + 4 : i;
+      tmp[i]     = (s[xl]     + s[i]     + s[xr])     / 3;
+      tmp[i + 1] = (s[xl + 1] + s[i + 1] + s[xr + 1]) / 3;
+      tmp[i + 2] = (s[xl + 2] + s[i + 2] + s[xr + 2]) / 3;
+    }
   }
-  ctx.putImageData(d, 0, 0);
+  const stride = w * 4;
+  for (let y = 0; y < h; y++) {
+    const row = y * w;
+    const up = y > 0 ? -stride : 0;
+    const dn = y < h - 1 ? stride : 0;
+    for (let x = 0; x < w; x++) {
+      const i = (row + x) * 4;
+      blur[i]     = (tmp[i + up]     + tmp[i]     + tmp[i + dn])     / 3;
+      blur[i + 1] = (tmp[i + up + 1] + tmp[i + 1] + tmp[i + dn + 1]) / 3;
+      blur[i + 2] = (tmp[i + up + 2] + tmp[i + 2] + tmp[i + dn + 2]) / 3;
+    }
+  }
+
+  const AMOUNT   = 0.9;    // unsharp strength
+  const CONTRAST = 1.12;   // gentle, so highlights don't blow out
+  for (let i = 0; i < s.length; i += 4) {
+    for (let c = 0; c < 3; c++) {
+      let v = s[i + c] + AMOUNT * (s[i + c] - blur[i + c]);  // unsharp mask
+      v = (v - 128) * CONTRAST + 128;                        // mild contrast
+      s[i + c] = v < 0 ? 0 : v > 255 ? 255 : v;
+    }
+  }
+  ctx.putImageData(img, 0, 0);
 }
 
 /** "Done" — finalise current blob(s), close modal, render strip or show pending preview */
@@ -1479,14 +1685,43 @@ async function useDocPhoto() {
   closeDocCameraModal();
 }
 
+// Run one ID photo through the document scanner (static/doc-scan.js): it
+// lazy-loads OpenCV, auto-detects the document's four corners (card OR long
+// doc), lets the operator nudge them, deskews the quad flat, applies the
+// magic-colour enhancement, and hands back a cropped JPEG — so only the
+// document, not the desk behind it, is ever uploaded. Returns the processed
+// File; the ORIGINAL file when the scanner is unavailable or passed it through
+// (non-image); or null when the operator cancelled in the editor.
+async function _scanIdDoc(file) {
+  if (!file || !(window.CibaraDocScan && typeof window.CibaraDocScan.scan === 'function')) {
+    return file;
+  }
+  try {
+    return await window.CibaraDocScan.scan(file, {
+      autoDetect: true,
+      enhance: 'magic',
+      title: 'Scan the ID',
+      hint: 'The document is detected automatically — drag the dots to fix the corners, then tap “Use this”.',
+    });
+  } catch (e) {
+    console.warn('[customer-docs] ID scan failed, keeping original:', e);
+    return file;
+  }
+}
+
 async function onDocFileSelected() {
-  const file = document.getElementById('doc-file-input')?.files[0];
-  if (!file || _docCapturedBlobs.length >= MAX_DOC_PHOTOS) return;
-  // Compress BEFORE queueing — a raw phone photo is 3-8 MB; capped at
-  // 1280px JPEG it's ~150-350 KB. This path previously uploaded the
-  // ORIGINAL file and was the single slowest part of photo check-ins.
-  // _compressImage falls back to the original blob on any error.
-  const blob = await _compressImage(file);
+  const input = document.getElementById('doc-file-input');
+  const picked = input?.files[0];
+  if (!picked || _docCapturedBlobs.length >= MAX_DOC_PHOTOS) return;
+  // Auto-detect → adjust corners → deskew → magic colour. Only the cropped
+  // document is kept. Cancelling the editor adds nothing.
+  const scanned = await _scanIdDoc(picked);
+  if (input) input.value = '';           // let the same file be re-picked
+  if (!scanned) return;                  // cancelled in the editor
+  // The scanner already returns a sized, enhanced JPEG; only fall back to
+  // _compressImage (3-8 MB phone photo → ~150-350 KB) when it passed the
+  // original straight through (scanner unavailable / non-image).
+  const blob = (scanned !== picked) ? scanned : await _compressImage(picked);
   const url = URL.createObjectURL(blob);
   _docCapturedBlobs.push({ blob, url });
   renderThumbStrip();
@@ -1578,11 +1813,33 @@ function resetDocCaptureUI() {
 // (set when opening from a customer context so the delete button can call the API)
 let _viewerMobile = '';
 
+// Bumped on every photo switch. An image fetch that finishes after the user
+// has already moved on (or opened a different guest) checks its token against
+// this and bails, so a slow previous request can never paint over the photo
+// now on screen.
+let _viewerLoadToken = 0;
+
+// Warm the session image cache (window.CibaraSecureImg keeps a Map of blob
+// URLs) so navigating between a guest's photos — and re-opening the same
+// guest — is instant. Thumbs are small, so warm them all; the heavier
+// watermarked views only for the current photo and its immediate neighbours,
+// to avoid asking the server to generate every watermark at once.
+function _prefetchViewerImages(urls, idx) {
+  const Secure = window.CibaraSecureImg;
+  if (!Secure || !urls) return;
+  urls.forEach((u, i) => {
+    if (!Secure.isSecure(u)) return;
+    Secure.src(u, 'thumb').catch(() => {});
+    if (Math.abs(i - idx) <= 1) Secure.src(u, 'view').catch(() => {});
+  });
+}
+
 function openPhotoViewer(urls, startIdx, mobile) {
   if (!urls || !urls.length) return;
   _viewerUrls       = urls;
   _viewerCurrentIdx = startIdx || 0;
   _viewerMobile     = (mobile || '').replace(/\D/g, '');
+  _prefetchViewerImages(urls, _viewerCurrentIdx);
 
   _setText('doc-viewer-count', `${urls.length} photo${urls.length !== 1 ? 's' : ''} on file`);
 
@@ -1591,7 +1848,7 @@ function openPhotoViewer(urls, startIdx, mobile) {
     thumbsEl.innerHTML = '';
     urls.forEach((url, i) => {
       const img     = document.createElement('img');
-      img.src       = url;
+      window.CibaraSecureImg.apply(img, url, 'thumb');
       img.alt       = `Doc ${i + 1}`;
       img.className = 'doc-thumb' + (i === _viewerCurrentIdx ? ' active' : '');
       img.addEventListener('click', () => setViewerPhoto(i));
@@ -1606,17 +1863,86 @@ function openPhotoViewer(urls, startIdx, mobile) {
   _showFlex('doc-viewer-prev', showArrows);
   _showFlex('doc-viewer-next', showArrows);
 
+  // "Add photo" is offered only when a mobile is linked, a host screen has
+  // registered an add handler (register.js sets window.CibaraDocAddHandler),
+  // and the guest is still under the photo cap. This is what lets the Register
+  // open documents straight in this viewer and still add more without an
+  // intermediate grid modal.
+  const addBtn = document.getElementById('doc-viewer-add-btn');
+  if (addBtn) {
+    const canAdd = !!(_viewerMobile && typeof window.CibaraDocAddHandler === 'function'
+                      && _viewerUrls.length < MAX_DOC_PHOTOS);
+    addBtn.style.display = canAdd ? 'inline-flex' : 'none';
+  }
+
   const viewer = document.getElementById('doc-photo-viewer');
   if (viewer) viewer.style.display = 'flex';
+}
+
+function _showViewerSpinner(show) {
+  const el = document.getElementById('doc-viewer-loading');
+  if (el) el.style.display = show ? 'flex' : 'none';
 }
 
 function setViewerPhoto(idx) {
   _viewerCurrentIdx = idx;
   const url = _viewerUrls[idx];
+  const token = ++_viewerLoadToken;
   const mainImg  = document.getElementById('doc-viewer-main-img');
-  if (mainImg)  mainImg.src = url;
+  if (mainImg) {
+    // Drop any zoom from the previous photo so each one opens fitted.
+    mainImg.classList.remove('doc-zoomed');
+    mainImg.style.cursor = 'zoom-in';
+
+    const Secure = window.CibaraSecureImg;
+    if (Secure && Secure.isSecure(url)) {
+      // Blank the previous image at once so another guest's document is never
+      // left on screen while the new (watermarked, server-generated) view
+      // loads. Show a spinner, then paint the small thumb the moment it is
+      // ready (fast, usually cached) and sharpen to the full view after.
+      mainImg.removeAttribute('src');
+      mainImg.alt = '';
+      mainImg.classList.add('doc-lowres');
+      _showViewerSpinner(true);
+
+      let gotFull = false;
+      Secure.src(url, 'thumb').then((u) => {
+        if (token !== _viewerLoadToken || gotFull) return;
+        mainImg.src = u;
+        _showViewerSpinner(false);
+      }).catch(() => {});
+      Secure.src(url, 'view').then((u) => {
+        if (token !== _viewerLoadToken) return;
+        gotFull = true;
+        mainImg.src = u;
+        mainImg.classList.remove('doc-lowres');
+        _showViewerSpinner(false);
+      }).catch(() => {
+        if (token !== _viewerLoadToken) return;
+        _showViewerSpinner(false);
+        mainImg.classList.remove('doc-lowres');
+        mainImg.alt = 'Could not load';
+      });
+
+      // Warm the neighbours so flipping between photos is instant.
+      _prefetchViewerImages(_viewerUrls, idx);
+    } else {
+      // Local blob URL (a not-yet-uploaded capture) — no fetch, show it now.
+      mainImg.classList.remove('doc-lowres');
+      _showViewerSpinner(false);
+      mainImg.src = url;
+    }
+  }
   const openLink = document.getElementById('doc-viewer-open-link');
-  if (openLink) openLink.href = url;
+  if (openLink) {
+    openLink.href = window.CibaraSecureImg.isSecure(url) ? '#' : url;
+    openLink.onclick = window.CibaraSecureImg.isSecure(url)
+      ? (e) => { e.preventDefault(); window.CibaraSecureImg.open(url); } : null;
+  }
+  // Who captured this photo and when (shown under "N photos on file").
+  const n = _viewerUrls.length;
+  const cap = window.CibaraSecureImg.caption(url);
+  _setText('doc-viewer-count', `${n} photo${n !== 1 ? 's' : ''} on file` + (cap ? ` · ${cap}` : ''));
   document.querySelectorAll('.doc-thumb').forEach((el, i) => el.classList.toggle('active', i === idx));
 }
 
@@ -1628,6 +1954,11 @@ function closePhotoViewer() {
   const viewer = document.getElementById('doc-photo-viewer');
   if (viewer) viewer.style.display = 'none';
 }
+
+// Exposed on window so the Register screen (static/register.js, a separate
+// script) can open the same lightbox instead of dumping the raw image into a
+// new browser tab.
+window.openPhotoViewer = openPhotoViewer;
 
 async function _deleteViewerPhoto() {
   const urlToDelete = _viewerUrls[_viewerCurrentIdx];
@@ -1703,7 +2034,7 @@ async function _doDeleteViewerPhoto(urlToDelete) {
   } catch (err) {
     _notify('Delete error: ' + err.message, 'error');
   } finally {
-    if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-trash-alt"></i> Delete &amp; Retake'; }
+    if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-trash-alt"></i> Remove'; }
   }
 }
 

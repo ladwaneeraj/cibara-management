@@ -1249,42 +1249,6 @@ def checkout():
                 ).start()
             # ────────────────────────────────────────────────────────────────
 
-            # ── Banking: finalise pending cash on this stay ────────────────
-            # If the stay finished WITHOUT a real bill number (invoice
-            # toggle OFF -> bill_number == "-"), any cash collected on it
-            # is non-deposit cash. Flip its eligibility from `pending`
-            # to `excluded` so the deposit screen never offers it, and
-            # the Unofficial tab can list it. If the bill DOES have a
-            # real number, mark_unofficial_on_checkout is a no-op (the
-            # trigger should already have fired on the first online
-            # payment); calling it would simply do nothing.
-            try:
-                _bnum = (bill_record or {}).get("bill_number") if bill_record else None
-                if not _bnum or str(_bnum).strip() in ("", "-"):
-                    from services.banking import cash_receipts as _bk_receipts
-
-                    # Runs in the background: this is 2–4 Firestore
-                    # round-trips (query + batch + event record) that the
-                    # operator should not wait on. mark_unofficial_on_checkout
-                    # already catches and records its own failures internally;
-                    # the wrapper below logs anything that still escapes.
-                    def _bk_unofficial(_sid=bill_id):
-                        try:
-                            _bk_receipts.mark_unofficial_on_checkout(_sid)
-                        except Exception as _e:
-                            logger.warning(
-                                f"mark_unofficial_on_checkout failed "
-                                f"for stay={_sid}: {_e}"
-                            )
-
-                    import threading as _threading
-                    _threading.Thread(target=_bk_unofficial, daemon=True).start()
-            except Exception as _bk_e:
-                # Banking-side bookkeeping must never block a checkout.
-                logger.warning(
-                    f"mark_unofficial_on_checkout failed for stay={bill_id}: {_bk_e}"
-                )
-
             return jsonify(
                 success=True,
                 message=message,
@@ -5297,28 +5261,7 @@ def update_stay_payment():
                              f"and the change must be re-declared to your CA."),
                 ), 409
 
-        # ── Banking integrity guards ──────────────────────────────────────────
-        # These guards protect deposit and receipt-voucher integrity.
-        # They block edits that would silently corrupt downstream Banking
-        # state. The error message in each case tells the operator the
-        # supported recovery path.
-
-        # (a) If the payment is already bundled into a confirmed bank
-        # deposit, refuse the edit — changing the row would alter the
-        # gross/net of that deposit without the deposit knowing about
-        # it.
-        if old_data.get("cash_deposit_id"):
-            return jsonify(
-                success=False,
-                code="DEPOSIT_LINKED",
-                message=(
-                    "Cannot edit: this payment is linked to bank "
-                    f"deposit {old_data.get('cash_deposit_id')}. "
-                    f"Reverse the deposit first (Banking → History → "
-                    f"Reverse), then edit."
-                ),
-            ), 409
-
+        # ── Receipt-number guard ─────────────────────────────────────────────
         # (b) If a receipt voucher has been issued for this payment AND
         # the method is changing (cash → online or vice versa), refuse.
         # Re-stamping a different receipt prefix on the same payment is
@@ -5377,45 +5320,6 @@ def update_stay_payment():
             # Checked-out stay: room.add_ons is no longer live, so there is no
             # second store to drift and no balance to corrupt. Allow the edit,
             # but never let step 3 touch a balance for a charge.
-
-        # (c) If this payment is THE trigger that made the stay
-        # invoiceable AND the method is changing away from online, the
-        # stay's invoiceable state is no longer justified. Attempt to
-        # un-trigger automatically. revert_trigger_if_safe will refuse
-        # if any cash from this stay has already been deposited — in
-        # which case the operator must reverse the deposit first.
-        _stay_id = old_data.get("stay_id")
-        if _method_changing and new_method != "online" and _stay_id:
-            try:
-                bill_snap = db.collection("bills").document(_stay_id).get()
-                if bill_snap.exists:
-                    bill = bill_snap.to_dict() or {}
-                    if bill.get("invoiceable_trigger_payment_id") == payment_id:
-                        from services.banking import cash_receipts as _bk_rc
-                        from services.banking.cash_receipts import UnTriggerBlocked
-                        try:
-                            _bk_rc.revert_trigger_if_safe(
-                                _stay_id,
-                                reason="trigger_payment_method_change",
-                            )
-                        except UnTriggerBlocked as _bk_e:
-                            return jsonify(
-                                success=False,
-                                code="TRIGGER_LOCKED",
-                                message=(
-                                    "Cannot change method: this is the "
-                                    "online payment that made the stay "
-                                    "invoiceable, and cash from the "
-                                    "stay has already been deposited "
-                                    f"(on {_bk_e.first_deposit_at}). "
-                                    "Reverse that deposit first."
-                                ),
-                            ), 409
-            except Exception as _bk_e:
-                logger.warning(
-                    f"update_stay_payment: trigger-payment-edit guard "
-                    f"errored for {payment_id}: {_bk_e}"
-                )
 
         # ── Determine final values ────────────────────────────────────────────
         final_method = new_method if new_method else old_method

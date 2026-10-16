@@ -218,6 +218,7 @@
       const data = await res.json();
       if (!data.success) throw new Error(data.message || "Not found");
       currentCustomer = data.customer;
+      if (window.CibaraSecureImg) window.CibaraSecureImg.remember(currentCustomer);
       editMode        = false;
       _historyMobile  = null;  // force history re-fetch for this customer
       _renderDetailView();
@@ -245,8 +246,9 @@
     const docsHTML = docs.length
       ? docs.map((url, i) => `
           <div class="cm-doc-item">
-            <a href="${_esc(url)}" target="_blank">
-              <img src="${_esc(url)}" alt="Doc ${i+1}"
+            <a href="#" onclick="event.preventDefault();window.CibaraSecureImg.open('${_esc(url)}')"
+               title="${_esc(window.CibaraSecureImg ? window.CibaraSecureImg.caption(url) : '')}">
+              <img data-secure-src="${_esc(url)}" alt="Doc ${i+1}"
                 onerror="this.src=''; this.parentElement.innerHTML='<i class=\\'fas fa-file-image\\'></i>'" />
             </a>
             ${editMode ? `<button class="cm-doc-del-btn" onclick="cmDeleteDoc('${_esc(url)}')" title="Remove">
@@ -351,6 +353,9 @@
                <i class="fas fa-cloud-upload-alt"></i> Upload ${pendingPhotos.length} Photo${pendingPhotos.length > 1 ? "s" : ""}
              </button>` : ""}
       </div>`;
+    // ID photos are private: load them with the signed-in session.
+    document.querySelectorAll("#cm-detail-body img[data-secure-src]").forEach((im) =>
+      window.CibaraSecureImg && window.CibaraSecureImg.apply(im, im.dataset.secureSrc, "thumb"));
   }
 
   /* ─── Stay history ───────────────────────────────────────────────────── */

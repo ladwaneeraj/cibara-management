@@ -1,3 +1,6 @@
+# Claude Code local (machine-specific permissions/settings — not shared)
+.claude/settings.local.json
+
 # Python
 __pycache__/
 *.py[cod]
@@ -89,3 +92,11 @@ firestore-debug.log
 .firebase/
 guest/node_modules/
 guest/dist/
+
+# FastAPI/React migration: the Python-template "lib/" rule above would
+# otherwise hide the SPA's source folder (and gcloud --source honours it).
+!frontend/src/lib/
+frontend/node_modules/
+frontend/dist/
+frontend/coverage/
+frontend/e2e/shots/

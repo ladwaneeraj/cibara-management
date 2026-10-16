@@ -1,0 +1,96 @@
+@import "tailwindcss";
+@import "@fontsource-variable/inter";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+/*
+ * Cibara ERP theme
+ * ────────────────
+ * Primary  : cobalt blue (brand-*)     — actions, selection, occupied rooms
+ * Accent   : saffron/gold (accent-*)   — the complement of blue; used sparingly
+ *            for the active-nav marker, brand mark and highlights
+ * Chrome   : deep navy (ink-*)         — sidebar and dark mode surfaces
+ * Canvas   : cool grey (canvas)        — page background; cards are white
+ * Status   : emerald = vacant/paid, blue = occupied, amber = cleaning,
+ *            sky = ready to inspect, rose = balance due / danger
+ *
+ * Radii are tightened globally (ERP density): Tailwind's rounded-xl/2xl/3xl
+ * resolve to 8/10/12 px instead of 12/16/24 px.
+ */
+@theme {
+  --font-sans: "Inter Variable", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+
+  --color-brand-50: #eef4ff;
+  --color-brand-100: #dbe7fe;
+  --color-brand-200: #bfd3fe;
+  --color-brand-300: #93b4fd;
+  --color-brand-400: #608cf8;
+  --color-brand-500: #3b67f1;
+  --color-brand-600: #2449d8;
+  --color-brand-700: #1d3abd;
+  --color-brand-800: #1e3399;
+  --color-brand-900: #1e3078;
+
+  --color-accent-50: #fff8eb;
+  --color-accent-100: #feecc7;
+  --color-accent-200: #fdd88a;
+  --color-accent-300: #fcc14d;
+  --color-accent-400: #f9a825;
+  --color-accent-500: #e8890b;
+  --color-accent-600: #c66a06;
+  --color-accent-700: #a34b09;
+
+  --color-ink-950: #0a1426;
+  --color-ink-900: #0f1d36;
+  --color-ink-800: #172845;
+  --color-ink-700: #213656;
+  --color-ink-600: #2e4670;
+
+  --color-canvas: #f2f4f8;
+
+  --radius-lg: 0.4375rem;
+  --radius-xl: 0.5rem;
+  --radius-2xl: 0.625rem;
+  --radius-3xl: 0.75rem;
+
+  --shadow-card: 0 1px 2px 0 rgb(15 29 54 / 0.05), 0 1px 3px 0 rgb(15 29 54 / 0.04);
+}
+
+@layer base {
+  html { -webkit-tap-highlight-color: transparent; }
+  body {
+    @apply bg-canvas text-slate-900 antialiased dark:bg-ink-950 dark:text-slate-100;
+    font-feature-settings: "cv11", "ss01", "tnum";
+  }
+  :focus-visible { @apply outline-2 outline-offset-2 outline-brand-500; }
+  ::selection { @apply bg-brand-200 text-brand-900; }
+}
+
+@layer components {
+  .card {
+    @apply rounded-xl border border-slate-200 bg-white shadow-card
+           dark:border-white/[0.07] dark:bg-ink-900 dark:shadow-none;
+  }
+  .label { @apply mb-1.5 block text-[11px] font-semibold tracking-wider text-slate-500 uppercase dark:text-slate-400; }
+  .input {
+    @apply block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900
+           placeholder:text-slate-400 transition
+           focus:border-brand-500 focus:ring-3 focus:ring-brand-500/15 focus:outline-none
+           disabled:cursor-not-allowed disabled:bg-slate-50 disabled:opacity-70
+           dark:border-white/12 dark:bg-ink-800 dark:text-slate-100 dark:disabled:bg-ink-900;
+  }
+  /* Data tables: header strip, row dividers, hover. */
+  .table-erp { @apply w-full text-sm; }
+  .table-erp thead th {
+    @apply border-b border-slate-200 bg-slate-50 px-3 py-2.5 text-left text-[11px] font-semibold tracking-wider
+           text-slate-500 uppercase dark:border-white/10 dark:bg-ink-800/60 dark:text-slate-400;
+  }
+  .table-erp tbody td { @apply border-b border-slate-100 px-3 py-2.5 dark:border-white/5; }
+  .table-erp tbody tr { @apply transition-colors hover:bg-brand-50/50 dark:hover:bg-white/[0.03]; }
+  .num { font-variant-numeric: tabular-nums; }
+  .scrollbar-thin { scrollbar-width: thin; }
+}
+
+@keyframes pulse-ring { 0% { box-shadow: 0 0 0 0 rgb(239 68 68 / .55) } 100% { box-shadow: 0 0 0 7px rgb(239 68 68 / 0) } }
+.pulse-ring { animation: pulse-ring 1.4s ease-out infinite; }
+@media (prefers-reduced-motion: reduce) { .pulse-ring { animation: none; } * { scroll-behavior: auto !important; } }

@@ -33,7 +33,19 @@ def main() -> int:
     # Importing config initialises Firebase (project chosen via CIBARA_ENV).
     from config import bills_ref, IST
     from google.cloud.firestore_v1.base_query import FieldFilter
-    from routes.billing import _build_bill_html, _build_pdf_html
+    # Same invoice layout as the running app (backend/cibara_api/invoice).
+    # INVOICE_LAYOUT=legacy keeps the original renderer, as in the app.
+    try:
+        import os as _os
+        _backend = _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))), "backend")
+        if _backend not in sys.path:
+            sys.path.insert(0, _backend)
+        from cibara_api.invoice import install as _install_invoice
+        _install_invoice()
+    except Exception as e:  # noqa: BLE001
+        print(f"WARN: invoice layout v2 not available ({e}); using the legacy layout")
+    from routes import billing as _billing
+    _build_bill_html, _build_pdf_html = _billing._build_bill_html, _billing._build_pdf_html
     from services import pdf_service
 
     try:

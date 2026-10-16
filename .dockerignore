@@ -76,3 +76,19 @@ node_modules/
 # Backup files
 *.bak
 *.backup
+# ── FastAPI/React migration ──────────────────────────────────────────────
+# Patterns above only match at the context root; these cover nested paths.
+**/node_modules
+**/__pycache__
+frontend/dist
+frontend/coverage
+frontend/e2e/shots
+backend/tests
+guest/
+cibara-*.json
+name_backup_*.csv
+_to_delete/
+.code-review-graph/
+.venv/
+Claude outputs/
+pytest-cache-files-*/

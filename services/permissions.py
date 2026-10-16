@@ -103,23 +103,20 @@ PERMISSIONS = frozenset(
         # Exports & customer records & quick-actions UI
         "data.export",
         "customer.manage",
+        # Guest ID documents (Aadhaar). Capture and view: admin + manager.
+        # Download of the original file, remove and restore: admin-only
+        # (wildcard). Every view, download, remove and restore is audited.
+        "customer_doc.capture",
+        "customer_doc.view",
+        "customer_doc.download",
+        "customer_doc.remove",
         "quick_actions.use",
-        # Banking — cash deposits, receipt vouchers, adjustments,
-        # bank account directory. See services/banking/schema.py for
-        # the canonical PERM_* constants; the strings here must match.
-        "banking.view",
-        "banking.deposit.create",
-        "banking.deposit.confirm",
-        "banking.deposit.reconcile",
-        "banking.deposit.reverse",
-        "banking.adjustment.create",
-        "banking.account.manage",
         # Expense presets — admin-curated quick-pick tiles per category.
         # Read is open to every authenticated user (so operators can render
         # tiles in the expense modal); editing requires this permission.
         "expense.presets.manage",
         # Editing / deleting an existing expense. Distinct from "creating"
-        # an expense (everyone with banking.adjustment.create / write
+        # an expense (everyone with write
         # access to the transaction tab can create). Admin-only by default.
         "expense.manage",
         # Browse expense history across ANY date range (routes/reports.py
@@ -199,13 +196,6 @@ ROLE_PERMISSIONS: dict[str, FrozenSet[str]] = {
             # Correct guest name / mobile on a bill (non-financial). Amounts,
             # taxes and GST recipient details remain admin-only.
             "bill.guest.edit",
-            # Banking — manager can VIEW the deposit screens and
-            # ASSEMBLE a draft deposit, but CANNOT confirm/reconcile/
-            # reverse a deposit or create cash adjustments. Those are
-            # admin-only because they involve money leaving the
-            # operator's custody.
-            "banking.view",
-            "banking.deposit.create",
             # Deep-check maintenance — manager inspects rooms and marks
             # issues fixed; verification, checklist editing and deletion
             # stay admin-only.
@@ -215,7 +205,7 @@ ROLE_PERMISSIONS: dict[str, FrozenSet[str]] = {
             # Staff — the manager on duty marks daily attendance and can
             # settle salaries / hand out advances FROM COUNTER CASH ONLY
             # (staff.pay.account, i.e. bank/UPI payouts, stays admin-only —
-            # same custody principle as banking.deposit.confirm). Adding/
+            # money leaving the operator's custody). Adding/
             # editing staff, wages, and reversing payments stay admin-only
             # via staff.manage.
             "staff.view",
@@ -224,6 +214,10 @@ ROLE_PERMISSIONS: dict[str, FrozenSet[str]] = {
             "staff.salary.pay",
             "staff.advance.give",
             "guest_request.handle",
+            # Guest ID documents: capture at check-in / checkout and view.
+            # Download original, remove and restore stay admin-only.
+            "customer_doc.capture",
+            "customer_doc.view",
             # Collect a pending balance from a returning guest (the check-in
             # banner and the Pending Payments list).
             "settlement.collect",
@@ -239,10 +233,7 @@ ROLE_PERMISSIONS: dict[str, FrozenSet[str]] = {
             # settlement.manage (writing a balance off),
             # revenue.view,
             # analytics.view, laundry.price.edit, settle_later.use,
-            # logs.view, user.manage,
-            # banking.deposit.confirm, banking.deposit.reconcile,
-            # banking.deposit.reverse, banking.adjustment.create,
-            # banking.account.manage.
+            # logs.view, user.manage.
         }
     ),
     ROLE_HOUSEKEEPING: frozenset(

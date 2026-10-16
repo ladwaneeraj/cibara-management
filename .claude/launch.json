@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "demo",
+      "runtimeExecutable": ".venv/Scripts/python.exe",
+      "runtimeArgs": ["-c", "import os,sys,runpy; os.environ['PORT']='8091'; os.chdir('backend'); sys.path.insert(0, os.getcwd()); runpy.run_module('tests.demo_server', run_name='__main__')"],
+      "port": 8091
+    }
+  ]
+}

@@ -6356,6 +6356,23 @@ select.filter-select:disabled, .rpt-gst-toggle.rpt-disabled { opacity: 0.45; poi
    they could not be compacted along with the cards they sit in. */
 .bl-note { font-size: 0.66rem; color: #aaa; margin-top: 2px; line-height: 1.3; }
 .bl-note-gst { color: #888; }
+/* Thin progress line at the foot of the Cash, UPI and GST cards. Amounts show
+   on hover only (data-tip). */
+.bl-exp-line {
+  position: relative; margin-top: 8px; height: 4px; border-radius: 99px;
+  background: #eef2f7;
+}
+.bl-exp-fill { height: 100%; border-radius: 99px; transition: width .4s ease; }
+.bl-exp-fill.is-out { background: #f87171; }
+.bl-exp-fill.is-in  { background: #22c55e; }
+.bl-exp-line::after {
+  content: attr(data-tip); position: absolute; left: 50%; bottom: calc(100% + 8px);
+  transform: translateX(-50%); white-space: nowrap; z-index: 5;
+  background: #1f2937; color: #fff; font-size: 0.72rem; line-height: 1.3;
+  padding: 4px 8px; border-radius: 6px; opacity: 0; pointer-events: none;
+  transition: opacity .15s;
+}
+.bl-exp-line:hover::after { opacity: 1; }
 
 /* ═══════════════════════════════════════════════════════════════════════
    EDGE-TO-EDGE MOBILE MODULES — Transactions · Bills · Register
@@ -6749,3 +6766,206 @@ body.gr-panel-open { overflow: hidden; }
 .gr-stars { color: #f59e0b; letter-spacing: 1px; }
 .gr-feedback .gr-item-room { background: #f59e0b; }
 .gr-h3 { margin: 16px 0 8px; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-secondary, #64748b); }
+
+/* ── Settings modal (grouped list) ───────────────────────────────────────────
+   Markup: #settings-modal in templates/index.html. The switches keep their
+   old ids; script.js paints the track colour and slides the knob inline. */
+.modal-content.set-modal {
+  max-width: 520px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: #f6f7fb;
+}
+.set-head {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  padding: 1.1rem 1.25rem;
+  background: #fff;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.set-head-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 11px;
+  background: rgba(67, 97, 238, 0.1);
+  color: var(--primary);
+  display: grid;
+  place-items: center;
+  font-size: 1.05rem;
+  flex-shrink: 0;
+}
+.set-head-text { flex: 1; min-width: 0; }
+.set-head-text h2 {
+  margin: 0;
+  font-size: 1.15rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  letter-spacing: -0.01em;
+}
+.set-head-text p {
+  margin: 2px 0 0;
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+}
+.set-close {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: #fff;
+  color: var(--text-secondary);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.15s, color 0.15s;
+}
+.set-close:hover { background: #f1f5f9; color: var(--text-primary); }
+
+.set-body {
+  padding: 0.5rem 1.25rem 1.25rem;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+.set-group { margin-top: 1rem; }
+/* A group whose rows are all hidden (role lacks the permission) disappears. */
+.set-group:not(:has(.set-row:not([hidden]))) { display: none; }
+.set-group-title {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0 0 0.45rem 0.25rem;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+.set-group-note {
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--primary);
+  background: rgba(67, 97, 238, 0.08);
+  padding: 1px 7px;
+  border-radius: 999px;
+}
+.set-list {
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  overflow: hidden;
+  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04);
+}
+
+.set-row {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  padding: 0.8rem 1rem;
+  min-height: 64px;
+}
+/* Divider between visible rows only (hidden rows don't leave a double line). */
+.set-list > .set-row:not([hidden]) ~ .set-row:not([hidden]) {
+  border-top: 1px solid #eef1f6;
+}
+.set-row--link { cursor: pointer; transition: background 0.15s; }
+.set-row--link:hover { background: #f8faff; }
+.set-row--link:active { background: #eef2ff; }
+.set-row--link:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: -2px;
+}
+
+.set-ico {
+  width: 38px;
+  height: 38px;
+  border-radius: 10px;
+  display: grid;
+  place-items: center;
+  font-size: 0.98rem;
+  flex-shrink: 0;
+}
+.set-ico--blue   { background: rgba(12, 111, 205, 0.1);  color: #0c6fcd; }
+.set-ico--amber  { background: rgba(249, 168, 37, 0.15); color: #c66a06; }
+.set-ico--indigo { background: rgba(63, 81, 181, 0.1);   color: #3f51b5; }
+.set-ico--slate  { background: rgba(33, 37, 41, 0.08);   color: #334155; }
+.set-ico--sky    { background: rgba(67, 97, 238, 0.1);   color: var(--primary); }
+.set-ico--teal   { background: rgba(46, 196, 182, 0.14); color: #0f8f84; }
+.set-ico--rose   { background: rgba(229, 62, 62, 0.1);   color: #e53e3e; }
+.set-ico--green  { background: rgba(22, 163, 74, 0.1);   color: #16a34a; }
+
+.set-text { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.set-title {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  line-height: 1.3;
+}
+.set-sub {
+  font-size: 0.76rem;
+  color: var(--text-secondary);
+  margin-top: 2px;
+  line-height: 1.35;
+}
+.set-chev { color: #b8c0cc; font-size: 0.78rem; flex-shrink: 0; }
+
+/* Switch — 46×26, knob slides 20px (script.js sets translateX(20px)). */
+.set-switch {
+  position: relative;
+  display: inline-block;
+  width: 46px;
+  height: 26px;
+  flex-shrink: 0;
+  cursor: pointer;
+}
+.set-switch input {
+  position: absolute;
+  opacity: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  cursor: pointer;
+  z-index: 2;
+}
+.set-switch-track {
+  position: absolute;
+  inset: 0;
+  background: #cbd5e1;
+  border-radius: 999px;
+  transition: background 0.2s;
+}
+.set-switch-knob {
+  position: absolute;
+  width: 20px;
+  height: 20px;
+  left: 3px;
+  top: 3px;
+  background: #fff;
+  border-radius: 50%;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.25);
+  transition: transform 0.2s;
+  pointer-events: none;
+}
+.set-switch input:focus-visible ~ .set-switch-track {
+  box-shadow: 0 0 0 3px rgba(67, 97, 238, 0.3);
+}
+.set-switch input:disabled ~ .set-switch-track { opacity: 0.55; }
+
+@media (max-width: 576px) {
+  .modal-content.set-modal {
+    width: 100%;
+    max-width: none;
+    max-height: 92vh;
+    border-radius: 16px 16px 0 0;
+    align-self: flex-end;
+    margin-top: auto;
+  }
+  .set-body { padding: 0.25rem 0.85rem 1.25rem; }
+  .set-head { padding: 0.95rem 1rem; }
+}

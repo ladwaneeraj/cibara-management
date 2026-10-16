@@ -9,6 +9,8 @@ import pytz
 import base64
 import time as _time
 
+from services.auth_service import requires_permission
+
 utils_bp = Blueprint('utils', __name__)
 
 UPLOAD_FOLDER = "/tmp/cibara_uploads"
@@ -64,48 +66,31 @@ def upload_photo():
 # ── One-time cleanup: strip dead local-path URLs from customer id_doc_urls ──
 
 @utils_bp.route("/admin/cleanup_dead_doc_urls", methods=["POST"])
+@requires_permission("customer.manage")
 def cleanup_dead_doc_urls():
     """
-    Scan all customer records and remove any id_doc_url entries that are
-    local file paths (starting with '/uploads/') — these are dead after a
-    VM reset and will never resolve.  Firebase Storage URLs
-    (https://firebasestorage.googleapis.com/...) are kept untouched.
+    Remove id_doc_urls entries that are local file paths ('/uploads/…') —
+    dead after a VM reset. Firebase Storage entries are never touched.
 
-    Safe to call multiple times (idempotent).
-    Returns counts of customers inspected, updated, and URLs removed.
+    Admin only (it used to be open to any signed-in user). Uses ArrayRemove
+    of just the dead entries: the old version wrote the whole list back,
+    which could drop a document uploaded at the same moment.
     """
     try:
+        from firebase_admin import firestore as _fs
         customers_ref = db.collection("customers")
-        docs = list(customers_ref.stream())
-
-        inspected = 0
-        updated = 0
-        removed_total = 0
-
-        for doc in docs:
+        inspected = updated = removed_total = 0
+        for doc in customers_ref.stream():
             inspected += 1
-            data = doc.to_dict()
-            urls = data.get("id_doc_urls", [])
-            if not urls:
-                continue
-
-            live_urls = [u for u in urls if u.startswith("https://")]
-            removed = len(urls) - len(live_urls)
-
-            if removed > 0:
-                customers_ref.document(doc.id).update({"id_doc_urls": live_urls})
+            urls = (doc.to_dict() or {}).get("id_doc_urls", []) or []
+            dead = [u for u in urls if isinstance(u, str) and u.startswith("/uploads/")]
+            if dead:
+                customers_ref.document(doc.id).update({"id_doc_urls": _fs.ArrayRemove(dead)})
                 updated += 1
-                removed_total += removed
-                logger.info(
-                    f"cleanup_dead_doc_urls: removed {removed} dead URL(s) "
-                    f"from customer {doc.id}"
-                )
-
+                removed_total += len(dead)
+                logger.info(f"cleanup_dead_doc_urls: removed {len(dead)} dead URL(s) from {doc.id}")
         return jsonify(
-            success=True,
-            inspected=inspected,
-            updated=updated,
-            removed=removed_total,
+            success=True, inspected=inspected, updated=updated, removed=removed_total,
             message=f"Done. Inspected {inspected} customers, "
                     f"cleaned {updated} records, removed {removed_total} dead URLs.",
         )
@@ -114,93 +99,13 @@ def cleanup_dead_doc_urls():
         return jsonify(success=False, message=str(e)), 500
 
 
-# ── Repair broken Firebase Storage download tokens ───────────────────────────
-
 @utils_bp.route("/admin/repair_doc_tokens", methods=["POST"])
+@requires_permission("customer.manage")
 def repair_doc_tokens():
-    """
-    Walk every customer's id_doc_urls, re-patch each Firebase Storage blob
-    with a fresh firebaseStorageDownloadTokens metadata value, and update the
-    Firestore URL to match the new token.
-
-    Fixes:
-      - Blobs uploaded with old code (no token persisted → 403)
-      - Blobs uploaded with wrong metadata key (nested dict → invalid token)
-
-    Safe to call multiple times (idempotent — each call just refreshes tokens).
-    """
-    import uuid as _uuid
-    import urllib.parse
-    try:
-        from firebase_admin import storage as _fb_storage
-        storage_bucket = _fb_storage.bucket()
-    except Exception as e:
-        return jsonify(success=False, message=f"Firebase Storage not available: {e}"), 500
-
-    customers_ref = db.collection("customers")
-
-    inspected   = 0
-    blobs_fixed = 0
-    errors      = []
-
-    try:
-        docs = list(customers_ref.stream())
-    except Exception as e:
-        return jsonify(success=False, message=f"Firestore read failed: {e}"), 500
-
-    for doc in docs:
-        data = doc.to_dict()
-        urls = data.get("id_doc_urls", [])
-        if not urls:
-            continue
-
-        inspected += 1
-        new_urls = list(urls)
-        changed  = False
-
-        for i, url in enumerate(urls):
-            if not url.startswith("https://firebasestorage.googleapis.com"):
-                continue  # skip local/dead paths
-
-            try:
-                # Parse blob path from URL
-                path_encoded = url.split("/o/")[1].split("?")[0]
-                blob_path    = urllib.parse.unquote(path_encoded)
-
-                blob = storage_bucket.blob(blob_path)
-
-                # Generate a fresh download token and write it to GCS metadata
-                new_token = str(_uuid.uuid4())
-                blob.metadata = {"firebaseStorageDownloadTokens": new_token}
-                blob.patch()
-
-                # Rebuild the URL with the new token
-                new_url = (
-                    f"https://firebasestorage.googleapis.com/v0/b/"
-                    f"{storage_bucket.name}/o/{path_encoded}"
-                    f"?alt=media&token={new_token}"
-                )
-                new_urls[i] = new_url
-                changed      = True
-                blobs_fixed += 1
-                logger.info(f"repair_doc_tokens: fixed blob {blob_path}")
-
-            except Exception as blob_err:
-                msg = f"customer {doc.id} url[{i}]: {blob_err}"
-                logger.warning(f"repair_doc_tokens: skipped — {msg}")
-                errors.append(msg)
-
-        if changed:
-            customers_ref.document(doc.id).update({"id_doc_urls": new_urls})
-
-    return jsonify(
-        success=True,
-        inspected=inspected,
-        blobs_fixed=blobs_fixed,
-        errors=errors,
-        message=(
-            f"Done. Inspected {inspected} customers with docs, "
-            f"fixed {blobs_fixed} blob(s)."
-            + (f" {len(errors)} error(s) — check server log." if errors else "")
-        ),
-    )
+    """Retired. It minted fresh PUBLIC download tokens for every ID photo and
+    rewrote every customer's document list. ID documents are private now and
+    served through /api/v2/customers/<mobile>/id-docs (services/id_docs.py);
+    old photos are adopted automatically or by scripts/migrate_id_docs.py."""
+    return jsonify(success=False,
+                   message="Retired: ID documents are private now. "
+                           "Use scripts/migrate_id_docs.py for old photos."), 410

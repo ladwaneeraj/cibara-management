@@ -1,0 +1,364 @@
+# CLAUDE.md — Cibara ERP (FastAPI + React migration)
+
+This file is the working memory for anyone (human or AI) changing this repo.
+Read **Preserved logic** before touching anything that moves money or tax.
+
+---
+
+## 1. Architecture in one picture
+
+```
+Browser ─┬─ /, /login, …  classic Flask/Jinja screens (THE UI, UI_MODE=classic, default)
+         ├─ /api/v2/*     FastAPI (backend/cibara_api) ── typed facades ─┐
+         ├─ /app/*        React SPA — parked; only served with UI_MODE=spa │
+         └─ everything    legacy Flask app (app.py, routes/, services/)  │
+            else  ◄──────────── mounted as WSGI inside FastAPI ◄─────────┘
+                                         │
+                                 config.py / services/*  ← ALL business logic
+                                         │
+                                     Firestore / Firebase Storage / Firebase Auth
+```
+
+* **One process, one container** (Cloud Run, `uvicorn cibara_api.main:app`, 1 worker).
+* **UI decision (owner, Oct 2026): keep the classic screens.** `UI_MODE=classic` (default)
+  serves the Flask pages at `/` and `/login`; `/app/*` redirects to `/`. The React app in
+  `frontend/` is kept and still builds; `UI_MODE=spa` switches back to it without code changes.
+* The Flask app is **imported unchanged** and mounted at `/` (a2wsgi). Every one of
+  its ~235 routes still works at its old path: the classic UI (`/legacy`), `/static`,
+  OTA ingest endpoints with their `X-Ingest-Secret`, scripts using `X-API-Key`.
+* `/api/v2` endpoints are of two kinds:
+  * **Facades** (most): validate input with Pydantic, enforce the permission, then run
+    the *unchanged* legacy route in-process (`legacy.call_legacy`). Same handler, same
+    duplicate-submit guard, same Firestore writes, same audit entries.
+  * **Native** (where speed mattered): `auth/*`, `dashboard`, `bills` list/summary/detail,
+    `settlements` list, `rooms/tariffs`, `admin/metrics`. They call the legacy *helpers*
+    (`config.bill_tax_breakup`, `config.get_all_rooms`, `role_filters.clamp_date_range`,
+    `routes.settlements._attach_bill_summary`, …) — never re-implementations.
+* Strangler pattern: a module moves to native code only with a parity test (see §6).
+
+## 2. Preserved logic — DO NOT re-implement, import
+
+No business logic was edited by the migration: `git diff` against the pre-migration commit
+shows no change under `config.py`, `services/`, `routes/`, `app.py`. The ID-document work (§3c)
+later changed `services/customer_service.py`, `routes/customers.py`, `routes/utils.py` and
+`services/permissions.py` — guest documents only, no money or tax path. Browser-side files changed
+for the sign-in and sharing work only: `static/auth.js`, `static/login.js`, `static/bills.js`
+(Share PDF), `static/sw.js` (cache version), two `<script>` tags in `templates/`, and
+`scripts/regenerate_bill_pdf.py` (uses the same invoice layout as the app).
+
+| Concern | Source of truth (unchanged) | How v2 uses it |
+|---|---|---|
+| GST slabs (`<₹1000→0%`, `≤₹7500→5%`, else 18%, post-discount, per night) | `config._slab_for_value`, `compute_daily_folio`, `aggregate_folio_tax`, `split_bucket_tax` | via `/checkout` (facade) |
+| Bill record + numbering `CC/YYYY/MM/NNNNN` (atomic) | `config.create_bill_record`, `allocate_and_finalize_bill` | via `/checkout`, `/generate_invoice` |
+| Tax breakup shown everywhere (invoice HSN table, bills list, tally) | `config.bill_tax_breakup` | called directly by `routers/bills.py` |
+| GST recompute after discount / service edit | `config.recompute_bill_gst` | via `/add_bill_payment`, `/update_bill_service` |
+| CGST/SGST split, place of supply KA-29, B2B/B2CL classification | `config.compute_gst_split`, `classify_invoice_type`, `/update_bill_gst` | facade |
+| Credit notes `CN/YYYY/MM/NNNNN`, Section 34 window | `config.create_credit_note`, `compute_credit_components` | facades |
+| Settle-later: settlement docs, customer pending flags, collection, write-off | `routes/rooms.py` (checkout), `routes/settlements.py`, `customer_service` | facades + `_attach_bill_summary` |
+| Room tariffs | `config.room_base_price`, `AC_SURCHARGE`, `room_category` | `GET /api/v2/rooms/tariffs` |
+| Bill PDF storage (xhtml2pdf, Storage paths, token URLs) | `services/pdf_service`, `/render_bill_pdf` | unchanged; layout swapped by `invoice/` (§3b), money untouched |
+| Guest-portal QR (qrcode) | `services/guest_portal.qr_png` | facade |
+| Invoice OCR (Gemini) | `services/ocr_service` | unchanged legacy endpoint (`/ocr/*`) |
+| Duplicate-submit guard (`X-Op-Id`, 409 `duplicate_suspected`, `X-Force-Duplicate`) | `services/request_guard` | headers forwarded; SPA implements the same client protocol |
+| Audit log schema | `services/audit_log.write_log` | new layer writes through the same function inside a Flask request context |
+
+**Rule:** if a number on an invoice could change, the change belongs in the legacy module
+with its existing tests (`tests/`), not in `backend/`.
+
+### Parity evidence (run on every change)
+`backend/tests/test_parity.py` drives six desk scenarios twice on an identical fresh
+database — once with the **old browser payloads to the old paths with a Firebase token**,
+once through **/api/v2 with the new JWT** — and asserts identical bills (every money, GST,
+CGST/SGST, folio, service, segment field and the tax breakup), room state, running totals,
+payment ledger and settlements:
+
+1. walk-in ₹1,200 + water (5%) 2. ₹900 pay-later + accommodation extra bed (exempt→5% slab)
+3. 3 nights, renewals, discount, part payment, **settle later** 4. overpay → refund
+5. ₹8,200 AC night (**18%**) 6. company **B2B** bill with GSTIN.
+
+Plus golden figures: ₹1,200 → taxable 1,142.86, GST 57.14 (28.57 + 28.57), IGST 0.
+The legacy suite (`tests/`, 557 tests) still passes unchanged.
+
+## 3. Auth, sessions, roles
+
+* **Passwords stay in Firebase Auth.** `POST /api/v2/auth/login` checks them with the
+  Identity Toolkit REST API (`accounts:signInWithPassword`, synthetic email
+  `<userId>@cibara.internal` — same as the old login page), then:
+  * access JWT (HS256, 15 min) in the response body — kept in memory by the SPA;
+  * refresh JWT (7 days) in an `HttpOnly; SameSite=Strict; Path=/api/v2/auth` cookie, rotated on use;
+  * a Firebase **custom token** so the SPA can attach Firestore listeners under the existing
+    `firestore.rules` (role claim comes from the user's existing custom claims).
+* **Refresh** re-checks Firebase on every rotation (≤ once per 15 min per user): disabled
+  user, `tokens_valid_after` (force-logout / password reset / role change), `users/{id}.isActive`,
+  and re-reads the role claim (role changes apply within 15 min, or immediately — see below).
+  * **Families:** each login is a refresh-token family (`fam` claim). Rotation is tracked in
+    memory; a rotated cookie is accepted for 30 s (two tabs refreshing together), after that
+    presenting it again = theft → the whole family is killed (audit `auth.refresh_denied`,
+    reason "refresh token reuse"). Logout kills the family. After a restart the state is empty
+    and an unknown family is *adopted* (otherwise every deploy would sign everyone out).
+  * **Absolute cap:** `auth_time` (password sign-in time) is carried through rotations;
+    refresh is refused after `SESSION_MAX_DAYS` (default 30).
+  * **Outage ≠ logout:** if Firebase is unreachable, refresh answers **503 and keeps the
+    cookie**; the SPA keeps the session and retries (`RefreshResult = 'unavailable'`). Only
+    401/403 (`'denied'`) sign the user out. A deleted Firebase user is 401.
+* **Immediate revocation:** force-logout, reset password, role change, deactivate and
+  self-service password change also add the user to an in-memory "issued-before" list
+  (`security/revocation.py`) so live access tokens die at once. Single instance ⇒ exact.
+  This is a Flask `after_request` hook in `legacy.py`, so it fires for the classic Users
+  screen as well as the `/api/v2/admin` facades.
+* **Classic screens use the same JWT sessions** (`static/login.js`, `static/auth.js`):
+  * login page → `POST /api/v2/auth/login` (server-side password check, attempt limits, refresh cookie);
+  * every page load → `POST /api/v2/auth/refresh?firebase=true` restores the session from the
+    cookie, then the Firebase compat SDK signs in with the returned custom token so
+    `google_sync.js` listeners run under `firestore.rules` exactly as before
+    (`CibaraAuth.ready()` resolves after that);
+  * the fetch wrapper attaches the 15-min access JWT, refreshes once on 401 (single flight, same
+    `X-Op-Id` on retry), and treats 503/offline as "keep the session, retry" — only a server
+    denial signs out; the duplicate-write guard, idle timeout and role gating are unchanged;
+  * sign-out → `POST /api/v2/auth/logout` + Firebase sign-out + a `BroadcastChannel`/`storage`
+    event so every open tab leaves; a sign-in in another tab makes open tabs refresh at once
+    and reload if the user changed (shared front-desk PCs);
+  * change password → `POST /api/v2/auth/password` (verifies, updates, ends all sessions, audits);
+  * `auth.js`/`login.js` are referenced through `asset_url()` and the service-worker cache
+    version was bumped, so no browser keeps running the old Firebase-only sign-in.
+  * First deploy: everyone signs in once (there is no refresh cookie yet).
+* (UI_MODE=spa only) `/login` redirects to `/app/login?signout=1` so a classic sign-out also
+  ends the SPA session.
+* **Legacy routes accept the new JWT**: `legacy.py` wraps `services.auth_service.verify_token`;
+  HS256 tokens are ours, anything else (the classic UI's Firebase ID tokens) goes to the
+  original Firebase verification. Every legacy decorator funnels through that function.
+* **Roles are unchanged** (`admin`, `manager`, `housekeeping`) and so is the permission map
+  (`services/permissions.py`). UI labels: housekeeping is shown as **Staff**. **Guest** is the
+  QR guest-portal session (anonymous Firebase auth + room/mobile proof enforced by
+  `firestore.rules`; the `guest/` app is unchanged and never calls this API).
+* **Hardening** (`security/legacy_hardening.py`, `LEGACY_RBAC_HARDENING=true`): legacy routes
+  that only required a login now require the permission the old UI already checked:
+  `/checkin`→room.checkin, `/checkout`→room.checkout (+`settle_later.use` when settling later),
+  `/add_on` & `/renew_rent`→room.update, `/reports` `/revenue_report` `/reports/gstr1_summary`
+  →analytics.view, `/render_bill_pdf`→register.view, `/get_ota_settlements`→settlement.manage.
+  API-key callers are unaffected. Set the flag to `false` to restore the old behaviour.
+* Rate limits (in memory): 600 req/min/IP, 120 writes/min/user, login 20/min/IP (front desks
+  share one NAT IP) and 8 failures/15 min/account (keyed by the Firebase identity, reset on
+  success), password change 5/15 min.
+* **Legacy bridge safety nets** (`legacy.py`, no legacy file edited):
+  * On Cloud Run with `API_KEY` unset, the legacy "dev mode" (anonymous GETs allowed) is
+    closed: anonymous requests to non-public, non-ingest paths get 401. Local dev unchanged.
+  * The classic page (`/`, also `/legacy`) no longer exposes `API_KEY`: it is redacted from
+    the rendered HTML (the classic UI authenticates with its access token, which
+    `require_auth` checks before the API key). Integrations sending `X-API-Key` still work.
+  * Legacy 404s are recorded under one metrics row (`legacy 404`); the per-route registry is
+    capped at 400 rows (overflow → `other`).
+* Audit: new actions `auth.login`, `auth.login_failed`, `auth.logout`, `auth.refresh_denied`
+  (same `audit_logs` schema).
+
+## 3b. Invoice layout v2 (GST) and PDF sharing
+
+* `backend/cibara_api/invoice/render.py` replaces `routes.billing._build_bill_html` at startup
+  (`INVOICE_LAYOUT=v2`, default; `legacy` restores the old renderer — the legacy function stays
+  in `routes/billing.py` untouched). Every surface uses it: bill modal, Print, PDF stored at
+  checkout, `/render_bill_pdf`, `scripts/regenerate_bill_pdf.py`, the WhatsApp/share copy.
+  Credit notes keep their legacy renderer.
+* **Presentation only.** Payable total = stored `total_amount`; tax table =
+  `config.bill_tax_breakup` (what GSTR-1 files); particulars = stored folio/services, grouped
+  with the legacy `_group_folio` / `_resolve_view_mode`. `tests/test_invoice.py` asserts the
+  v2 total equals the legacy GRAND TOTAL for 12 scenarios × both views, and that particulars
+  net to the total. A service discount larger than the accommodation share shows as
+  "Less: discount on other items" in the summary (the breakup's service rows are pre-discount).
+* Rule 46 fields are mapped in the module docstring (supplier/GSTIN, serial ≤16 chars, date,
+  recipient + GSTIN/address/state, HSN/SAC, qty, rate, taxable value after discount, CGST/SGST
+  rate+amount, place of supply, reverse charge, signature). Also: amount in words, "Original
+  for recipient", rupee glyph in the PDF (vendored DejaVu Sans, `invoice/fonts/`), page x of y.
+* **Document title:** `INVOICE_TITLE_RULE=by_supply` gives BILL OF SUPPLY (all exempt) /
+  INVOICE-CUM-BILL OF SUPPLY (taxable + exempt to an unregistered guest, Rule 46A) / TAX
+  INVOICE, but **only for bills checked out on/after `INVOICE_TITLE_BY_SUPPLY_FROM`**
+  (empty = off = always TAX INVOICE). Regenerating a PDF overwrites it at the same link, so an
+  already-issued invoice must never change type. Owner + CA to confirm before setting the date.
+* **Branding is set in the app:** Settings → **Invoice & payments** (`static/invoice-settings.js`,
+  admins only, `settings.update`) → `/api/v2/settings/invoice`. Logo, signature and a static
+  UPI QR image (PNG/JPEG ≤ 2 MB, re-encoded to PNG, downscaled) go to Storage
+  `branding/<kind>.png`; text fields (UPI ID + payee, e-mail, website, signatory label,
+  thank-you line, terms) to the new doc `settings/invoice_branding`. Every change is audited
+  (`settings.invoice_update` / `settings.invoice_image`). Precedence: settings doc > env
+  (`UPI_VPA`, `UPI_PAYEE_NAME`) > `invoice/brand/branding.json` (+ optional files there).
+  Cached 5 min, cleared on save. With a UPI ID, a bill with a balance due prints a QR for that
+  exact amount; without one, the uploaded QR image is printed with the amount under it.
+* **Windows/PDF:** the DejaVu font is registered with ReportLab directly — CSS `@font-face`
+  makes xhtml2pdf re-open a temp copy, which Windows refuses ("Permission denied … .ttf").
+* **304 + gzip:** conditional requests skip gzip (`core/middleware.py`); Starlette's gzip
+  otherwise adds a trailer to the empty 304 and uvicorn aborts the response.
+* **Sharing the PDF file:** `GET /api/v2/bills/{id}/pdf-file` (register.view) streams the stored
+  PDF same-origin (the server resolves `pdf_url`; only `bills/`/`credit_notes/` objects in our
+  bucket; no token in URLs/logs). The classic WhatsApp modal has **Share PDF** (native share
+  sheet with the file attached: phones, tablets, Chrome/Edge on Windows with WhatsApp installed)
+  and falls back to downloading the PDF + opening the guest's chat; **Send link** keeps the old
+  link message. The PDF is pre-loaded when the modal opens because browsers only allow sharing
+  straight from a tap.
+
+## 3c. Guest ID documents (Aadhaar) — private, audited
+
+* **Storage:** `customer_docs/{mobile}/{doc_id}.jpg` with **no download token** (private), one
+  record per image in `customers/{mobile}/id_docs/{doc_id}` (side front/back/other, status
+  active/archived/removed, source auto_scan/manual/upload/legacy, `captured_by`, context
+  check-in/checkout/room, append-only `history`, `views`, `last_viewed_by`). The customer doc
+  only gets `id_doc_count` / `has_id_docs` (merge). Logic: `services/id_docs.py`.
+* **API:** `/api/v2/customers/{mobile}/id-docs` (`routers/customer_docs.py`): list, upload,
+  `/{id}/image?variant=thumb|view|original`, `/{id}/remove`, `/restore`, `/side`. `view` is
+  watermarked with the viewer's name + time; images are `no-store`. Audit actions
+  `customer_doc.capture|view|download|remove|restore|relabel`.
+* **Permissions:** `customer_doc.capture` + `customer_doc.view` = admin, manager;
+  `customer_doc.download` + `customer_doc.remove` = admin. Housekeeping: none.
+* **Remove is soft** — the file is kept and an admin can restore it. A new front/back
+  archives the previous one; nothing is ever auto-deleted.
+* **Legacy photos:** `id_doc_urls` entries are adopted lazily (record `legacy-<hash>` pointing
+  at the same object) and the array is never rewritten. `scripts/migrate_id_docs.py --adopt`
+  does everyone; `--revoke-tokens` then switches off the old public links (files kept).
+  `/get_customer` etc. now return `id_doc_urls: []` + `id_doc_count`.
+* **Classic UI unchanged** (owner decision): the old camera modal / auto-scan and photo viewer
+  in `static/customer-docs.js`, the register ID popup and customer manager. `/get_customer`
+  returns `id_doc_urls` as in-app links (only for `customer_doc.view`) plus `id_doc_meta`
+  (who captured, when); the screens load them with `window.CibaraSecureImg` (apiFetch → blob
+  URL) and the viewer caption shows "Captured by … · date". Classic uploads are side "other"
+  (never archive each other; beyond 6 the oldest are archived, not deleted).
+* **Bugs fixed (docs went missing):** background "trim to 3" deleted new scans of returning
+  guests; first-time check-in `set()` wiped the parallel upload (now `create()`); check-in and
+  checkout shared one photo tray; the tray was cleared after upload (lost the next guest's
+  photos); delete rewrote the whole list; `/admin/cleanup_dead_doc_urls` and
+  `/admin/repair_doc_tokens` were open to any user (now admin; repair retired, 410);
+  Firestore rules let browsers write `customers` (now `write: if false` — deploy rules).
+* Tests: `backend/tests/test_customer_docs.py`.
+
+## 4. Firestore usage
+
+* The biggest latency fix is auth: the old stack called
+  `verify_id_token(check_revoked=True)` — a network round trip — up to 4× per request.
+  New-client requests verify a local HS256 signature instead.
+* Bills list: keyset-paginated (50/page, cursor `checkout_time|docId`) instead of loading the
+  whole range plus a full rooms scan and three unused tally queries. The period tally is a
+  separate lazy call.
+* Settle later: status filter runs in Firestore (`status in [pending, partial]`), bill lookups
+  only for returned rows. (A settlement doc with no `status` field shows only under "All".)
+* Dashboard: one call (legacy `/get_data` + arrivals + ui_config in parallel, legacy caches
+  reused); room changes stream via a Firestore listener with IndexedDB cache, so a reload
+  only pays for changed documents. Polling fallback 15 s if Firebase is unreachable.
+* **No new composite indexes are required**: every new query is a single-field range/`in`.
+  `firestore.indexes.json` is unchanged.
+* **Monitoring:** every response carries `X-Firestore-Reads`, `X-Firestore-Writes` and
+  `Server-Timing`; `GET /api/v2/admin/metrics` (Admin → System health) shows per-route calls,
+  p50/p95 latency and reads per call since the last restart. Counting wraps the GAPIC client
+  (`core/metrics.py`) and is guarded so it can never break a Firestore call.
+
+## 5. Running it
+
+```bash
+# backend (Python 3.11)
+python -m venv .venv && . .venv/bin/activate
+pip install -r backend/requirements-dev.txt
+# real Firebase (same env vars as before) + JWT_SECRET:
+export CIBARA_ENV=UAT JWT_SECRET=$(python -c "import secrets;print(secrets.token_urlsafe(48))")
+PYTHONPATH=.:backend uvicorn cibara_api.main:app --reload --port 8080
+
+# or: everything in memory, no credentials, seeded demo data
+cd backend && python -m tests.demo_server      # http://localhost:8080/  admin/admin123 manager/manager123 staff/staff123
+
+# frontend
+cd frontend && npm ci && npm run dev            # http://localhost:5173/app/ (proxies /api to :8080)
+npm run build                                   # → frontend/dist, served by FastAPI at /app
+```
+
+Tests:
+```bash
+cd backend && python -m pytest tests --cov=cibara_api     # new layer (fakes, no network)
+python -m pytest tests                                     # from repo root: legacy suite, unchanged
+cd frontend && npm test && npm run typecheck               # Vitest + RTL, tsc strict
+npm run e2e        # Playwright smoke against a running server (demo_server or real)
+```
+`backend/tests/fakes/fake_firestore.py` is an in-memory Firestore (transactions, transforms,
+cursors, preconditions) used because the emulator cannot be downloaded in some sandboxes.
+
+## 6. Deploying (Cloud Run, unchanged pipeline)
+
+`cloudbuild.yaml` still runs `gcloud run deploy lodge-management --source=.`; the root
+`Dockerfile` is now the two-stage FastAPI + React image. Before the first deploy:
+
+1. Bind **`JWT_SECRET`** (32+ random chars) in the Cloud Run console → Variables & Secrets.
+   The service refuses to start on Cloud Run without it. Existing vars (`CIBARA_ENV`,
+   `FIREBASE_CREDENTIALS`, `GEMINI_API_KEY`, ingest secrets, …) stay as they are.
+2. Optional `PUBLIC_ORIGIN=https://<host>` if the Firebase web API key has HTTP-referrer
+   restrictions (the server-side password check then sends that Referer).
+3. `--max-instances=1` is set on purpose (in-memory rate limits, revocation, legacy caches).
+4. Cloud Scheduler jobs hitting `/mmt/ingest`, `/agoda/ingest`, `/bank/settlements/ingest`
+   keep working (same paths, same `X-Ingest-Secret`).
+
+**Rollback:** `Dockerfile.flask` is the previous image byte-for-byte — copy it over
+`Dockerfile` (or deploy the previous revision in the console). No data migration exists to undo.
+
+## 7. Migration status
+
+The classic screens are the UI (§1). The table below describes the parked React app
+(`UI_MODE=spa`); its `/api/v2` endpoints remain available and tested either way.
+
+| Area | New UI (/app) | API |
+|---|---|---|
+| Login, password change, sessions | ✅ | native |
+| Front desk: room grid, check-in, payments, refunds, add-ons, renewals, discount, room shift, housekeeping requests, checkout (incl. settle later, company billing) | ✅ | facades |
+| Cleaning / inspection with checklist and photos | ✅ | facades |
+| Bills: list, search, filters, invoice preview, print, PDF, WhatsApp, guest/GST edits, collect, cancel, activity, credit notes | ✅ | list native, actions facades |
+| Reports: overview, GSTR-1 summary, operations insights, transactions, settle later, expenses (basic) | ✅ | facades (+ native settlements) |
+| Guest requests (staff side) + portal settings + QR | ✅ | facades |
+| Admin: users, audit log, settings, alerts, metrics | ✅ | facades (+ native metrics) |
+| Bookings & calendar, Register, Banking, Staff & payroll, Laundry, Maintenance, expense OCR/advances/split, customer ID documents, stay-time edits, checkout revert, manual bill, GSTR-1/3B Excel workbook, GST month locks UI | classic screens (`/legacy`) | legacy routes work with the new JWT |
+
+Next modules to port, in order of daily use: Bookings → Register → Staff → Banking.
+For each: write the facade, add a parity test, then build the screen.
+
+## 8. Known issues found in the legacy code (NOT changed — logic preserved)
+
+Fixing these changes accounting behaviour; each needs an owner decision and its own test.
+
+1. `/collect_settlement`: the Section-34 credit-note check runs **after** the payment,
+   totals and settlement are committed; the client's "acknowledge & retry" then gets
+   `ALREADY_PAID`, so the bill is never updated and no credit note is issued. (The new UI
+   shows the warning and does not retry.)
+2. `config.create_credit_note` routes tax to **IGST** when `recipient_state_code != "29"`,
+   unlike every other path (always CGST+SGST, place of supply KA-29).
+3. Total credit across several credit notes on one invoice is not capped at the invoice value.
+4. `/add_bill_payment` with `discount_type="credit_note"` both rewrites the bill's GST and
+   issues a credit note for the same amount, and skips the month-lock check; its
+   "needs GSTIN or reason" check runs after the writes.
+5. `recompute_bill_gst` and `/edit_bill_room_price` read `bill.pre_transfer_charges`, which
+   checkout never writes top-level → transferred stays re-price all nights at the final rate.
+6. `/reports`: `checkins` counts only rooms occupied *now*; `renewals` can double count.
+7. `/list_advances` calls `payment_service.query_payments_by_booking_id`, which doesn't exist.
+8. `GET /api/audit-logs` without a user/action/target filter scans an arbitrary ≤2000-doc window.
+9. Guest app hard-codes a 24 h session while rules cap it at `sessionHours`; setting
+   `sessionHours < 24` refuses every guest login (the settings form now warns).
+10. The classic page renders the server `API_KEY` into `index.html` to anonymous visitors.
+    The bridge now redacts it (see §3), but **rotate `API_KEY`** if it was ever deployed —
+    it was readable by anyone who loaded `/`. If no integration uses it, unset it.
+11. Legacy client bugs avoided by the new UI (server untouched): `bad_debt` vs `is_bad_debt`
+    (**behaviour change — owner sign-off needed:** the new Bills screen's "bad debt" option
+    sends `is_bad_debt`, which the server actually reads, so it now takes effect; in the
+    classic UI it was silently ignored),
+    check-in `photoPath` vs `photo_path`, AC toggle left on for room 207, manual refund dated
+    in UTC, two competing checkout handlers with different payloads.
+
+## 9. Conventions
+
+* Backend: `backend/cibara_api/` — `routers/` (one file per area), `security/`, `core/`.
+  Facades use `routers/_forward.forward(...)`; never import Flask `request`/`g` in routers —
+  use `legacy.legacy_context(user)` when a legacy helper needs them.
+* Every error is `{"success": false, "message": ...}` (legacy routes may return HTTP 200 with
+  `success:false`; the SPA treats that as an error).
+* Frontend: `src/lib` (api client, auth store, realtime, formatting), `src/components/ui`
+  (design system), `src/features/<area>`. Server state = TanStack Query; session/UI = Zustand.
+  Money is formatted only with `lib/format.money`; dates are IST business days (`istDate`).
+* **Visual system** (`src/index.css` tokens + `components/ui`): cobalt `brand-*` for actions
+  and occupied rooms, saffron `accent-*` (its complement) only for the brand mark, active-nav
+  marker and highlights, navy `ink-*` for the sidebar and dark mode, grey `canvas` page
+  background with white cards. Status colours are fixed app-wide: emerald = vacant/paid,
+  brand blue = occupied, amber = cleaning, sky = ready to inspect, rose = due/danger. Radii are
+  tightened globally in `@theme` (rounded-xl = 8 px). KPI tiles = `StatCard` (coloured left
+  rule); tables use the `.table-erp` look (grey header strip, uppercase 11 px labels). Charts
+  use `charts.PALETTE` and no animation. Use tokens, not raw hex, in components.
+* Writes from the SPA always go through `lib/api.api()` (X-Op-Id, refresh-retry, duplicate
+  protocol). Never call `fetch` directly for a write except multipart uploads.

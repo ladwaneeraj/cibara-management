@@ -1229,42 +1229,70 @@ tr.rp-svc-voided .rp-actions-cell { opacity:.9; }
 /* ── ID Documents modal ── */
 .rdoc-overlay {
   display: none; position: fixed; inset: 0;
-  background: rgba(0,0,0,.55); z-index: 1200;
-  align-items: flex-start; justify-content: center;
+  background: rgba(15,23,42,.62); backdrop-filter: blur(3px);
+  z-index: 1200;
+  align-items: center; justify-content: center;
   padding: 1rem; overflow-y: auto;
 }
 .rdoc-overlay.show { display: flex; }
 .rdoc-modal {
-  background: #fff; border-radius: 10px; width: 100%;
-  max-width: 620px; margin-top: 1rem;
-  box-shadow: 0 8px 32px rgba(0,0,0,.22);
+  background: #fff; border-radius: 16px; width: 100%;
+  max-width: 640px; margin: auto;
+  box-shadow: 0 24px 64px rgba(15,23,42,.35), 0 0 0 1px rgba(15,23,42,.05);
+  overflow: hidden; animation: rdocPop .16s ease-out;
 }
+@keyframes rdocPop { from { opacity: 0; transform: translateY(8px) scale(.985); } to { opacity: 1; transform: none; } }
 .rdoc-header {
   display: flex; justify-content: space-between; align-items: center;
-  padding: .7rem 1rem; border-bottom: 1px solid #eee;
-  position: sticky; top: 0; background: #fff; z-index: 1;
-  border-radius: 10px 10px 0 0;
+  padding: .85rem 1.1rem; gap: .75rem;
+  background: linear-gradient(135deg, #1565c0, #1976d2);
+  position: sticky; top: 0; z-index: 1;
 }
-.rdoc-header h3 { margin: 0; font-size: .92rem; }
-.rdoc-close { background: none; border: none; font-size: 1.3rem; cursor: pointer; color: #888; }
-.rdoc-body { padding: 1rem; }
-.rdoc-meta { font-size: .77rem; color: #666; margin-bottom: .75rem; }
-.rdoc-meta strong { color: #333; }
+.rdoc-header .rdoc-htitle { display: flex; align-items: center; gap: .6rem; min-width: 0; }
+.rdoc-header .rdoc-hicon {
+  width: 34px; height: 34px; border-radius: 10px; flex-shrink: 0;
+  background: rgba(255,255,255,.18);
+  display: flex; align-items: center; justify-content: center; color: #fff;
+}
+.rdoc-header h3 { margin: 0; font-size: .95rem; color: #fff; font-weight: 700; letter-spacing: .01em; }
+.rdoc-header .rdoc-hsub { font-size: .7rem; color: rgba(255,255,255,.8); margin-top: 1px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rdoc-close {
+  background: rgba(255,255,255,.16); border: none; color: #fff;
+  width: 30px; height: 30px; border-radius: 50%; flex-shrink: 0;
+  font-size: 1.15rem; line-height: 1; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  transition: background .15s;
+}
+.rdoc-close:hover { background: rgba(255,255,255,.3); }
+.rdoc-body { padding: 1.1rem; }
+/* The guest / mobile line now lives in the header subtitle; keep the hook
+   for backward-compatibility but hide it so nothing double-renders. */
+.rdoc-meta { display: none; }
 .rdoc-grid {
-  display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
-  gap: .75rem;
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: .8rem;
 }
 .rdoc-img-wrap {
-  border: 1px solid #e0e0e0; border-radius: 6px; overflow: hidden;
-  background: #f8f8f8; aspect-ratio: 4/3; display: flex;
+  position: relative; padding: 0; margin: 0; cursor: pointer;
+  border: 1px solid #e2e8f0; border-radius: 12px; overflow: hidden;
+  background: #f1f5f9; aspect-ratio: 4/3; display: flex;
   align-items: center; justify-content: center;
+  transition: border-color .15s, box-shadow .15s, transform .15s;
 }
-.rdoc-img-wrap img {
-  width: 100%; height: 100%; object-fit: cover; cursor: pointer;
-  transition: opacity .15s;
+.rdoc-img-wrap:hover {
+  border-color: #1976d2; box-shadow: 0 8px 22px rgba(25,118,210,.18);
+  transform: translateY(-2px);
 }
-.rdoc-img-wrap img:hover { opacity: .88; }
-.rdoc-empty { text-align: center; color: #999; padding: 1.5rem; font-size: .82rem; }
+.rdoc-img-wrap img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.rdoc-img-fail { color: #94a3b8; font-size: .75rem; }
+.rdoc-img-zoom {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  background: rgba(15,23,42,.32); color: #fff; font-size: 1.1rem;
+  opacity: 0; transition: opacity .15s; pointer-events: none;
+}
+.rdoc-img-wrap:hover .rdoc-img-zoom { opacity: 1; }
+.rdoc-empty { text-align: center; color: #64748b; padding: 2rem 1rem; font-size: .85rem; }
 
 /* Add-photo tile — sits as the last cell of the document grid so "there is
    room for one more" is shown by the layout instead of said in a sentence.
@@ -1272,38 +1300,39 @@ tr.rp-svc-voided .rp-actions-cell { opacity:.9; }
    two entry points into the same action look like the same action. */
 .rdoc-add {
   display: flex; flex-direction: column;
-  align-items: center; justify-content: center; gap: .3rem;
+  align-items: center; justify-content: center; gap: .35rem;
   aspect-ratio: 4/3; padding: .5rem;
-  border: 1px dashed #f59e0b; border-radius: 6px;
+  border: 1.5px dashed #f59e0b; border-radius: 12px;
   background: #fffbeb; color: #b45309;
-  font: 600 .8rem 'Inter', sans-serif;
+  font: 600 .82rem 'Inter', sans-serif;
   cursor: pointer; text-align: center;
   transition: background .12s, border-color .12s;
 }
 .rdoc-add:hover { background: #fef3c7; border-color: #d97706; }
-.rdoc-add i { font-size: 1.15rem; }
-.rdoc-add small { font-weight: 500; font-size: .66rem; opacity: .75; }
+.rdoc-add i { font-size: 1.3rem; }
+.rdoc-add small { font-weight: 500; font-size: .67rem; opacity: .75; }
 .rdoc-add.busy, .rdoc-add:disabled { opacity: .75; cursor: default; }
 /* In the empty state there is no grid to sit in, so it becomes a button. */
 .rdoc-empty .rdoc-add {
-  aspect-ratio: auto; max-width: 220px;
-  margin: .9rem auto 0; padding: .75rem 1rem;
+  aspect-ratio: auto; max-width: 230px;
+  margin: 1rem auto 0; padding: .8rem 1rem;
 }
 .rdoc-cap-note {
-  margin-top: .7rem; text-align: center;
-  font-size: .72rem; color: #94a3b8;
+  margin-top: .85rem; text-align: center;
+  font-size: .73rem; color: #94a3b8;
 }
 
-/* The grid's minmax(180px, 1fr) collapses to a single column on a phone,
-   which made every tile a ~250px-tall slab and pushed the add tile below
-   the fold. Two up keeps a 3-photo set on one screen; tapping a tile still
-   opens the full-size image. */
+/* The grid's minmax(190px, 1fr) collapses to a single column on a phone,
+   which made every tile a tall slab and pushed the add tile below the fold.
+   Two up keeps a full set on one screen; tapping a tile still opens the
+   lightbox. */
 @media (max-width: 600px) {
+  .rdoc-modal { max-width: 100%; border-radius: 14px; }
   .rdoc-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .6rem; }
-  .rdoc-add { max-height: 150px; }
+  .rdoc-add { max-height: 160px; }
   .rdoc-add span { font-size: .74rem; }
 }
-.rdoc-spinner { text-align: center; padding: 1.5rem; color: #888; font-size: .82rem; }
+.rdoc-spinner { text-align: center; padding: 2rem; color: #64748b; font-size: .85rem; }
 `;
 
 
@@ -1869,8 +1898,14 @@ tr.rp-svc-voided .rp-actions-cell { opacity:.9; }
 <div id="rdoc-overlay" class="rdoc-overlay" role="dialog" aria-modal="true">
   <div class="rdoc-modal">
     <div class="rdoc-header">
-      <h3><i class="fas fa-id-card" style="margin-right:.4rem;"></i>ID Documents</h3>
-      <button class="rdoc-close" id="rdoc-close" title="Close">&times;</button>
+      <div class="rdoc-htitle">
+        <div class="rdoc-hicon"><i class="fas fa-id-card"></i></div>
+        <div style="min-width:0;">
+          <h3>ID Documents</h3>
+          <div class="rdoc-hsub" id="rdoc-sub"></div>
+        </div>
+      </div>
+      <button class="rdoc-close" id="rdoc-close" title="Close" aria-label="Close">&times;</button>
     </div>
     <div class="rdoc-body">
       <div class="rdoc-meta" id="rdoc-meta"></div>
@@ -2187,9 +2222,12 @@ tr.rp-svc-voided .rp-actions-cell { opacity:.9; }
           if (docBtn.dataset.mode === "upload") {
             _openDocUploadPicker(docBtn, DOC_MAX);
           } else {
-            _openDocsModal(
+            // Straight into the full-screen photo viewer — no intermediate
+            // grid modal to click through first.
+            _viewDocsDirect(
               docBtn.dataset.mobile,
-              decodeURIComponent(docBtn.dataset.guest || "")
+              decodeURIComponent(docBtn.dataset.guest || ""),
+              docBtn
             );
           }
         }
@@ -3532,10 +3570,13 @@ tr.rp-svc-voided .rp-actions-cell { opacity:.9; }
   // ID DOCUMENTS MODAL — view customer docs, no password required
   // ══════════════════════════════════════════════════════════════════════════════
 
-  // Hard cap, mirroring services/customer_service.upload_document, which
-  // trims anything past 3 server-side. Enforced here too so the picker can
-  // say why up front instead of letting photos upload and vanish.
-  const DOC_MAX = 3;
+  // Per-guest photo cap. Shared with the check-in / checkout camera through
+  // window.MAX_DOC_PHOTOS (static/customer-docs.js) so the two can never
+  // disagree — they did before (4 there, 3 here), which is why a guest with
+  // 4 photos showed "3 of 3 photos — remove one to add another" in this
+  // viewer. Enforced here too so the picker can say why up front instead of
+  // letting photos upload and vanish.
+  const DOC_MAX = (typeof window !== "undefined" && window.MAX_DOC_PHOTOS) || 4;
 
   // Which guest the viewer is currently showing, so the add tile inside it
   // knows where to upload without a button to read it off.
@@ -3690,12 +3731,23 @@ tr.rp-svc-voided .rp-actions-cell { opacity:.9; }
     for (let i = 0; i < files.length; i++) {
       try {
         let blob = files[i];
-        if (typeof _compressImage === "function") {
-          try { blob = await _compressImage(files[i]); } catch (_) { blob = files[i]; }
-        }
+        // Magic-scan the picked photo before upload: auto-detect the document,
+        // deskew it flat and apply the "magic colour" enhancement — the same
+        // treatment a check-in capture gets — so a gallery photo of an Aadhaar
+        // is cropped, straightened and cleaned up, not stored as a raw snap.
+        // Headless (autoScan): no crop editor, so a bulk pick stays one tap.
+        // Falls back to a plain colour compress if the scanner is unavailable.
+        try {
+          if (window.CibaraDocScan && typeof window.CibaraDocScan.autoScan === "function") {
+            blob = await window.CibaraDocScan.autoScan(files[i], { autoDetect: true, enhance: "magic" }) || files[i];
+          } else if (typeof _compressImage === "function") {
+            blob = await _compressImage(files[i]);
+          }
+        } catch (_) { blob = files[i]; }
         const form = new FormData();
         form.append("mobile", mobile);
         form.append("document", blob, `register_doc_${Date.now()}_${i}.jpg`);
+        form.append("context", "register");
         const res  = await apiFetch("/upload_customer_document", {
           method: "POST", body: form,
         });
@@ -3735,11 +3787,14 @@ tr.rp-svc-voided .rp-actions-cell { opacity:.9; }
       );
     }
 
-    // Refresh the viewer if it is open, so the new photos show immediately
-    // and the add tile recalculates how many slots are left.
+    // Refresh whichever viewer is open so the new photos show immediately: the
+    // grid modal (legacy path) or the full-screen lightbox (direct view).
     const overlay = dom("rdoc-overlay");
+    const lightbox = document.getElementById("doc-photo-viewer");
     if (overlay && overlay.classList.contains("show")) {
       _openDocsModal(mobile, guest);
+    } else if (done && lightbox && lightbox.style.display === "flex") {
+      _viewDocsDirect(mobile, guest);
     } else {
       _rdocAddBusy(null);
     }
@@ -3782,15 +3837,67 @@ tr.rp-svc-voided .rp-actions-cell { opacity:.9; }
             </button>`;
   }
 
+  // Open the guest's ID photos straight in the full-screen lightbox (shared
+  // with check-in / checkout), skipping the grid modal. A brief spinner on the
+  // row icon covers the one fetch. If the guest has no photos yet, go straight
+  // to the upload picker — that is the only useful action in the empty case.
+  async function _viewDocsDirect(mobile, guest, btn) {
+    const toast = window.showNotification || _notify;
+    _rdocCtx.mobile = mobile || "";
+    _rdocCtx.guest  = guest  || "";
+
+    const origHTML = btn ? btn.innerHTML : "";
+    if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>'; }
+    try {
+      const res  = await apiFetch(`/get_customer/${encodeURIComponent(mobile)}`);
+      const data = await res.json();
+      if (!data.success || !data.customer) {
+        toast("No customer record found for this number.", "error");
+        return;
+      }
+      if (window.CibaraSecureImg) window.CibaraSecureImg.remember(data.customer);
+      const urls = data.customer.id_doc_urls || [];
+      _rdocCtx.count = urls.length;
+
+      if (!urls.length) {
+        // Nothing to view — keep the cache honest and jump to adding.
+        _docStatus.set(mobile, false);
+        _paintDocButtons();
+        _openDocUploadPicker(null, DOC_MAX);
+        return;
+      }
+      if (typeof window.openPhotoViewer === "function") {
+        window.openPhotoViewer(urls, 0, mobile);
+      } else if (window.CibaraSecureImg) {
+        window.CibaraSecureImg.open(urls[0]);   // fallback: raw full-size
+      }
+    } catch (_) {
+      toast("Network error — could not load documents.", "error");
+    } finally {
+      if (btn) { btn.disabled = false; if (origHTML) btn.innerHTML = origHTML; }
+    }
+  }
+
+  // Let the shared viewer's "Add photo" button add to this guest without a
+  // modal: it calls back here with the mobile and how many slots are free.
+  window.CibaraDocAddHandler = function (mobile, remaining) {
+    _rdocCtx.mobile = mobile || _rdocCtx.mobile;
+    _openDocUploadPicker(null, remaining == null ? DOC_MAX : remaining);
+  };
+
   async function _openDocsModal(mobile, guestName) {
     _rdocCtx.mobile = mobile || "";
     _rdocCtx.guest  = guestName || "";
     const overlay = dom("rdoc-overlay");
     const meta    = dom("rdoc-meta");
+    const sub     = dom("rdoc-sub");
     const content = dom("rdoc-content");
     if (!overlay) return;
 
-    // Show modal immediately with spinner
+    // Show modal immediately with spinner. Guest / mobile ride in the header
+    // subtitle now; the old .rdoc-meta line is kept (hidden) for safety.
+    const subText = [guestName || "", mobile || ""].filter(Boolean).join("  ·  ") || "No guest linked";
+    if (sub)     sub.textContent = subText;
     if (meta)    meta.innerHTML = `<strong>Guest:</strong> ${guestName || "-"} &nbsp;|&nbsp; <strong>Mobile:</strong> ${mobile || "-"}`;
     if (content) content.innerHTML = `<div class="rdoc-spinner"><i class="fas fa-spinner fa-spin"></i> Loading…</div>`;
     overlay.classList.add("show");
@@ -3804,6 +3911,7 @@ tr.rp-svc-voided .rp-actions-cell { opacity:.9; }
         return;
       }
 
+      if (window.CibaraSecureImg) window.CibaraSecureImg.remember(data.customer);
       const urls = data.customer.id_doc_urls || [];
       _rdocCtx.count = urls.length;
 
@@ -3821,24 +3929,46 @@ tr.rp-svc-voided .rp-actions-cell { opacity:.9; }
         return;
       }
 
-      // Render image grid — each image opens full-size in a new tab on click
+      // Render image grid. A tile opens the full lightbox (zoom, swipe,
+      // delete, caption) — the same viewer check-in uses — instead of dumping
+      // the raw image into a new browser tab.
       const imgTiles = urls.map((url, i) =>
-        `<div class="rdoc-img-wrap">
-          <img src="${url}" alt="ID Document ${i + 1}" loading="lazy"
-               onclick="window.open('${url}', '_blank')"
-               onerror="this.parentElement.innerHTML='<span style=\\'color:#bbb;font-size:.75rem;\\'>Failed to load</span>'" />
-        </div>`
+        `<button type="button" class="rdoc-img-wrap" data-idx="${i}"
+             title="${window.CibaraSecureImg ? window.CibaraSecureImg.caption(url) : 'View document'}">
+          <img data-secure-src="${url}" alt="ID document ${i + 1}" loading="lazy"
+               onerror="this.parentElement.innerHTML='<span class=\\'rdoc-img-fail\\'>Failed to load</span>'" />
+          <span class="rdoc-img-zoom"><i class="fas fa-expand"></i></span>
+        </button>`
       ).join("");
 
-      // The add tile sits as the last cell of the grid, so "there is room
-      // for another photo" is shown by the layout rather than stated in a
-      // sentence. It disappears at the cap.
-      const addTile = _rdocAddTileHTML(DOC_MAX - urls.length);
+      // Free slots left, clamped at 0 so a legacy record already over the cap
+      // never produces a negative/odd tile. The add tile sits as the last
+      // cell of the grid, so "there is room for another photo" is shown by the
+      // layout rather than stated in a sentence; it disappears at the cap.
+      const freeSlots = Math.max(0, DOC_MAX - urls.length);
+      const addTile = _rdocAddTileHTML(freeSlots);
 
+      if (content) setTimeout(() => {
+        content.querySelectorAll("img[data-secure-src]").forEach((im) =>
+          window.CibaraSecureImg.apply(im, im.dataset.secureSrc, "view"));
+        // Open the shared lightbox on tile click. Falls back to a plain
+        // full-size open if customer-docs.js (which defines openPhotoViewer)
+        // did not load for some reason.
+        content.querySelectorAll(".rdoc-img-wrap[data-idx]").forEach((tile) => {
+          tile.addEventListener("click", () => {
+            const idx = parseInt(tile.dataset.idx || "0", 10);
+            if (typeof window.openPhotoViewer === "function") {
+              window.openPhotoViewer(urls, idx, _rdocCtx.mobile || mobile || "");
+            } else if (window.CibaraSecureImg) {
+              window.CibaraSecureImg.open(urls[idx]);
+            }
+          });
+        });
+      }, 0);
       if (content) content.innerHTML =
         `<div class="rdoc-grid">${imgTiles}${addTile}</div>` +
-        (urls.length >= DOC_MAX
-          ? `<div class="rdoc-cap-note">${DOC_MAX} of ${DOC_MAX} photos — remove one from the customer record to add another.</div>`
+        (freeSlots === 0
+          ? `<div class="rdoc-cap-note">${urls.length} photo${urls.length === 1 ? "" : "s"} on file — the maximum. Remove one to add another.</div>`
           : "");
 
     } catch (err) {

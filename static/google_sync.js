@@ -165,6 +165,24 @@ const _horizonStr = _localYMD(_horizonDate);
 // by the rules and logged as an error, so those listeners are skipped.
 window.CibaraAuth.ready().then((user) => {
   if (!user || !user.role) return;
+  // If the Firebase SDK sign-in failed (e.g. the fake-backend demo, or Firebase
+  // unreachable), every listener below would come back permission-denied — one
+  // warning toast per collection. In LEGACY mode /get_data has already painted
+  // the screen, so skip the listeners entirely and say it once instead of eight
+  // times. In LISTENER-FIRST mode the listeners ARE the data source, so we must
+  // still attempt them (a blank grid with a hint beats no data at all).
+  const realtimeOk = typeof window.CibaraAuth.realtimeAvailable !== "function" ||
+    window.CibaraAuth.realtimeAvailable();
+  if (!realtimeOk && !LISTENER_FIRST) {
+    if (typeof showNotification === "function") {
+      showNotification(
+        "Live updates are off — the screen won't auto-refresh. Reload to see " +
+          "changes made on other devices.",
+        "warning", 6000,
+      );
+    }
+    return;
+  }
   startListeners(user.role !== "housekeeping");
 });
 

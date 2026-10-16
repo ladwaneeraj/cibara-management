@@ -17,7 +17,6 @@ import base64
 
 from services import payment_service, customer_service, pdf_service, expense_service, bills_service, expense_presets_service, ocr_service
 from services import rate_segments
-from services.banking import init_banking
 
 # Configure logging
 logging.basicConfig(
@@ -305,10 +304,6 @@ try:
     # Phase 1 of the stay_id migration — adds the bills/stay-document helper.
     # Additive, no behaviour change. See docs/STAY_DOC_CONTRACT.md.
     bills_service.init(db)
-    # Banking package — cash receipts, deposits, adjustments, bank
-    # accounts. Adds five new Firestore collections plus a bill_events
-    # audit log. Initialiser is idempotent.
-    init_banking(db)
 except Exception as e:
     logger.error(f"Error initializing Firebase: {str(e)}")
     raise

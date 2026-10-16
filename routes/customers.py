@@ -10,6 +10,8 @@ from flask import Blueprint, request, jsonify
 from config import logger
 from services import customer_service
 from services import ocr_service
+from services import id_docs
+from services.audit_log import write_log
 from services import pincode_geo
 from services.customer_service import search_by_mobile_prefix
 from services.auth_service import requires_permission
@@ -34,7 +36,11 @@ def _format_customer(c: dict) -> dict:
         "address": c.get("address", ""),
         "id_type": c.get("id_type", ""),
         "id_number": c.get("id_number", ""),
-        "id_doc_urls": c.get("id_doc_urls", []),
+        # ID documents are private now (services/id_docs.py): the browser gets
+        # a count and loads images through /api/v2/customers/<m>/id-docs.
+        # The key stays (empty) so older scripts that read it don't break.
+        "id_doc_urls": [],
+        "id_doc_count": id_docs.active_count(c),
         "total_stays": c.get("total_stays", 0),
         "total_spent": c.get("total_spent", 0),
         "first_visit": c.get("first_visit", ""),
@@ -87,6 +93,59 @@ def search_customers_route():
         return jsonify(success=False, message=f"Error: {str(e)}")
 
 
+def _id_doc_links(mobile: str) -> dict:
+    """In-app links to the guest's active ID photos, for users allowed to see
+    them (customer_doc.view: admin, manager). The links only work with the
+    signed-in session — there is no public URL any more. `id_doc_meta` says
+    who captured each photo and when, for the photo viewer caption."""
+    from services.auth_service import load_current_user, role_has_permission
+    user = load_current_user()
+    if not user or not role_has_permission(user.get("role"), "customer_doc.view"):
+        return {"id_doc_urls": [], "id_doc_meta": []}
+    try:
+        docs = [d for d in id_docs.list_documents(mobile) if d.get("status") == "active"]
+    except Exception as e:
+        logger.warning(f"id doc links for {mobile} unavailable: {e}")
+        return {"id_doc_urls": [], "id_doc_meta": []}
+    clean = id_docs.clean_mobile(mobile)
+    meta = [{
+        "url": f"/api/v2/customers/{clean}/id-docs/{d['id']}/image",
+        "side": d.get("side"),
+        "captured_by": (d.get("captured_by") or {}).get("name") or "",
+        "captured_at": d.get("captured_at") or "",
+        "legacy": bool(d.get("legacy")),
+    } for d in docs]
+    return {"id_doc_urls": [m["url"] for m in meta], "id_doc_meta": meta,
+            "id_doc_count": len(meta)}
+
+
+def _pending_from_settlements(mobile: str, out: dict) -> dict:
+    """The check-in warning, from the settlements themselves rather than the
+    single has_pending_settlement flag (which describes one stay at most and
+    can drift). The pending_settlement_* fields point at the OLDEST open
+    balance — what the Collect button takes first — and the totals cover all
+    of them. If the lookup fails the stored flag is kept as before."""
+    rows = customer_service.open_settlements(mobile)
+    if rows is None:
+        return {}
+    if not rows:
+        return {"has_pending_settlement": False, "pending_settlement_id": None,
+                "pending_settlement_amount": None, "pending_settlement_date": None,
+                "pending_settlement_room": None, "pending_settlements": [],
+                "pending_settlement_total": 0, "pending_settlement_count": 0}
+    first = rows[0]
+    return {
+        "has_pending_settlement":    True,
+        "pending_settlement_id":     first["id"],
+        "pending_settlement_amount": first["amount"],
+        "pending_settlement_date":   first["checkout_date"],
+        "pending_settlement_room":   first["room"],
+        "pending_settlements":       rows,
+        "pending_settlement_total":  sum(r["amount"] for r in rows),
+        "pending_settlement_count":  len(rows),
+    }
+
+
 @customers_bp.route("/get_customer/<mobile>", methods=["GET"])
 def get_customer_route(mobile):
     """Get a single customer record by mobile number."""
@@ -94,7 +153,10 @@ def get_customer_route(mobile):
         customer = customer_service.get_customer(mobile)
         if customer:
             customer.pop("_id", None)
-            return jsonify(success=True, customer=_format_customer(customer))
+            out = _format_customer(customer)
+            out.update(_id_doc_links(customer.get("mobile") or mobile))
+            out.update(_pending_from_settlements(customer.get("mobile") or mobile, out))
+            return jsonify(success=True, customer=out)
         return jsonify(success=False, message="Customer not found")
     except Exception as e:
         logger.error(f"Error getting customer: {str(e)}")
@@ -148,17 +210,25 @@ def search_customers_by_mobile_route():
 
 
 @customers_bp.route("/upload_customer_document", methods=["POST"])
+@requires_permission("customer_doc.capture")
 def upload_customer_document():
     """
-    Upload a document image and attach it to a customer by mobile number.
+    Upload an ID document image and attach it to a customer by mobile number.
+    Kept for older screens; the scanner uses POST /api/v2/customers/<m>/id-docs.
 
     Form fields:
         mobile    – 10-digit mobile number (customer key)
-        document  – image file (JPEG / PNG)
+        document  – image file (JPEG / PNG / WebP)
+        side      – optional: front | back | other (default front)
+        source    – optional: auto_scan | manual | upload (default upload)
+        context   – optional: checkin | checkout | customer_manager | register
+        room      – optional room number
 
-    Returns JSON: { success, url, message }
+    Returns JSON: { success, url, id, message } — `url` is the in-app image
+    endpoint (needs the signed-in session), never a public link.
     """
     try:
+        from flask import g
         mobile = request.form.get("mobile", "").strip()
         if not mobile:
             return jsonify(success=False, message="Mobile number is required")
@@ -170,39 +240,34 @@ def upload_customer_document():
         if not file or file.filename == "":
             return jsonify(success=False, message="Empty file")
 
-        # NOTE: no pre-flight cap check here — it cost one Firestore read
-        # per photo on every upload. The transaction inside upload_document
-        # is the authoritative cap enforcement; it raises DocumentCapReached
-        # (after deleting the orphaned Storage blob) in the rare at-cap case.
         image_bytes = file.read()
         mime = (file.mimetype or "image/jpeg").lower()
-        filename = f"doc_{uuid.uuid4().hex[:10]}_{datetime.now().strftime('%Y%m%d%H%M%S')}.jpg"
-
-        # Diagnostic: payload size tells us whether client-side compression
-        # is active (~150-350 KB) or the browser is running a cached old
-        # bundle that uploads raw photos (2-8 MB).
-        import time as _t
-        _t0 = _t.time()
-        logger.info(
-            f"[PERF] upload_customer_document: {len(image_bytes)/1024:.0f} KB "
-            f"({mime}) for {mobile}"
-        )
-
+        user = getattr(g, "current_user", None)
         try:
-            url = customer_service.upload_document(mobile, image_bytes, filename)
-        except customer_service.DocumentCapReached as cap:
-            return jsonify(success=False, message=str(cap))
-        if url:
-            logger.info(
-                f"[PERF] upload_customer_document stored in {_t.time()-_t0:.2f}s "
-                f"(storage upload + firestore txn)"
+            rec = id_docs.add_document(
+                mobile, image_bytes, user=user,
+                # The classic screens don't label sides: "other" never archives
+                # an earlier photo of the same guest.
+                side=request.form.get("side", "other"),
+                source=request.form.get("source", "upload"),
+                context={"kind": request.form.get("context", "customer_manager"),
+                         "room": request.form.get("room", "")},
+                device=request.headers.get("User-Agent", ""),
             )
-            # Best-effort demographics extraction (pincode + DOB) in the
-            # background — never blocks the upload response, never fails it.
-            # Gated by the ID-OCR kill-switch inside ocr_service.
-            _maybe_extract_demographics(mobile, image_bytes, mime, url)
-            return jsonify(success=True, url=url, message="Document uploaded successfully")
-        return jsonify(success=False, message="Failed to store document — check server logs")
+        except id_docs.IdDocError as e:
+            return jsonify(success=False, message=str(e)), (e.status if e.status != 400 else 200)
+
+        clean = id_docs.clean_mobile(mobile)
+        url = f"/api/v2/customers/{clean}/id-docs/{rec['id']}/image"
+        write_log("customer_doc.capture", target_collection="customers", target_id=clean,
+                  metadata={"doc_id": rec["id"], "side": rec.get("side"),
+                            "source": rec.get("source"), "via": "legacy_route"})
+        # Best-effort demographics extraction (pincode + DOB) in the
+        # background — never blocks the upload response, never fails it.
+        # Gated by the ID-OCR kill-switch inside ocr_service.
+        _maybe_extract_demographics(clean, image_bytes, mime, f"iddoc:{rec['id']}")
+        return jsonify(success=True, url=url, id=rec["id"], document=rec,
+                       message="Document saved securely")
 
     except Exception as e:
         logger.error(f"Error uploading customer document: {str(e)}")
@@ -210,59 +275,47 @@ def upload_customer_document():
 
 
 @customers_bp.route("/delete_customer_document", methods=["POST"])
-@requires_permission("customer.manage")
+@requires_permission("customer_doc.remove")
 def delete_customer_document():
     """
-    Remove a specific document URL from a customer's id_doc_urls list.
+    Remove an ID document from a customer's record — SOFT delete.
+
+    The record is marked `removed` with who/when/why and the file is kept, so
+    an admin can restore it. (The old version rewrote the whole id_doc_urls
+    list — losing any document uploaded at the same moment — and deleted the
+    file from Storage for good.)
 
     JSON body:
         mobile  – 10-digit mobile number
-        url     – the exact URL to remove
-
-    Returns JSON: { success, message, remaining }
+        url     – the document's URL (old download link or in-app image URL)
+        id      – or the document id
+        reason  – optional reason (defaults to "Removed from viewer")
     """
     try:
+        from flask import g
         data   = request.get_json(silent=True) or {}
         mobile = "".join(c for c in str(data.get("mobile", "")) if c.isdigit())
         url    = str(data.get("url", "")).strip()
+        doc_id = str(data.get("id", "")).strip()
 
         if len(mobile) != 10:
             return jsonify(success=False, message="Valid 10-digit mobile required"), 400
-        if not url:
-            return jsonify(success=False, message="Document URL required"), 400
+        if not doc_id:
+            doc_id = id_docs.resolve_legacy_url(mobile, url)
+        if not doc_id:
+            return jsonify(success=False, message="Document not found in customer record"), 404
 
-        customer = customer_service.get_customer(mobile)
-        if not customer:
-            return jsonify(success=False, message="Customer not found"), 404
-
-        urls = list(customer.get("id_doc_urls", []))
-        if url not in urls:
-            return jsonify(success=False, message="URL not found in customer record"), 404
-
-        urls.remove(url)
-
-        from config import db as _db
-        _db.collection("customers").document(mobile).update({"id_doc_urls": urls})
-
-        # Delete from Firebase Storage in a background thread so the HTTP response
-        # is returned immediately after the Firestore update without waiting for
-        # the Storage round-trip (~200-400 ms saved per delete).
-        if url.startswith("https://firebasestorage.googleapis.com"):
-            import threading, urllib.parse
-            from firebase_admin import storage as _fb_storage
-
-            def _delete_blob(blob_url):
-                try:
-                    path_encoded = blob_url.split("/o/")[1].split("?")[0]
-                    blob_path    = urllib.parse.unquote(path_encoded)
-                    _fb_storage.bucket().blob(blob_path).delete()
-                    logger.info(f"Storage: deleted {blob_path}")
-                except Exception as err:
-                    logger.warning(f"Storage delete skipped: {err}")
-
-            threading.Thread(target=_delete_blob, args=(url,), daemon=True).start()
-
-        return jsonify(success=True, message="Document removed", remaining=len(urls))
+        reason = str(data.get("reason", "")).strip() or "Removed from viewer"
+        try:
+            rec = id_docs.remove_document(mobile, doc_id, user=getattr(g, "current_user", None),
+                                          reason=reason)
+        except id_docs.IdDocError as e:
+            return jsonify(success=False, message=str(e)), e.status
+        write_log("customer_doc.remove", target_collection="customers", target_id=mobile,
+                  metadata={"doc_id": doc_id, "reason": reason, "via": "legacy_route"})
+        remaining = sum(1 for d in id_docs.list_documents(mobile) if d.get("status") == "active")
+        return jsonify(success=True, message="Document removed (kept in history)",
+                       remaining=remaining, document=rec)
 
     except Exception as e:
         logger.error(f"delete_customer_document error: {e}")
@@ -402,6 +455,24 @@ def add_customer_route():
 
 
 
+def _group_mobiles_by_clean(raw_mobiles):
+    """Group raw mobile strings by their cleaned 10-digit key.
+
+    Returns (clean_keys, clean_to_raws). Customer documents — and the id_docs
+    summary on them — are keyed by the cleaned mobile, so a lookup must use the
+    clean key; but the response has to echo the ORIGINAL strings the client
+    sent, because the Register caches per-row doc status by the raw
+    guest_mobile. This bridges the two: look up by `clean_keys`, answer with the
+    `clean_to_raws[clean]` originals. Invalid / non-10-digit numbers drop out.
+    """
+    clean_to_raws: dict[str, list[str]] = {}
+    for raw in raw_mobiles:
+        clean = id_docs.clean_mobile(raw)
+        if clean:
+            clean_to_raws.setdefault(clean, []).append(str(raw))
+    return list(clean_to_raws.keys()), clean_to_raws
+
+
 @customers_bp.route("/batch_check_customer_docs", methods=["POST"])
 # Open to any authenticated user. This is a lightweight existence check —
 # returns just the list of mobile numbers that have at least one ID
@@ -421,11 +492,25 @@ def batch_check_customer_docs():
     """
     try:
         from config import db as _db
-        data    = request.json or {}
-        mobiles = [str(m).strip() for m in data.get("mobiles", []) if m]
-        mobiles = list(dict.fromkeys(mobiles))[:500]  # deduplicate, cap at 500
+        data = request.json or {}
+        raw_mobiles = [str(m).strip() for m in data.get("mobiles", []) if m]
 
-        if not mobiles:
+        # Clean every number to its 10-digit key before using it as a Firestore
+        # document id. Customer docs — and the id_docs summary on them — are
+        # keyed by the cleaned mobile (services.customer_service._clean_mobile),
+        # and every other lookup in the app cleans first. This route did not: it
+        # used the raw guest_mobile straight as the doc id. A number stored with
+        # a +91 / space / leading 0 (check-in keeps it raw, routes/rooms.py) was
+        # then looked up under a key that does not exist, so the Register row's
+        # ID icon stayed "missing" even though the document was on file.
+        #
+        # The response must echo the ORIGINAL strings the client sent: the
+        # Register keys its per-row doc-status cache by the raw guest_mobile, so
+        # a cleaned key would never match. Map clean -> original(s) and return
+        # the originals.
+        clean_keys, clean_to_raws = _group_mobiles_by_clean(raw_mobiles)
+        clean_keys = clean_keys[:500]  # cap at 500 lookups
+        if not clean_keys:
             return jsonify(success=True, mobiles_with_docs=[])
 
         cust_ref = _db.collection("customers")
@@ -434,14 +519,12 @@ def batch_check_customer_docs():
         # Chunk the mobile list so registers with 100+ entries work correctly.
         CHUNK = 100
         mobiles_with_docs = []
-        for i in range(0, len(mobiles), CHUNK):
-            chunk = mobiles[i:i + CHUNK]
+        for i in range(0, len(clean_keys), CHUNK):
+            chunk = clean_keys[i:i + CHUNK]
             refs  = [cust_ref.document(m) for m in chunk]
             for snap in _db.get_all(refs):
-                if snap.exists:
-                    urls = snap.get("id_doc_urls") or []
-                    if urls:
-                        mobiles_with_docs.append(snap.id)
+                if snap.exists and id_docs.active_count(snap.to_dict() or {}) > 0:
+                    mobiles_with_docs.extend(clean_to_raws.get(snap.id, [snap.id]))
 
         return jsonify(success=True, mobiles_with_docs=mobiles_with_docs)
     except Exception as e:

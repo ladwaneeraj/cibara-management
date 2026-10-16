@@ -17,7 +17,7 @@
  * Bump CACHE_VERSION whenever this file or the precache list changes so old
  * caches are cleaned up on activate.
  */
-const CACHE_VERSION = 'v1';
+const CACHE_VERSION = 'v7';
 const CACHE = `cibara-static-${CACHE_VERSION}`;
 const OFFLINE_URL = '/static/offline.html';
 

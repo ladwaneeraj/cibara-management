@@ -41,10 +41,6 @@
       // Correct guest name / mobile on a bill (non-financial only). Amounts,
       // taxes and GST recipient details stay admin-only.
       "bill.guest.edit",
-      // Banking — manager can view + assemble drafts; cannot confirm,
-      // reconcile, reverse, create adjustments, or manage accounts.
-      "banking.view",
-      "banking.deposit.create",
       // Deep-check maintenance — manager inspects and marks fixed;
       // verify / checklist edit / delete stay admin-only.
       "maintenance.view",
@@ -62,6 +58,10 @@
       // Guest portal: act on room-service requests. Portal settings and the
       // QR print stay admin-only.
       "guest_request.handle",
+      // Guest ID documents (Aadhaar): capture and view. Download original,
+      // remove and restore stay admin-only (wildcard).
+      "customer_doc.capture",
+      "customer_doc.view",
       // Collect a pending balance from a returning guest. Granting the
       // credit (settle_later.use) and writing it off (settlement.manage)
       // stay admin-only.
@@ -78,9 +78,6 @@
       // revenue.view,
       // analytics.view, laundry.price.edit, settle_later.use,
       // logs.view, user.manage, quick_actions.use,
-      // banking.deposit.confirm, banking.deposit.reconcile,
-      // banking.deposit.reverse, banking.adjustment.create,
-      // banking.account.manage,
       // expense.presets.manage,
       // expense.manage,
       // gst.lock.manage (GST month locking — admin-only),

@@ -397,8 +397,8 @@ function initializeExpense() {
     // time. Non-admin (manager) keeps the locked-to-transaction
     // behaviour they had before.
     const isAdmin = window.CibaraAuth
-      && typeof window.CibaraAuth.userCan === "function"
-      && window.CibaraAuth.userCan("banking.adjustment.create");
+      && typeof window.CibaraAuth.isAdmin === "function"
+      && window.CibaraAuth.isAdmin();
     showExpenseModal("transaction", { allowTypeToggle: isAdmin });
   });
 

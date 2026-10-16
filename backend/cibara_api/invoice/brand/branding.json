@@ -1,0 +1,15 @@
+{
+  "_comment": "Invoice branding. Edit freely; no code change needed. Supplier name, address, phone and GSTIN come from routes/billing.py (SUPPLIER_*) so every document stays consistent. Put logo.png and signature.png next to this file to print them. UPI_VPA / UPI_PAYEE_NAME environment variables override the upi block.",
+  "email": "",
+  "website": "",
+  "upi": {
+    "vpa": "",
+    "payee_name": "Cibara Comforts"
+  },
+  "terms": [
+    "All charges are inclusive of applicable GST.",
+    "Please check this invoice and report any discrepancy to the front desk."
+  ],
+  "thank_you": "Thank you for staying at Cibara Comforts. We look forward to welcoming you again!",
+  "signatory_label": "Authorised Signatory"
+}

@@ -43,6 +43,13 @@ def _download(url: str, timeout: int = 25, retries: int = 4) -> bytes:
     whole run cascading into failures.
     """
     import time as _t
+    # ID photos are private now (scripts/migrate_id_docs.py switches the old
+    # public tokens off), so read Storage objects with the service account.
+    from services.id_docs import storage_path_from_url
+    path = storage_path_from_url(url)
+    if path:
+        from firebase_admin import storage
+        return storage.bucket().blob(path).download_as_bytes()
     last_err = None
     for attempt in range(retries):
         try:

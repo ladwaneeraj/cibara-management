@@ -16,7 +16,6 @@ from routes.customers import customers_bp
 from routes.utils import utils_bp
 from routes.laundry import laundry_bp
 from routes.users import users_bp
-from routes.banking import banking_bp
 from routes.mmt_ingest import mmt_ingest_bp
 from routes.agoda_ingest import agoda_ingest_bp
 from routes.bank_settlement import bank_settlement_bp
@@ -312,7 +311,6 @@ app.register_blueprint(utils_bp,       url_prefix="")
 app.register_blueprint(laundry_bp,    url_prefix="")
 app.register_blueprint(users_bp,      url_prefix="")
 app.register_blueprint(guest_bp)         # /api/guest-portal/*, /api/guest-requests/* (prefix set in the blueprint)
-app.register_blueprint(banking_bp)    # /banking/* — owns its url_prefix
 app.register_blueprint(mmt_ingest_bp, url_prefix="")  # /mmt/ingest, /mmt/ingest_status
 app.register_blueprint(agoda_ingest_bp, url_prefix="")  # /agoda/ingest, /agoda/ingest_status
 app.register_blueprint(bank_settlement_bp, url_prefix="")  # /bank/settlements/ingest

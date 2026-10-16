@@ -37,7 +37,7 @@
     <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore-compat.js"></script>
     <script src="/firebase-config.js"></script>
     <script src="{{ asset_url('permissions.js') }}"></script>
-    <script src="/static/auth.js"></script>
+    <script src="{{ asset_url('auth.js') }}"></script>
     <script src="/static/user-directory.js"></script>
     <script src="/static/attribution.js"></script>
     <script src="/static/room-attribution.js"></script>
@@ -49,7 +49,6 @@
     <link rel="stylesheet" href="{{ asset_url('booking.css') }}" />
     <link rel="stylesheet" href="{{ asset_url('room-calendar.css') }}" />
     <link rel="stylesheet" href="/static/laundry.css" />
-    <link rel="stylesheet" href="/static/banking.css" />
     <link rel="stylesheet" href="/static/maintenance.css" />
     <!-- asset_url appends ?v=mtime so browsers pick up new versions on the
          next load instead of serving a 12h-cached stylesheet (the JS is
@@ -481,6 +480,27 @@
         align-items: center;
         justify-content: center;
         padding: 1rem;
+      }
+      /* Click-to-zoom in the lightbox: fitted by default, natural 1:1 when
+         zoomed so a small ID number becomes readable; the stage scrolls. */
+      #doc-viewer-stage {
+        overflow: auto;
+        scrollbar-width: thin;
+      }
+      #doc-viewer-main-img.doc-zoomed {
+        max-height: none !important;
+        max-width: none !important;
+        width: auto !important;
+        height: auto !important;
+      }
+      /* Progressive load: the small thumbnail shows first (blurred), then the
+         sharp watermarked image replaces it — so the viewer feels instant and
+         never flashes the previous guest's document. */
+      #doc-viewer-main-img {
+        transition: filter 0.2s ease;
+      }
+      #doc-viewer-main-img.doc-lowres {
+        filter: blur(7px);
       }
       /* Thumbnail in viewer */
       .doc-thumb {
@@ -1208,11 +1228,11 @@
                 <i class="fas fa-calendar-alt"></i><span>Calendar</span>
               </button>
             </div>
-            <!-- "More" dropdown — Deep Check / Pending Payments / Banking.
+            <!-- "More" dropdown — Deep Check / Pending Payments.
                  Lives in the top row beside the Grid/Calendar switch so it
                  is reachable in both views. Same
                  element IDs as before, so maintenance.js / the settlements
-                 + banking handlers wire up unchanged regardless of DOM
+                 handlers wire up unchanged regardless of DOM
                  parent. Laundry and Staff live in the floating Quick
                  Actions menu instead — see quick-actions-container below. -->
             <div class="filter-more" id="rooms-filter-more">
@@ -1235,11 +1255,6 @@
                 <div class="quick-action-item" id="quick-settlements-btn">
                   <i class="fas fa-money-bill-wave"></i>
                   <span>Pending Payments</span>
-                </div>
-                <div class="quick-action-item" id="quick-banking-btn"
-                     data-perm="banking.view" data-hide-roles="housekeeping">
-                  <i class="fas fa-university"></i>
-                  <span>Banking</span>
                 </div>
               </div>
             </div>
@@ -1892,9 +1907,6 @@
 
         <!-- Bills Tab Content (populated by bills.js) -->
         <div class="tab-content hidden" id="bills-tab"></div>
-
-        <!-- Banking Tab Content (populated by banking.js) -->
-        <div class="tab-content hidden" id="banking-tab"></div>
 
         <!-- Staff Tab Content (populated by staff.js — see ensureModal()) -->
         <div class="tab-content hidden" id="staff-tab"></div>
@@ -2592,676 +2604,213 @@
       </nav>
     </div>
 
-    <!-- ── Settings Modal ───────────────────────────────────────────────────── -->
+    <!-- ── Settings Modal ─────────────────────────────────────────────────────
+         Grouped list layout (styles: .set-* in static/style.css). Every id,
+         onclick/onchange handler and data-perm is unchanged — script.js,
+         invoice-settings.js, expense-presets-admin.js and guest-requests.js
+         drive these elements exactly as before. A group whose rows are all
+         hidden by data-perm hides itself (CSS :has). -->
     <div
       class="modal-backdrop"
       id="settings-modal"
       onclick="if (event.target === this) closeSettingsModal();"
     >
-      <div class="modal-content" style="max-width: 420px">
-        <div class="modal-header">
-          <h2>
-            <i
-              class="fas fa-cog"
-              style="margin-right: 8px; color: var(--primary)"
-            ></i
-            >Settings
-          </h2>
-          <button
-            class="close-btn"
-            onclick="closeSettingsModal()"
-            aria-label="Close"
-          >
-            &times;
+      <div class="modal-content set-modal" role="dialog" aria-labelledby="settings-title">
+        <div class="set-head">
+          <div class="set-head-icon"><i class="fas fa-sliders-h"></i></div>
+          <div class="set-head-text">
+            <h2 id="settings-title">Settings</h2>
+            <p>Changes save instantly and apply on every device.</p>
+          </div>
+          <button class="set-close" onclick="closeSettingsModal()" aria-label="Close">
+            <i class="fas fa-times"></i>
           </button>
         </div>
-        <div style="padding: 0.5rem 0 0.75rem">
-          <!-- Reports card -->
-          <div
-            id="settings-reports-card"
-            onclick="handleSettingsReportsClick()"
-            style="
-              display: flex;
-              align-items: center;
-              gap: 1rem;
-              padding: 0.85rem 1rem;
-              border-radius: 12px;
-              border: 1.5px solid var(--border);
-              cursor: pointer;
-              transition:
-                background 0.15s,
-                border-color 0.15s;
-            "
-            onmouseover="
-              this.style.background = '#f0f7ff';
-              this.style.borderColor = '#0c6fcd';
-            "
-            onmouseout="
-              this.style.background = '';
-              this.style.borderColor = '';
-            "
-          >
-            <div
-              style="
-                width: 44px;
-                height: 44px;
-                border-radius: 12px;
-                flex-shrink: 0;
-                background: rgba(12, 111, 205, 0.1);
-                display: flex;
-                align-items: center;
-                justify-content: center;
-              "
-            >
-              <i
-                class="fas fa-chart-bar"
-                style="color: #0c6fcd; font-size: 1.1rem"
-              ></i>
-            </div>
-            <div style="flex: 1">
-              <div
-                style="
-                  font-weight: 600;
-                  font-size: 0.92rem;
-                  color: var(--text-primary);
-                "
-              >
-                Analytics &amp; Reports
-              </div>
-              <div
-                style="
-                  font-size: 0.75rem;
-                  color: var(--text-secondary);
-                  margin-top: 2px;
-                "
-              >
-                Revenue, expenses &amp; trends
-              </div>
-            </div>
-            <i
-              class="fas fa-chevron-right"
-              style="color: #bbb; font-size: 0.8rem"
-            ></i>
-          </div>
 
-          <!-- Incognito mode — master switch (see script.js
-               toggleIncognitoMode). ON → hides Transactions + Register tabs and
-               the bill "Edit Price" button, and forces bill generation for every
-               stay (server-enforced in config.create_bill_record). The
-               standalone "Bill generation" card below controls the same
-               always_generate_bill flag independently, so bills-for-all-stays
-               can be enabled WITHOUT the tab-hiding that Incognito brings;
-               while Incognito is ON the server forces generation regardless of
-               that card. Hide-Register stays folded into Incognito. -->
-          <div
-            id="settings-incognito-card"
-            style="
-              display: flex;
-              align-items: center;
-              gap: 1rem;
-              padding: 0.85rem 1rem;
-              border-radius: 12px;
-              border: 1.5px solid var(--border);
-              margin-top: 0.65rem;
-            "
-          >
-            <div
-              style="
-                width: 44px;
-                height: 44px;
-                border-radius: 12px;
-                flex-shrink: 0;
-                background: rgba(33, 33, 33, 0.1);
-                display: flex;
-                align-items: center;
-                justify-content: center;
-              "
-            >
-              <i
-                class="fas fa-user-secret"
-                style="color: #212121; font-size: 1.1rem"
-              ></i>
-            </div>
-            <div style="flex: 1; min-width: 0">
+        <div class="set-body">
+          <!-- ── Reports & documents ── -->
+          <section class="set-group">
+            <h3 class="set-group-title">Reports &amp; documents</h3>
+            <div class="set-list">
               <div
-                style="
-                  font-weight: 600;
-                  font-size: 0.92rem;
-                  color: var(--text-primary);
-                "
+                id="settings-reports-card"
+                class="set-row set-row--link"
+                role="button"
+                tabindex="0"
+                onclick="handleSettingsReportsClick()"
+                onkeydown="if (event.key === 'Enter') this.click();"
               >
-                Incognito mode
+                <span class="set-ico set-ico--blue"><i class="fas fa-chart-bar"></i></span>
+                <span class="set-text">
+                  <span class="set-title">Analytics &amp; Reports</span>
+                  <span class="set-sub">Revenue, expenses &amp; trends</span>
+                </span>
+                <i class="fas fa-chevron-right set-chev"></i>
               </div>
-              <div
-                id="settings-incognito-sub"
-                style="
-                  font-size: 0.75rem;
-                  color: var(--text-secondary);
-                  margin-top: 2px;
-                "
-              >
-                Loading…
-              </div>
-            </div>
-            <label
-              class="settings-toggle"
-              style="
-                position: relative;
-                display: inline-block;
-                width: 44px;
-                height: 24px;
-                flex-shrink: 0;
-                cursor: pointer;
-              "
-              title="Enable incognito mode"
-            >
-              <input
-                type="checkbox"
-                id="settings-incognito-toggle"
-                onchange="toggleIncognitoMode(this)"
-                style="opacity: 0; width: 0; height: 0"
-              />
-              <span
-                id="settings-incognito-slider"
-                style="
-                  position: absolute;
-                  inset: 0;
-                  background: #ccc;
-                  border-radius: 24px;
-                  transition: background 0.2s;
-                "
-              ></span>
-              <span
-                id="settings-incognito-knob"
-                style="
-                  position: absolute;
-                  height: 18px;
-                  width: 18px;
-                  left: 3px;
-                  top: 3px;
-                  background: white;
-                  border-radius: 50%;
-                  transition: transform 0.2s;
-                  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
-                "
-              ></span>
-            </label>
-          </div>
 
-          <!-- Manager photo check (rooms 200-228). Flag: ui_config.inspection_photos.
-               When on, a manager approving one of those rooms must attach
-               washroom + room photos (static/room-photos.js); when off they use
-               the checklist. Admin and housekeeping are unaffected. -->
-          <div
-            data-perm="settings.update"
-            style="
-              display: flex;
-              align-items: center;
-              gap: 0.85rem;
-              padding: 0.85rem 1rem;
-              border-radius: 12px;
-              border: 1.5px solid var(--border);
-              margin-top: 0.65rem;
-            "
-          >
-            <div
-              style="
-                width: 44px;
-                height: 44px;
-                border-radius: 12px;
-                flex-shrink: 0;
-                background: rgba(67, 97, 238, 0.1);
-                display: flex;
-                align-items: center;
-                justify-content: center;
-              "
-            >
-              <i class="fas fa-camera" style="color: var(--primary); font-size: 1.1rem"></i>
-            </div>
-            <div style="flex: 1; min-width: 0">
-              <div style="font-weight: 600; font-size: 0.92rem; color: var(--text-primary)">
-                Photo check for rooms 200-228
-              </div>
+              <!-- Invoice & payments (logo, signature, UPI, terms) — static/invoice-settings.js -->
               <div
-                id="settings-photos-sub"
-                style="font-size: 0.75rem; color: var(--text-secondary); margin-top: 2px"
+                id="settings-invoice-card"
+                class="set-row set-row--link"
+                data-perm="settings.update"
+                role="button"
+                tabindex="0"
+                onclick="closeSettingsModal(); window.CibaraInvoiceSettings && window.CibaraInvoiceSettings.open();"
+                onkeydown="if (event.key === 'Enter') this.click();"
               >
-                Loading…
+                <span class="set-ico set-ico--amber"><i class="fas fa-file-invoice"></i></span>
+                <span class="set-text">
+                  <span class="set-title">Invoice &amp; payments</span>
+                  <span class="set-sub">Logo, signature, UPI QR, terms</span>
+                </span>
+                <i class="fas fa-chevron-right set-chev"></i>
               </div>
             </div>
-            <label
-              class="settings-toggle"
-              style="position: relative; display: inline-block; width: 44px; height: 24px; flex-shrink: 0; cursor: pointer"
-              title="Require washroom + room photos from managers"
-            >
-              <input
-                type="checkbox"
-                id="settings-photos-toggle"
-                onchange="toggleInspectionPhotos(this)"
-                style="opacity: 0; width: 0; height: 0"
-              />
-              <span
-                id="settings-photos-slider"
-                style="position: absolute; inset: 0; background: #ccc; border-radius: 24px; transition: background 0.2s"
-              ></span>
-              <span
-                id="settings-photos-knob"
-                style="position: absolute; height: 18px; width: 18px; left: 3px; top: 3px; background: white; border-radius: 50%; transition: transform 0.2s; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2)"
-              ></span>
-            </label>
-          </div>
+          </section>
 
-          <!-- Housekeeping cleaning photos (rooms 200-228). Flag: ui_config.cleaning_photos.
-               When on, housekeeping marking one of those rooms cleaned must
-               attach washroom + room photos, and a mid-stay service clean
-               they complete needs the matching photo. Off by default. -->
-          <div
-            data-perm="settings.update"
-            style="
-              display: flex;
-              align-items: center;
-              gap: 0.85rem;
-              padding: 0.85rem 1rem;
-              border-radius: 12px;
-              border: 1.5px solid var(--border);
-              margin-top: 0.65rem;
-            "
-          >
-            <div
-              style="
-                width: 44px;
-                height: 44px;
-                border-radius: 12px;
-                flex-shrink: 0;
-                background: rgba(67, 97, 238, 0.1);
-                display: flex;
-                align-items: center;
-                justify-content: center;
-              "
-            >
-              <i class="fas fa-broom" style="color: var(--primary); font-size: 1.1rem"></i>
-            </div>
-            <div style="flex: 1; min-width: 0">
-              <div style="font-weight: 600; font-size: 0.92rem; color: var(--text-primary)">
-                Cleaning photos (housekeeping)
+          <!-- ── Billing & privacy ── -->
+          <section class="set-group">
+            <h3 class="set-group-title">Billing &amp; privacy</h3>
+            <div class="set-list">
+              <!-- Bill generation toggle — generate bills for ALL stays
+                   regardless of payment mode (always_generate_bill). OFF skips the
+                   bill for entirely-cash stays. Incognito ON overrides this to
+                   always-generate on the server. -->
+              <div id="settings-billgen-card" class="set-row">
+                <span class="set-ico set-ico--indigo"><i class="fas fa-receipt"></i></span>
+                <span class="set-text">
+                  <span class="set-title">Generate bills for all stays</span>
+                  <span class="set-sub" id="settings-billgen-sub">Loading…</span>
+                </span>
+                <label class="settings-toggle set-switch" title="Always generate bill">
+                  <input type="checkbox" id="settings-billgen-toggle" onchange="toggleAlwaysGenerateBill(this)" />
+                  <span class="set-switch-track" id="settings-billgen-slider"></span>
+                  <span class="set-switch-knob" id="settings-billgen-knob"></span>
+                </label>
               </div>
-              <div
-                id="settings-hk-photos-sub"
-                style="font-size: 0.75rem; color: var(--text-secondary); margin-top: 2px"
-              >
-                Loading…
-              </div>
-            </div>
-            <label
-              class="settings-toggle"
-              style="position: relative; display: inline-block; width: 44px; height: 24px; flex-shrink: 0; cursor: pointer"
-              title="Require washroom + room photos from housekeeping"
-            >
-              <input
-                type="checkbox"
-                id="settings-hk-photos-toggle"
-                onchange="toggleCleaningPhotos(this)"
-                style="opacity: 0; width: 0; height: 0"
-              />
-              <span
-                id="settings-hk-photos-slider"
-                style="position: absolute; inset: 0; background: #ccc; border-radius: 24px; transition: background 0.2s"
-              ></span>
-              <span
-                id="settings-hk-photos-knob"
-                style="position: absolute; height: 18px; width: 18px; left: 3px; top: 3px; background: white; border-radius: 50%; transition: transform 0.2s; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2)"
-              ></span>
-            </label>
-          </div>
 
-          <!-- Bill generation toggle — generate bills for ALL stays
-               regardless of payment mode (always_generate_bill). OFF skips the
-               bill for entirely-cash stays. Incognito ON overrides this to
-               always-generate on the server. -->
-          <div
-            id="settings-billgen-card"
-            style="
-              display: flex;
-              align-items: center;
-              gap: 1rem;
-              padding: 0.85rem 1rem;
-              border-radius: 12px;
-              border: 1.5px solid var(--border);
-              margin-top: 0.65rem;
-              transition:
-                background 0.15s,
-                border-color 0.15s;
-            "
-          >
-            <div
-              style="
-                width: 44px;
-                height: 44px;
-                border-radius: 12px;
-                flex-shrink: 0;
-                background: rgba(63, 81, 181, 0.1);
-                display: flex;
-                align-items: center;
-                justify-content: center;
-              "
-            >
-              <i
-                class="fas fa-file-invoice"
-                style="color: #3f51b5; font-size: 1.05rem"
-              ></i>
-            </div>
-            <div style="flex: 1; min-width: 0">
-              <div
-                style="
-                  font-weight: 600;
-                  font-size: 0.92rem;
-                  color: var(--text-primary);
-                "
-              >
-                Generate bills for all stays
+              <!-- Incognito mode — master switch (see script.js
+                   toggleIncognitoMode). ON → hides Transactions + Register tabs and
+                   the bill "Edit Price" button, and forces bill generation for every
+                   stay (server-enforced in config.create_bill_record). The
+                   "Generate bills" row above controls the same always_generate_bill
+                   flag independently, so bills-for-all-stays can be enabled WITHOUT
+                   the tab-hiding that Incognito brings; while Incognito is ON the
+                   server forces generation regardless of that row. -->
+              <div id="settings-incognito-card" class="set-row">
+                <span class="set-ico set-ico--slate"><i class="fas fa-user-secret"></i></span>
+                <span class="set-text">
+                  <span class="set-title">Incognito mode</span>
+                  <span class="set-sub" id="settings-incognito-sub">Loading…</span>
+                </span>
+                <label class="settings-toggle set-switch" title="Enable incognito mode">
+                  <input type="checkbox" id="settings-incognito-toggle" onchange="toggleIncognitoMode(this)" />
+                  <span class="set-switch-track" id="settings-incognito-slider"></span>
+                  <span class="set-switch-knob" id="settings-incognito-knob"></span>
+                </label>
               </div>
-              <div
-                id="settings-billgen-sub"
-                style="
-                  font-size: 0.75rem;
-                  color: var(--text-secondary);
-                  margin-top: 2px;
-                "
-              >
-                Loading…
-              </div>
-            </div>
-            <!-- Toggle switch -->
-            <label
-              class="settings-toggle"
-              style="
-                position: relative;
-                display: inline-block;
-                width: 44px;
-                height: 24px;
-                flex-shrink: 0;
-                cursor: pointer;
-              "
-              title="Always generate bill"
-            >
-              <input
-                type="checkbox"
-                id="settings-billgen-toggle"
-                onchange="toggleAlwaysGenerateBill(this)"
-                style="opacity: 0; width: 0; height: 0"
-              />
-              <span
-                id="settings-billgen-slider"
-                style="
-                  position: absolute;
-                  inset: 0;
-                  background: #ccc;
-                  border-radius: 24px;
-                  transition: background 0.2s;
-                "
-              ></span>
-              <span
-                id="settings-billgen-knob"
-                style="
-                  position: absolute;
-                  height: 18px;
-                  width: 18px;
-                  left: 3px;
-                  top: 3px;
-                  background: white;
-                  border-radius: 50%;
-                  transition: transform 0.2s;
-                  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
-                "
-              ></span>
-            </label>
-          </div>
 
-          <!-- Hide Register tab toggle -->
-          <!-- Hide Register tab — hidden: folded into Incognito (kept in the
-               DOM so its existing load/save JS stays intact). -->
-          <div
-            id="settings-hidereg-card"
-            style="
-              display: none;
-              align-items: center;
-              gap: 1rem;
-              padding: 0.85rem 1rem;
-              border-radius: 12px;
-              border: 1.5px solid var(--border);
-              margin-top: 0.65rem;
-              transition:
-                background 0.15s,
-                border-color 0.15s;
-            "
-          >
-            <div
-              style="
-                width: 44px;
-                height: 44px;
-                border-radius: 12px;
-                flex-shrink: 0;
-                background: rgba(108, 117, 125, 0.12);
-                display: flex;
-                align-items: center;
-                justify-content: center;
-              "
-            >
-              <i
-                class="fas fa-eye-slash"
-                style="color: #6c757d; font-size: 1.05rem"
-              ></i>
-            </div>
-            <div style="flex: 1; min-width: 0">
-              <div
-                style="
-                  font-weight: 600;
-                  font-size: 0.92rem;
-                  color: var(--text-primary);
-                "
-              >
-                Hide Register tab
-              </div>
-              <div
-                id="settings-hidereg-sub"
-                style="
-                  font-size: 0.75rem;
-                  color: var(--text-secondary);
-                  margin-top: 2px;
-                "
-              >
-                Loading…
+              <!-- Hide Register tab — folded into Incognito; kept in the DOM
+                   (hidden) so its existing load/save JS stays intact. -->
+              <div id="settings-hidereg-card" class="set-row" hidden style="display: none">
+                <span class="set-ico set-ico--slate"><i class="fas fa-eye-slash"></i></span>
+                <span class="set-text">
+                  <span class="set-title">Hide Register tab</span>
+                  <span class="set-sub" id="settings-hidereg-sub">Loading…</span>
+                </span>
+                <label class="settings-toggle set-switch" title="Hide Register tab on every device">
+                  <input type="checkbox" id="settings-hidereg-toggle" onchange="toggleHideRegisterTab(this)" />
+                  <span class="set-switch-track" id="settings-hidereg-slider"></span>
+                  <span class="set-switch-knob" id="settings-hidereg-knob"></span>
+                </label>
               </div>
             </div>
-            <label
-              class="settings-toggle"
-              style="
-                position: relative;
-                display: inline-block;
-                width: 44px;
-                height: 24px;
-                flex-shrink: 0;
-                cursor: pointer;
-              "
-              title="Hide Register tab on every device"
-            >
-              <input
-                type="checkbox"
-                id="settings-hidereg-toggle"
-                onchange="toggleHideRegisterTab(this)"
-                style="opacity: 0; width: 0; height: 0"
-              />
-              <span
-                id="settings-hidereg-slider"
-                style="
-                  position: absolute;
-                  inset: 0;
-                  background: #ccc;
-                  border-radius: 24px;
-                  transition: background 0.2s;
-                "
-              ></span>
-              <span
-                id="settings-hidereg-knob"
-                style="
-                  position: absolute;
-                  height: 18px;
-                  width: 18px;
-                  left: 3px;
-                  top: 3px;
-                  background: white;
-                  border-radius: 50%;
-                  transition: transform 0.2s;
-                  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
-                "
-              ></span>
-            </label>
-          </div>
+          </section>
 
-          <!-- Expense Presets card — opens admin-only manager.
-               Visibility for the card itself is enforced by
-               static/expense-presets-admin.js (data-perm attribute is
-               also picked up by the auth-driven hide logic). -->
-          <div
-            id="settings-expense-presets-card"
-            data-perm="expense.presets.manage"
-            onclick="if (typeof openExpensePresetManager === 'function') openExpensePresetManager('');"
-            style="
-              display: flex;
-              align-items: center;
-              gap: 1rem;
-              padding: 0.85rem 1rem;
-              border-radius: 12px;
-              border: 1.5px solid var(--border);
-              cursor: pointer;
-              margin-top: 0.65rem;
-              transition:
-                background 0.15s,
-                border-color 0.15s;
-            "
-            onmouseover="
-              this.style.background = '#fff5f5';
-              this.style.borderColor = '#e53e3e';
-            "
-            onmouseout="
-              this.style.background = '';
-              this.style.borderColor = '';
-            "
-          >
-            <div
-              style="
-                width: 44px;
-                height: 44px;
-                border-radius: 12px;
-                flex-shrink: 0;
-                background: rgba(229, 62, 62, 0.1);
-                display: flex;
-                align-items: center;
-                justify-content: center;
-              "
-            >
-              <i
-                class="fas fa-tags"
-                style="color: #e53e3e; font-size: 1.1rem"
-              ></i>
-            </div>
-            <div style="flex: 1">
-              <div
-                style="
-                  font-weight: 600;
-                  font-size: 0.92rem;
-                  color: var(--text-primary);
-                "
-              >
-                Expense Quick-Pick Tiles
+          <!-- ── Room photos (rooms 200-228) ── -->
+          <section class="set-group">
+            <h3 class="set-group-title">Room photos <span class="set-group-note">Rooms 200–228</span></h3>
+            <div class="set-list">
+              <!-- Manager photo check. Flag: ui_config.inspection_photos.
+                   When on, a manager approving one of those rooms must attach
+                   washroom + room photos (static/room-photos.js); when off they use
+                   the checklist. Admin and housekeeping are unaffected. -->
+              <div class="set-row" data-perm="settings.update">
+                <span class="set-ico set-ico--sky"><i class="fas fa-camera"></i></span>
+                <span class="set-text">
+                  <span class="set-title">Photo check by managers</span>
+                  <span class="set-sub" id="settings-photos-sub">Loading…</span>
+                </span>
+                <label class="settings-toggle set-switch" title="Require washroom + room photos from managers">
+                  <input type="checkbox" id="settings-photos-toggle" onchange="toggleInspectionPhotos(this)" />
+                  <span class="set-switch-track" id="settings-photos-slider"></span>
+                  <span class="set-switch-knob" id="settings-photos-knob"></span>
+                </label>
               </div>
-              <div
-                style="
-                  font-size: 0.75rem;
-                  color: var(--text-secondary);
-                  margin-top: 2px;
-                "
-              >
-                Manage preset names &amp; default amounts per category
-              </div>
-            </div>
-            <i
-              class="fas fa-chevron-right"
-              style="color: #bbb; font-size: 0.8rem"
-            ></i>
-          </div>
 
-          <!-- Guest portal card — QR room-service settings + print the QR.
-               Admin only (guest_portal.manage); guest-requests.js owns the
-               modal it opens. -->
-          <div
-            id="settings-guest-portal-card"
-            data-perm="guest_portal.manage"
-            onclick="if (window.CibaraGuestRequests) window.CibaraGuestRequests.openSettings();"
-            style="
-              display: flex;
-              align-items: center;
-              gap: 1rem;
-              padding: 0.85rem 1rem;
-              border-radius: 12px;
-              border: 1.5px solid var(--border);
-              cursor: pointer;
-              margin-top: 0.65rem;
-              transition:
-                background 0.15s,
-                border-color 0.15s;
-            "
-            onmouseover="
-              this.style.background = '#f0fdf4';
-              this.style.borderColor = '#16a34a';
-            "
-            onmouseout="
-              this.style.background = '';
-              this.style.borderColor = '';
-            "
-          >
-            <div
-              style="
-                width: 44px;
-                height: 44px;
-                border-radius: 12px;
-                flex-shrink: 0;
-                background: rgba(22, 163, 74, 0.1);
-                display: flex;
-                align-items: center;
-                justify-content: center;
-              "
-            >
-              <i
-                class="fas fa-qrcode"
-                style="color: #16a34a; font-size: 1.1rem"
-              ></i>
-            </div>
-            <div style="flex: 1">
-              <div
-                style="
-                  font-weight: 600;
-                  font-size: 0.92rem;
-                  color: var(--text-primary);
-                "
-              >
-                Guest Portal (QR room service)
-              </div>
-              <div
-                style="
-                  font-size: 0.75rem;
-                  color: var(--text-secondary);
-                  margin-top: 2px;
-                "
-              >
-                Switch on, Wi-Fi &amp; reception details, print the room QR
+              <!-- Housekeeping cleaning photos. Flag: ui_config.cleaning_photos.
+                   When on, housekeeping marking one of those rooms cleaned must
+                   attach washroom + room photos, and a mid-stay service clean
+                   they complete needs the matching photo. Off by default. -->
+              <div class="set-row" data-perm="settings.update">
+                <span class="set-ico set-ico--teal"><i class="fas fa-broom"></i></span>
+                <span class="set-text">
+                  <span class="set-title">Cleaning photos by housekeeping</span>
+                  <span class="set-sub" id="settings-hk-photos-sub">Loading…</span>
+                </span>
+                <label class="settings-toggle set-switch" title="Require washroom + room photos from housekeeping">
+                  <input type="checkbox" id="settings-hk-photos-toggle" onchange="toggleCleaningPhotos(this)" />
+                  <span class="set-switch-track" id="settings-hk-photos-slider"></span>
+                  <span class="set-switch-knob" id="settings-hk-photos-knob"></span>
+                </label>
               </div>
             </div>
-            <i
-              class="fas fa-chevron-right"
-              style="color: #bbb; font-size: 0.8rem"
-            ></i>
-          </div>
+          </section>
+
+          <!-- ── Setup ── -->
+          <section class="set-group">
+            <h3 class="set-group-title">Setup</h3>
+            <div class="set-list">
+              <!-- Expense Presets — opens admin-only manager
+                   (static/expense-presets-admin.js). -->
+              <div
+                id="settings-expense-presets-card"
+                class="set-row set-row--link"
+                data-perm="expense.presets.manage"
+                role="button"
+                tabindex="0"
+                onclick="if (typeof openExpensePresetManager === 'function') openExpensePresetManager('');"
+                onkeydown="if (event.key === 'Enter') this.click();"
+              >
+                <span class="set-ico set-ico--rose"><i class="fas fa-tags"></i></span>
+                <span class="set-text">
+                  <span class="set-title">Expense quick-pick tiles</span>
+                  <span class="set-sub">Preset names &amp; default amounts per category</span>
+                </span>
+                <i class="fas fa-chevron-right set-chev"></i>
+              </div>
+
+              <!-- Guest portal — QR room-service settings + print the QR.
+                   Admin only (guest_portal.manage); guest-requests.js owns the
+                   modal it opens. -->
+              <div
+                id="settings-guest-portal-card"
+                class="set-row set-row--link"
+                data-perm="guest_portal.manage"
+                role="button"
+                tabindex="0"
+                onclick="if (window.CibaraGuestRequests) window.CibaraGuestRequests.openSettings();"
+                onkeydown="if (event.key === 'Enter') this.click();"
+              >
+                <span class="set-ico set-ico--green"><i class="fas fa-qrcode"></i></span>
+                <span class="set-text">
+                  <span class="set-title">Guest portal (QR room service)</span>
+                  <span class="set-sub">Switch on, Wi-Fi &amp; reception details, print the room QR</span>
+                </span>
+                <i class="fas fa-chevron-right set-chev"></i>
+              </div>
+            </div>
+          </section>
         </div>
       </div>
     </div>
@@ -4447,10 +3996,10 @@
              staff.js, so leaving those in place is harmless dead code, not
              a dangling reference. -->
 
-        <!-- Deep Check (maintenance), Pending Payments and Banking stay in
+        <!-- Deep Check (maintenance) and Pending Payments stay in
              the "more" dropdown in the Rooms-tab filter bar — see
              filter-row above. Same element IDs, so their JS wiring
-             (maintenance.js / the settlements + banking handlers) is
+             (maintenance.js / the settlements handlers) is
              untouched. -->
 
       </div>
@@ -6572,8 +6121,7 @@
     <script defer src="{{ asset_url('register.js') }}"></script>
     <script defer src="{{ asset_url('manual-bill.js') }}"></script>
     <script defer src="{{ asset_url('bills.js') }}"></script>
-    <!-- Banking Section: cash deposits, receipt vouchers, adjustments -->
-    <script defer src="/static/banking.js"></script>
+    <script defer src="{{ asset_url('invoice-settings.js') }}"></script>
     <!-- optimistic.js MUST load before script.js: it defines window.optimisticWrite
          and window.cibaraWrites used by the check-in / payment / service handlers. -->
     <script defer src="{{ asset_url('optimistic.js') }}"></script>
@@ -6706,7 +6254,10 @@
       <div
         style="
           width: 100%;
-          max-width: 420px;
+          max-width: 560px;
+          max-height: 94vh;
+          display: flex;
+          flex-direction: column;
           background: linear-gradient(160deg, #1c2133 0%, #141824 100%);
           border-radius: 20px;
           overflow: hidden;
@@ -6797,10 +6348,12 @@
 
         <!-- Image area -->
         <div
+          id="doc-viewer-stage"
           style="
             position: relative;
             background: #0a0c12;
-            min-height: 280px;
+            min-height: 340px;
+            flex: 1 1 auto;
             display: flex;
             align-items: center;
             justify-content: center;
@@ -6810,12 +6363,31 @@
             id="doc-viewer-main-img"
             style="
               width: 100%;
-              max-height: 340px;
+              max-height: 72vh;
               object-fit: contain;
               display: block;
             "
             alt="ID Document"
           />
+
+          <!-- Loading spinner — shown while a photo is being fetched so the
+               previous guest's image is never left on screen. -->
+          <div
+            id="doc-viewer-loading"
+            style="
+              position: absolute;
+              inset: 0;
+              display: none;
+              align-items: center;
+              justify-content: center;
+              pointer-events: none;
+            "
+          >
+            <i
+              class="fas fa-spinner fa-spin"
+              style="color: rgba(255, 255, 255, 0.75); font-size: 1.7rem"
+            ></i>
+          </div>
 
           <!-- Gradient fade edges -->
           <div
@@ -6940,7 +6512,30 @@
             "
             title="Delete this document"
           >
-            <i class="fas fa-trash-alt"></i> Delete &amp; Retake
+            <i class="fas fa-trash-alt"></i> Remove
+          </button>
+          <button
+            id="doc-viewer-add-btn"
+            type="button"
+            style="
+              display: none;
+              background: rgba(21, 101, 192, 0.18);
+              border: 1px solid rgba(21, 101, 192, 0.45);
+              color: #90caf9;
+              border-radius: 8px;
+              padding: 0.38rem 0.85rem;
+              font-size: 0.78rem;
+              cursor: pointer;
+              align-items: center;
+              gap: 0.4rem;
+              font-weight: 500;
+              transition: all 0.15s;
+            "
+            onmouseover="this.style.background='rgba(21,101,192,0.3)';this.style.color='#bbdefb';"
+            onmouseout="this.style.background='rgba(21,101,192,0.18)';this.style.color='#90caf9';"
+            title="Add another ID photo for this guest"
+          >
+            <i class="fas fa-plus"></i> Add photo
           </button>
           <a
             id="doc-viewer-open-link"

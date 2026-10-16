@@ -6,11 +6,15 @@
  *
  * Responsibilities
  * ────────────────
- *   1. Initialise Firebase Auth (using config served from /firebase-config.js).
- *   2. Maintain currentUser (userId, name, role) in memory.
- *   3. Attach the current ID token to every fetch() call to /api/* and
- *      same-origin Flask routes via a fetch wrapper.
- *   4. Redirect to /login if no user is signed in.
+ *   1. Restore the session from the server: POST /api/v2/auth/refresh uses the
+ *      HttpOnly refresh cookie set at sign-in and returns a 15-minute access
+ *      token (kept in memory only) plus the user's identity and role.
+ *   2. Sign the Firebase SDK in with the custom token from that response, so
+ *      google_sync.js listeners run under firestore.rules exactly as before.
+ *   3. Attach the access token to every same-origin fetch() via a wrapper;
+ *      on 401 refresh once (single flight) and retry with the same X-Op-Id.
+ *   4. Redirect to /login when the server says the session is over. A server
+ *      that cannot be reached is NOT a sign-out: the page keeps retrying.
  *   5. Force logout after IDLE_TIMEOUT_MS of no interaction (24 hours).
  *   6. Apply role-based DOM hiding:
  *        - elements with data-perm="<key>" hidden when user lacks the perm
@@ -30,7 +34,12 @@
 
   // ── State ─────────────────────────────────────────────────────────────
   let _user = null;          // {userId, name, role}
-  let _idToken = null;
+  let _idToken = null;       // our access JWT (in memory only)
+  let _authUid = null;       // Firebase uid of the signed-in user
+  let _refreshTimer = null;
+  let _refreshInflight = null;
+  let _rawFetch = window.fetch.bind(window); // unwrapped, for /api/v2/auth calls
+  const AUTH_API = "/api/v2/auth";
   let _ready = false;
   let _readyResolvers = [];
   let _idleTimerId = null;
@@ -138,7 +147,11 @@
   }
 
   // ── Logout ────────────────────────────────────────────────────────────
-  function logout(reason) {
+  let _loggingOut = false;
+  function logout(reason, fromOtherTab) {
+    if (_loggingOut) return;
+    _loggingOut = true;
+    if (!fromOtherTab) _broadcast("logout");
     try {
       localStorage.removeItem(LAST_ACTIVITY_KEY);
       sessionStorage.removeItem("cibara_login_ts");
@@ -153,11 +166,134 @@
       _redirectToLogin();
     };
 
-    if (_firebaseAuth && _firebaseAuth.currentUser) {
-      _firebaseAuth.signOut().then(finish).catch(finish);
-    } else {
+    if (_refreshTimer) clearTimeout(_refreshTimer);
+    _idToken = null;
+    // End the server session (clears the refresh cookie and retires its
+    // token family), then the Firebase session used by the live listeners.
+    if (fromOtherTab) {
+      // The tab that signed out already ended the server + Firebase session.
       finish();
+      return;
     }
+    const serverLogout = _rawFetch(AUTH_API + "/logout", {
+      method: "POST", credentials: "same-origin",
+      headers: { "Content-Type": "application/json" }, body: "{}",
+    }).catch(function () { /* already gone / offline */ });
+    serverLogout.then(function () {
+      if (_firebaseAuth && _firebaseAuth.currentUser) {
+        return _firebaseAuth.signOut().catch(function () {});
+      }
+    }).then(finish, finish);
+  }
+
+  // ── Session (JWT) ─────────────────────────────────────────────────────
+  // Result of a refresh: "ok" | "denied" (server ended the session) |
+  // "unavailable" (server/Firebase unreachable — keep the session, retry).
+  // ── Cross-tab sync ──────────────────────────────────────────────────
+  // All tabs share one refresh cookie. Signing out in one tab, or a different
+  // user signing in on the same PC, must not leave another tab acting as the
+  // previous user.
+  let _channel = null;
+  try { _channel = new BroadcastChannel("cibara-auth"); } catch (_) { _channel = null; }
+  function _broadcast(type) {
+    const msg = { type: type, at: Date.now() };
+    try { if (_channel) _channel.postMessage(msg); } catch (_) { /* ignore */ }
+    try { localStorage.setItem("cibara_auth_event", JSON.stringify(msg)); } catch (_) { /* ignore */ }
+  }
+  function _onAuthEvent(msg) {
+    if (!msg || window.location.pathname === LOGIN_PATH) return;
+    if (msg.type === "logout" && _user) logout(null, true);
+    // Someone signed in on another tab (maybe a different user): pick up the
+    // new session now; _applySession reloads this page if the user changed.
+    if (msg.type === "login" && _user) _refreshSession(false);
+  }
+  if (_channel) _channel.onmessage = function (ev) { _onAuthEvent(ev.data); };
+  window.addEventListener("storage", function (ev) {
+    if (ev.key !== "cibara_auth_event" || !ev.newValue) return;
+    let msg = null;
+    try { msg = JSON.parse(ev.newValue); } catch (_) { return; }
+    // auth.js also posts on the channel; login.js (the sign-in page) only
+    // writes storage. Avoid handling the same logout twice.
+    if (_channel && msg && msg.type === "logout") return;
+    _onAuthEvent(msg);
+  });
+
+  function _applySession(s) {
+    const u = s.user || {};
+    if (_user && u.userId && u.userId !== _user.userId) {
+      // Another tab signed in as someone else: this page's role gating,
+      // identity chip and listeners belong to the previous user. Start over.
+      _idToken = null;
+      window.location.reload();
+      return;
+    }
+    _idToken = s.access_token;
+    _authUid = u.authUid || _authUid;
+    _user = { userId: u.userId, name: u.name || u.userId, role: u.role || null };
+    if (_refreshTimer) clearTimeout(_refreshTimer);
+    const inSec = Math.max(30, (s.expires_in || 900) - 60);
+    _refreshTimer = setTimeout(function again() {
+      _refreshSession(false).then(function (r) {
+        if (r === "unavailable") _refreshTimer = setTimeout(again, 30000);
+        else if (r === "denied") logout("Your session ended. Please sign in again.");
+      });
+    }, inSec * 1000);
+  }
+
+  function _refreshSession(withFirebase) {
+    if (_refreshInflight) return _refreshInflight;
+    _refreshInflight = _rawFetch(AUTH_API + "/refresh" + (withFirebase ? "?firebase=true" : ""), {
+      method: "POST", credentials: "same-origin",
+      headers: { "Content-Type": "application/json", "Accept": "application/json" }, body: "{}",
+    }).then(function (r) {
+      if (r.status === 401 || r.status === 403) {
+        return r.json().catch(function () { return {}; }).then(function (b) {
+          _deniedMessage = (b && b.message) || null;
+          return "denied";
+        });
+      }
+      if (!r.ok) return "unavailable";
+      return r.json().then(function (s) {
+        _applySession(s);
+        _lastSession = s;
+        return "ok";
+      });
+    }).catch(function () {
+      return "unavailable";
+    }).then(function (res) {
+      _refreshInflight = null;
+      return res;
+    });
+    return _refreshInflight;
+  }
+  let _deniedMessage = null;
+  let _lastSession = null;
+  // Whether the Firebase SDK sign-in (for live Firestore listeners) succeeded.
+  // False when the custom token is rejected or Firebase is unreachable, so the
+  // app can skip attaching listeners that would only be refused — see
+  // google_sync.js. Set once, before ready() resolves.
+  let _realtimeOk = false;
+
+  // Sign the Firebase SDK in as the same user (custom token), so Firestore
+  // listeners are authorised by firestore.rules. Resolves either way: a
+  // failure only means live updates fall back to manual refresh.
+  function _signInFirebase(customToken) {
+    if (!_firebaseAuth) return Promise.resolve(false);
+    return new Promise(function (resolve) {
+      const off = _firebaseAuth.onAuthStateChanged(function (fbUser) {
+        off();
+        resolve(fbUser);
+      });
+    }).then(function (fbUser) {
+      if (!customToken) return !!(fbUser && fbUser.uid === _authUid);
+      const signOutFirst = fbUser ? _firebaseAuth.signOut() : Promise.resolve();
+      return signOutFirst
+        .then(function () { return _firebaseAuth.signInWithCustomToken(customToken); })
+        .then(function () { return true; });
+    }).catch(function (e) {
+      console.warn("Cibara: realtime sign-in failed — live updates unavailable", e);
+      return false;
+    });
   }
 
   // ── Fetch wrapper — attach Bearer token automatically ─────────────────
@@ -172,18 +308,13 @@
     }
   }
 
-  // Force-refresh the Firebase ID token. Used both on the recurring
-  // pre-expiry timer and as a one-shot retry when an API call returns 401.
-  // Returns the fresh token, or null on failure.
+  // One-shot refresh after a 401. Resolves "ok" | "denied" | "unavailable".
   function _refreshToken() {
-    if (!_firebaseAuth || !_firebaseAuth.currentUser) return Promise.resolve(null);
-    return _firebaseAuth.currentUser.getIdToken(true)
-      .then(function (t) { _idToken = t; return t; })
-      .catch(function () { return null; });
+    return _refreshSession(false);
   }
 
   function _wrapFetch() {
-    const originalFetch = window.fetch.bind(window);
+    const originalFetch = _rawFetch;
 
     // Build the request with our current token attached.
     function _attach(init, url) {
@@ -236,11 +367,19 @@
       return originalFetch(input, attachedInit).then(function (resp) {
         if (resp.status !== 401) return resp;
 
-        return _refreshToken().then(function (newToken) {
-          if (!newToken) {
-            // Refresh failed — account likely disabled / revoked.
-            console.warn("Cibara: token refresh failed after 401, signing out");
-            logout("Your session ended. Please sign in again.");
+        return _refreshToken().then(function (result) {
+          if (result === "unavailable") {
+            // Server unreachable: keep the session, report a transient error.
+            return new Response(JSON.stringify({
+              success: false,
+              message: "Cannot reach the server right now. Please try again.",
+            }), { status: 503, headers: { "Content-Type": "application/json" } });
+          }
+          if (result !== "ok") {
+            // The server ended the session (disabled / force-logout / expired).
+            console.warn("Cibara: session refresh denied after 401, signing out");
+            logout(_deniedMessage && _deniedMessage !== "Not signed in"
+              ? _deniedMessage : (_user ? "Your session ended. Please sign in again." : null));
             return resp;
           }
           // Brief delay so the new token's IAT is comfortably after any
@@ -253,11 +392,7 @@
               const retryInit = _attach(Object.assign({}, init), url);
               return originalFetch(input, retryInit).then(function (retryResp) {
                 if (retryResp.status === 401) {
-                  console.warn(
-                    "Cibara: still 401 after refresh+retry. Token may be " +
-                    "missing custom claims. Check server logs for " +
-                    "'load_current_user: token valid but missing claims'."
-                  );
+                  console.warn("Cibara: still 401 after refresh+retry, signing out");
                   logout("Your session ended. Please sign in again.");
                 }
                 return retryResp;
@@ -562,11 +697,11 @@
   }
 
   // ── Change password (self-service) ────────────────────────────────────
-  // Available to every signed-in role. Uses Firebase Auth client SDK to
-  // reauthenticate (verifies the current password) and update. Then audits
-  // the change via the backend, signs out, and bounces to /login.
+  // Available to every signed-in role. POST /api/v2/auth/password verifies
+  // the current password, updates it in Firebase Auth, ends every session of
+  // this user and writes the audit entry. Then we sign out and bounce to /login.
   function _openChangePasswordModal() {
-    if (!_firebaseAuth || !_firebaseAuth.currentUser) {
+    if (!_user) {
       logout();
       return;
     }
@@ -649,47 +784,34 @@
       submitBtn.disabled = true;
       submitBtn.textContent = "Updating…";
 
-      const fbUser = _firebaseAuth.currentUser;
-      const provider = window.firebase && window.firebase.auth
-        && window.firebase.auth.EmailAuthProvider;
-      if (!fbUser || !provider) {
-        showErr("Auth not available. Please sign in again.");
-        submitBtn.disabled = false; submitBtn.textContent = "Update password";
-        return;
-      }
-      const cred = provider.credential(fbUser.email, cur);
-
-      fbUser.reauthenticateWithCredential(cred)
-        .then(function () {
-          return fbUser.updatePassword(next);
+      fetch(AUTH_API + "/password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ current_password: cur, new_password: next }),
+      })
+        .then(function (r) {
+          return r.json().catch(function () { return {}; }).then(function (b) {
+            return { ok: r.ok && b.success !== false, body: b };
+          });
         })
-        .then(function () {
-          // Best-effort audit; don't block on failure
-          try {
-            fetch("/api/auth/log-password-change", { method: "POST" })
-              .catch(function () { /* ignore */ });
-          } catch (_) { /* ignore */ }
+        .then(function (res) {
+          if (!res.ok) {
+            submitBtn.disabled = false;
+            submitBtn.textContent = "Update password";
+            showErr((res.body && (res.body.message || res.body.detail)) || "Could not update password.");
+            curEl.focus(); curEl.select();
+            return;
+          }
           submitBtn.textContent = "Done — signing out…";
-          // Force re-login with the new password
           setTimeout(function () {
             close();
             logout("Password changed. Please sign in with your new password.");
           }, 600);
         })
-        .catch(function (err) {
+        .catch(function () {
           submitBtn.disabled = false;
           submitBtn.textContent = "Update password";
-          const code = (err && err.code) || "";
-          if (code === "auth/wrong-password" || code === "auth/invalid-credential") {
-            showErr("Current password is incorrect.");
-            curEl.focus(); curEl.select();
-          } else if (code === "auth/weak-password") {
-            showErr("New password is too weak.");
-          } else if (code === "auth/requires-recent-login") {
-            showErr("Please sign out and sign back in, then try again.");
-          } else {
-            showErr("Could not update password. " + ((err && err.message) || ""));
-          }
+          showErr("Cannot reach the server. Please try again.");
         });
     });
 
@@ -710,16 +832,14 @@
       return;
     }
 
-    if (!window.FIREBASE_CONFIG || !window.FIREBASE_CONFIG.apiKey) {
-      console.error("Cibara: FIREBASE_CONFIG missing — cannot authenticate");
-      _redirectToLogin();
-      return;
+    if (typeof firebase !== "undefined" && window.FIREBASE_CONFIG && window.FIREBASE_CONFIG.apiKey) {
+      if (!firebase.apps.length) {
+        firebase.initializeApp(window.FIREBASE_CONFIG);
+      }
+      _firebaseAuth = firebase.auth();
+    } else {
+      console.error("Cibara: Firebase SDK or config missing — live updates disabled");
     }
-
-    if (!firebase.apps.length) {
-      firebase.initializeApp(window.FIREBASE_CONFIG);
-    }
-    _firebaseAuth = firebase.auth();
 
     _wrapFetch();
     // Expose apiFetch as a bare global so legacy modules can call it
@@ -729,97 +849,68 @@
       return window.fetch(input, init);
     };
 
-    _firebaseAuth.onAuthStateChanged(function (fbUser) {
-      if (!fbUser) {
-        _user = null;
-        _idToken = null;
-        _redirectToLogin();
-        return;
-      }
-
-      // Pull token + claims so we know the role
-      fbUser
-        .getIdTokenResult(true) // forceRefresh — picks up newly set claims
-        .then(function (tokenResult) {
-          _idToken = tokenResult.token;
-          const claims = tokenResult.claims || {};
-          _user = {
-            userId: claims.userId || (fbUser.email || "").split("@")[0] || fbUser.uid,
-            name: claims.name || fbUser.displayName || claims.userId || fbUser.uid,
-            role: claims.role || null,
+    let _attempt = 0;
+    function _start() {
+      _refreshSession(true).then(function (result) {
+        if (result === "denied") {
+          // No (valid) session. Drop any Firebase session left over from the
+          // old sign-in flow too, so the login page does not bounce back.
+          _user = null;
+          _idToken = null;
+          const goLogin = function () {
+            if (_deniedMessage && _deniedMessage !== "Not signed in") {
+              try { sessionStorage.setItem("cibara_logout_msg", _deniedMessage); } catch (_) { /* ignore */ }
+            }
+            _redirectToLogin();
           };
-          if (!_user.role) {
-            console.warn("Cibara: user has no role claim — refusing access");
-            logout("Your account is not configured. Contact an administrator.");
-            return;
-          }
-
-          // ── Recurring token refresh ──────────────────────────────────────
-          // Firebase ID tokens expire every hour. Schedule a refresh ~5 min
-          // before each expiry; the refresh handler re-schedules itself
-          // after success so the user stays signed in indefinitely (until
-          // the 24-hour idle timer kicks in or admin force-logout).
-          //
-          // The previous version scheduled ONE refresh and then stopped —
-          // the second hour's token expired silently and the next API
-          // call returned 401, bouncing the user to login.
-          function _scheduleRefresh(expSec) {
-            const expMs = (expSec || 0) * 1000;
-            if (!expMs) return;
-            // Refresh 5 minutes before expiry. Floor at 30s so a clock
-            // skew on the client doesn't cause a refresh storm.
-            const refreshIn = Math.max(30_000, expMs - Date.now() - 5 * 60_000);
-            setTimeout(function () {
-              if (!_firebaseAuth || !_firebaseAuth.currentUser) return;
-              _firebaseAuth.currentUser.getIdTokenResult(true)
-                .then(function (newTokenResult) {
-                  _idToken = newTokenResult.token;
-                  // Re-schedule using the new token's exp claim.
-                  _scheduleRefresh(newTokenResult.claims && newTokenResult.claims.exp);
-                })
-                .catch(function (e) {
-                  // Refresh failed — likely network blip. Try again in 60s.
-                  console.warn("Cibara: token refresh failed, retrying in 60s:", e);
-                  setTimeout(function () {
-                    _scheduleRefresh((Date.now() / 1000) + 60);
-                  }, 60_000);
-                });
-            }, refreshIn);
-          }
-          _scheduleRefresh(claims.exp);
-
+          if (_firebaseAuth) _firebaseAuth.signOut().then(goLogin, goLogin);
+          else goLogin();
+          return;
+        }
+        if (result === "unavailable") {
+          // Keep the cookie; retry with back-off (2s, 4s, … max 30s).
+          _attempt += 1;
+          console.warn("Cibara: server unreachable while restoring the session, retrying");
+          setTimeout(_start, Math.min(30000, 2000 * Math.pow(2, _attempt - 1)));
+          return;
+        }
+        if (!_user || !_user.role) {
+          logout("Your account is not configured. Contact an administrator.");
+          return;
+        }
+        const tokenP = (_lastSession && _lastSession.firebase_custom_token)
+          ? Promise.resolve(_lastSession.firebase_custom_token)
+          : fetch(AUTH_API + "/firebase-token")
+              .then(function (r) { return r.ok ? r.json() : {}; })
+              .then(function (b) { return (b && b.firebase_custom_token) || null; })
+              .catch(function () { return null; });
+        tokenP.then(_signInFirebase).then(function (realtimeOk) {
+          _realtimeOk = !!realtimeOk;
           _startIdleTimer();
           _markReady();
 
-          // Apply gating once DOM is ready
-          if (document.readyState === "loading") {
-            document.addEventListener("DOMContentLoaded", function () {
-              applyRoleGating();
-              _startMutationGating();
-              _injectIdentityChip();
-              document.body.setAttribute("data-role", _user.role);
-            });
-          } else {
+          const gate = function () {
             applyRoleGating();
             _startMutationGating();
             _injectIdentityChip();
             document.body.setAttribute("data-role", _user.role);
+          };
+          if (document.readyState === "loading") {
+            document.addEventListener("DOMContentLoaded", gate);
+          } else {
+            gate();
           }
 
-          // Verify the user against our backend (lastLoginAt + active check)
+          // Verify the user against our backend (active check) — unchanged.
           fetch("/api/auth/me").then(function (r) {
             if (r.status === 403) {
               logout("Your account has been disabled.");
             }
           }).catch(function () { /* non-fatal */ });
-        })
-        .catch(function (e) {
-          console.error("Cibara: failed to load token claims", e);
-          // Token is valid but the metadata fetch blip is non-fatal — flag
-          // ready so the rest of the UI stops blocking on this promise.
-          _markReady();
         });
-    });
+      });
+    }
+    _start();
   }
 
   // ── Public API ────────────────────────────────────────────────────────────
@@ -844,6 +935,7 @@
     isHousekeeping:  isHousekeeping,
     userCan:         userCan,
     ready:           ready,
+    realtimeAvailable: function () { return _realtimeOk; },
     logout:          logout,
     applyRoleGating: applyRoleGating,
   });

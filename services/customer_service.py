@@ -111,7 +111,7 @@ def standardize_name(raw) -> str:
     return " ".join(parts)
 
 
-def _upsert(mobile: str, guest_data: dict, amount_paid: int):
+def _upsert(mobile: str, guest_data: dict, amount_paid: int, _retry: bool = True):
     try:
         doc_ref = _customers_ref.document(mobile)
         doc = doc_ref.get()
@@ -156,11 +156,9 @@ def _upsert(mobile: str, guest_data: dict, amount_paid: int):
             if address and not existing.get("address"):
                 updates["address"] = address
             if id_doc_url:
-                # Append to list of ID doc URLs
-                existing_urls = existing.get("id_doc_urls", [])
-                if id_doc_url not in existing_urls:
-                    existing_urls.append(id_doc_url)
-                    updates["id_doc_urls"] = existing_urls
+                # Server-side append. Writing back the whole list (the old
+                # code) could drop a document uploaded in parallel.
+                updates["id_doc_urls"] = _fs.ArrayUnion([id_doc_url])
 
             doc_ref.update(updates)
         else:
@@ -185,7 +183,17 @@ def _upsert(mobile: str, guest_data: dict, amount_paid: int):
             # refined to the real stay total at checkout.
             if _amt > 0:
                 new_doc["last_stay_amount"] = _amt
-            doc_ref.set(new_doc)
+            # create(), not set(): the ID photo upload runs in parallel with
+            # /checkin and may have created this customer a moment ago. set()
+            # replaced that record and wiped its documents. If the doc now
+            # exists, fall through to the normal returning-guest update.
+            from google.api_core import exceptions as _gax
+            try:
+                doc_ref.create(new_doc)
+            except _gax.Conflict:  # AlreadyExists (and emulator variants)
+                if _retry:
+                    return _upsert(mobile, guest_data, amount_paid, _retry=False)
+                raise
 
         logger.info(f"CustomerService: upserted customer {mobile}")
     except Exception as e:
@@ -409,6 +417,11 @@ def list_customers_page(page_size: int = 50, cursor: str = "", search: str = "")
         return {"customers": [], "next_cursor": None, "has_more": False}
 
 
+def _id_doc_count(c: dict) -> int:
+    from services.id_docs import active_count
+    return active_count(c)
+
+
 def _slim(c: dict) -> dict:
     """Lightweight customer row — no image URLs, just counts."""
     return {
@@ -420,7 +433,7 @@ def _slim(c: dict) -> dict:
         "last_stay_amount": c.get("last_stay_amount", 0),
         "first_visit":    c.get("first_visit", ""),
         "is_flagged":     c.get("is_flagged", False),
-        "doc_count":      len(c.get("id_doc_urls") or []),
+        "doc_count":      _id_doc_count(c),
     }
 
 
@@ -983,102 +996,37 @@ class DocumentCapReached(Exception):
     pre-flight Firestore read on every upload."""
 
 
-def upload_document(mobile: str, image_bytes: bytes, filename: str) -> str:
+def upload_document(mobile: str, image_bytes: bytes, filename: str = "", *,
+                    user: dict | None = None, side: str = "front",
+                    source: str = "upload", context: dict | None = None,
+                    device: str = "") -> str:
     """
-    Upload a document image and append its URL to the customer's id_doc_urls.
+    Store an ID document image for a customer. Returns the in-app image URL
+    ('' on failure).
 
-    Tries Firebase Storage first; falls back to local file serving if Storage
-    is not configured or fails.  Enforces a hard cap of 3 documents per customer.
-
-    Uses a Firestore transaction to atomically check the cap and append the URL,
-    preventing TOCTOU races when concurrent uploads happen.  If the transaction
-    detects the cap was hit after the Storage upload already completed, the
-    orphaned blob is deleted from Storage.
-
-    Returns the public URL on success, or an empty string on failure.
+    Delegates to services.id_docs: the file is stored PRIVATELY (no public
+    download token) with one record per document under
+    customers/{mobile}/id_docs, including who captured it. The old
+    background "trim to 3" pass is gone — it deleted the NEWEST documents
+    (and their files) of any returning guest who already had 3 on file.
+    `filename` is accepted for backwards compatibility and ignored.
     """
-    if _customers_ref is None:
-        return ""
-
+    from services import id_docs
     clean = _clean_mobile(mobile)
     if not clean:
         return ""
-
     try:
-        # No pre-flight Firestore read here — the route already ran get_customer()
-        # and enforced the cap before calling upload_document().  The transaction
-        # below provides the final atomic safety net against concurrent uploads.
-        doc_ref = _customers_ref.document(clean)
-
-        # ── Upload to Storage ─────────────────────────────────────────────────
-        url = _store_image(clean, filename, image_bytes)
-        if not url:
-            return ""
-
-        # ── Atomic append — single RPC, parallel-safe ─────────────────────
-        # ArrayUnion appends server-side without a read-modify-write
-        # transaction. The old transactional path cost 2 round-trips
-        # (read + commit) AND serialized concurrent uploads to the same
-        # customer with contention retries + backoff — a 2-photo parallel
-        # upload regularly doubled in wall-clock time because of it.
-        #
-        # Race-safe doc creation: update() raises NotFound when the
-        # customer doc doesn't exist yet; create() raises AlreadyExists if
-        # a parallel upload created it first — in which case the plain
-        # ArrayUnion update succeeds on retry. No path can overwrite
-        # another upload's URL (the old txn's set() stub could).
-        from google.api_core import exceptions as _gax
-        try:
-            doc_ref.update({"id_doc_urls": _fs.ArrayUnion([url])})
-        except _gax.NotFound:
-            try:
-                # Minimal stub — enriched on first check-in
-                doc_ref.create({
-                    "mobile": clean,
-                    "name": "",
-                    "address": "",
-                    "id_doc_urls": [url],
-                    "total_stays": 0,
-                    "total_spent": 0,
-                    "first_visit": datetime.now(timezone.utc).isoformat(),
-                    "last_stay_date": "",
-                })
-            except _gax.AlreadyExists:
-                doc_ref.update({"id_doc_urls": _fs.ArrayUnion([url])})
-
-        # ── Cap enforcement (max 3) — lazy, off the request path ──────────
-        # The atomic append above can briefly overflow the cap when uploads
-        # race; this background pass trims anything beyond the first 3 and
-        # deletes the orphaned Storage blobs. The capture UI already caps
-        # photos per session, so this trim is a rare safety net, not the
-        # primary control.
-        def _trim_overflow():
-            try:
-                snap = doc_ref.get()
-                urls = list((snap.to_dict() or {}).get("id_doc_urls", []) or []) \
-                    if snap.exists else []
-                if len(urls) > 3:
-                    extras = urls[3:]
-                    doc_ref.update({"id_doc_urls": _fs.ArrayRemove(extras)})
-                    for u in extras:
-                        _delete_storage_url(u)
-                    logger.warning(
-                        f"CustomerService: doc cap exceeded for {clean}; "
-                        f"trimmed {len(extras)} overflow doc(s)"
-                    )
-            except Exception as te:
-                logger.warning(f"CustomerService: cap trim failed for {clean}: {te}")
-
-        threading.Thread(target=_trim_overflow, daemon=True).start()
-
-        logger.info(f"CustomerService: document stored for {clean} -> {url}")
-        return url
-
-    except DocumentCapReached:
-        raise
+        rec = id_docs.add_document(clean, image_bytes, user=user, side=side,
+                                   source=source, context=context, device=device)
+    except id_docs.IdDocError as e:
+        if e.status == 409:
+            raise DocumentCapReached(str(e)) from e
+        logger.warning(f"CustomerService upload_document rejected for {clean}: {e}")
+        return ""
     except Exception as e:
         logger.error(f"CustomerService upload_document failed for {mobile}: {e}")
         return ""
+    return f"/api/v2/customers/{clean}/id-docs/{rec['id']}/image"
 
 
 # ---------------------------------------------------------------------------
@@ -1177,81 +1125,54 @@ def _clear_pending_settlement(mobile: str, settlement_id: str = None):
         logger.error(f"CustomerService clear_pending_settlement failed for {mobile}: {e}")
 
 
-def _delete_storage_url(url: str):
-    """Delete a Firebase Storage blob by its download URL. Silently ignores errors."""
-    if not url.startswith("https://firebasestorage.googleapis.com"):
-        return
+def open_settlements(mobile: str, limit: int = 50):
+    """
+    Every settle-later balance this guest still owes, oldest first, read from
+    the settlements collection itself.
+
+    The has_pending_settlement flag on the customer doc is a single pointer:
+    it can only describe one stay, and it drifts (a customer record rewritten
+    by an older check-in, a revert that cleared it, a balance from before the
+    flag existed). The check-in warning therefore asks the source of truth.
+
+    settlements.guest_mobile is stored as typed at check-in, so the common
+    spellings are matched with one single-field "in" query (no composite
+    index). Returns None if the lookup fails, so the caller can fall back to
+    the flag.
+    """
+    if _db is None:
+        return None
+    clean = _clean_mobile(mobile)
+    if not clean:
+        return []
+    variants = [clean, "+91" + clean, "91" + clean, "0" + clean, "+91 " + clean]
     try:
-        import urllib.parse
-        from firebase_admin import storage as _fb_storage
-        path_encoded = url.split("/o/")[1].split("?")[0]
-        blob_path = urllib.parse.unquote(path_encoded)
-        _fb_storage.bucket().blob(blob_path).delete()
-        logger.info(f"CustomerService: orphan blob deleted: {blob_path}")
+        q = _db.collection("settlements").where(
+            filter=_fs.firestore.FieldFilter("guest_mobile", "in", variants)
+        ).limit(limit)
+        rows = []
+        for snap in q.stream():
+            s = snap.to_dict() or {}
+            if (s.get("status") or "").lower() not in ("pending", "partial"):
+                continue
+            try:
+                amount = float(s.get("amount") or 0)
+            except (TypeError, ValueError):
+                amount = 0
+            if amount <= 0:
+                continue
+            rows.append({
+                "id": snap.id,
+                "amount": int(amount) if amount == int(amount) else amount,
+                "checkout_date": s.get("checkout_date") or "",
+                "room": str(s.get("room") or ""),
+                "status": s.get("status") or "",
+            })
+        rows.sort(key=lambda r: r["checkout_date"])
+        return rows
     except Exception as e:
-        logger.warning(f"CustomerService: orphan blob delete failed: {e}")
-
-
-def _store_image(mobile_clean: str, filename: str, image_bytes: bytes) -> str:
-    """
-    Internal helper: upload bytes to Firebase Storage or local disk.
-    Returns a URL string, or empty string on failure.
-
-    Uses Firebase token-based download URLs (same format as Firebase JS SDK)
-    instead of make_public() / ACLs — works even when the GCS bucket has
-    uniform bucket-level access enabled.
-    """
-    # ── Try Firebase Storage ───────────────────────────────────────────────
-    try:
-        import urllib.parse
-        import uuid as _uuid
-        from firebase_admin import storage as _fb_storage
-
-        bucket = _fb_storage.bucket()
-        # bucket.name containing the placeholder means Storage isn't configured
-        if bucket and "your-project-id" not in (bucket.name or ""):
-            blob_path = f"customer_docs/{mobile_clean}/{filename}"
-            blob = bucket.blob(blob_path)
-
-            # Set the download token BEFORE upload so it is included in the
-            # single multipart upload request.  This avoids a separate
-            # blob.patch() call (which is a second HTTP round-trip and was
-            # the step most likely to fail, causing silent fallback to local).
-            download_token = str(_uuid.uuid4())
-            blob.metadata  = {"firebaseStorageDownloadTokens": download_token}
-
-            blob.upload_from_string(
-                image_bytes,
-                content_type="image/jpeg",
-            )
-
-            # Construct the Firebase Storage download URL
-            encoded_path = urllib.parse.quote(blob_path, safe="")
-            url = (
-                f"https://firebasestorage.googleapis.com/v0/b/"
-                f"{bucket.name}/o/{encoded_path}"
-                f"?alt=media&token={download_token}"
-            )
-            logger.info(f"Firebase Storage upload OK: {blob_path}")
-            return url
-    except Exception as storage_err:
-        # Log the full exception so the server admin can see exactly why
-        # Firebase Storage is failing (permissions, bucket name, network, etc.)
-        logger.error(
-            f"Firebase Storage upload FAILED for {mobile_clean}/{filename} — "
-            f"error type: {type(storage_err).__name__} — "
-            f"detail: {storage_err!r}",
-            exc_info=True,
-        )
-        # Do NOT fall back to local disk storage:
-        # • On cloud platforms (Heroku, Railway, Cloud Run) the local file
-        #   system is ephemeral — files survive only until the next dyno
-        #   restart or scale-out, after which /uploads/* URLs return 404.
-        # • Silently returning a local URL stores a broken URL in Firestore
-        #   that can never be reliably served.
-        # Returning "" signals failure to the caller, which returns an error
-        # response to the client so the issue is visible immediately.
-        return ""
+        logger.warning(f"CustomerService open_settlements failed for {clean}: {e}")
+        return None
 
 
 # ---------------------------------------------------------------------------

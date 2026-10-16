@@ -1027,19 +1027,9 @@ def convert_booking_to_checkin():
             "isAC": is_ac
         }
 
-        # Mint stay_id and create the draft bill — same lifecycle as /checkin
-        # except that booking-converted bills are born invoiceable=true.
-        #
-        # Why pre-officialise: a confirmed booking that has been converted
-        # is, operationally, an official stay — the operator already
-        # collected advance payment and committed to the room. Forcing
-        # the cash through the "pending → trigger fires on first online
-        # payment" lifecycle made booking-advance cash invisible to the
-        # deposit screen on cash-only stays (the common case for this
-        # hotel). Setting invoiceable=true at create_draft makes the
-        # banking hook below route each booking-advance cash row straight
-        # to "eligible" with an RV, so the operator can include it in
-        # a deposit on day one.
+        # Mint stay_id and create the draft bill — same lifecycle as /checkin.
+        # (invoiceable=True is a leftover flag from the removed Banking
+        # module; nothing reads it.)
         stay_id = uuid.uuid4().hex
         bills_service.create_draft(
             room=room_number,
@@ -1146,17 +1136,6 @@ def convert_booking_to_checkin():
         stay_key = f"{room_number}_{checkin_datetime_str}"
         relink_pending = False
         relink_count = 0
-        # Banking-hook queue. Booking-advance payments were written via the
-        # legacy `write_payment()` path at booking creation time — before a
-        # stay_id existed — so they never went through the banking hook
-        # and have no `deposit_eligibility` field. After we stamp stay_id
-        # on them in this batch, we'll fire the hook on each so they
-        # enter the cash-receipts lifecycle (cash → pending; online →
-        # triggers invoiceability). Without this, booking-advance cash
-        # is invisible to BOTH the deposit screen and the unofficial-cash
-        # list — it falls into a no-field limbo and the operator loses
-        # track of the money.
-        _advance_banking_queue: list[tuple[str, str, str]] = []
         try:
             from google.cloud.firestore_v1.base_query import FieldFilter as _FF
             _payments_coll = db.collection("payments")
@@ -1171,16 +1150,6 @@ def convert_booking_to_checkin():
                         "stay_checkin_date": current_date,
                     })
                     relink_count += 1
-                    # Capture for post-commit banking-hook firing. We only
-                    # need (payment_id, method, prior_eligibility) — the
-                    # hook decides what to do based on method, and we
-                    # gate on prior_eligibility so re-runs of conversion
-                    # don't regress an already-stamped doc.
-                    _advance_banking_queue.append((
-                        pdoc.reference.id,
-                        (pdata.get("method") or "").lower().strip(),
-                        (pdata.get("deposit_eligibility") or "").strip(),
-                    ))
         except Exception as _re:
             relink_pending = True
             logger.warning(
@@ -1199,60 +1168,6 @@ def convert_booking_to_checkin():
             })
 
         batch.commit()
-
-        # ── Fire banking hooks on the just-relinked booking advances ────────
-        # Must run AFTER batch.commit() so the stay_id stamps are durable
-        # before the banking flow reads each payment. Idempotent: skipped
-        # for any advance that already has a deposit_eligibility set (so
-        # a second run of conversion, manual retry, etc. is safe).
-        #
-        # Behaviour:
-        #   - cash advance:   stamps deposit_eligibility = "pending".
-        #                     Later picked up by either the trigger
-        #                     (an online payment hits the stay) or by
-        #                     mark_unofficial_on_checkout (stay closes
-        #                     without invoice), flipping to eligible or
-        #                     excluded respectively.
-        #   - online advance: fires the trigger immediately, which also
-        #                     officialises any prior cash on this stay.
-        #
-        # Failures are logged but never raised — the conversion has
-        # already succeeded and the advance can be retried via a
-        # follow-up admin tool if needed.
-        try:
-            from services.banking import cash_receipts as _cr
-            for (_pid, _pmethod, _peligibility) in _advance_banking_queue:
-                if _peligibility:
-                    # Already in the banking lifecycle — don't regress.
-                    continue
-                if _pmethod in ("cash",):
-                    try:
-                        _cr.issue_receipt_for_new_payment(
-                            stay_id, _pid, method="cash"
-                        )
-                    except Exception as _bhe:
-                        logger.warning(
-                            f"convert_booking_to_checkin: banking hook "
-                            f"failed for cash advance {_pid}: {_bhe}"
-                        )
-                elif _pmethod in ("online", "upi", "card", "bank_transfer"):
-                    try:
-                        _cr.issue_receipt_for_new_payment(
-                            stay_id, _pid, method="online"
-                        )
-                    except Exception as _bhe:
-                        logger.warning(
-                            f"convert_booking_to_checkin: banking hook "
-                            f"failed for online advance {_pid}: {_bhe}"
-                        )
-                # Other methods (ota, already_paid, balance, etc.) don't
-                # participate in the cash-receipts lifecycle — intentional.
-        except Exception as _bhe_outer:
-            logger.warning(
-                f"convert_booking_to_checkin: banking-hook pass failed "
-                f"outer ({_bhe_outer}); stay_id={stay_id}, "
-                f"queue_size={len(_advance_banking_queue)}"
-            )
 
         # Fix 4: store_transaction_metadata AFTER batch commit
         store_transaction_metadata(room_number, current_date, serial_number, "booking_conversion")

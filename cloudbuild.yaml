@@ -13,6 +13,12 @@ steps:
       - "--min-instances=1"
       # Startup CPU boost shortens any cold start that does occur.
       - "--cpu-boost"
+      # FastAPI image keeps rate limits, session revocation and the legacy
+      # in-process caches in memory, so run exactly one instance (ample for
+      # ~10 users; requests are concurrent inside it). Raise only after
+      # moving that state out of process.
+      - "--max-instances=1"
+      - "--concurrency=80"
       - "--clear-base-image"
       # ── Environment is managed in the Cloud Run CONSOLE, not here ─────────
       # This deploy intentionally does NOT set any env vars or secrets.
@@ -23,5 +29,12 @@ steps:
       #
       # (Do NOT add --update-env-vars / --set-secrets back here, or it will
       # override the console-managed values.)
+      #
+      # NEW for the FastAPI image — bind once in the console before the first
+      # deploy of this branch:
+      #   JWT_SECRET   random, 32+ chars (e.g. `openssl rand -base64 48`);
+      #                the service refuses to start on Cloud Run without it.
+      # Optional: PUBLIC_ORIGIN=https://<your domain> if the Firebase web API
+      # key has HTTP-referrer restrictions.
 
 timeout: "1200s"

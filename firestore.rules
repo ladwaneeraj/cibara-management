@@ -105,9 +105,14 @@ service cloud.firestore {
     match /laundry_bills/{id} { allow read: if isStaff(); allow write: if isStaff(); }
 
     // ─── Customers ────────────────────────────────────────────────────
+    // Written only by the backend (customer_service / id_docs, Admin SDK).
+    // Client writes used to be allowed and could overwrite a guest's ID
+    // document list. ID document records (customers/{id}/id_docs/*) have no
+    // rule on purpose: browsers reach them only through /api/v2, which
+    // checks customer_doc.view and audits every view.
     match /customers/{id} {
       allow read:  if isStaff();
-      allow write: if isStaff();
+      allow write: if false;
     }
 
     // ─── Daily counters / metadata / totals / legacy logs ─────────────

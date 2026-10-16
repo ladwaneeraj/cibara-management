@@ -3,22 +3,22 @@
  *
  * Flow:
  *   1. User types userId + password.
- *   2. We map userId → "<userId>@cibara.internal" (synthetic email).
- *   3. signInWithEmailAndPassword via Firebase Auth web SDK.
- *   4. On success, redirect to "/".
+ *   2. POST /api/v2/auth/login checks the password against Firebase Auth on
+ *      the server (same "<userId>@cibara.internal" account as before),
+ *      applies the per-IP / per-account attempt limits, and sets the
+ *      HttpOnly refresh cookie.
+ *   3. On success, redirect to "/". The main app (auth.js) restores the
+ *      session from that cookie and signs the Firebase SDK in for live sync.
  *
- * The synthetic-email domain is an implementation detail — the user
- * never sees it.
- *
- * Error messages are deliberately generic to avoid leaking which half
- * of the credential pair was wrong.
+ * Error messages come from the server and are deliberately generic so they
+ * don't leak which half of the credential pair was wrong.
  * ──────────────────────────────────────────────────────────────────── */
 
 (function () {
   "use strict";
 
-  const SYNTHETIC_DOMAIN = "cibara.internal";
   const REDIRECT_TARGET = "/";
+  const LOGIN_API = "/api/v2/auth/login";
 
   // ── DOM refs ──────────────────────────────────────────────────────────
   const form = document.getElementById("login-form");
@@ -50,58 +50,26 @@
     passwordInput.disabled = on;
   }
 
-  function toSyntheticEmail(userId) {
-    const cleaned = String(userId || "").trim().toLowerCase();
-    if (!cleaned) return "";
-    return cleaned.includes("@") ? cleaned : `${cleaned}@${SYNTHETIC_DOMAIN}`;
+  function friendlyError(status, body) {
+    const msg = body && (body.message || body.detail);
+    if (typeof msg === "string" && msg) return msg;
+    if (status === 401) return "Incorrect User ID or password.";
+    if (status === 403) return "This account has been disabled. Contact an administrator.";
+    if (status === 429) return "Too many failed attempts. Please wait a minute and try again.";
+    if (status >= 500) return "Sign-in service is unreachable. Please try again.";
+    return "Sign-in failed. Please try again.";
   }
 
-  function friendlyAuthError(err) {
-    // Generic message for credential errors so we don't leak which one was wrong.
-    const code = (err && err.code) || "";
-    switch (code) {
-      case "auth/invalid-email":
-      case "auth/invalid-credential":
-      case "auth/wrong-password":
-      case "auth/user-not-found":
-        return "Incorrect User ID or password.";
-      case "auth/user-disabled":
-        return "This account has been disabled. Contact an administrator.";
-      case "auth/too-many-requests":
-        return "Too many failed attempts. Please wait a minute and try again.";
-      case "auth/network-request-failed":
-        return "Network error. Check your connection and try again.";
-      default:
-        return "Sign-in failed. Please try again.";
+  // Message left by the main app when it signed the user out
+  // (idle timeout, password change, account disabled, …).
+  try {
+    const m = sessionStorage.getItem("cibara_logout_msg");
+    if (m) {
+      sessionStorage.removeItem("cibara_logout_msg");
+      errorBox.textContent = m;
+      errorBox.hidden = false;
     }
-  }
-
-  // ── Firebase init ─────────────────────────────────────────────────────
-  if (!window.FIREBASE_CONFIG || !window.FIREBASE_CONFIG.apiKey) {
-    showError("Firebase is not configured. Contact your administrator.");
-    setLoading(false);
-    submitBtn.disabled = true;
-    return;
-  }
-
-  if (!firebase.apps.length) {
-    firebase.initializeApp(window.FIREBASE_CONFIG);
-  }
-  const auth = firebase.auth();
-
-  // Persist session across reloads but allow the 24-hour idle timer in the
-  // main app to clear it. LOCAL persistence is the correct choice — the
-  // app's own idle timer drives the actual logout.
-  auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL).catch(function (e) {
-    console.warn("Could not set auth persistence:", e);
-  });
-
-  // If the user is already signed in, skip straight to the app.
-  auth.onAuthStateChanged(function (user) {
-    if (user) {
-      window.location.replace(REDIRECT_TARGET);
-    }
-  });
+  } catch (_) { /* storage blocked */ }
 
   // ── Password visibility toggle ────────────────────────────────────────
   togglePwBtn.addEventListener("click", function () {
@@ -135,32 +103,40 @@
       return;
     }
 
-    const email = toSyntheticEmail(userId);
     setLoading(true);
 
-    auth
-      .signInWithEmailAndPassword(email, password)
-      .then(function (cred) {
-        // Force-refresh the ID token so any newly-set custom claims are
-        // present immediately (relevant after a password reset).
-        return cred.user.getIdToken(true);
+    fetch(LOGIN_API, {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json", "Accept": "application/json" },
+      body: JSON.stringify({ user_id: userId, password: password }),
+    })
+      .then(function (r) {
+        return r.json().catch(function () { return {}; }).then(function (b) {
+          return { status: r.status, ok: r.ok, body: b };
+        });
       })
-      .then(function () {
+      .then(function (res) {
+        if (!res.ok) {
+          showError(friendlyError(res.status, res.body));
+          setLoading(false);
+          passwordInput.value = "";
+          passwordInput.focus();
+          return;
+        }
         // Mark fresh login — main app's idle timer reads this on first paint
         try {
           sessionStorage.setItem("cibara_login_ts", String(Date.now()));
         } catch (_) {
           /* sessionStorage may be unavailable in private mode */
         }
+        // Tell any open app tabs: a (possibly different) user just signed in.
+        try { localStorage.setItem("cibara_auth_event", JSON.stringify({ type: "login", at: Date.now() })); } catch (_) {}
         window.location.replace(REDIRECT_TARGET);
       })
-      .catch(function (err) {
-        console.warn("Login failed:", err && err.code, err && err.message);
-        showError(friendlyAuthError(err));
+      .catch(function () {
+        showError("Network error. Check your connection and try again.");
         setLoading(false);
-        // Refocus the password field so the user can retype quickly
-        passwordInput.value = "";
-        passwordInput.focus();
       });
   });
 })();

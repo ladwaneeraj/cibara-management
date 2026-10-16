@@ -187,6 +187,164 @@
     return oc;
   }
 
+  // ── Automatic edge detection (optional, lazy OpenCV.js) ─────────────────────
+  // OpenCV.js is ~8 MB, so it is fetched ONLY when a caller passes autoDetect
+  // (ID capture), never for the plain bill crop — those stay manual and light.
+  // Everything here is best-effort: any failure resolves to null and the manual
+  // corner editor takes over, so a capture is never blocked by a detection miss
+  // or a CDN hiccup. Cached by the service worker after the first load.
+  var CV_URL = "https://docs.opencv.org/4.x/opencv.js";
+  var _cvPromise = null;
+
+  function ensureCv() {
+    if (_cvPromise) return _cvPromise;
+    _cvPromise = new Promise(function (resolve, reject) {
+      function ready() { return window.cv && window.cv.Mat; }
+      if (ready()) { resolve(); return; }
+      var settled = false;
+      var timer = setTimeout(function () { finish(false, new Error("opencv load timeout")); }, 25000);
+      function finish(ok, err) {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        if (ok) resolve(); else reject(err);
+      }
+      var s = document.createElement("script");
+      s.src = CV_URL;
+      s.async = true;
+      s.onload = function () {
+        var cv = window.cv;
+        if (!cv) { finish(false, new Error("opencv missing after load")); return; }
+        // Builds differ: a Promise, an already-initialised module, or one that
+        // signals readiness through onRuntimeInitialized. Handle all three.
+        if (typeof cv.then === "function") {
+          cv.then(function (c) { window.cv = c; finish(true); }, function (e) { finish(false, e); });
+          return;
+        }
+        if (cv.Mat) { finish(true); return; }
+        cv.onRuntimeInitialized = function () { finish(true); };
+        var poll = setInterval(function () {
+          if (ready()) { clearInterval(poll); finish(true); }
+        }, 100);
+      };
+      s.onerror = function () { finish(false, new Error("opencv failed to load")); };
+      document.head.appendChild(s);
+    });
+    return _cvPromise;
+  }
+
+  // Order four points as [top-left, top-right, bottom-right, bottom-left] — the
+  // corner order warp() and the editor expect.
+  function orderQuad(pts) {
+    var bySum = pts.slice().sort(function (a, b) { return (a.x + a.y) - (b.x + b.y); });
+    var byDiff = pts.slice().sort(function (a, b) { return (a.y - a.x) - (b.y - b.x); });
+    return [bySum[0], byDiff[0], bySum[3], byDiff[3]]; // TL, TR, BR, BL
+  }
+
+  /**
+   * Detect the largest convex 4-sided paper/card contour in `srcCanvas`.
+   * Resolves with four source-pixel corners [TL,TR,BR,BL], or null when nothing
+   * confident is found (cluttered background, low contrast) — the caller then
+   * falls back to the manual editor. Works for a card or a long document alike:
+   * it simply takes the biggest quadrilateral in frame.
+   */
+  function detectQuad(srcCanvas) {
+    return ensureCv().then(function () {
+      var cv = window.cv;
+      var mats = [];
+      function M(m) { mats.push(m); return m; }
+      try {
+        var src = M(cv.imread(srcCanvas));
+        var area = src.rows * src.cols;
+        var gray = M(new cv.Mat());
+        cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+        var blur = M(new cv.Mat());
+        cv.GaussianBlur(gray, blur, new cv.Size(5, 5), 0);
+        var edges = M(new cv.Mat());
+        cv.Canny(blur, edges, 60, 180);
+        var kernel = M(cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(5, 5)));
+        cv.dilate(edges, edges, kernel);
+        var contours = M(new cv.MatVector());
+        var hierarchy = M(new cv.Mat());
+        cv.findContours(edges, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+
+        var minArea = 0.18 * area;   // ignore anything smaller than ~18% of frame
+        var best = null, bestArea = minArea;
+        for (var i = 0; i < contours.size(); i++) {
+          var c = contours.get(i);
+          var a = cv.contourArea(c);
+          if (a > bestArea) {
+            var peri = cv.arcLength(c, true);
+            var approx = new cv.Mat();
+            cv.approxPolyDP(c, approx, 0.02 * peri, true);
+            if (approx.rows === 4 && cv.isContourConvex(approx)) {
+              bestArea = a;
+              if (best) best.delete();
+              best = approx;
+            } else {
+              approx.delete();
+            }
+          }
+          c.delete();
+        }
+        if (!best) return null;
+        var p = best.data32S;   // [x0,y0, x1,y1, x2,y2, x3,y3]
+        best.delete();
+        return orderQuad([
+          { x: p[0], y: p[1] }, { x: p[2], y: p[3] },
+          { x: p[4], y: p[5] }, { x: p[6], y: p[7] },
+        ]);
+      } catch (e) {
+        console.warn("[DocScan] detect failed:", e);
+        return null;
+      } finally {
+        mats.forEach(function (m) {
+          if (m && typeof m.delete === "function") { try { m.delete(); } catch (_e) { /* freed */ } }
+        });
+      }
+    }).catch(function (e) {
+      console.warn("[DocScan] OpenCV unavailable, falling back to manual crop:", e);
+      return null;
+    });
+  }
+
+  // ── "Magic colour" enhancement ──────────────────────────────────────────────
+  // Per-channel auto-levels: stretch each channel between its 0.5% and 99.5%
+  // percentiles, which whitens the paper and deepens the ink while keeping real
+  // colour (stamps, holograms, a photo on an ID), then a mild global contrast
+  // lift. The Adobe-scan "magic colour" look, in one pixel pass, no OpenCV.
+  function magicColor(canvas) {
+    var ctx = canvas.getContext("2d");
+    var w = canvas.width, h = canvas.height, n = w * h;
+    if (!n) return;
+    var img = ctx.getImageData(0, 0, w, h), d = img.data;
+    var hr = new Uint32Array(256), hg = new Uint32Array(256), hb = new Uint32Array(256);
+    for (var i = 0; i < d.length; i += 4) { hr[d[i]]++; hg[d[i + 1]]++; hb[d[i + 2]]++; }
+    var cut = n * 0.005;
+    function bounds(hist) {
+      var lo = 0, hi = 255, c = 0, j;
+      for (j = 0; j < 256; j++) { c += hist[j]; if (c >= cut) { lo = j; break; } }
+      c = 0;
+      for (j = 255; j >= 0; j--) { c += hist[j]; if (c >= cut) { hi = j; break; } }
+      if (hi - lo < 16) { lo = 0; hi = 255; }   // near-flat channel: leave it be
+      return [lo, hi];
+    }
+    function lut(b) {
+      var lo = b[0], range = b[1] - b[0], C = 1.14, t = new Uint8ClampedArray(256);
+      for (var v = 0; v < 256; v++) {
+        var s = (v - lo) * 255 / range;
+        s = (s - 128) * C + 128;
+        t[v] = s < 0 ? 0 : s > 255 ? 255 : s;
+      }
+      return t;
+    }
+    var lr = lut(bounds(hr)), lg = lut(bounds(hg)), lb = lut(bounds(hb));
+    for (i = 0; i < d.length; i += 4) {
+      d[i] = lr[d[i]]; d[i + 1] = lg[d[i + 1]]; d[i + 2] = lb[d[i + 2]];
+    }
+    ctx.putImageData(img, 0, 0);
+  }
+
   // ── Image loading ─────────────────────────────────────────────────────────
 
   /**
@@ -279,7 +437,11 @@
     ".ds-btn.primary{background:#2563eb;border-color:#2563eb;color:#fff;}",
     ".ds-btn.primary:active{background:#1d4ed8;}",
     ".ds-btn[disabled]{opacity:.6;cursor:wait;}",
-    ".ds-btn.ghost{flex:0 0 auto;padding:12px 16px;}"
+    ".ds-btn.ghost{flex:0 0 auto;padding:12px 16px;}",
+    ".ds-detect{position:absolute;top:12px;left:50%;transform:translateX(-50%);",
+    "  background:rgba(37,99,235,.92);color:#fff;pointer-events:none;",
+    "  font:600 .74rem 'Inter',system-ui,sans-serif;padding:6px 13px;border-radius:999px;}",
+    ".ds-detect[hidden]{display:none;}"
   ].join("");
 
   function ensureStyles() {
@@ -290,23 +452,29 @@
     document.head.appendChild(s);
   }
 
-  function openEditor(srcCanvas, resolve) {
+  function openEditor(srcCanvas, resolve, opts) {
+    opts = opts || {};
     ensureStyles();
 
     var back = document.createElement("div");
     back.className = "ds-back";
     back.innerHTML =
       '<div class="ds-bar">' +
-        '<span class="ds-title">Crop the bill</span>' +
+        '<span class="ds-title"></span>' +
         '<button type="button" class="ds-btn ghost" data-ds-full>Whole photo</button>' +
       '</div>' +
-      '<div class="ds-hint">Drag the four dots onto the corners of the bill. ' +
-        'Everything outside them is removed.</div>' +
-      '<div class="ds-stage"><canvas class="ds-canvas"></canvas></div>' +
+      '<div class="ds-hint"></div>' +
+      '<div class="ds-stage"><canvas class="ds-canvas"></canvas>' +
+        '<div class="ds-detect" data-ds-detect hidden>Finding edges…</div>' +
+      '</div>' +
       '<div class="ds-foot">' +
         '<button type="button" class="ds-btn" data-ds-cancel>Cancel</button>' +
         '<button type="button" class="ds-btn primary" data-ds-done>Use this</button>' +
       '</div>';
+    // textContent, not innerHTML, so a caller-supplied label can never inject.
+    back.querySelector(".ds-title").textContent = opts.title || "Crop the bill";
+    back.querySelector(".ds-hint").textContent = opts.hint ||
+      "Drag the four dots onto the corners of the bill. Everything outside them is removed.";
     document.body.appendChild(back);
     // Stop the page behind from scrolling under the editor on iOS.
     var prevOverflow = document.body.style.overflow;
@@ -327,10 +495,21 @@
     // teleporting it across the image.
     var dragPointer = null;
 
+    function clampPt(p) {
+      return {
+        x: Math.min(Math.max(p.x, 0), srcCanvas.width),
+        y: Math.min(Math.max(p.y, 0), srcCanvas.height)
+      };
+    }
+
     function resetQuad() {
-      // No auto-detect, so start with a sensible guess: an 8% inset. Most
-      // photos frame the bill roughly centred, which makes this a short drag
-      // rather than a fresh placement.
+      // Auto-detected corners, when the caller supplied them, else a sensible
+      // 8% inset. Most photos frame the document roughly centred, so the inset
+      // is a short drag rather than a fresh placement.
+      if (opts.initialQuad && opts.initialQuad.length === 4) {
+        quad = opts.initialQuad.map(clampPt);
+        return;
+      }
       var ix = srcCanvas.width * 0.08, iy = srcCanvas.height * 0.08;
       quad = [
         { x: ix,                     y: iy },
@@ -498,6 +677,9 @@
           }
           return;
         }
+        if (opts.enhance === "magic") {
+          try { magicColor(outCanvas); } catch (e) { console.warn("[DocScan] enhance failed:", e); }
+        }
         outCanvas.toBlob(function (blob) {
           if (!blob) {
             // toBlob yields null when the encoder fails — a very large photo,
@@ -518,13 +700,41 @@
     });
 
     resetQuad();
+
+    // Auto-detection runs in parallel so the editor opens instantly. When it
+    // resolves we snap the corners onto the detected document; a miss (null)
+    // just leaves the inset guess for the operator to drag.
+    if (opts.detectPromise) {
+      var chip = back.querySelector("[data-ds-detect]");
+      if (chip) chip.hidden = false;
+      opts.detectPromise.then(function (detected) {
+        if (chip) chip.hidden = true;
+        if (settled) return;
+        if (detected && detected.length === 4) {
+          quad = detected.map(clampPt);
+          redraw();
+        }
+      }).catch(function () { if (chip) chip.hidden = true; });
+    }
+
     // Two frames: one for the stage to get its height, one to draw into it.
     requestAnimationFrame(function () { requestAnimationFrame(layout); });
   }
 
   // ── Public API ────────────────────────────────────────────────────────────
 
-  function scan(file) {
+  /**
+   * scan(file, opts) -> Promise<File|null>
+   *   opts.autoDetect  — lazy-load OpenCV.js and pre-place the corners on the
+   *                      detected document (card or long doc). Falls back to the
+   *                      manual inset on any miss or load failure.
+   *   opts.enhance     — "magic" applies the magic-colour auto-levels to the
+   *                      cropped output; omit to keep the photo's own colours.
+   *   opts.title/hint  — editor labels (default: bill wording).
+   * With no opts this behaves exactly as before (manual crop, no enhancement).
+   */
+  function scan(file, opts) {
+    opts = opts || {};
     return new Promise(function (resolve) {
       if (!file) { resolve(null); return; }
 
@@ -541,6 +751,13 @@
             type: "image/jpeg",
             lastModified: Date.now()
           }));
+        }, {
+          title: opts.title,
+          hint: opts.hint,
+          enhance: opts.enhance,
+          // Detection runs in parallel; the editor opens immediately and snaps
+          // the corners in when it resolves.
+          detectPromise: opts.autoDetect ? detectQuad(srcCanvas) : null
         });
       }).catch(function (err) {
         console.error("[DocScan] could not open image:", err);
@@ -550,5 +767,71 @@
     });
   }
 
-  window.CibaraDocScan = { scan: scan, isSupported: isSupported };
+  /**
+   * autoScan(file, opts) -> Promise<File|null>
+   * Headless: NO corner editor. Auto-detects the document, deskews + enhances,
+   * and resolves with the cropped File — for the live camera, where the operator
+   * already framed the document in the guide box and a second crop screen is
+   * just friction.
+   *   opts.autoDetect   — run OpenCV detection (else skip straight to fallback).
+   *   opts.enhance      — "magic" applies magic-colour to the output.
+   *   opts.fallbackCrop — {x,y,w,h} as FRACTIONS (0-1) of the image, used when
+   *                       detection misses — e.g. the camera guide box, so we
+   *                       still keep "the area you framed". Omit → whole image.
+   */
+  function autoScan(file, opts) {
+    opts = opts || {};
+    return new Promise(function (resolve) {
+      if (!file) { resolve(null); return; }
+      if (!/^image\//i.test(file.type || "")) { resolve(file); return; }
+      if (!isSupported()) { resolve(file); return; }
+
+      loadToCanvas(file).then(function (srcCanvas) {
+        function finish(outCanvas) {
+          if (opts.enhance === "magic") {
+            try { magicColor(outCanvas); } catch (e) { console.warn("[DocScan] enhance failed:", e); }
+          }
+          outCanvas.toBlob(function (blob) {
+            if (!blob) { resolve(file); return; }
+            var base = (file.name || "id").replace(/\.[^.]+$/, "");
+            resolve(new File([blob], base + "-scan.jpg", { type: "image/jpeg", lastModified: Date.now() }));
+          }, "image/jpeg", JPEG_QUALITY);
+        }
+        function cropFallback() {
+          var fc = opts.fallbackCrop;
+          if (fc) {
+            var x = Math.max(0, Math.round(fc.x * srcCanvas.width));
+            var y = Math.max(0, Math.round(fc.y * srcCanvas.height));
+            var w = Math.min(srcCanvas.width - x, Math.round(fc.w * srcCanvas.width));
+            var h = Math.min(srcCanvas.height - y, Math.round(fc.h * srcCanvas.height));
+            if (w > 8 && h > 8) {
+              var cc = document.createElement("canvas");
+              cc.width = w; cc.height = h;
+              cc.getContext("2d").drawImage(srcCanvas, x, y, w, h, 0, 0, w, h);
+              finish(cc);
+              return;
+            }
+          }
+          finish(srcCanvas);
+        }
+        if (opts.autoDetect) {
+          detectQuad(srcCanvas).then(function (q) {
+            if (q && q.length === 4) {
+              var size = outputSize(q);
+              var wc = warp(srcCanvas, q, size.w, size.h);
+              if (wc) { finish(wc); return; }
+            }
+            cropFallback();
+          }).catch(cropFallback);
+        } else {
+          cropFallback();
+        }
+      }).catch(function (err) {
+        console.error("[DocScan] autoScan failed:", err);
+        resolve(file);   // never block the capture
+      });
+    });
+  }
+
+  window.CibaraDocScan = { scan: scan, autoScan: autoScan, isSupported: isSupported };
 })();

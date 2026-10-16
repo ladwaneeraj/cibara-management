@@ -830,6 +830,81 @@ def expenses_gst():
         return jsonify(success=False, message=str(e)), 500
 
 
+def _num(v):
+    try:
+        return float(v or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def summarise_expenses(expenses: list) -> dict:
+    """
+    Period expense figures for the Bills tab cards. Pure, no I/O.
+
+    cash / online: every expense leg by how it was paid (split invoices are
+    stored as one leg per payment source, so summing legs is exact).
+    counter_cash: the part of `cash` taken from the daily counter
+    (expense_type "transaction"); the rest was paid from home.
+
+    itc: GST on purchase invoices that carry a vendor GSTIN — the credit the
+    "Expenses (ITC)" sheet hands the CA. Split legs are collapsed first so an
+    invoice is counted once. GST on a bill without a GSTIN cannot be claimed,
+    so it is reported separately as itc_unclaimable.
+    """
+    cash = online = counter_cash = 0.0
+    for e in expenses:
+        amt = _num(e.get("amount"))
+        if (e.get("payment_method") or "cash") == "cash":
+            cash += amt
+            if e.get("expense_type") == "transaction":
+                counter_cash += amt
+        else:
+            online += amt
+
+    itc = unclaimable = 0.0
+    itc_bills = 0
+    for e in _dedupe_split_groups(list(expenses)):
+        tax = _num(e.get("gst_amount")) or _num(e.get("commission_gst"))
+        if tax <= 0:
+            continue
+        # Booking.com commission invoices come from a registered supplier.
+        if (e.get("vendor_gstin") or "").strip() or e.get("category") == "booking_commission":
+            itc += tax
+            itc_bills += 1
+        else:
+            unclaimable += tax
+
+    r = lambda x: round(x, 2)
+    return {"cash": r(cash), "online": r(online), "counter_cash": r(counter_cash),
+            "itc": r(itc), "itc_bills": itc_bills, "itc_unclaimable": r(unclaimable)}
+
+
+@reports_bp.route("/expenses/period_summary", methods=["POST"])
+@requires_permission(_EXPENSE_VIEW_PERM)
+def expenses_period_summary():
+    """
+    Expense totals for the Bills tab's date range: cash spent, online spent,
+    and the GST input credit on purchase bills. Read-only.
+
+    Body: { "start_date": "YYYY-MM-DD", "end_date": "YYYY-MM-DD" } (inclusive)
+    """
+    try:
+        data = request.json or {}
+        start_date = (data.get("start_date") or "").strip()
+        end_date = (data.get("end_date") or "").strip()
+        try:
+            datetime.strptime(start_date, "%Y-%m-%d")
+            _end_dt = datetime.strptime(end_date, "%Y-%m-%d")
+        except ValueError:
+            return jsonify(success=False, message="Dates must be YYYY-MM-DD."), 400
+        end_exclusive = (_end_dt + timedelta(days=1)).strftime("%Y-%m-%d")
+        expenses = expense_service.query_expenses_by_date_range(start_date, end_exclusive) or []
+        return jsonify(success=True, **summarise_expenses(expenses))
+    except Exception as e:
+        logger.error(f"expenses_period_summary error: {e}", exc_info=True)
+        return jsonify(success=False, message=str(e)), 500
+
+
 @reports_bp.route("/update_expense_photo", methods=["PATCH"])
 def update_expense_photo():
     """

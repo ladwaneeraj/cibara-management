@@ -1,0 +1,240 @@
+/* Bill preview styles — extracted from static/register.js (REGISTER_CSS) so the
+   server-rendered invoice HTML (/bill_html) looks the same as in the old UI.
+   Injected into the sandboxed preview iframe only. */
+body { margin: 0; padding: 1.2rem 1.5rem; font-family: Arial, Helvetica, sans-serif; font-size: 0.80rem; line-height: 1.45; color: #1a1a1a; background: #fff; }
+/* ── Bill structure — full width so it fills the A4 sheet ── */
+.b-bill-wrap { width: 100%; margin: 0 auto; }
+
+/* Header — clean centered text, no background */
+.b-header-block {
+  text-align: center;
+  padding-bottom: .6rem;
+  border-bottom: 2px solid #333;
+  margin-bottom: 0;
+}
+.b-lodge-name {
+  font-size: 1.45rem; font-weight: 800;
+  letter-spacing: .05em;
+}
+.b-lodge-entity {
+  font-size: .82rem; color: #444; font-style: italic; margin-top: .15rem;
+}
+.b-lodge-sub {
+  font-size: .78rem; color: #555; margin-top: .15rem;
+}
+.b-gstin-bar {
+  font-size: .72rem; color: #777; margin-top: .18rem;
+}
+.b-title {
+  font-size: .82rem; font-weight: 700;
+  letter-spacing: .1em; margin-top: .4rem;
+}
+
+/* Info table */
+.b-info-outer {
+  border: 1px solid #ccc; border-top: none;
+  width: 100%; border-collapse: collapse;
+  margin-bottom: .6rem;
+}
+.b-info-col {
+  padding: .55rem .8rem;
+  font-size: .82rem;
+  width: 50%;
+  vertical-align: top;
+}
+.b-info-col-r { border-left: 1px solid #ccc; }
+.b-row { margin-bottom: .22rem; }
+.b-lbl {
+  font-weight: 700; color: #444; white-space: nowrap;
+  display: inline-block; min-width: 100px; margin-right: .3rem;
+}
+.b-val { color: #1a1a1a; }
+
+/* Main items table */
+.b-tbl {
+  width: 100%; border-collapse: collapse;
+  font-size: .82rem; margin-bottom: .5rem;
+}
+.b-tbl th {
+  background: #efefef; font-weight: 700;
+  padding: .38rem .5rem; border: 1px solid #bbb;
+}
+.b-tbl td { padding: .32rem .5rem; border: 1px solid #ddd; }
+.b-tr { text-align: right; }
+
+/* Section header rows */
+.b-sec td {
+  background: #f5f5f5; font-weight: 700;
+  font-size: .77rem; color: #333;
+  padding: .28rem .5rem; border-color: #bbb;
+  text-transform: uppercase;
+}
+
+/* GST sub-rows */
+.b-gst-row td { color: #666; font-size: .79rem; }
+
+/* Grand total row */
+.b-grand { border-top: 2px solid #333 !important; }
+.b-grand td { font-weight: 800; background: #eee; padding: .4rem .5rem; }
+
+/* Subtotal rows */
+.b-subtotal td { font-weight: 700; background: #fafafa; }
+
+/* Payment section */
+.b-pay-section {
+  margin-top: .7rem;
+  border: 1px solid #ccc;
+}
+.b-pay-title {
+  background: #efefef; font-weight: 700; font-size: .77rem;
+  padding: .28rem .5rem;
+  letter-spacing: .04em; text-transform: uppercase;
+}
+.b-pay-section .b-tbl { margin-bottom: 0; }
+.b-pay-section .b-tbl td { border-color: #eee; padding: .3rem .5rem; }
+
+/* Signature */
+.b-sig {
+  margin-top: 2rem; width: 100%;
+  border-collapse: collapse;
+}
+.b-sig td { padding-top: .9rem; }
+.b-sig td:last-child { text-align: right; }
+.b-sig-line {
+  display: inline-block;
+  border-top: 1px solid #555;
+  padding-top: .22rem; width: 140px;
+  text-align: center; font-size: .75rem; color: #555;
+}
+
+/* Footer */
+.b-footer {
+  margin-top: .8rem; border-top: 1px solid #ddd;
+  padding-top: .4rem; font-size: .7rem;
+  color: #999; text-align: center;
+}
+
+
+/* Inline HSN/SAC sub-line under each line-item description (Rule 46(g)) */
+.b-sac {
+  font-size: .7rem; color: #888; font-style: italic;
+  display: inline-block; margin-top: 1px;
+}
+
+
+/* Per-day section header */
+.b-day-header td {
+  background: #e8eef5; font-weight: 700;
+  font-size: .85rem; color: #1a1a1a;
+  padding: .32rem .5rem; border-color: #b8c6d8;
+  letter-spacing: .02em;
+}
+
+/* Per-day total row */
+.b-day-total td {
+  background: #fafafa; font-weight: 700;
+  font-size: .82rem; color: #1a1a1a;
+  border-top: 1px dashed #b0b0b0;
+  padding: .28rem .5rem;
+}
+
+/* Tax Summary by HSN/SAC — appears between line items and Payment Details */
+.b-tax-summary {
+  width: 100%; border-collapse: collapse;
+  font-size: .78rem; margin: .35rem 0 .55rem 0;
+}
+.b-tax-summary th {
+  background: #efefef; font-weight: 700;
+  padding: .32rem .5rem; border: 1px solid #bbb;
+}
+.b-tax-summary td { padding: .28rem .5rem; border: 1px solid #ddd; }
+.b-tax-summary .b-tax-sum-total td {
+  font-weight: 800; background: #fafafa;
+  border-top: 1.5px solid #555;
+}
+@media print {
+  @page { size: A4 portrait; margin: 8mm; }
+  body { padding: 0; }
+  body { font-size: 9pt !important; line-height: 1.3 !important; }
+  /* (removed page-break-inside on .b-bill-wrap — was causing phantom blank page) */
+  .b-bill-wrap { margin: 0 !important; padding: 0 !important; }
+
+  /* Header block */
+  .b-header-block {
+    padding: 3mm 4mm 2.5mm !important;
+  }
+  .b-lodge-name { font-size: 13pt !important; }
+  .b-lodge-sub  { font-size: 7pt !important; }
+  .b-gstin-bar  { font-size: 6.5pt !important; }
+  .b-title      { font-size: 8.5pt !important; padding: 1.2mm 0 !important;
+                  -webkit-print-color-adjust: exact !important;
+                  print-color-adjust: exact !important; }
+  .b-info-outer { font-size: 7.5pt !important; }
+  .b-info-col   { padding: 1.5mm 2.5mm !important; }
+  .b-lbl        { min-width: 60px !important; }
+
+  .b-tbl        { font-size: 7.5pt !important; margin-bottom: 1mm !important; }
+  .b-tbl th     {
+    font-size: 6.5pt !important; padding: .8mm !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+  .b-tbl td     { padding: .7mm .8mm !important; }
+  .b-sec td     {
+    font-size: 6.5pt !important; padding: .6mm .8mm !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+  .b-grand td   {
+    padding: .9mm .8mm !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+  .b-pay-title  {
+    font-size: 6.5pt !important; padding: .6mm .8mm !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+  .b-pay-section { margin-top: 1.2mm !important; }
+  .b-pay-section .b-tbl td { padding: .55mm .8mm !important; }
+  .b-sig        { margin-top: 2mm !important; padding: 0 !important; }
+  .b-sig td     { padding-top: 1mm !important; }
+  /* margin-top here is the blank signing gap printed ABOVE the rule line.
+     Bumped from 2mm so there is real room to sign by hand. */
+  .b-sig-line   { margin-top: 12mm !important; width: 30mm !important;
+                  font-size: 6pt !important; padding-top: 1mm !important; }
+  .b-footer     { margin: 1mm 0 0 0 !important; padding: 1mm 0 0 0 !important;
+                  font-size: 5.5pt !important;
+                  page-break-after: avoid !important;
+                  break-after: avoid !important; }
+
+
+
+  /* Trim any trailing margin on the last element of the bill so it can't
+     push by 1-2px and force a new page. */
+
+  /* Per-day section header / per-day total — compress for print */
+  .b-day-header td {
+    font-size: 6.8pt !important; padding: .8mm .8mm !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+  .b-day-total td {
+    font-size: 6.8pt !important; padding: .6mm .8mm !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+  /* Inline HSN/SAC sub-line under each line item */
+  .b-sac { font-size: 5.5pt !important; line-height: 1 !important;
+           margin-top: 0 !important; }
+  /* Tax Summary table — same density as the main line-items table */
+  .b-tax-summary { font-size: 6.8pt !important; margin: 1mm 0 !important; }
+  .b-tax-summary th { font-size: 6pt !important; padding: .6mm .8mm !important;
+                      -webkit-print-color-adjust: exact !important;
+                      print-color-adjust: exact !important; }
+  .b-tax-summary td { padding: .55mm .8mm !important; }
+  .b-tax-summary .b-tax-sum-total td { font-weight: 700 !important; }
+  .b-tbl, .b-info-outer, .b-pay-section, .b-sig, .b-footer, .b-tax-summary {
+    page-break-inside: avoid !important; break-inside: avoid !important;
+  }
+}

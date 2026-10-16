@@ -4310,6 +4310,15 @@ async function saveCheckoutMobile(roomNumber) {
       const link = document.getElementById("checkout-guest-mobile");
       if (span) span.textContent = newMobile || "N/A";
       if (link) link.href = `tel:${newMobile}`;
+      // The ID-photo button and viewer were wired with the number the modal
+      // opened with (often none); point them at the new one, or the camera
+      // keeps saying "No mobile number for this guest".
+      if (typeof window.populateCheckoutDocView === "function") {
+        window.populateCheckoutDocView(newMobile);
+      }
+      if (typeof window.initCheckoutDocAttach === "function") {
+        window.initCheckoutDocAttach(newMobile);
+      }
       if (typeof showNotification === "function")
         showNotification("Mobile number updated.", "success");
     } else {
@@ -5788,7 +5797,7 @@ function _setBillGenToggleUI(enabled) {
   const knob   = document.getElementById("settings-billgen-knob");
   const sub    = document.getElementById("settings-billgen-sub");
   if (toggle) toggle.checked = !!enabled;
-  if (slider) slider.style.background = enabled ? "#3f51b5" : "#ccc";
+  if (slider) slider.style.background = enabled ? "var(--primary)" : "#cbd5e1";
   if (knob)   knob.style.transform   = enabled ? "translateX(20px)" : "translateX(0)";
   if (sub) {
     // Incognito force-enables bill generation on the server regardless of
@@ -5885,7 +5894,7 @@ function _setHideRegisterToggleUI(enabled) {
   const knob   = document.getElementById("settings-hidereg-knob");
   const sub    = document.getElementById("settings-hidereg-sub");
   if (toggle) toggle.checked = !!enabled;
-  if (slider) slider.style.background = enabled ? "#3f51b5" : "#ccc";
+  if (slider) slider.style.background = enabled ? "var(--primary)" : "#cbd5e1";
   if (knob)   knob.style.transform   = enabled ? "translateX(20px)" : "translateX(0)";
   if (sub) {
     sub.textContent = enabled
@@ -5901,7 +5910,7 @@ function _setIncognitoToggleUI(enabled) {
   const knob   = document.getElementById("settings-incognito-knob");
   const sub    = document.getElementById("settings-incognito-sub");
   if (toggle) toggle.checked = !!enabled;
-  if (slider) slider.style.background = enabled ? "#212121" : "#ccc";
+  if (slider) slider.style.background = enabled ? "var(--primary)" : "#cbd5e1";
   if (knob)   knob.style.transform   = enabled ? "translateX(20px)" : "translateX(0)";
   if (sub) {
     sub.textContent = enabled
@@ -6062,7 +6071,7 @@ function _setPhotoToggleUI(id, enabled, onText, offText) {
   const knob   = document.getElementById("settings-" + id + "-knob");
   const sub    = document.getElementById("settings-" + id + "-sub");
   if (toggle) toggle.checked = !!enabled;
-  if (slider) slider.style.background = enabled ? "var(--primary)" : "#ccc";
+  if (slider) slider.style.background = enabled ? "var(--primary)" : "#cbd5e1";
   if (knob)   knob.style.transform   = enabled ? "translateX(20px)" : "translateX(0)";
   if (sub)    sub.textContent = enabled ? onText : offText;
 }
@@ -7329,7 +7338,7 @@ document.addEventListener("DOMContentLoaded", function () {
       // check-in still stands; staff get an explicit warning afterwards.
       let _docUploadPromise = Promise.resolve(true);
       if (typeof window.uploadPendingDocIfAny === 'function') {
-        _docUploadPromise = window.uploadPendingDocIfAny(guestMobile);
+        _docUploadPromise = window.uploadPendingDocIfAny(guestMobile, roomNumber);
       }
 
       const _checkinBody = {
@@ -7682,10 +7691,10 @@ document.addEventListener("DOMContentLoaded", function () {
     });
   }
 
-  // Rooms-tab filter bar "more" dropdown — Deep Check / Pending Payments /
-  // Banking live here. Laundry and Staff live in the floating Quick
+  // Rooms-tab filter bar "more" dropdown — Deep Check / Pending Payments
+  // live here. Laundry and Staff live in the floating Quick
   // Actions menu instead — see quick-action-toggle above. Each item's
-  // own click handler (maintenance.js / settlements + banking handlers /
+  // own click handler (maintenance.js / settlements handlers /
   // laundry.js / staff.js) still opens its modal exactly as before; this
   // just handles opening/closing the dropdown itself.
   const roomsMoreBtn = document.getElementById("rooms-filter-more-btn");
@@ -7725,7 +7734,48 @@ document.addEventListener("DOMContentLoaded", function () {
     });
   }
 
-  // Add Room form submission
+  // Add Room form submission.
+  //
+  // `addRoom` was referenced here but defined nowhere (the handler was lost in
+  // a refactor), so this line threw "ReferenceError: addRoom is not defined" on
+  // EVERY page load — an uncaught error that aborted the rest of this init
+  // block — and the Add Room feature did nothing. Defined here now; it posts to
+  // the existing /add_room route (routes/rooms.py).
+  async function addRoom(event) {
+    event.preventDefault();
+    const input = document.getElementById("new-room-number");
+    const roomNumber = (input ? input.value : "").trim();
+    if (!roomNumber) {
+      showNotification("Please enter a room number.", "error");
+      return;
+    }
+    const submitBtn = event.target && event.target.querySelector('button[type="submit"]');
+    if (submitBtn) submitBtn.disabled = true;
+    try {
+      const res = await apiFetch("/add_room", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ roomNumber }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        showNotification(data.message || `Room ${roomNumber} added.`, "success");
+        if (input) input.value = "";
+        const modal = document.getElementById("add-room-modal");
+        if (modal) modal.classList.remove("show");
+        if (typeof fetchData === "function") fetchData();
+        else if (typeof debouncedFetchData === "function") debouncedFetchData(0);
+      } else {
+        showNotification(data.message || "Could not add room.", "error");
+      }
+    } catch (err) {
+      console.error("addRoom failed:", err);
+      showNotification("Network error while adding room.", "error");
+    } finally {
+      if (submitBtn) submitBtn.disabled = false;
+    }
+  }
+
   const addRoomForm = document.getElementById("add-room-form");
   if (addRoomForm) {
     addRoomForm.addEventListener("submit", addRoom);
@@ -7740,9 +7790,16 @@ document.addEventListener("DOMContentLoaded", function () {
     document.getElementById("end-date").value = today;
   }
 
-  // Initialise settings modal + manager access modal
-  initSettingsModal();
-  initMgrAccessModal();
+  // Initialise settings modal + manager access modal.
+  // These were called unconditionally but are defined nowhere (removed/renamed
+  // in a refactor), so each threw "ReferenceError: … is not defined" and
+  // aborted the rest of this init block — the Settings button handler and the
+  // cross-device booking listeners below never got wired. `typeof` on an
+  // undeclared name is safe (returns "undefined" without throwing), so this
+  // runs them if they exist and skips them cleanly if they don't. Settings is
+  // separately wired through openSettingsModal where it is opened.
+  if (typeof initSettingsModal === "function") initSettingsModal();
+  if (typeof initMgrAccessModal === "function") initMgrAccessModal();
 
   // Settings button in header — query fresh (top-level const may be null at load time)
   const settingsBtnEl = document.getElementById("settings-btn");

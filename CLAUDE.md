@@ -411,6 +411,43 @@ alerts + security updates in GitHub repo settings (owner). Fixed now: `pyjwt` 2.
 **Not done this phase:** admin MFA + login-anomaly audit (original item 8) — deferred; and
 the CI gate only blocks merges once the jobs are set as required status checks (owner).
 
+### 6.3 RBAC / step-up re-auth (Phase 2)
+
+**Step-up RE-AUTH, not two-person approval.** This is a solo/small-desk lodge, so the acting
+admin re-enters their OWN password to confirm a money-leaving action — it confirms intent and
+protects an unattended, signed-in session. It is named honestly as such everywhere (UI copy,
+audit, docs); the gated actions are already admin-only, so initiator == authorizer.
+
+**Flow.** A gated request returns `428 {code:"step_up_required", action, amount}`. The client
+(classic `static/step-up.js` via the `auth.js` fetch wrapper; SPA `StepUpHost` via the
+`lib/api` `stepUp` hook) prompts for the password, calls `POST /api/v2/authorize` (rate-limited
+with the login limits, admin-only, verifies the caller's own password), and replays the SAME
+request (same `X-Op-Id` — the blocked request never ran) with `X-Step-Up-Token`. Every attempt
+is audited: `authz.step_up` (success), `authz.denied` (bad password / not admin), `authz.blocked`
+(gate hit without a token).
+
+**Where it lives (no money/tax logic touched):** `security/step_up.py` (pure action mapper +
+in-memory single-use token store + per-(user, action, target) grace window — single instance,
+like the rate limiter), `routers/step_up.py` (`/api/v2/authorize`), and a `before_request` gate
+in `legacy.py` that covers the classic UI and facade paths alike.
+
+**Gated now (body-detectable):** `/cancel_bill`, `/issue_credit_note` always;
+`/add_bill_payment` bad-debt/credit-note always + discount ≥ threshold; `/collect_settlement`
+write-off/credit-note always; `/checkout` manual refund ≥ threshold. **Deferred (documented):**
+checkout OVERPAY refunds (amount is computed server-side, not in the body) and staff BANK payouts
+(dynamic `/staff/<id>` paths; already admin-only via `staff.pay.account`).
+
+**Settings (env-overridable):** `STEP_UP_AUTH` (master kill-switch, **default on**),
+`STEP_UP_REFUND_MIN=1000`, `STEP_UP_DISCOUNT_MIN=2000` (DEFAULTS — confirm the numbers),
+`STEP_UP_GRACE_SECONDS=180`, `STEP_UP_TOKEN_TTL_SECONDS=120`.
+> **DEPLOY/SEQUENCING:** keep `STEP_UP_AUTH=false` in a running environment until the client
+> prompt is deployed, else gated actions 428 with no way to confirm. The whole FastAPI stack is
+> not in prod yet, so once all Phase 2 PRs merge, default-on is safe at deploy time.
+
+**Permission splits:** `payment.refund` (out of `payment.edit`) and `settlement.writeoff` (out
+of `settlement.manage`) are registered (admin-only) so money-OUT is distinct and can be
+delegated later without editing route handlers. `LEGACY_RBAC_HARDENING` stays **default-on**.
+
 ## 7. Migration status
 
 The classic screens are the UI (§1). The table below describes the parked React app

@@ -29,6 +29,11 @@ class Settings(BaseSettings):
     # locally a random per-process secret is generated so dev "just works"
     # (every restart then signs everyone out, which is fine for dev).
     JWT_SECRET: str = Field(default="")
+    # Alternative to JWT_SECRET: read the signing secret from a file. This is
+    # the Secret Manager "mounted volume" pattern on Cloud Run — the secret
+    # never appears in the environment (safer than an env var, which leaks via
+    # /proc and the metadata server). Used only when JWT_SECRET is not set.
+    JWT_SECRET_FILE: str = ""
     JWT_ISSUER: str = "cibara-api"
     ACCESS_TOKEN_TTL_SECONDS: int = 15 * 60
     REFRESH_TOKEN_TTL_SECONDS: int = 7 * 24 * 60 * 60
@@ -109,14 +114,27 @@ class Settings(BaseSettings):
         return [o.strip() for o in self.CORS_ORIGINS.split(",") if o.strip()]
 
 
+def _read_secret_file(path: str) -> str:
+    """Read a secret from a file (e.g. a Secret Manager volume mount). Trailing
+    newlines are stripped. Raises if the path is set but unreadable."""
+    try:
+        return Path(path).read_text(encoding="utf-8").strip()
+    except OSError as e:
+        raise RuntimeError(f"JWT_SECRET_FILE is set but unreadable: {path} ({e})") from e
+
+
 @lru_cache
 def get_settings() -> Settings:
     s = Settings()
+    # Prefer a mounted secret file over an env var when JWT_SECRET is not set.
+    if not s.JWT_SECRET and s.JWT_SECRET_FILE:
+        s.JWT_SECRET = _read_secret_file(s.JWT_SECRET_FILE)
     if not s.JWT_SECRET:
         if s.on_cloud_run:
             raise RuntimeError(
                 "JWT_SECRET is not set. Bind it in the Cloud Run console "
-                "(Variables & Secrets) — use a random value of 32+ bytes."
+                "(Variables & Secrets), or mount a Secret Manager secret and "
+                "point JWT_SECRET_FILE at it — use a random value of 32+ bytes."
             )
         s.JWT_SECRET = secrets.token_urlsafe(48)
         log.warning("JWT_SECRET not set — using a random per-process dev secret")

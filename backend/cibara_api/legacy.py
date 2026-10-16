@@ -143,6 +143,18 @@ def _cibara_api_redact_api_key(resp):
     return resp
 
 
+# One-time nudge: the legacy integration key was historically readable from the
+# classic page (CLAUDE.md §10). It is redacted now, but it should be rotated or,
+# if no integration sends X-API-Key, unset entirely.
+if _os.environ.get("API_KEY"):
+    import logging as _logging
+    _logging.getLogger("cibara_api").warning(
+        "API_KEY is set (legacy integration key). It is redacted from the "
+        "classic page, but rotate it (it may have been exposed historically — "
+        "CLAUDE.md §10) or unset it if no integration uses the X-API-Key header."
+    )
+
+
 # ─── 3d. admin actions in the classic UI also end live JWT sessions ───────
 #
 # Legacy force-logout / reset-password / role change / deactivate revoke the

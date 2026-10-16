@@ -100,3 +100,6 @@ frontend/node_modules/
 frontend/dist/
 frontend/coverage/
 frontend/e2e/shots/
+
+# Repo-root lint tooling (package.json / eslint.config.mjs) — deps are local only
+/node_modules/

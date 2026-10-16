@@ -1,0 +1,42 @@
+# Pre-commit hooks — the fast half of the CI gate, run locally before each
+# commit. Install once with:
+#     pip install pre-commit
+#     pre-commit install
+#
+# These mirror CI's lint + hygiene checks (so `no-undef` and friends are caught
+# before a push). The full test suites run in CI, not here, to keep commits
+# fast; run them yourself per CLAUDE.md §5 before opening a PR.
+minimum_pre_commit_version: '3.5.0'
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+        exclude: '\.(csv|log)$'
+      - id: end-of-file-fixer
+        exclude: '\.(csv|log)$'
+      - id: check-merge-conflict
+      - id: check-yaml
+      - id: check-json
+      - id: check-added-large-files
+        args: ['--maxkb=2048']
+      # Guardrail for this repo: never let a service-account key or other
+      # private key slip into a commit (see the gitignored cibara-*.json).
+      - id: detect-private-key
+
+  - repo: local
+    hooks:
+      - id: eslint-classic
+        name: ESLint — classic UI (static/, no-undef)
+        language: system
+        entry: npm run lint
+        pass_filenames: false
+        files: '^static/.*\.js$'
+
+      - id: eslint-spa
+        name: ESLint — React SPA (frontend/)
+        language: system
+        entry: npm --prefix frontend run lint
+        pass_filenames: false
+        files: '^frontend/.*\.(ts|tsx)$'

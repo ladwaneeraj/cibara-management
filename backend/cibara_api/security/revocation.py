@@ -20,19 +20,54 @@ _lock = threading.Lock()
 _revoked_before: dict[str, int] = {}
 
 
+def _shared():
+    # Shared cache backend, or None (→ the in-process map below). Imported here
+    # to avoid an import cycle and so this module works without the FastAPI core.
+    try:
+        from ..core import cache
+        return cache.get_shared_backend()
+    except Exception:
+        return None
+
+
+def _rev_ttl() -> int:
+    # A revoke mark only matters while an access token minted before it can still
+    # be alive, i.e. the access-token lifetime. After that it is safe to drop.
+    try:
+        from ..settings import get_settings
+        return int(get_settings().ACCESS_TOKEN_TTL_SECONDS)
+    except Exception:
+        return 15 * 60
+
+
 def revoke(auth_uid: str, at: int | None = None) -> None:
     if not auth_uid:
         return
+    ts = int(at if at is not None else time.time())
+    backend = _shared()
+    if backend is not None:
+        try:
+            backend.set(f"rev:{auth_uid}", str(ts), _rev_ttl())
+            return
+        except Exception:  # pragma: no cover - Redis blip → in-process
+            pass
     with _lock:
-        _revoked_before[auth_uid] = int(at if at is not None else time.time())
+        _revoked_before[auth_uid] = ts
 
 
 def is_revoked(auth_uid: str, issued_at: int) -> bool:
-    with _lock:
-        cutoff = _revoked_before.get(auth_uid)
     # Tokens minted in the same second as the revocation are treated as dead
     # unless minted strictly after (a fresh login right after a force-logout
     # gets a later iat once the clock ticks).
+    backend = _shared()
+    if backend is not None:
+        try:
+            v = backend.get(f"rev:{auth_uid}")
+            return v is not None and issued_at <= int(v)
+        except Exception:  # pragma: no cover - Redis blip → in-process (fail-open)
+            pass
+    with _lock:
+        cutoff = _revoked_before.get(auth_uid)
     return cutoff is not None and issued_at <= cutoff
 
 

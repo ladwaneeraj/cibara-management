@@ -63,3 +63,16 @@ def test_ratelimiter_degrades_to_inprocess_on_backend_error(monkeypatch):
     assert lim.hit("k", 2, 60)[0] is True
     assert lim.hit("k", 2, 60)[0] is True
     assert lim.hit("k", 2, 60)[0] is False  # 3rd over the in-process limit
+
+
+def test_revocation_uses_shared_backend(monkeypatch):
+    import time as _t
+
+    from cibara_api.security import revocation
+    backend = _fake_redis_backend()
+    monkeypatch.setattr(cache, "get_shared_backend", lambda: backend)
+    now = int(_t.time())
+    revocation.revoke("uid1", now)
+    assert revocation.is_revoked("uid1", now) is True       # minted at/before the mark
+    assert revocation.is_revoked("uid1", now + 5) is False  # minted after → alive
+    assert revocation.is_revoked("other-uid", now) is False

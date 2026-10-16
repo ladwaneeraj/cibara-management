@@ -14,6 +14,9 @@
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="Cibara" />
+    <!-- Security helpers (escHtml) — first script so every later script can use
+         it to escape guest-controlled data before it reaches innerHTML. -->
+    <script src="{{ asset_url('security.js') }}"></script>
     <script>
       // Register the service worker (root-scoped) after load so it never
       // blocks first paint. Failures are non-fatal — the app works without it.

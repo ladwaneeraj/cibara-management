@@ -3311,7 +3311,7 @@ tr.rp-svc-voided .rp-actions-cell { opacity:.9; }
     return `<tr class="date-group-row" data-date-group="${dk}" data-entry-id="${e.id || ''}">
       <td>${serial}</td>
       <td>${billNoCell}</td>
-      <td><strong>${e.guest_name || "-"}</strong></td>
+      <td><strong>${escHtml(e.guest_name || "-")}</strong></td>
       <td class="reg-td-persons">${personsCell}</td>
       <td style="font-size:.78rem;">${e.guest_mobile || "-"}</td>
       <td><strong>${e.room || "-"}</strong></td>
@@ -3898,7 +3898,7 @@ tr.rp-svc-voided .rp-actions-cell { opacity:.9; }
     // subtitle now; the old .rdoc-meta line is kept (hidden) for safety.
     const subText = [guestName || "", mobile || ""].filter(Boolean).join("  ·  ") || "No guest linked";
     if (sub)     sub.textContent = subText;
-    if (meta)    meta.innerHTML = `<strong>Guest:</strong> ${guestName || "-"} &nbsp;|&nbsp; <strong>Mobile:</strong> ${mobile || "-"}`;
+    if (meta)    meta.innerHTML = `<strong>Guest:</strong> ${escHtml(guestName || "-")} &nbsp;|&nbsp; <strong>Mobile:</strong> ${escHtml(mobile || "-")}`;
     if (content) content.innerHTML = `<div class="rdoc-spinner"><i class="fas fa-spinner fa-spin"></i> Loading…</div>`;
     overlay.classList.add("show");
 
@@ -4237,7 +4237,7 @@ tr.rp-svc-voided .rp-actions-cell { opacity:.9; }
     const e = pmState.entry;
     if (meta) {
       meta.innerHTML =
-        `<strong>Guest:</strong> ${e.guest_name || "-"} &nbsp;|&nbsp; ` +
+        `<strong>Guest:</strong> ${escHtml(e.guest_name || "-")} &nbsp;|&nbsp; ` +
         `<strong>Room:</strong> ${e.room || "-"} &nbsp;|&nbsp; ` +
         `<strong>Check-in:</strong> ${e.checkin_time || "-"}` +
         ' <span id="rp-attr" style="display:inline-block;margin-left:8px;"></span>';

@@ -292,6 +292,77 @@ cursors, preconditions) used because the emulator cannot be downloaded in some s
 **Rollback:** `Dockerfile.flask` is the previous image byte-for-byte — copy it over
 `Dockerfile` (or deploy the previous revision in the console). No data migration exists to undo.
 
+### 6.1 Reliability & observability (Phase 0 safety net)
+
+All GCP commands below are scoped to **cibara-dev**. NEVER run them against prod
+(`cibara-software-61512`) — always pass `--project cibara-dev`.
+
+**CI gate** — `.github/workflows/ci.yml` runs on every PR: Python (legacy `tests/` +
+FastAPI `backend/tests`), SPA (ESLint + `tsc` typecheck + Vitest), and the classic-UI
+ESLint (`no-undef` is a hard error — it catches the init-bug class in the concatenated
+`static/*.js`). To actually block merge, enable these jobs as **required status checks** in
+the branch protection rules (GitHub → Settings → Branches — owner action). Mirror the lint
+half locally: `pip install pre-commit && pre-commit install`.
+
+**Error monitoring (Sentry)** — off unless `SENTRY_DSN` is set (bind it in Cloud Run →
+Variables & Secrets; `SENTRY_ENVIRONMENT`/`SENTRY_RELEASE`/`SENTRY_TRACES_SAMPLE_RATE`
+optional). Captures FastAPI + legacy-Flask unhandled errors and browser errors (classic UI
+`static/error-monitor.js` + SPA `src/lib/errorMonitor.ts` → `POST /api/v2/client-errors`).
+PII (Aadhaar / mobile / e-mail / bodies / cookies / credentials) is scrubbed in
+`core/observability.py` (`send_default_pii=False`, `before_send` fails closed). Set the
+error-rate alert inside Sentry (not GCP) once the DSN is provisioned.
+
+**Firestore backups + PITR** (enabled on cibara-dev 2026-10-16; mirror on prod when ready):
+```bash
+gcloud firestore databases update --database="(default)" --enable-pitr --project cibara-dev
+gcloud firestore backups schedules create --database="(default)" --recurrence=daily  --retention=7d  --project cibara-dev
+gcloud firestore backups schedules create --database="(default)" --recurrence=weekly --day-of-week=MON --retention=14w --project cibara-dev
+gcloud firestore backups schedules list --database="(default)" --project cibara-dev
+gcloud firestore backups list --project cibara-dev
+```
+PITR = 7 days of per-minute history; daily backups kept 7 days; weekly kept 14 weeks.
+
+**Firebase Storage versioning + lifecycle** (bucket `cibara-dev.firebasestorage.app`):
+```bash
+gcloud storage buckets update gs://cibara-dev.firebasestorage.app --versioning --project cibara-dev
+gcloud storage buckets update gs://cibara-dev.firebasestorage.app --lifecycle-file=ops/storage-lifecycle.json --project cibara-dev
+```
+`ops/storage-lifecycle.json` deletes **noncurrent** versions only (age ≥30d or >5 newer) —
+live objects are never touched.
+
+**Restore runbook (DR drill).** Always restore into a NEW throwaway database and verify;
+never overwrite `(default)`. A separate scratch project is NOT required.
+```bash
+gcloud firestore backups list --project cibara-dev --format="value(name,state,snapshotTime)"   # 1. pick a COMPLETED backup
+TOKEN=$(gcloud auth print-access-token)                                                          # 2. restore into a temp DB
+curl -s -X POST "https://firestore.googleapis.com/v1/projects/cibara-dev/databases:restore" \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"databaseId":"restore-test","backup":"<BACKUP RESOURCE NAME>"}'
+# 3. poll the returned operation; spot-check a known doc in the "restore-test" database
+gcloud firestore databases delete --database="restore-test" --project cibara-dev               # 4. tear down
+```
+> **DRILL STATUS (2026-10-16):** PITR + schedules are enabled, but the first scheduled
+> backup had not yet materialised and this workstation's gcloud SDK has no
+> `firestore databases restore/clone` subcommand, so the restore was **not yet validated
+> end-to-end**. Validate once the first daily backup lands (≈24h) via the REST call above,
+> or update the gcloud SDK, or grant export IAM to run an export→import drill immediately.
+
+**Uptime + alerting (Cloud Monitoring).** Uptime check on the UAT health endpoint plus two
+alert policies (service down, 5xx spike) notifying an e-mail channel:
+```bash
+gcloud monitoring uptime create "Cibara UAT health" --resource-type=uptime-url \
+  --resource-labels=host=lodge-management-uat-afe5xbwddq-el.a.run.app \
+  --protocol=https --path=/api/v2/health --port=443 --period=5 --project cibara-dev
+```
+The notification channel and alert policies were created via the Monitoring REST API
+(`v3/projects/cibara-dev/notificationChannels` and `.../alertPolicies`) because this host's
+SDK lacks the `alpha` component. Alert recipient defaults to `cibaracomforts@gmail.com` —
+change it in Monitoring → Alerting → Notification channels.
+
+**Deferred (need a decision):** a GCS daily *export* (for BigQuery / §12 reporting) needs an
+IAM grant to the Firestore service agent + an export bucket — not done; the managed scheduled
+backups above already cover disaster recovery.
+
 ## 7. Migration status
 
 The classic screens are the UI (§1). The table below describes the parked React app

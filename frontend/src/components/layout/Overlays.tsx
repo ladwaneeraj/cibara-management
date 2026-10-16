@@ -1,7 +1,18 @@
+import { useEffect, useState } from 'react'
 import { CheckCircle2, Info, XCircle } from 'lucide-react'
 import { Button, Modal } from '@/components/ui'
+import { post } from '@/lib/api'
 import { cls } from '@/lib/format'
 import { useUi } from '@/lib/ui'
+
+const STEP_UP_LABELS: Record<string, string> = {
+  cancel_bill: 'Cancel this bill',
+  credit_note: 'Issue this credit note',
+  bad_debt: 'Write off as bad debt',
+  writeoff: 'Write off this balance',
+  discount: 'Apply this discount',
+  refund: 'Process this refund',
+}
 
 export function Toaster() {
   const toasts = useUi((s) => s.toasts)
@@ -45,6 +56,77 @@ export function ConfirmHost() {
       }
     >
       <p className="text-sm text-slate-600 dark:text-slate-300">{req?.message}</p>
+    </Modal>
+  )
+}
+
+/**
+ * Step-up RE-AUTH prompt. The admin re-enters their own password to confirm a
+ * money-leaving action (not a two-person approval); on success /api/v2/authorize
+ * returns a single-use token the api client replays as X-Step-Up-Token.
+ */
+export function StepUpHost() {
+  const req = useUi((s) => s.stepUpReq)
+  const close = useUi((s) => s.closeStepUp)
+  const [pass, setPass] = useState('')
+  const [err, setErr] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    setPass('')
+    setErr('')
+    setBusy(false)
+  }, [req])
+
+  const amt = req?.amount ? `₹${req.amount.toLocaleString('en-IN')}` : ''
+
+  async function submit() {
+    if (!req) return
+    if (!pass) {
+      setErr('Enter your password.')
+      return
+    }
+    setBusy(true)
+    setErr('')
+    try {
+      const r = await post<{ token: string }>('/api/v2/authorize', {
+        action: req.action,
+        amount: req.amount || 0,
+        password: pass,
+      })
+      close(r.token)
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Confirmation failed.')
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Modal
+      open={!!req}
+      onClose={() => close(null)}
+      title={req ? `${STEP_UP_LABELS[req.action] ?? 'Admin confirmation'}?` : ''}
+      size="sm"
+      footer={
+        <>
+          <Button variant="secondary" onClick={() => close(null)}>Cancel</Button>
+          <Button variant="primary" onClick={submit} disabled={busy}>{busy ? 'Checking…' : 'Confirm'}</Button>
+        </>
+      }
+    >
+      <p className="text-sm text-slate-600 dark:text-slate-300">
+        Re-enter your password to confirm{amt ? ` ${amt}` : ''}. Money-leaving actions need admin confirmation.
+      </p>
+      <input
+        type="password"
+        autoComplete="current-password"
+        value={pass}
+        onChange={(e) => setPass(e.target.value)}
+        onKeyDown={(e) => { if (e.key === 'Enter') submit() }}
+        placeholder="Your password"
+        className="mt-3 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-brand-500 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
+      />
+      {err && <p className="mt-2 text-xs text-rose-600">{err}</p>}
     </Modal>
   )
 }

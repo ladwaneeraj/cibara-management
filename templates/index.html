@@ -38,6 +38,9 @@
     <script src="/firebase-config.js"></script>
     <script src="{{ asset_url('permissions.js') }}"></script>
     <script src="{{ asset_url('auth.js') }}"></script>
+    <!-- Step-up re-auth prompt: auth.js calls window.CibaraStepUp when the
+         server returns 428 on a money-leaving action. -->
+    <script src="{{ asset_url('step-up.js') }}"></script>
     <script src="/static/user-directory.js"></script>
     <script src="/static/attribution.js"></script>
     <script src="/static/room-attribution.js"></script>

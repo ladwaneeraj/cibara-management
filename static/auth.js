@@ -352,8 +352,31 @@
       // Non-same-origin or no token: just pass through.
       if (!sameOrigin) return originalFetch(input, init);
 
-      return _guardedSend(input, Object.assign({}, init || {}), url);
+      const _sendInit = Object.assign({}, init || {});
+      return _guardedSend(input, _sendInit, url).then(function (resp) {
+        return _maybeStepUp(resp, input, _sendInit, url);
+      });
     };
+
+    // Step-up re-auth: a money-leaving action blocked with 428 → prompt the
+    // admin for their password (step-up.js), then replay the SAME request with
+    // the returned single-use token. The same init is reused so the X-Op-Id is
+    // preserved; the blocked request never executed, so this is its first real
+    // attempt. One replay only — a second 428 is surfaced to the caller.
+    function _maybeStepUp(resp, input, init, url) {
+      if (!resp || resp.status !== 428) return resp;
+      if (!window.CibaraStepUp || typeof window.CibaraStepUp.authorize !== "function") return resp;
+      return resp.clone().json().then(function (body) {
+        if (!body || body.code !== "step_up_required") return resp;
+        return window.CibaraStepUp.authorize(body.action, body.amount).then(function (token) {
+          if (!token) return resp; // cancelled → surface the block
+          const headers = new Headers(init.headers || {});
+          headers.set("X-Step-Up-Token", token);
+          init.headers = headers;
+          return _guardedSend(input, init, url);
+        });
+      }).catch(function () { return resp; });
+    }
 
     // Send with the token attached; on 401 refresh ONCE and retry.
     // Common causes of the 401:

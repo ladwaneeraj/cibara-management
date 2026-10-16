@@ -94,6 +94,29 @@ class Settings(BaseSettings):
     # extended past this, however often it is rotated.
     SESSION_MAX_DAYS: int = 30
 
+    # ── Step-up re-authentication (Phase 2) ───────────────────────────────
+    # This is step-up RE-AUTH, not two-person separation of duties: the acting
+    # admin re-enters their own password to confirm a money-leaving action (and
+    # protect an unattended, signed-in session). Master kill-switch; set to
+    # false to disable instantly if it disrupts the desk.
+    #
+    # DEPLOY NOTE: keep this FALSE in a running environment until the client
+    # step-up prompt (classic UI / SPA) is deployed — otherwise gated actions
+    # return 428 with no way to confirm them. It defaults on so it is the
+    # intended end state once the UI is in place.
+    STEP_UP_AUTH: bool = True
+    # A successful confirmation covers repeats of the SAME action on the SAME
+    # bill/target for this long, so a burst on one bill isn't re-prompted.
+    STEP_UP_GRACE_SECONDS: int = 180
+    # How long an issued authorization token is valid before it is used.
+    STEP_UP_TOKEN_TTL_SECONDS: int = 120
+    # Amount thresholds (₹). At/above these, the action needs confirmation;
+    # below, it passes. Always-gated actions (cancellation, credit note,
+    # bad-debt, settlement write-off) ignore thresholds. DEFAULTS — confirm the
+    # numbers for your desk; override via env.
+    STEP_UP_REFUND_MIN: int = 1000
+    STEP_UP_DISCOUNT_MIN: int = 2000
+
     @property
     def on_cloud_run(self) -> bool:
         return bool(os.environ.get("K_SERVICE"))

@@ -28,7 +28,8 @@ from starlette.middleware.gzip import GZipMiddleware
 
 from . import legacy
 from .core.middleware import RequestContextMiddleware
-from .routers import admin, auth, bills, customer_docs, dashboard, guest, reports, rooms, invoice_settings
+from .routers import (admin, auth, bills, customer_docs, dashboard, guest, reports,
+                      rooms, invoice_settings, step_up)
 from .settings import get_settings
 
 log = logging.getLogger("cibara_api")
@@ -86,7 +87,8 @@ def create_app() -> FastAPI:
         return {"success": True, "env": legacy.legacy_config.CIBARA_ENV, "version": VERSION, "firebase": cfg}
 
     for r in (auth.router, dashboard.router, rooms.router, bills.router, reports.router,
-              admin.router, guest.router, invoice_settings.router, customer_docs.router):
+              admin.router, guest.router, invoice_settings.router, customer_docs.router,
+              step_up.router):
         app.include_router(r)
 
     @app.api_route("/api/v2/{rest:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"],

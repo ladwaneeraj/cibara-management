@@ -493,6 +493,55 @@ gcloud compute backend-services add-backend cibara-be --global \
 ```
 Cloud CDN then caches `/static` at the edge per those headers; everything else passes through.
 
+### 6.5 Data & document storage (Phase 4)
+
+**Migration runner.** `migrations/runner.py` runs tracked, ordered, idempotent Firestore
+migrations (formalising the ad-hoc `scripts/`): `python -m migrations.runner --status` /
+`--commit` (dry run by default). A migration is `migrations/NNNN_slug.py` with `ID`,
+`DESCRIPTION`, `up(db)`; it is recorded in `_migrations` only after `up()` returns, so it must
+be idempotent. Copy `migrations/_template.py`. **Never alter money/tax records** in a
+migration — that is preserved logic with its own owner decision + test. Run on UAT first.
+
+**Upload safety.** Stored images are re-encoded through Pillow (`services/id_docs.py`,
+`routers/invoice_settings.py`) — the real malware defence for images (rejects non-decodable
+files, strips polyglot/metadata). `core/uploads.py` adds magic-byte validation for paths that
+only checked the declared Content-Type (room photos). **Deeper malware scanning** for the PDF
+ingest paths (`/bank/settlements/ingest` etc.) is infra: run uploads through a ClamAV Cloud Run
+sidecar, or stage to a GCS bucket with the [GCS malware-scanning solution] and only accept
+objects it marks clean. Not wired here — owner decision.
+
+**Retention / archival policy (OWNER DECISION — legal).** Indian GST law requires invoices,
+credit notes and related records be kept **~6–8 years**. So: **never auto-delete bills, credit
+notes, settlements, folios, audit logs or their PDFs.** A migration or script may *archive*
+(copy to cold storage / mark archived) but not delete financial data. Safe to prune: expired
+step-up/rate-limit/revocation entries (TTL, automatic), old *noncurrent* object versions
+(below), and non-financial scratch. Confirm concrete retention windows with the CA before any
+archival job.
+
+**GCS bill-PDF versions — already pruned (Phase 0 §6.1).** Bill PDFs overwrite the same object
+path on regenerate; with versioning on, the old content becomes a *noncurrent* version, and the
+bucket lifecycle (`daysSinceNoncurrentTime ≥ 30` OR `numNewerVersions > 5`, noncurrent-only)
+deletes it — the live invoice PDF is always kept. Verified live on
+`gs://cibara-dev.firebasestorage.app`. Tune in `ops/storage-lifecycle.json`.
+
+**Token-URL PDF migration (owner-run).** Bill PDFs are served same-origin via
+`GET /api/v2/bills/{id}/pdf-file` (register.view), so the old Firebase download-token links on
+`bills[].pdf_url` can be revoked. Do it as a tracked migration (idempotent; revokes the
+`firebaseStorageDownloadTokens` metadata, keeps the file) run on UAT first, mirroring
+`scripts/migrate_id_docs.py --revoke-tokens` for guest docs. Not run here — it touches live
+storage access, so it is an owner `--commit` after a UAT dry run.
+
+**BigQuery export for reporting at scale (item 12 — owner infra).** Stop computing heavy GSTR/
+analytics reports live over Firestore: stream Firestore → BigQuery and query there. Options:
+the Firebase "Stream Firestore to BigQuery" extension (per-collection), or a scheduled
+Firestore export loaded into BQ. Scope to `--project cibara-dev`, never prod:
+```bash
+bq --project_id=cibara-dev mk --dataset --location=asia-south1 cibara_analytics
+# then install the Firestore→BigQuery extension (bills, settlements, customers, audit_logs),
+# or schedule `gcloud firestore export` to GCS + `bq load` into cibara_analytics.
+```
+Needs a BQ dataset + IAM for the export service account — owner infra (billing/IAM).
+
 ## 7. Migration status
 
 The classic screens are the UI (§1). The table below describes the parked React app

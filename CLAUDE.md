@@ -448,6 +448,51 @@ checkout OVERPAY refunds (amount is computed server-side, not in the body) and s
 of `settlement.manage`) are registered (admin-only) so money-OUT is distinct and can be
 delegated later without editing route handlers. `LEGACY_RBAC_HARDENING` stays **default-on**.
 
+### 6.4 Scaling: shared cache + CDN (Phase 3)
+
+**Shared cache (off-process state), feature-flagged.** `core/cache.py` defines a
+`CacheBackend` (get/set/getdel/incr) with a MemoryBackend and a RedisBackend;
+`get_shared_backend()` returns the Redis backend only when `REDIS_URL` is set AND reachable,
+else `None` → the existing in-process state. So the **default (one Cloud Run instance) is
+unchanged**; set `REDIS_URL` (e.g. Memorystore) to run `>1` instance safely, and unset it to
+revert. A Redis error degrades to the in-process path (fail-open — the Firebase refresh check
+stays the security backstop).
+
+Moved to the shared cache when `REDIS_URL` is set:
+* rate-limit counters (`core/ratelimit.py`) — a fixed-window counter shared across instances;
+* access-token revocation marks (`security/revocation.py`) — TTL = the access-token lifetime.
+
+Still process-local **by design** (follow-ups, not yet moved):
+* step-up tokens + grace (`security/step_up.py`) — a one-file wiring to `core/cache`, blocked
+  until the Phase 2 branch merges (step_up.py isn't on the Phase 3 base);
+* refresh-token families rotation/reuse detection (needs atomic multi-key semantics);
+* the legacy duplicate-submit guard.
+
+Enabling Memorystore on cibara-dev (owner — VPC connector = networking/billing; `--project
+cibara-dev`, never prod):
+```bash
+gcloud redis instances create cibara-cache --region=asia-south1 --size=1 --tier=basic --project cibara-dev
+# create a Serverless VPC Access connector in asia-south1, then:
+gcloud run services update lodge-management-uat --project cibara-dev \
+  --vpc-connector=<connector> --set-env-vars=REDIS_URL=redis://<host>:6379
+# only now may --max-instances be raised above 1. Unset REDIS_URL to revert.
+```
+
+**Cloud CDN for /static.** `/static` responses now carry CDN-friendly `Cache-Control`
+(`immutable` for versioned `?v=` URLs, `max-age=3600` otherwise; `core/middleware.py`); dynamic
+routes stay `no-store`/`no-cache`. Putting Cloud CDN in front (owner — external HTTPS LB =
+billing/networking):
+```bash
+gcloud compute network-endpoint-groups create cibara-neg --region=asia-south1 \
+  --network-endpoint-type=serverless --cloud-run-service=lodge-management-uat --project cibara-dev
+gcloud compute backend-services create cibara-be --global --enable-cdn \
+  --cache-mode=USE_ORIGIN_HEADERS --project cibara-dev
+gcloud compute backend-services add-backend cibara-be --global \
+  --network-endpoint-group=cibara-neg --network-endpoint-group-region=asia-south1 --project cibara-dev
+# + URL map, target HTTPS proxy, managed cert and a global forwarding rule (static IP).
+```
+Cloud CDN then caches `/static` at the edge per those headers; everything else passes through.
+
 ## 7. Migration status
 
 The classic screens are the UI (§1). The table below describes the parked React app

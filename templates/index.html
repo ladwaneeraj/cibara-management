@@ -2646,14 +2646,13 @@
     >
       <div class="modal-content set-modal" role="dialog" aria-labelledby="settings-title">
         <div class="set-head">
-          <div class="set-head-icon"><i class="fas fa-sliders-h"></i></div>
+          <button class="set-back" onclick="closeSettingsModal()" aria-label="Back">
+            <i class="fas fa-arrow-left"></i>
+          </button>
           <div class="set-head-text">
             <h2 id="settings-title">Settings</h2>
             <p>Changes save instantly and apply on every device.</p>
           </div>
-          <button class="set-close" onclick="closeSettingsModal()" aria-label="Close">
-            <i class="fas fa-times"></i>
-          </button>
         </div>
 
         <div class="set-body">
@@ -2840,6 +2839,63 @@
               </div>
             </div>
           </section>
+
+          <!-- ── System (admin only) ──
+               System health page — plain-language insights over
+               GET /api/v2/admin/metrics. Admin-only via data-perm="logs.view"
+               (same permission the endpoint enforces). static/system-health.js
+               owns the sheet it opens. -->
+          <section class="set-group">
+            <h3 class="set-group-title">System</h3>
+            <div class="set-list">
+              <div
+                id="settings-system-health-card"
+                class="set-row set-row--link"
+                data-perm="logs.view"
+                role="button"
+                tabindex="0"
+                onclick="if (window.CibaraSystemHealth) window.CibaraSystemHealth.open();"
+                onkeydown="if (event.key === 'Enter') this.click();"
+              >
+                <span class="set-ico set-ico--teal"><i class="fas fa-heartbeat"></i></span>
+                <span class="set-text">
+                  <span class="set-title">System health</span>
+                  <span class="set-sub">Uptime, speed &amp; database usage</span>
+                </span>
+                <i class="fas fa-chevron-right set-chev"></i>
+              </div>
+            </div>
+          </section>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── System Health sheet (admin only) ───────────────────────────────────
+         Full-screen page (same look as Settings) opened from the System health
+         card above. Plain-language insights derived client-side from
+         GET /api/v2/admin/metrics. Read-only; changes no data. Rendered and
+         wired by static/system-health.js. -->
+    <div
+      class="modal-backdrop"
+      id="system-health-modal"
+      style="z-index: 1100;"
+      onclick="if (event.target === this) window.CibaraSystemHealth && window.CibaraSystemHealth.close();"
+    >
+      <div class="modal-content set-modal" role="dialog" aria-labelledby="sh-title">
+        <div class="set-head">
+          <button class="set-back" onclick="window.CibaraSystemHealth && window.CibaraSystemHealth.close();" aria-label="Back">
+            <i class="fas fa-arrow-left"></i>
+          </button>
+          <div class="set-head-text">
+            <h2 id="sh-title">System health</h2>
+            <p>Live &middot; updates every 30 seconds</p>
+          </div>
+          <button class="sh-refresh" onclick="window.CibaraSystemHealth && window.CibaraSystemHealth.refresh();" aria-label="Refresh now" title="Refresh now">
+            <i class="fas fa-sync-alt"></i>
+          </button>
+        </div>
+        <div class="set-body" id="system-health-body">
+          <!-- filled by static/system-health.js -->
         </div>
       </div>
     </div>
@@ -6205,6 +6261,8 @@
     <script defer src="/static/admin-users.js"></script>
     <!-- Guest requests panel + portal settings (listens to google_sync events) -->
     <script defer src="{{ asset_url('guest-requests.js') }}"></script>
+    <!-- System health page (admin-only; reads GET /api/v2/admin/metrics) -->
+    <script defer src="{{ asset_url('system-health.js') }}"></script>
     <!-- Firebase config served from env vars — must load before google_sync module -->
     <script src="/firebase-config.js"></script>
     <script

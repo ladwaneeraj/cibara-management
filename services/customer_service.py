@@ -1482,6 +1482,259 @@ def get_demographics_aggregate(force: bool = False) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# CRM INSIGHTS — behavioural + financial analytics over the whole collection
+# ---------------------------------------------------------------------------
+#
+# Unlike get_demographics_aggregate (age / pincode, which depend on ID-OCR and
+# are shown in the Reports screen), this aggregate is built ONLY from fields
+# every customer doc already carries — total_stays, total_spent, first_visit,
+# last_stay_date, flags, pending settlements, GST profile. So it works on day
+# one, OCR on or off, and powers the Customer Records "Insights" panel.
+#
+# One bounded .select() scan, cached 5 minutes (analytics is read far more
+# often than the collection changes), and it NEVER raises — a broken insight
+# must not take down the admin's customer screen.
+
+# Loyalty tiers by lifetime stay count. (label, lo_inclusive, hi_inclusive)
+_LOYALTY_TIERS = [
+    ("One-time",  0, 1),
+    ("Returning", 2, 2),
+    ("Regular",   3, 5),
+    ("Loyal",     6, 10),
+    ("VIP",       11, 10 ** 9),
+]
+
+# Lifetime-value tiers by total_spent in ₹. (label, lo_inclusive, hi_exclusive)
+_VALUE_TIERS = [
+    ("₹0",        0, 1),
+    ("< ₹1k",     1, 1000),
+    ("₹1k–5k",    1000, 5000),
+    ("₹5k–15k",   5000, 15000),
+    ("₹15k–50k",  15000, 50000),
+    ("₹50k+",     50000, 10 ** 12),
+]
+
+# Recency bands by days since last stay. (label, lo_inclusive, hi_inclusive)
+# "Lost" also absorbs guests with no recorded last stay.
+_RECENCY_BANDS = [
+    ("Active · ≤90d",   0, 90),
+    ("Cooling · 3–6m",  91, 180),
+    ("Dormant · 6–12m", 181, 365),
+    ("Lost · >12m",     366, 10 ** 9),
+]
+
+_INSIGHTS_CACHE = {"data": None, "ts": 0.0}
+_INSIGHTS_TTL_SECONDS = 300  # 5 minutes
+
+
+def _parse_date_prefix(raw):
+    """Parse the YYYY-MM-DD prefix of an ISO date/datetime string to a date.
+    Returns None for blanks or anything unparseable (never raises)."""
+    if not raw:
+        return None
+    try:
+        return datetime.strptime(str(raw)[:10], "%Y-%m-%d").date()
+    except (ValueError, TypeError):
+        return None
+
+
+def _empty_insights() -> dict:
+    return {
+        "kpis": {
+            "total_customers": 0, "repeat_customers": 0, "repeat_rate_pct": 0,
+            "total_revenue": 0, "avg_spend": 0, "avg_stays": 0,
+            "active_90d": 0, "new_30d": 0, "new_this_month": 0,
+            "flagged": 0, "wants_bill": 0, "gst_customers": 0,
+            "dues_count": 0, "dues_total": 0,
+            "top10_revenue_share_pct": 0, "top20_revenue_share_pct": 0,
+        },
+        "segments": {
+            "loyalty": [{"label": l, "count": 0} for l, _, _ in _LOYALTY_TIERS],
+            "value":   [{"label": l, "count": 0} for l, _, _ in _VALUE_TIERS],
+            "recency": [{"label": l, "count": 0} for l, _, _ in _RECENCY_BANDS],
+        },
+        "acquisition_trend": [],
+        "top_by_spend": [], "top_by_stays": [],
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def get_customer_insights(force: bool = False) -> dict:
+    """
+    Aggregate the customers collection into decision-useful CRM analytics for
+    the Customer Records "Insights" panel:
+
+      • Headline KPIs (base size, repeat rate, lifetime revenue, average spend
+        and stays, active base, new acquisitions, flags, outstanding dues,
+        B2B/GST count, and the Pareto revenue-concentration share).
+      • RFM-style segments — loyalty (by stays), value (by spend), recency
+        (days since last stay).
+      • A 12-month new-customer acquisition trend (from first_visit).
+      • Top guests by spend and by frequency (each clickable through to the
+        existing customer detail view).
+
+    One bounded .select() scan, cached `_INSIGHTS_TTL_SECONDS`. Never raises.
+    """
+    import time as _time
+    now_ts = _time.time()
+    if (not force and _INSIGHTS_CACHE["data"] is not None
+            and (now_ts - _INSIGHTS_CACHE["ts"]) < _INSIGHTS_TTL_SECONDS):
+        return _INSIGHTS_CACHE["data"]
+
+    if _customers_ref is None:
+        return _empty_insights()
+
+    try:
+        today = datetime.now(timezone.utc).date()
+        this_month_key = today.strftime("%Y-%m")
+
+        total = repeat = stays_sum = 0
+        total_revenue = dues_total = 0.0
+        flagged = wants_bill = gst = 0
+        dues_count = active_90 = new_30 = new_month = 0
+
+        loyalty = {label: 0 for label, _, _ in _LOYALTY_TIERS}
+        value   = {label: 0 for label, _, _ in _VALUE_TIERS}
+        recency = {label: 0 for label, _, _ in _RECENCY_BANDS}
+        months  = {}        # "YYYY-MM" -> new-customer count
+        spends  = []        # every total_spent, for the Pareto share
+        by_spend, by_stays = [], []
+
+        query = _customers_ref.select([
+            "total_stays", "total_spent", "first_visit", "last_stay_date",
+            "is_flagged", "has_pending_settlement", "pending_settlement_amount",
+            "wants_bill", "gst_profile", "name",
+        ])
+        for snap in query.stream():
+            d = snap.to_dict() or {}
+            mobile = snap.id
+            total += 1
+
+            stays = int(d.get("total_stays") or 0)
+            try:
+                spent = float(d.get("total_spent") or 0)
+            except (TypeError, ValueError):
+                spent = 0.0
+            sp_int = int(round(spent))
+            name = d.get("name") or ""
+
+            stays_sum += stays
+            total_revenue += spent
+            spends.append(spent)
+
+            if stays > 1:
+                repeat += 1
+            if d.get("is_flagged"):
+                flagged += 1
+            if d.get("wants_bill"):
+                wants_bill += 1
+            gp = d.get("gst_profile") or {}
+            if isinstance(gp, dict) and str(gp.get("gstin") or "").strip():
+                gst += 1
+            if d.get("has_pending_settlement"):
+                dues_count += 1
+                try:
+                    dues_total += float(d.get("pending_settlement_amount") or 0)
+                except (TypeError, ValueError):
+                    pass
+
+            for label, lo, hi in _LOYALTY_TIERS:
+                if lo <= stays <= hi:
+                    loyalty[label] += 1
+                    break
+            for label, lo, hi in _VALUE_TIERS:
+                if lo <= sp_int < hi:
+                    value[label] += 1
+                    break
+
+            last = _parse_date_prefix(d.get("last_stay_date"))
+            if last:
+                days = max((today - last).days, 0)
+                if days <= 90:
+                    active_90 += 1
+                for label, lo, hi in _RECENCY_BANDS:
+                    if lo <= days <= hi:
+                        recency[label] += 1
+                        break
+            else:
+                recency[_RECENCY_BANDS[-1][0]] += 1  # no last stay → Lost
+
+            fv = _parse_date_prefix(d.get("first_visit"))
+            if fv:
+                mk = fv.strftime("%Y-%m")
+                months[mk] = months.get(mk, 0) + 1
+                if (today - fv).days <= 30:
+                    new_30 += 1
+                if mk == this_month_key:
+                    new_month += 1
+
+            row = {"mobile": mobile, "name": name, "total_spent": sp_int,
+                   "total_stays": stays, "last_stay_date": d.get("last_stay_date") or ""}
+            if spent > 0:
+                by_spend.append(row)
+            if stays > 0:
+                by_stays.append(dict(row))
+
+        # Pareto: revenue share of the top X% of guests (by spend).
+        spends_sorted = sorted(spends, reverse=True)
+
+        def _top_share(frac: float) -> int:
+            if not spends_sorted or total_revenue <= 0:
+                return 0
+            k = max(1, int(round(len(spends_sorted) * frac)))
+            return round(sum(spends_sorted[:k]) / total_revenue * 100)
+
+        by_spend.sort(key=lambda r: r["total_spent"], reverse=True)
+        by_stays.sort(key=lambda r: (r["total_stays"], r["total_spent"]), reverse=True)
+
+        # 12-month acquisition trend, oldest→newest, gaps filled with 0.
+        seq, y, m = [], today.year, today.month
+        for _ in range(12):
+            seq.append((y, m))
+            m -= 1
+            if m == 0:
+                m, y = 12, y - 1
+        trend = [{"month": f"{yy:04d}-{mm:02d}", "count": months.get(f"{yy:04d}-{mm:02d}", 0)}
+                 for yy, mm in reversed(seq)]
+
+        result = {
+            "kpis": {
+                "total_customers": total,
+                "repeat_customers": repeat,
+                "repeat_rate_pct": round(repeat / total * 100) if total else 0,
+                "total_revenue": round(total_revenue),
+                "avg_spend": round(total_revenue / total) if total else 0,
+                "avg_stays": round(stays_sum / total, 1) if total else 0,
+                "active_90d": active_90,
+                "new_30d": new_30,
+                "new_this_month": new_month,
+                "flagged": flagged,
+                "wants_bill": wants_bill,
+                "gst_customers": gst,
+                "dues_count": dues_count,
+                "dues_total": round(dues_total),
+                "top10_revenue_share_pct": _top_share(0.10),
+                "top20_revenue_share_pct": _top_share(0.20),
+            },
+            "segments": {
+                "loyalty": [{"label": l, "count": loyalty[l]} for l, _, _ in _LOYALTY_TIERS],
+                "value":   [{"label": l, "count": value[l]} for l, _, _ in _VALUE_TIERS],
+                "recency": [{"label": l, "count": recency[l]} for l, _, _ in _RECENCY_BANDS],
+            },
+            "acquisition_trend": trend,
+            "top_by_spend": by_spend[:8],
+            "top_by_stays": by_stays[:8],
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        _INSIGHTS_CACHE["data"] = result
+        _INSIGHTS_CACHE["ts"] = now_ts
+        return result
+    except Exception as e:
+        logger.error(f"CustomerService get_customer_insights failed: {e}")
+        return _empty_insights()
+
+
+# ---------------------------------------------------------------------------
 # HELPERS
 # ---------------------------------------------------------------------------
 

@@ -805,4 +805,246 @@
     setTimeout(() => { el.classList.remove("cm-toast-show"); setTimeout(() => el.remove(), 400); }, 3000);
   }
 
+  /* ═══ Customer Insights ═══════════════════════════════════════════════
+     Behavioural + financial CRM analytics over the whole customer base,
+     fetched once from /customer_insights (server-side aggregate, cached) and
+     rendered as a self-contained panel — no Chart.js dependency, so it works
+     reliably inside the modal. Drill-downs reuse openCustomerDetail. */
+  let _insightsData    = null;
+  let _insightsLoading = false;
+
+  const _inr = (n) => "₹" + Number(n || 0).toLocaleString("en-IN");
+  const _num = (n) => Number(n || 0).toLocaleString("en-IN");
+  const _MONTHS = ["", "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                   "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+  window.openCustomerInsights = function () {
+    document.getElementById("cm-insights-overlay").classList.add("cm-insights-open");
+    if (_insightsData) _renderInsights(_insightsData);
+    else _loadInsights(false);
+  };
+
+  window.closeCustomerInsights = function () {
+    document.getElementById("cm-insights-overlay").classList.remove("cm-insights-open");
+  };
+
+  window.refreshCustomerInsights = function () { _loadInsights(true); };
+
+  // Open a guest's detail card ON TOP of the insights panel (higher overlay),
+  // so closing it returns the admin to the insights they were reading.
+  window.cmInsightsOpenGuest = function (mobile) {
+    if (typeof window.openCustomerDetail === "function") window.openCustomerDetail(mobile);
+  };
+
+  async function _loadInsights(force) {
+    if (_insightsLoading) return;
+    _insightsLoading = true;
+    const body   = document.getElementById("cm-insights-body");
+    const refBtn = document.getElementById("cm-insights-refresh");
+    if (refBtn) refBtn.classList.add("cm-spin");
+    if (body && !_insightsData)
+      body.innerHTML =
+        `<div class="cm-detail-loading"><i class="fas fa-spinner fa-spin"></i> Crunching customer data…</div>`;
+
+    try {
+      const res  = await apiFetch(`/customer_insights${force ? "?refresh=1" : ""}`);
+      const data = await res.json();
+      if (!data.success) throw new Error(data.message || "Failed to load insights");
+      _insightsData = data;
+      _renderInsights(data);
+    } catch (err) {
+      if (body)
+        body.innerHTML =
+          `<div class="cm-error"><i class="fas fa-exclamation-circle"></i> ${_esc(err.message)}</div>`;
+    } finally {
+      _insightsLoading = false;
+      if (refBtn) refBtn.classList.remove("cm-spin");
+    }
+  }
+
+  function _insCard(accent, icon, label, value, sub) {
+    return `
+      <div class="ins-kpi" style="--ins-accent:${accent}">
+        <div class="ins-kpi-top">
+          <span class="ins-kpi-icon"><i class="${icon}"></i></span>
+          <span class="ins-kpi-label">${label}</span>
+        </div>
+        <div class="ins-kpi-value">${value}</div>
+        ${sub ? `<div class="ins-kpi-sub">${sub}</div>` : ""}
+      </div>`;
+  }
+
+  // Horizontal distribution bars (bar length relative to the largest bucket;
+  // the percentage shown is share of the whole base, which is what reads as a
+  // distribution).
+  function _insBars(rows, total, palette) {
+    const max = Math.max(1, ...rows.map((r) => r.count));
+    return rows.map((r, i) => {
+      const pct = total ? Math.round((r.count / total) * 100) : 0;
+      const w   = Math.round((r.count / max) * 100);
+      return `
+        <div class="ins-bar-row">
+          <span class="ins-bar-label">${_esc(r.label)}</span>
+          <span class="ins-bar-track">
+            <span class="ins-bar-fill" style="width:${w}%;background:${palette[i % palette.length]}"></span>
+          </span>
+          <span class="ins-bar-val">${_num(r.count)}<small>${pct}%</small></span>
+        </div>`;
+    }).join("");
+  }
+
+  function _insTrend(trend) {
+    if (!trend || !trend.length) return `<div class="ins-empty-sm">No history yet</div>`;
+    const max = Math.max(1, ...trend.map((t) => t.count));
+    return trend.map((t) => {
+      const h = Math.round((t.count / max) * 100);
+      const mm = Number((t.month || "0-0").split("-")[1]);
+      return `
+        <div class="ins-trend-col" title="${_MONTHS[mm] || ""} ${_esc((t.month || "").slice(0, 4))}: ${t.count} new">
+          <span class="ins-trend-barwrap">
+            <span class="ins-trend-bar" style="height:${Math.max(h, t.count ? 6 : 0)}%"></span>
+          </span>
+          <span class="ins-trend-count">${t.count || ""}</span>
+          <span class="ins-trend-m">${_MONTHS[mm] || ""}</span>
+        </div>`;
+    }).join("");
+  }
+
+  function _insTopList(rows, metric) {
+    if (!rows || !rows.length) return `<div class="ins-empty-sm">No data yet</div>`;
+    return rows.map((r) => {
+      const val = metric === "spend" ? _inr(r.total_spent)
+                                     : `${r.total_stays} stay${r.total_stays === 1 ? "" : "s"}`;
+      const sub = metric === "spend" ? `${r.total_stays} stay${r.total_stays === 1 ? "" : "s"}`
+                                     : _inr(r.total_spent);
+      return `
+        <div class="ins-top-row" onclick="cmInsightsOpenGuest('${_esc(r.mobile)}')">
+          <span class="ins-top-av" style="${_avatarStyle(r.name || r.mobile)}">${_initials(r.name)}</span>
+          <span class="ins-top-info">
+            <span class="ins-top-name">${_esc(r.name) || "<em>No name</em>"}</span>
+            <span class="ins-top-sub">${_esc(r.mobile)} · ${sub}</span>
+          </span>
+          <span class="ins-top-val">${val}</span>
+        </div>`;
+    }).join("");
+  }
+
+  // Decision-oriented one-liners derived from the KPIs — the "so what".
+  function _insCallouts(k, seg) {
+    const out = [];
+    const recency = seg.recency || [];
+    const lapsed = recency
+      .filter((r) => /Dormant|Lost/.test(r.label))
+      .reduce((s, r) => s + r.count, 0);
+
+    if (k.top10_revenue_share_pct > 0)
+      out.push({ icon: "fas fa-crown", tone: "brand",
+        text: `Your top 10% of guests drive <b>${k.top10_revenue_share_pct}%</b> of all revenue.` });
+    if (k.dues_total > 0)
+      out.push({ icon: "fas fa-hand-holding-usd", tone: "danger",
+        text: `<b>${_inr(k.dues_total)}</b> outstanding across <b>${k.dues_count}</b> guest${k.dues_count === 1 ? "" : "s"} to collect.` });
+    if (lapsed > 0)
+      out.push({ icon: "fas fa-user-clock", tone: "amber",
+        text: `<b>${_num(lapsed)}</b> guest${lapsed === 1 ? "" : "s"} haven't returned in 6+ months — ripe for a win-back message.` });
+    if (k.repeat_rate_pct > 0)
+      out.push({ icon: "fas fa-repeat", tone: "emerald",
+        text: `<b>${k.repeat_rate_pct}%</b> of guests have stayed more than once.` });
+    if (k.new_30d > 0)
+      out.push({ icon: "fas fa-user-plus", tone: "sky",
+        text: `<b>${_num(k.new_30d)}</b> new guest${k.new_30d === 1 ? "" : "s"} joined in the last 30 days.` });
+    if (k.flagged > 0)
+      out.push({ icon: "fas fa-flag", tone: "danger",
+        text: `<b>${_num(k.flagged)}</b> flagged guest${k.flagged === 1 ? "" : "s"} to keep an eye on.` });
+
+    if (!out.length) return "";
+    return `<div class="ins-callouts">${out.slice(0, 4).map((c) => `
+      <div class="ins-callout ins-callout-${c.tone}">
+        <i class="${c.icon}"></i><span>${c.text}</span>
+      </div>`).join("")}</div>`;
+  }
+
+  function _renderInsights(data) {
+    const body = document.getElementById("cm-insights-body");
+    if (!body) return;
+    const k   = data.kpis || {};
+    const seg = data.segments || {};
+
+    if (!k.total_customers) {
+      body.innerHTML =
+        `<div class="ins-empty"><i class="fas fa-chart-pie"></i>
+          <p>No customer data yet</p>
+          <span>Insights appear once guests start checking in.</span></div>`;
+      return;
+    }
+
+    const LOYAL_PAL = ["#94a3b8", "#60a5fa", "#3b82f6", "#2563eb", "#f59e0b"];
+    const VALUE_PAL = ["#cbd5e1", "#93c5fd", "#60a5fa", "#3b82f6", "#1d4ed8", "#f59e0b"];
+    const RECEN_PAL = ["#10b981", "#38bdf8", "#f59e0b", "#f43f5e"];
+
+    const gen = data.generated_at ? _fmtDate(data.generated_at) : "";
+
+    body.innerHTML = `
+      <div class="ins-wrap">
+
+        <!-- KPI grid -->
+        <div class="ins-kpi-grid">
+          ${_insCard("#1d4ed8", "fas fa-users", "Total Guests", _num(k.total_customers),
+            `${_num(k.active_90d)} active · last 90d`)}
+          ${_insCard("#10b981", "fas fa-repeat", "Repeat Rate", `${k.repeat_rate_pct}%`,
+            `${_num(k.repeat_customers)} returning guests`)}
+          ${_insCard("#2563eb", "fas fa-rupee-sign", "Lifetime Revenue", _inr(k.total_revenue),
+            `${_inr(k.avg_spend)} avg / guest`)}
+          ${_insCard("#7c3aed", "fas fa-bed", "Avg Stays / Guest", k.avg_stays,
+            `${_num(k.new_this_month)} new this month`)}
+          ${_insCard(k.dues_total > 0 ? "#f43f5e" : "#10b981", "fas fa-hand-holding-usd",
+            "Outstanding Dues", _inr(k.dues_total),
+            `${_num(k.dues_count)} guest${k.dues_count === 1 ? "" : "s"} owe`)}
+          ${_insCard("#0ea5e9", "fas fa-file-invoice", "Company / GST", _num(k.gst_customers),
+            `${_num(k.wants_bill)} always want a bill`)}
+        </div>
+
+        ${_insCallouts(k, seg)}
+
+        <!-- Segment distributions -->
+        <div class="ins-seg-grid">
+          <div class="ins-card">
+            <div class="ins-card-hd"><i class="fas fa-medal"></i> Loyalty — by stays</div>
+            <div class="ins-bars">${_insBars(seg.loyalty || [], k.total_customers, LOYAL_PAL)}</div>
+          </div>
+          <div class="ins-card">
+            <div class="ins-card-hd"><i class="fas fa-coins"></i> Value — lifetime spend</div>
+            <div class="ins-bars">${_insBars(seg.value || [], k.total_customers, VALUE_PAL)}</div>
+          </div>
+          <div class="ins-card">
+            <div class="ins-card-hd"><i class="fas fa-clock-rotate-left"></i> Recency — last stay</div>
+            <div class="ins-bars">${_insBars(seg.recency || [], k.total_customers, RECEN_PAL)}</div>
+          </div>
+        </div>
+
+        <!-- Acquisition trend -->
+        <div class="ins-card">
+          <div class="ins-card-hd"><i class="fas fa-chart-column"></i> New guests — last 12 months</div>
+          <div class="ins-trend">${_insTrend(data.acquisition_trend)}</div>
+        </div>
+
+        <!-- Top guests -->
+        <div class="ins-seg-grid ins-top-grid">
+          <div class="ins-card">
+            <div class="ins-card-hd"><i class="fas fa-trophy"></i> Top guests — by spend</div>
+            <div class="ins-top-list">${_insTopList(data.top_by_spend, "spend")}</div>
+          </div>
+          <div class="ins-card">
+            <div class="ins-card-hd"><i class="fas fa-fire"></i> Most frequent guests</div>
+            <div class="ins-top-list">${_insTopList(data.top_by_stays, "stays")}</div>
+          </div>
+        </div>
+
+        <div class="ins-foot">
+          <i class="fas fa-circle-info"></i>
+          Based on ${_num(k.total_customers)} guest records${gen ? ` · updated ${gen}` : ""}.
+          Top 20% of guests = ${k.top20_revenue_share_pct}% of revenue.
+        </div>
+      </div>`;
+  }
+
 })();

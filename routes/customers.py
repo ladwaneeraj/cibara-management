@@ -609,3 +609,29 @@ def customer_analytics_route():
     except Exception as e:
         logger.error(f"customer_analytics error: {e}")
         return jsonify(success=False, message=str(e)), 500
+
+
+@customers_bp.route("/customer_insights", methods=["GET"])
+@requires_permission("customer.manage")
+def customer_insights_route():
+    """
+    Behavioural + financial CRM insights over the whole customers collection —
+    headline KPIs, RFM-style segments, a 12-month acquisition trend and the top
+    guests by spend / frequency. Powers the Customer Records "Insights" panel.
+
+    Built only from fields every customer doc carries (stays, spend, dates,
+    flags, dues, GST), so it needs no ID-OCR. One cached collection scan.
+
+    Query params:
+        refresh – "1" to bypass the 5-minute cache and rescan.
+
+    Returns: { success, kpis:{...}, segments:{...}, acquisition_trend:[...],
+               top_by_spend:[...], top_by_stays:[...], generated_at }
+    """
+    try:
+        force = request.args.get("refresh", "") in ("1", "true", "yes")
+        data = customer_service.get_customer_insights(force=force)
+        return jsonify(success=True, **data)
+    except Exception as e:
+        logger.error(f"customer_insights error: {e}")
+        return jsonify(success=False, message=str(e)), 500

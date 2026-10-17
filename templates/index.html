@@ -2064,6 +2064,9 @@
             <div class="cm-header">
               <div class="cm-header-left"><i class="fas fa-users"></i><h2>Customer Records</h2></div>
               <div class="cm-header-right">
+                <button class="cm-insights-btn" onclick="openCustomerInsights()" title="Customer analytics & insights">
+                  <i class="fas fa-chart-pie"></i> Insights
+                </button>
                 <button class="cm-add-btn" onclick="openAddCustomerForm()">
                   <i class="fas fa-user-plus"></i> Add Customer
                 </button>
@@ -2120,6 +2123,23 @@
               <p>No customers found</p>
               <span>Try a different search or add a new customer</span>
             </div>
+          </div>
+        </div>
+
+        <!-- ═══ Customer Insights Panel ═══ -->
+        <div class="cm-insights-overlay" id="cm-insights-overlay">
+          <div class="cm-insights-panel">
+            <div class="cm-insights-header">
+              <button class="cm-back-btn" onclick="closeCustomerInsights()">
+                <i class="fas fa-arrow-left"></i> Back
+              </button>
+              <h3><i class="fas fa-chart-pie"></i> Customer Insights</h3>
+              <button class="cm-insights-refresh" id="cm-insights-refresh"
+                onclick="refreshCustomerInsights()" title="Recalculate now">
+                <i class="fas fa-rotate"></i>
+              </button>
+            </div>
+            <div class="cm-insights-body" id="cm-insights-body"></div>
           </div>
         </div>
 

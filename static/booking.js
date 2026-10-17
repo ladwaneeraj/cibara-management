@@ -1465,7 +1465,7 @@ function renderBookings() {
             ${sourceBadge}
           </div>
         </div>
-        <div class="booking-guest">${booking.guest_name}</div>
+        <div class="booking-guest">${escHtml(booking.guest_name)}</div>
         <div class="bk-stay-line">
           <i class="fas fa-calendar-check"></i> ${formattedCheckIn}
           <span class="bk-stay-sep">&rarr;</span> ${formattedCheckOut}
@@ -3807,7 +3807,7 @@ function showDayDetails(dateStr, bookings) {
           <div class="day-booking-room">Room ${booking.room}${acBadge}</div>
           ${timeDisplay}
         </div>
-        <div class="day-booking-guest">${booking.guest_name}</div>
+        <div class="day-booking-guest">${escHtml(booking.guest_name)}</div>
         <div class="day-booking-status">
           <div class="day-booking-status-badge ${booking.status}">
             ${statusText}
@@ -4630,7 +4630,7 @@ async function _mmtRenderPending() {
       <div style="border:1px solid #fde68a;border-radius:8px;padding:0.65rem 0.85rem;
                   margin-bottom:0.5rem;background:#fffbeb;">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.3rem;">
-          <span style="font-weight:600;">${b.guest_name || "—"}${platChip}</span>
+          <span style="font-weight:600;">${escHtml(b.guest_name || "—")}${platChip}</span>
           <span style="font-weight:700;color:#d97706;">${net}</span>
         </div>
         <div style="display:flex;gap:0.9rem;font-size:0.78rem;color:var(--text-secondary);flex-wrap:wrap;align-items:center;margin-bottom:0.45rem;">

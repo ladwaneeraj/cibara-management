@@ -873,7 +873,7 @@ function renderRooms() {
           </span>
         </div>
         <div class="guest-name">
-          ${isMmtRoom ? '<span style="background:#0c6fcd;color:#fff;font-size:0.6rem;font-weight:700;padding:1px 5px;border-radius:4px;margin-right:4px;letter-spacing:0.03em;vertical-align:middle;">MMT</span>' : ''}${info.guest.name}
+          ${isMmtRoom ? '<span style="background:#0c6fcd;color:#fff;font-size:0.6rem;font-weight:700;padding:1px 5px;border-radius:4px;margin-right:4px;letter-spacing:0.03em;vertical-align:middle;">MMT</span>' : ''}${escHtml(info.guest.name)}
         </div>
       `;
 
@@ -2277,7 +2277,7 @@ function updateCheckoutModal(roomNumber) {
     if (isMmtCheckout) {
       checkoutGuestName.innerHTML =
         '<span style="background:#0c6fcd;color:#fff;font-size:0.65rem;font-weight:700;padding:1px 6px;border-radius:4px;margin-right:5px;vertical-align:middle;letter-spacing:0.03em;">MMT</span>' +
-        roomInfo.guest.name;
+        escHtml(roomInfo.guest.name);
     } else {
       checkoutGuestName.textContent = roomInfo.guest.name;
     }
@@ -4413,7 +4413,7 @@ function showRoomDetailsModal(roomNumber) {
           </div>
           <div class="summary-row">
             <div class="summary-label">Guest</div>
-            <div class="summary-value">${info.guest.name}</div>
+            <div class="summary-value">${escHtml(info.guest.name)}</div>
           </div>
           <div class="summary-row">
             <div class="summary-label">Mobile</div>
@@ -7851,7 +7851,7 @@ document.addEventListener("DOMContentLoaded", function () {
 
     const roomInfo   = roomNum ? ` — Room ${roomNum}` : "";
     const whenLabel  = isToday ? "Today" : `Check-in ${checkIn}`;
-    const msg        = `📋 New Booking: ${guestName}${roomInfo} (${whenLabel})`;
+    const msg        = `📋 New Booking: ${escHtml(guestName)}${roomInfo} (${whenLabel})`;
 
     if (typeof showNotification === "function") {
       showNotification(msg, "info", 5000);

@@ -4037,7 +4037,7 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
       <td style="color:#888;font-size:.75rem;">${rowIndex}</td>
       <td style="font-size:.73rem;white-space:nowrap;font-family:monospace;">${billNo}${pendingBadge}${b2bPill}${revertedPill}${cancelPill}</td>
       <td class="bl-guest-cell" data-id="${e.id || ''}"
-          title="Edit guest name / phone"><strong>${e.guest_name || "-"}</strong>${guestNoteHTML}${_activityStrip(e)}</td>
+          title="Edit guest name / phone"><strong>${escHtml(e.guest_name || "-")}</strong>${guestNoteHTML}${_activityStrip(e)}</td>
       <td class="bl-guest-cell" data-id="${e.id || ''}"
           title="Edit guest name / phone"
           style="font-size:.78rem;">${e.guest_mobile || "-"}</td>
@@ -6558,7 +6558,7 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
             <div style="font-size:.66rem;color:#94a3b8;margin-top:.1rem;">${cn.against_invoice_date || ""}</div></td>
         <td>${recipientCell}</td>
         <td>${reasonCell}
-            ${cn.reason_text ? `<div style="font-size:.66rem;color:#94a3b8;margin-top:.15rem;max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${cn.reason_text.replace(/"/g,'&quot;')}">${cn.reason_text}</div>` : ""}</td>
+            ${cn.reason_text ? `<div style="font-size:.66rem;color:#94a3b8;margin-top:.15rem;max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escHtml(cn.reason_text)}">${escHtml(cn.reason_text)}</div>` : ""}</td>
         <td class="bl-cn-amt">- ₹${inr(cn.credit_amount_total || 0)}</td>
         <td>
           <div style="display:flex;gap:.3rem;align-items:center;flex-wrap:nowrap;">

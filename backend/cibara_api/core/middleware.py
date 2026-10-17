@@ -34,6 +34,26 @@ _CSP = (
     "worker-src 'self' blob:; object-src 'none'; base-uri 'self'; frame-ancestors 'self'"
 )
 
+# Classic Jinja UI CSP. Looser than the SPA's: the pages carry inline <script>
+# blocks (SW registration, window.__initialUIConfig) and inline handlers, so
+# 'unsafe-inline' is unavoidable without rewriting 40 legacy files. It still
+# locks down object/base/frame-ancestors, pins every external origin the classic
+# UI actually loads (firebase SDK, chart.js, leaflet + OSM tiles, font-awesome,
+# Google Fonts), and the real XSS defence is escaping at the sinks (escHtml).
+_CSP_CLASSIC = (
+    "default-src 'self'; "
+    "script-src 'self' 'unsafe-inline' https://www.gstatic.com https://cdn.jsdelivr.net "
+    "https://cdnjs.cloudflare.com; "
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdnjs.cloudflare.com; "
+    "font-src 'self' data: https://fonts.gstatic.com https://cdnjs.cloudflare.com; "
+    "img-src 'self' data: blob: https://firebasestorage.googleapis.com https://storage.googleapis.com "
+    "https://*.tile.openstreetmap.org; "
+    "connect-src 'self' https://*.googleapis.com https://*.firebaseio.com wss://*.firebaseio.com "
+    "https://firebasestorage.googleapis.com; "
+    "frame-src 'self' blob: https://firebasestorage.googleapis.com; "
+    "worker-src 'self' blob:; object-src 'none'; base-uri 'self'; frame-ancestors 'self'"
+)
+
 
 def _client_ip(scope: Scope) -> str:
     hops = max(0, get_settings().TRUSTED_PROXY_HOPS)
@@ -113,8 +133,24 @@ class RequestContextMiddleware:
                              (b"x-frame-options", b"SAMEORIGIN")):
                     if k not in names:
                         headers.append((k, v))
-                if path.startswith("/app") and b"content-security-policy" not in names:
-                    headers.append((b"content-security-policy", _CSP.encode()))
+                # HSTS only over HTTPS (Cloud Run); omitted on local http.
+                if s.on_cloud_run and b"strict-transport-security" not in names:
+                    headers.append((b"strict-transport-security",
+                                    b"max-age=31536000; includeSubDomains"))
+                has_csp = (b"content-security-policy" in names
+                           or b"content-security-policy-report-only" in names)
+                if path.startswith("/app"):
+                    if not has_csp:
+                        headers.append((b"content-security-policy", _CSP.encode()))
+                elif not has_csp and not path.startswith(("/api/", "/static/")):
+                    # Classic Jinja pages: apply to HTML documents only.
+                    mode = s.CLASSIC_CSP.lower()
+                    if mode != "off":
+                        ctype = next((v for k, v in headers if k.lower() == b"content-type"), b"")
+                        if ctype.lower().startswith(b"text/html"):
+                            hdr = (b"content-security-policy-report-only"
+                                   if mode == "report-only" else b"content-security-policy")
+                            headers.append((hdr, _CSP_CLASSIC.encode()))
                 if path.startswith("/api/v2/") and b"cache-control" not in names:
                     headers.append((b"cache-control", b"no-store"))
                 message["headers"] = headers

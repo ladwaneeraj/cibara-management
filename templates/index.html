@@ -17,6 +17,9 @@
     <!-- Browser error monitor — first script so it captures init errors in
          every script that follows. Forwards to /api/v2/client-errors. -->
     <script src="{{ asset_url('error-monitor.js') }}"></script>
+    <!-- Security helpers (escHtml) — loaded next so every later script can use
+         it to escape guest-controlled data before it reaches innerHTML. -->
+    <script src="{{ asset_url('security.js') }}"></script>
     <script>
       // Register the service worker (root-scoped) after load so it never
       // blocks first paint. Failures are non-fatal — the app works without it.

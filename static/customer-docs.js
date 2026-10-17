@@ -546,7 +546,7 @@ function renderMobileSuggestions(customers) {
 
     item.innerHTML = `
       <div class="ms-main">
-        <div class="ms-name">${_fmtName(c.name) || '(No name)'}</div>
+        <div class="ms-name">${escHtml(_fmtName(c.name) || '(No name)')}</div>
         <div class="ms-sub">${sub.join(' · ')}</div>
       </div>
       <div class="ms-stats">${cell(lastPaid, 'last paid')}${cell(lifetime, 'total spent')}</div>`;
@@ -2241,7 +2241,7 @@ function _bkRenderSuggestions(customers) {
 
     item.innerHTML = `
       <div style="flex:1;min-width:0;">
-        <div style="font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${_fmtName(c.name) || '(No name)'}</div>
+        <div style="font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escHtml(_fmtName(c.name) || '(No name)')}</div>
         <div style="color:#888;font-size:0.76rem;">${sub.join(' · ')}</div>
       </div>${stayBadge}`;
 
@@ -2369,7 +2369,7 @@ function attachMultiBookingMobileLookup(mobileInput, nameInput, suggestionsEl) {
 
       item.innerHTML = `
         <div style="flex:1;min-width:0;">
-          <div style="font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${_fmtName(c.name) || '(No name)'}</div>
+          <div style="font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escHtml(_fmtName(c.name) || '(No name)')}</div>
           <div style="color:#888;font-size:0.76rem;">${sub.join(' · ')}</div>
         </div>${stayBadge}`;
 

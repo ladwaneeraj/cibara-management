@@ -83,6 +83,14 @@ class Settings(BaseSettings):
 
     SLOW_REQUEST_MS: int = 1500
 
+    # Classic-UI Content-Security-Policy mode: "enforce" (default), "report-only"
+    # (send Content-Security-Policy-Report-Only so violations are visible in the
+    # console/Sentry without breaking the page — use this to vet the policy after
+    # a template change), or "off". The SPA CSP on /app is always enforced and is
+    # unaffected by this. The classic policy keeps 'unsafe-inline' for scripts
+    # because the Jinja pages carry inline <script> blocks and handlers.
+    CLASSIC_CSP: str = "enforce"
+
     # ── Invoice (cibara_api/invoice) ──────────────────────────────────────
     # "v2": GST invoice layout v2 for every bill surface (modal, print, PDF,
     # share). "legacy": the original routes.billing renderer, untouched.

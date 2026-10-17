@@ -341,13 +341,17 @@ async def upload_photo(request: Request, room: str = RoomId(),
                        p: Principal = Depends(require_permission("room.cleaning.complete"))):
     """Cleaning / inspection photo (multipart) → legacy /upload_room_photo."""
     import io
+
+    from ..core import uploads
     data = await photo.read(_MAX_PHOTO + 1)
     if len(data) > _MAX_PHOTO:
         raise HTTPException(413, "Photo too large (max 3 MB)")
-    if (photo.content_type or "") not in ("image/jpeg", "image/png", "image/webp"):
-        raise HTTPException(400, "Photo must be a JPEG, PNG or WebP image")
+    # Validate the actual bytes (magic number), not the client-declared type.
+    ok, detected, err = uploads.validate_image_upload(data, max_bytes=_MAX_PHOTO)
+    if not ok:
+        raise HTTPException(400, err if detected == "" else "Photo must be a JPEG, PNG or WebP image")
     form = {"room": room, "kind": kind, "context": context,
-            "photo": (io.BytesIO(data), photo.filename or "photo.jpg", photo.content_type)}
+            "photo": (io.BytesIO(data), photo.filename or "photo.jpg", detected)}
     if thumb is not None:
         t = await thumb.read(_MAX_PHOTO)
         form["thumb"] = (io.BytesIO(t), thumb.filename or "thumb.jpg", thumb.content_type or "image/jpeg")

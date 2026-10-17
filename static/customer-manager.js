@@ -23,6 +23,10 @@
   let currentCustomer = null;    // full customer object in detail/edit view
   let editMode        = false;
 
+  // Cohort mode: the list is showing one insights segment (not a normal page).
+  let cohortMode  = false;
+  let cohortLabel = "";
+
   // photo upload state for add/edit flow
   let pendingPhotos  = [];       // [{blob, localUrl}]
 
@@ -41,6 +45,7 @@
 
   /* ─── Load first page ────────────────────────────────────────────────── */
   function _resetAndLoad(search) {
+    _hideCohortBanner();           // any normal load leaves cohort mode
     allRows       = [];
     displayedRows = [];
     nextCursor    = null;
@@ -109,6 +114,9 @@
     activeFilter = f;
     document.querySelectorAll(".cm-chip").forEach(c => c.classList.remove("active"));
     btn.classList.add("active");
+    // A chip filters the whole base, so leaving a cohort view means reloading
+    // the normal (paginated) list first, then applying the chip to it.
+    if (cohortMode) { _resetAndLoad(currentSearch); return; }
     _applyChipFilter();
   };
 
@@ -862,9 +870,9 @@
     }
   }
 
-  function _insCard(accent, icon, label, value, sub) {
+  function _insCard(accent, icon, label, value, sub, click) {
     return `
-      <div class="ins-kpi" style="--ins-accent:${accent}">
+      <div class="ins-kpi${click ? " ins-clickable" : ""}" style="--ins-accent:${accent}"${click ? " " + click : ""}>
         <div class="ins-kpi-top">
           <span class="ins-kpi-icon"><i class="${icon}"></i></span>
           <span class="ins-kpi-label">${label}</span>
@@ -877,13 +885,15 @@
   // Horizontal distribution bars (bar length relative to the largest bucket;
   // the percentage shown is share of the whole base, which is what reads as a
   // distribution).
-  function _insBars(rows, total, palette) {
+  function _insBars(rows, total, palette, dimension, dimLabel) {
     const max = Math.max(1, ...rows.map((r) => r.count));
     return rows.map((r, i) => {
       const pct = total ? Math.round((r.count / total) * 100) : 0;
       const w   = Math.round((r.count / max) * 100);
+      const clickable = dimension && r.count > 0;
+      const click = clickable ? " " + _clickAttr(dimension, i, `${dimLabel} · ${r.label}`) : "";
       return `
-        <div class="ins-bar-row">
+        <div class="ins-bar-row${clickable ? " ins-clickable" : ""}"${click}>
           <span class="ins-bar-label">${_esc(r.label)}</span>
           <span class="ins-bar-track">
             <span class="ins-bar-fill" style="width:${w}%;background:${palette[i % palette.length]}"></span>
@@ -941,24 +951,29 @@
       out.push({ icon: "fas fa-crown", tone: "brand",
         text: `Your top 10% of guests drive <b>${k.top10_revenue_share_pct}%</b> of all revenue.` });
     if (k.dues_total > 0)
-      out.push({ icon: "fas fa-hand-holding-usd", tone: "danger",
+      out.push({ icon: "fas fa-hand-holding-usd", tone: "danger", dim: "dues",
+        label: "Guests with outstanding dues",
         text: `<b>${_inr(k.dues_total)}</b> outstanding across <b>${k.dues_count}</b> guest${k.dues_count === 1 ? "" : "s"} to collect.` });
     if (lapsed > 0)
-      out.push({ icon: "fas fa-user-clock", tone: "amber",
+      out.push({ icon: "fas fa-user-clock", tone: "amber", dim: "lapsed",
+        label: "Lapsed guests (6+ months)",
         text: `<b>${_num(lapsed)}</b> guest${lapsed === 1 ? "" : "s"} haven't returned in 6+ months — ripe for a win-back message.` });
-    if (k.repeat_rate_pct > 0)
-      out.push({ icon: "fas fa-repeat", tone: "emerald",
+    if (k.repeat_customers > 0)
+      out.push({ icon: "fas fa-repeat", tone: "emerald", dim: "repeat",
+        label: "Repeat guests",
         text: `<b>${k.repeat_rate_pct}%</b> of guests have stayed more than once.` });
     if (k.new_30d > 0)
-      out.push({ icon: "fas fa-user-plus", tone: "sky",
+      out.push({ icon: "fas fa-user-plus", tone: "sky", dim: "new30",
+        label: "New guests (last 30 days)",
         text: `<b>${_num(k.new_30d)}</b> new guest${k.new_30d === 1 ? "" : "s"} joined in the last 30 days.` });
     if (k.flagged > 0)
-      out.push({ icon: "fas fa-flag", tone: "danger",
+      out.push({ icon: "fas fa-flag", tone: "danger", dim: "flag",
+        label: "Flagged guests",
         text: `<b>${_num(k.flagged)}</b> flagged guest${k.flagged === 1 ? "" : "s"} to keep an eye on.` });
 
     if (!out.length) return "";
     return `<div class="ins-callouts">${out.slice(0, 4).map((c) => `
-      <div class="ins-callout ins-callout-${c.tone}">
+      <div class="ins-callout ins-callout-${c.tone}${c.dim ? " ins-clickable" : ""}"${c.dim ? " " + _clickAttr(c.dim, "", c.label) : ""}>
         <i class="${c.icon}"></i><span>${c.text}</span>
       </div>`).join("")}</div>`;
   }
@@ -991,16 +1006,19 @@
           ${_insCard("#1d4ed8", "fas fa-users", "Total Guests", _num(k.total_customers),
             `${_num(k.active_90d)} active · last 90d`)}
           ${_insCard("#10b981", "fas fa-repeat", "Repeat Rate", `${k.repeat_rate_pct}%`,
-            `${_num(k.repeat_customers)} returning guests`)}
+            `${_num(k.repeat_customers)} returning guests`,
+            k.repeat_customers > 0 ? _clickAttr("repeat", "", "Repeat guests") : "")}
           ${_insCard("#2563eb", "fas fa-rupee-sign", "Lifetime Revenue", _inr(k.total_revenue),
             `${_inr(k.avg_spend)} avg / guest`)}
           ${_insCard("#7c3aed", "fas fa-bed", "Avg Stays / Guest", k.avg_stays,
             `${_num(k.new_this_month)} new this month`)}
           ${_insCard(k.dues_total > 0 ? "#f43f5e" : "#10b981", "fas fa-hand-holding-usd",
             "Outstanding Dues", _inr(k.dues_total),
-            `${_num(k.dues_count)} guest${k.dues_count === 1 ? "" : "s"} owe`)}
+            `${_num(k.dues_count)} guest${k.dues_count === 1 ? "" : "s"} owe`,
+            k.dues_count > 0 ? _clickAttr("dues", "", "Guests with outstanding dues") : "")}
           ${_insCard("#0ea5e9", "fas fa-file-invoice", "Company / GST", _num(k.gst_customers),
-            `${_num(k.wants_bill)} always want a bill`)}
+            `${_num(k.wants_bill)} always want a bill`,
+            k.gst_customers > 0 ? _clickAttr("gst", "", "Company / GST guests") : "")}
         </div>
 
         ${_insCallouts(k, seg)}
@@ -1009,15 +1027,15 @@
         <div class="ins-seg-grid">
           <div class="ins-card">
             <div class="ins-card-hd"><i class="fas fa-medal"></i> Loyalty — by stays</div>
-            <div class="ins-bars">${_insBars(seg.loyalty || [], k.total_customers, LOYAL_PAL)}</div>
+            <div class="ins-bars">${_insBars(seg.loyalty || [], k.total_customers, LOYAL_PAL, "loyalty", "Loyalty")}</div>
           </div>
           <div class="ins-card">
             <div class="ins-card-hd"><i class="fas fa-coins"></i> Value — lifetime spend</div>
-            <div class="ins-bars">${_insBars(seg.value || [], k.total_customers, VALUE_PAL)}</div>
+            <div class="ins-bars">${_insBars(seg.value || [], k.total_customers, VALUE_PAL, "value", "Spend")}</div>
           </div>
           <div class="ins-card">
             <div class="ins-card-hd"><i class="fas fa-clock-rotate-left"></i> Recency — last stay</div>
-            <div class="ins-bars">${_insBars(seg.recency || [], k.total_customers, RECEN_PAL)}</div>
+            <div class="ins-bars">${_insBars(seg.recency || [], k.total_customers, RECEN_PAL, "recency", "Recency")}</div>
           </div>
         </div>
 
@@ -1045,6 +1063,121 @@
           Top 20% of guests = ${k.top20_revenue_share_pct}% of revenue.
         </div>
       </div>`;
+  }
+
+  /* ═══ Cohort drill-down: show one insights segment in the list ═════════
+     Clicking a segment bar / callout / KPI fetches that cohort from
+     /customer_segment (served from the cached insights scan — no extra DB
+     reads) and filters the customer list to exactly those guests, with a
+     banner and a CSV export. */
+
+  // Build an onclick that survives being embedded in a double-quoted HTML
+  // attribute with unicode labels (₹, ·, ≤, –) in them.
+  function _jsAttr(s) {
+    return String(s == null ? "" : s)
+      .replace(/\\/g, "\\\\").replace(/'/g, "\\'")
+      .replace(/"/g, "&quot;").replace(/\n/g, " ");
+  }
+  function _clickAttr(dimension, key, label) {
+    return `onclick="cmShowSegment('${_jsAttr(dimension)}','${_jsAttr(String(key))}','${_jsAttr(label)}')"`;
+  }
+
+  function _hideCohortBanner() {
+    cohortMode = false;
+    cohortLabel = "";
+    const b = document.getElementById("cm-cohort-banner");
+    if (b) b.style.display = "none";
+  }
+
+  window.cmShowSegment = async function (dimension, key, label) {
+    // Make sure the customer list is the thing on screen.
+    if (typeof window.openCustomerManager === "function" &&
+        !document.getElementById("customer-manager-overlay").classList.contains("cm-open")) {
+      window.openCustomerManager();
+    }
+    window.closeCustomerInsights();
+
+    const tbody = document.getElementById("cm-table-body");
+    if (tbody)
+      tbody.innerHTML =
+        `<tr><td colspan="6" class="cm-loading"><i class="fas fa-spinner fa-spin"></i> Loading segment…</td></tr>`;
+
+    try {
+      const params = new URLSearchParams({ dimension: dimension || "", key: key == null ? "" : String(key) });
+      const res  = await apiFetch(`/customer_segment?${params}`);
+      const data = await res.json();
+      if (!data.success) throw new Error(data.message || "Failed to load segment");
+
+      const rows = data.customers || [];
+      _hideCohortBanner();
+      cohortMode  = true;
+      cohortLabel = label || "Segment";
+      allRows = rows; displayedRows = rows;
+      hasMore = false; nextCursor = null; currentSearch = "";
+      activeFilter = "all";
+
+      document.querySelectorAll(".cm-chip").forEach(c => c.classList.remove("active"));
+      const inp = document.getElementById("cm-search-input");
+      if (inp) inp.value = "";
+      const clr = document.getElementById("cm-clear-btn");
+      if (clr) clr.style.display = "none";
+
+      document.getElementById("cm-cohort-label").textContent = cohortLabel;
+      document.getElementById("cm-cohort-count").textContent =
+        `${rows.length} guest${rows.length === 1 ? "" : "s"}`;
+      document.getElementById("cm-cohort-banner").style.display = "flex";
+      document.getElementById("cm-load-more-row").style.display = "none";
+
+      _renderTable();
+      _updateStats();
+    } catch (err) {
+      _toast("Couldn't load segment: " + err.message, "error");
+      _hideCohortBanner();
+    }
+  };
+
+  window.cmClearCohort = function () {
+    _hideCohortBanner();
+    activeFilter = "all";
+    document.querySelectorAll(".cm-chip").forEach(c => c.classList.remove("active"));
+    const allChip = document.querySelector(".cm-chip");
+    if (allChip) allChip.classList.add("active");
+    _resetAndLoad("");
+  };
+
+  window.cmExportCohort = function () {
+    _exportRowsCsv(displayedRows, cohortLabel || "segment");
+  };
+
+  function _exportRowsCsv(rows, labelForName) {
+    if (!rows || !rows.length) { _toast("Nothing to export", "error"); return; }
+    const esc = (v) => {
+      const s = String(v == null ? "" : v);
+      return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    const lines = [["Name", "Mobile", "Stays", "Total Spent", "Last Visit", "Flagged"].join(",")];
+    rows.forEach((r) => {
+      lines.push([
+        esc(r.name || ""),
+        esc(r.mobile || ""),
+        esc(r.total_stays || 0),
+        esc(r.total_spent || 0),
+        esc(r.last_stay_date ? _fmtDate(r.last_stay_date) : ""),
+        esc(r.is_flagged ? "yes" : ""),
+      ].join(","));
+    });
+    // Prepend a BOM so Excel reads UTF-8 names correctly.
+    const blob = new Blob(["﻿" + lines.join("\r\n")], { type: "text/csv;charset=utf-8;" });
+    const url  = URL.createObjectURL(blob);
+    const slug = String(labelForName).toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40) || "segment";
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `customers-${slug}-${new Date().toISOString().slice(0, 10)}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 1000);
+    _toast(`Exported ${rows.length} guest${rows.length === 1 ? "" : "s"} ✓`, "success");
   }
 
 })();

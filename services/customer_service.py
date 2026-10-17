@@ -1526,6 +1526,20 @@ _RECENCY_BANDS = [
 _INSIGHTS_CACHE = {"data": None, "ts": 0.0}
 _INSIGHTS_TTL_SECONDS = 300  # 5 minutes
 
+# Cohort membership, built in the SAME scan as the insights aggregate so a
+# drill-down ("show me the dormant guests") needs no extra Firestore read.
+# Keyed by dimension; the three RFM dimensions hold one list per tier/band
+# index, the rest are flat lists. Capped per cohort so a huge property can't
+# balloon memory. Returned on demand by get_customer_segment (never inlined
+# into the insights payload, which stays lightweight).
+_SEGMENT_CACHE = {"data": None, "ts": 0.0}
+_SEGMENT_MEMBER_CAP = 2000
+
+
+def _seg_add(lst: list, row: dict) -> None:
+    if len(lst) < _SEGMENT_MEMBER_CAP:
+        lst.append(row)
+
 
 def _parse_date_prefix(raw):
     """Parse the YYYY-MM-DD prefix of an ISO date/datetime string to a date.
@@ -1600,6 +1614,15 @@ def get_customer_insights(force: bool = False) -> dict:
         spends  = []        # every total_spent, for the Pareto share
         by_spend, by_stays = [], []
 
+        # Cohort membership captured during the same pass (see _SEGMENT_CACHE).
+        members = {
+            "loyalty": [[] for _ in _LOYALTY_TIERS],
+            "value":   [[] for _ in _VALUE_TIERS],
+            "recency": [[] for _ in _RECENCY_BANDS],
+            "repeat": [], "dues": [], "lapsed": [],
+            "new30": [], "flag": [], "gst": [], "wants_bill": [],
+        }
+
         query = _customers_ref.select([
             "total_stays", "total_spent", "first_visit", "last_stay_date",
             "is_flagged", "has_pending_settlement", "pending_settlement_amount",
@@ -1617,34 +1640,48 @@ def get_customer_insights(force: bool = False) -> dict:
                 spent = 0.0
             sp_int = int(round(spent))
             name = d.get("name") or ""
+            is_flag = bool(d.get("is_flagged"))
 
             stays_sum += stays
             total_revenue += spent
             spends.append(spent)
 
+            # One slim row per guest, shared by the top lists and every cohort
+            # it belongs to (read-only after here — same shape the list renders).
+            row = {"name": name, "mobile": mobile, "total_stays": stays,
+                   "total_spent": sp_int, "last_stay_date": d.get("last_stay_date") or "",
+                   "is_flagged": is_flag}
+
             if stays > 1:
                 repeat += 1
-            if d.get("is_flagged"):
+                _seg_add(members["repeat"], row)
+            if is_flag:
                 flagged += 1
+                _seg_add(members["flag"], row)
             if d.get("wants_bill"):
                 wants_bill += 1
+                _seg_add(members["wants_bill"], row)
             gp = d.get("gst_profile") or {}
             if isinstance(gp, dict) and str(gp.get("gstin") or "").strip():
                 gst += 1
+                _seg_add(members["gst"], row)
             if d.get("has_pending_settlement"):
                 dues_count += 1
+                _seg_add(members["dues"], row)
                 try:
                     dues_total += float(d.get("pending_settlement_amount") or 0)
                 except (TypeError, ValueError):
                     pass
 
-            for label, lo, hi in _LOYALTY_TIERS:
+            for i, (label, lo, hi) in enumerate(_LOYALTY_TIERS):
                 if lo <= stays <= hi:
                     loyalty[label] += 1
+                    _seg_add(members["loyalty"][i], row)
                     break
-            for label, lo, hi in _VALUE_TIERS:
+            for i, (label, lo, hi) in enumerate(_VALUE_TIERS):
                 if lo <= sp_int < hi:
                     value[label] += 1
+                    _seg_add(members["value"][i], row)
                     break
 
             last = _parse_date_prefix(d.get("last_stay_date"))
@@ -1652,12 +1689,17 @@ def get_customer_insights(force: bool = False) -> dict:
                 days = max((today - last).days, 0)
                 if days <= 90:
                     active_90 += 1
-                for label, lo, hi in _RECENCY_BANDS:
+                for i, (label, lo, hi) in enumerate(_RECENCY_BANDS):
                     if lo <= days <= hi:
                         recency[label] += 1
+                        _seg_add(members["recency"][i], row)
+                        if i >= 2:  # Dormant / Lost → the win-back cohort
+                            _seg_add(members["lapsed"], row)
                         break
             else:
                 recency[_RECENCY_BANDS[-1][0]] += 1  # no last stay → Lost
+                _seg_add(members["recency"][len(_RECENCY_BANDS) - 1], row)
+                _seg_add(members["lapsed"], row)
 
             fv = _parse_date_prefix(d.get("first_visit"))
             if fv:
@@ -1665,11 +1707,10 @@ def get_customer_insights(force: bool = False) -> dict:
                 months[mk] = months.get(mk, 0) + 1
                 if (today - fv).days <= 30:
                     new_30 += 1
+                    _seg_add(members["new30"], row)
                 if mk == this_month_key:
                     new_month += 1
 
-            row = {"mobile": mobile, "name": name, "total_spent": sp_int,
-                   "total_stays": stays, "last_stay_date": d.get("last_stay_date") or ""}
             if spent > 0:
                 by_spend.append(row)
             if stays > 0:
@@ -1726,12 +1767,70 @@ def get_customer_insights(force: bool = False) -> dict:
             "top_by_stays": by_stays[:8],
             "generated_at": datetime.now(timezone.utc).isoformat(),
         }
+        # Sort the cohorts the UI shows as lists so the drill-down reads
+        # best-first (biggest spenders / most recent on top).
+        for lst in (members["dues"], members["lapsed"], members["flag"],
+                    members["new30"], members["repeat"], members["gst"],
+                    members["wants_bill"]):
+            lst.sort(key=lambda r: r["total_spent"], reverse=True)
+
         _INSIGHTS_CACHE["data"] = result
         _INSIGHTS_CACHE["ts"] = now_ts
+        _SEGMENT_CACHE["data"] = members
+        _SEGMENT_CACHE["ts"] = now_ts
         return result
     except Exception as e:
         logger.error(f"CustomerService get_customer_insights failed: {e}")
         return _empty_insights()
+
+
+# Dimensions whose members are split into one list per tier/band index.
+_RFM_DIMENSIONS = {"loyalty", "value", "recency"}
+# Flat single-cohort dimensions (bucket key ignored).
+_FLAT_DIMENSIONS = {"repeat", "dues", "lapsed", "new30", "flag", "gst", "wants_bill"}
+
+
+def get_customer_segment(dimension: str, key: str = "") -> dict:
+    """
+    Return the guests in one insights cohort, so the Customer Records list can
+    be filtered to exactly the segment an admin clicked (e.g. the dormant
+    guests behind a win-back callout, or the "₹5k–15k" value tier).
+
+    Reads the membership captured during the last insights scan — no extra
+    Firestore reads — refreshing it first if the cache is cold/stale.
+
+      dimension : one of loyalty | value | recency  (needs `key` = tier index)
+                  or repeat | dues | lapsed | new30 | flag | gst | wants_bill.
+      key       : the 0-based tier/band index for the RFM dimensions; ignored
+                  otherwise.
+
+    Returns {"customers": [slim rows], "count": N}; empty for an unknown
+    cohort. Never raises.
+    """
+    try:
+        get_customer_insights(force=False)  # ensures both caches are warm
+        members = _SEGMENT_CACHE["data"]
+        if members is None:
+            get_customer_insights(force=True)
+            members = _SEGMENT_CACHE["data"] or {}
+
+        dimension = str(dimension or "").strip()
+        rows = []
+        if dimension in _RFM_DIMENSIONS:
+            lists = members.get(dimension) or []
+            try:
+                idx = int(key)
+            except (TypeError, ValueError):
+                idx = -1
+            if 0 <= idx < len(lists):
+                rows = lists[idx]
+        elif dimension in _FLAT_DIMENSIONS:
+            rows = members.get(dimension) or []
+
+        return {"customers": list(rows), "count": len(rows)}
+    except Exception as e:
+        logger.error(f"CustomerService get_customer_segment({dimension},{key}) failed: {e}")
+        return {"customers": [], "count": 0}
 
 
 # ---------------------------------------------------------------------------

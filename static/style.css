@@ -7169,3 +7169,43 @@ body.gr-panel-open { overflow: hidden; }
   .cm-insights-panel { width: 100%; max-height: 94vh; border-radius: 16px 16px 0 0; }
   .ins-kpi-value { font-size: 1.2rem; }
 }
+
+/* Clickable insight elements (drill into the list) */
+.ins-clickable { cursor: pointer; transition: transform .1s ease, box-shadow .15s ease, background .12s ease; }
+.ins-kpi.ins-clickable:hover,
+.ins-callout.ins-clickable:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 18px rgba(29, 78, 216, .14);
+}
+.ins-bar-row.ins-clickable { border-radius: 8px; padding: 2px 4px; margin: -2px -4px; }
+.ins-bar-row.ins-clickable:hover { background: #eff6ff; }
+.ins-bar-row.ins-clickable:hover .ins-bar-label { color: #1d4ed8; }
+
+/* Cohort banner — list filtered to one insights segment */
+.cm-cohort-banner {
+  display: flex; align-items: center; justify-content: space-between; gap: .75rem;
+  margin: 0 1.4rem .4rem; padding: .55rem .85rem;
+  background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 12px;
+  color: #1e3a8a; font-size: .82rem;
+}
+.cm-cohort-info { display: flex; align-items: center; gap: .5rem; font-weight: 700; min-width: 0; }
+.cm-cohort-info > span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cm-cohort-info i { color: #2563eb; }
+.cm-cohort-count {
+  background: #dbeafe; color: #1d4ed8; border-radius: 999px;
+  padding: .1rem .55rem; font-size: .72rem; font-weight: 700; flex-shrink: 0;
+}
+.cm-cohort-actions { display: flex; align-items: center; gap: .4rem; flex-shrink: 0; }
+.cm-cohort-export, .cm-cohort-clear {
+  border: 1px solid transparent; border-radius: 8px; cursor: pointer;
+  font-size: .76rem; font-weight: 600; padding: .35rem .7rem;
+  display: flex; align-items: center; gap: .35rem; transition: background .12s ease, border-color .12s ease;
+}
+.cm-cohort-export { background: #2563eb; color: #fff; }
+.cm-cohort-export:hover { background: #1d4ed8; }
+.cm-cohort-clear { background: #fff; color: #475569; border-color: #cbd5e1; }
+.cm-cohort-clear:hover { background: #f1f5f9; color: #1e293b; }
+
+@media (max-width: 576px) {
+  .cm-cohort-banner { margin: 0 .75rem .4rem; flex-wrap: wrap; }
+}

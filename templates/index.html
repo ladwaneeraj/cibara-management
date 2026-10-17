@@ -2093,6 +2093,24 @@
               <button class="cm-chip" onclick="cmSetFilter('docs',this)">📋 Has Docs</button>
             </div>
 
+            <!-- Cohort banner — shown when the list is filtered to a segment
+                 clicked in the Insights panel. -->
+            <div class="cm-cohort-banner" id="cm-cohort-banner" style="display:none">
+              <span class="cm-cohort-info">
+                <i class="fas fa-filter"></i>
+                <span id="cm-cohort-label">Segment</span>
+                <span class="cm-cohort-count" id="cm-cohort-count"></span>
+              </span>
+              <span class="cm-cohort-actions">
+                <button class="cm-cohort-export" onclick="cmExportCohort()">
+                  <i class="fas fa-file-csv"></i> Export CSV
+                </button>
+                <button class="cm-cohort-clear" onclick="cmClearCohort()">
+                  <i class="fas fa-times"></i> Clear
+                </button>
+              </span>
+            </div>
+
             <div class="cm-table-wrap">
               <table class="cm-table">
                 <thead>

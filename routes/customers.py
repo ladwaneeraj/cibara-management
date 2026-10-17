@@ -635,3 +635,29 @@ def customer_insights_route():
     except Exception as e:
         logger.error(f"customer_insights error: {e}")
         return jsonify(success=False, message=str(e)), 500
+
+
+@customers_bp.route("/customer_segment", methods=["GET"])
+@requires_permission("customer.manage")
+def customer_segment_route():
+    """
+    The guests in one insights cohort, so the Customer Records list can be
+    filtered to exactly the segment an admin clicked on in the Insights panel
+    (and exported). Served from the membership captured during the last
+    insights scan — no extra Firestore reads.
+
+    Query params:
+        dimension – loyalty | value | recency | repeat | dues | lapsed |
+                    new30 | flag | gst | wants_bill
+        key       – 0-based tier/band index for loyalty/value/recency.
+
+    Returns: { success, customers:[...], count }
+    """
+    try:
+        dimension = request.args.get("dimension", "").strip()
+        key       = request.args.get("key", "").strip()
+        seg = customer_service.get_customer_segment(dimension, key)
+        return jsonify(success=True, customers=seg["customers"], count=seg["count"])
+    except Exception as e:
+        logger.error(f"customer_segment error: {e}")
+        return jsonify(success=False, message=str(e), customers=[], count=0), 500

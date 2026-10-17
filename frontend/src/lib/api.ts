@@ -40,6 +40,9 @@ type Hooks = {
   refresh: () => Promise<RefreshResult>
   onAuthLost: (message: string) => void
   confirmDuplicate: (secondsAgo: number) => Promise<boolean>
+  // Step-up re-auth: a money-leaving action blocked with 428 → prompt the admin
+  // for their password and return a single-use token (or null if cancelled).
+  stepUp: (action: string, amount: number) => Promise<string | null>
 }
 
 let hooks: Hooks = {
@@ -47,6 +50,7 @@ let hooks: Hooks = {
   refresh: async () => 'denied',
   onAuthLost: () => {},
   confirmDuplicate: async () => false,
+  stepUp: async () => null,
 }
 
 export function configureApi(h: Partial<Hooks>) {
@@ -111,6 +115,7 @@ export async function api<T = unknown>(path: string, opts: RequestOptions = {}):
   const url = buildUrl(path, opts.query)
   let opId = opts.opId || (isWrite ? newOpId() : undefined)
   let force = false
+  let stepUpToken: string | null = null
 
   const send = async (): Promise<Response> => {
     const headers: Record<string, string> = { Accept: 'application/json' }
@@ -119,6 +124,7 @@ export async function api<T = unknown>(path: string, opts: RequestOptions = {}):
     if (opts.body !== undefined) headers['Content-Type'] = 'application/json'
     if (opId) headers['X-Op-Id'] = opId
     if (force) headers['X-Force-Duplicate'] = '1'
+    if (stepUpToken) headers['X-Step-Up-Token'] = stepUpToken
     return fetch(url, {
       method,
       headers,
@@ -156,6 +162,20 @@ export async function api<T = unknown>(path: string, opts: RequestOptions = {}):
       force = true
       opId = newOpId()
       res = await send()
+    }
+  }
+
+  // Step-up re-auth: the server blocked a money-leaving action. Prompt the admin,
+  // then replay the SAME request (same X-Op-Id; the blocked request never ran)
+  // with the token. One replay only.
+  if (res.status === 428 && isWrite) {
+    const body = (await parse(res.clone())) as { code?: string; action?: string; amount?: number } | null
+    if (body?.code === 'step_up_required') {
+      const token = await hooks.stepUp(body.action || '', Number(body.amount || 0))
+      if (token) {
+        stepUpToken = token
+        res = await send()
+      }
     }
   }
 

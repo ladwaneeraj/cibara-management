@@ -13,17 +13,26 @@ interface ConfirmRequest {
   resolve: (ok: boolean) => void
 }
 
+interface StepUpRequest {
+  action: string
+  amount: number
+  resolve: (token: string | null) => void
+}
+
 type Theme = 'light' | 'dark' | 'system'
 
 interface UiState {
   toasts: Toast[]
   confirmReq: ConfirmRequest | null
+  stepUpReq: StepUpRequest | null
   theme: Theme
   sidebarOpen: boolean
   toast: (message: string, tone?: ToastTone) => void
   dismiss: (id: number) => void
   confirm: (opts: Omit<ConfirmRequest, 'resolve'>) => Promise<boolean>
   closeConfirm: (ok: boolean) => void
+  stepUp: (action: string, amount: number) => Promise<string | null>
+  closeStepUp: (token: string | null) => void
   setTheme: (t: Theme) => void
   setSidebar: (open: boolean) => void
 }
@@ -47,6 +56,7 @@ export function applyTheme(t: Theme) {
 export const useUi = create<UiState>((set, get) => ({
   toasts: [],
   confirmReq: null,
+  stepUpReq: null,
   theme: readTheme(),
   sidebarOpen: false,
   toast(message, tone = 'success') {
@@ -64,6 +74,16 @@ export const useUi = create<UiState>((set, get) => ({
   closeConfirm(ok) {
     get().confirmReq?.resolve(ok)
     set({ confirmReq: null })
+  },
+  stepUp(action, amount) {
+    return new Promise<string | null>((resolve) => {
+      get().stepUpReq?.resolve(null)
+      set({ stepUpReq: { action, amount, resolve } })
+    })
+  },
+  closeStepUp(token) {
+    get().stepUpReq?.resolve(token)
+    set({ stepUpReq: null })
   },
   setTheme(t) {
     try { localStorage.setItem('cibara_theme', t) } catch { /* private mode */ }
@@ -83,4 +103,5 @@ configureApi({
       message: `This exact entry was already submitted ${Math.round(secondsAgo)}s ago. Record it a second time?`,
       confirmLabel: 'Record again',
     }),
+  stepUp: (action, amount) => useUi.getState().stepUp(action, amount),
 })

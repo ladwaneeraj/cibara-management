@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { lazy, Suspense, useEffect, type ReactNode } from 'react'
 import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom'
 import { AppShell } from '@/components/layout/AppShell'
-import { ConfirmHost, Toaster } from '@/components/layout/Overlays'
+import { ConfirmHost, StepUpHost, Toaster } from '@/components/layout/Overlays'
 import { Spinner } from '@/components/ui'
 import { ApiError } from '@/lib/api'
 import { onAuthChange, useAuth } from '@/lib/auth'
@@ -94,6 +94,7 @@ export function App({ queryClient }: { queryClient: QueryClient }) {
         <Realtime qc={queryClient} />
         <Toaster />
         <ConfirmHost />
+        <StepUpHost />
       </BrowserRouter>
     </QueryClientProvider>
   )

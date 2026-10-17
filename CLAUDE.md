@@ -363,6 +363,54 @@ change it in Monitoring → Alerting → Notification channels.
 IAM grant to the Firestore service agent + an export bucket — not done; the managed scheduled
 backups above already cover disaster recovery.
 
+### 6.2 Security hardening (Phase 1)
+
+**Response headers / CSP** (`core/middleware.py`). The SPA (`/app`) keeps its strict
+`script-src 'self'` CSP. Classic Jinja pages now get their own CSP (HTML documents only),
+pinning every origin the classic UI loads (firebase SDK, chart.js, leaflet + OSM tiles,
+font-awesome, Google Fonts) with `object-src 'none'`, `base-uri 'self'`, `frame-ancestors
+'self'`. It keeps `'unsafe-inline'` for scripts (legacy inline blocks/handlers), so the real
+XSS defence is escaping at the sinks. Mode switch: `CLASSIC_CSP=enforce` (default) |
+`report-only` (vet a policy change without breaking the page) | `off`. HSTS
+(`Strict-Transport-Security`) is sent on Cloud Run (HTTPS). `X-Content-Type-Options`,
+`Referrer-Policy`, `X-Frame-Options` are on every response.
+
+**DOM-XSS.** Guest-controlled values (name, free-text reason) were interpolated raw into
+`innerHTML` in 16 places; all now escaped via `static/security.js`'s `window.escHtml`
+(loaded first in `index.html`). Use `escHtml(...)` for any guest value that reaches
+`innerHTML`; not for `textContent`, WhatsApp/plain-text, or URL components.
+
+**JWT_SECRET → Secret Manager.** The app reads `JWT_SECRET` from the env, or — new — from a
+file via `JWT_SECRET_FILE` (the Secret Manager *mounted-volume* pattern; keeps the secret
+out of the environment). Setup + rotation (scope to `--project cibara-dev`; never prod):
+```bash
+printf '%s' "$(python -c 'import secrets;print(secrets.token_urlsafe(48))')" \
+  | gcloud secrets create jwt-secret --data-file=- --project cibara-dev          # create (or: versions add)
+# Grant the Cloud Run runtime service account access (IAM — owner action):
+gcloud secrets add-iam-policy-binding jwt-secret --project cibara-dev \
+  --member="serviceAccount:<RUNTIME_SA>" --role=roles/secretmanager.secretAccessor
+gcloud run services update lodge-management-uat --project cibara-dev \
+  --update-secrets=JWT_SECRET=jwt-secret:latest     # or mount a volume + set JWT_SECRET_FILE
+# Rotate: add a new version, then redeploy to pick up :latest. A new JWT_SECRET
+# invalidates all live access/refresh tokens (everyone signs in once) — expected.
+gcloud secrets versions add jwt-secret --data-file=- --project cibara-dev
+```
+
+**Legacy API_KEY (§10).** Redacted from the classic page (bridge) and now covered by a test;
+a startup warning fires when it is set. Rotate it, or unset it if no integration sends
+`X-API-Key`: `gcloud run services update lodge-management-uat --project cibara-dev
+--update-env-vars=API_KEY=<new>` (or `--remove-env-vars=API_KEY`).
+
+**Dependency/vuln scanning.** `.github/dependabot.yml` (weekly pip + npm + actions) and
+`.github/workflows/security-scan.yml` (pip-audit + npm audit, advisory). Enable Dependabot
+alerts + security updates in GitHub repo settings (owner). Fixed now: `pyjwt` 2.10.1→2.15.0,
+`python-multipart` 0.0.20→0.0.31. Open (Dependabot, breaking/coordinated): `starlette`
+(pinned by `fastapi` — needs a fastapi bump), `firebase`/`@firebase/firestore` (high),
+`react-router` v6→v7 (moderate, major).
+
+**Not done this phase:** admin MFA + login-anomaly audit (original item 8) — deferred; and
+the CI gate only blocks merges once the jobs are set as required status checks (owner).
+
 ## 7. Migration status
 
 The classic screens are the UI (§1). The table below describes the parked React app

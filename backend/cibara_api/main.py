@@ -30,7 +30,7 @@ from . import legacy
 from .core import observability
 from .core.middleware import RequestContextMiddleware
 from .routers import (admin, auth, bills, client_errors, customer_docs, dashboard,
-                      guest, reports, rooms, invoice_settings)
+                      guest, reports, rooms, invoice_settings, step_up)
 from .settings import get_settings
 
 log = logging.getLogger("cibara_api")
@@ -95,7 +95,7 @@ def create_app() -> FastAPI:
 
     for r in (auth.router, dashboard.router, rooms.router, bills.router, reports.router,
               admin.router, guest.router, invoice_settings.router, customer_docs.router,
-              client_errors.router):
+              client_errors.router, step_up.router):
         app.include_router(r)
 
     @app.api_route("/api/v2/{rest:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"],

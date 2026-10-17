@@ -76,6 +76,8 @@ _auth.verify_token = _bridged_verify_token
 # ─── 3. hardening hook (runs after the legacy global auth gate) ────────────
 
 from .security.legacy_hardening import required_permission  # noqa: E402
+from .security import step_up as _step_up  # noqa: E402
+from services import audit_log as _audit_log  # noqa: E402
 
 
 @flask_app.before_request
@@ -93,6 +95,39 @@ def _cibara_api_hardening():
                  request.method, request.path, perm)
         return jsonify(success=False, message=f"Forbidden: missing permission '{perm}'"), 403
     return None
+
+
+@flask_app.before_request
+def _cibara_api_step_up():
+    """Step-up RE-AUTH gate for money-leaving actions (Phase 2). A matching
+    request needs a valid single-use authorization token (from POST
+    /api/v2/authorize) in X-Step-Up-Token, unless the same (user, action, target)
+    is within its grace window. Disable with STEP_UP_AUTH=false."""
+    s = get_settings()
+    if not s.STEP_UP_AUTH:
+        return None
+    user = getattr(g, "current_user", None)
+    if not user:
+        return None  # API-key / public callers unchanged
+    body = request.get_json(silent=True) if request.is_json else None
+    spec = _step_up.required(request.method, request.path, body, s)
+    if not spec:
+        return None
+    uid = user.get("userId") or user.get("user_id") or ""
+    if _step_up.store.in_grace(uid, spec.action, spec.target):
+        return None
+    token = request.headers.get("X-Step-Up-Token", "")
+    if token and _step_up.store.consume(token, spec.action, spec.amount, spec.target):
+        _step_up.store.set_grace(uid, spec.action, spec.target, s.STEP_UP_GRACE_SECONDS)
+        return None
+    try:
+        _audit_log.write_log("authz.blocked", metadata={
+            "action": spec.action, "amount": spec.amount, "path": request.path, "user": uid})
+    except Exception:  # auditing must never block the response
+        log.debug("step-up blocked-audit write failed", exc_info=True)
+    return jsonify(success=False, code="step_up_required",
+                   message="This action needs admin confirmation — re-enter your password.",
+                   action=spec.action, amount=spec.amount), 428
 
 
 # ─── 3b. no anonymous reads on Cloud Run ───────────────────────────────────

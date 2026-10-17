@@ -22,12 +22,17 @@ def test_rate_limiter_window():
     assert rl.hit("k", 3, 60)[0]
 
 
-def test_rate_limiter_expires():
+def test_rate_limiter_expires(monkeypatch):
+    # Deterministic: drive the limiter with a fake monotonic clock instead of
+    # sleeping, so the window boundary isn't a timing race under CI load.
+    import cibara_api.core.ratelimit as rl_mod
+    clock = [1000.0]
+    monkeypatch.setattr(rl_mod.time, "monotonic", lambda: clock[0])
     rl = RateLimiter()
-    rl.hit("k", 1, 0.05)
-    assert not rl.hit("k", 1, 0.05)[0]
-    time.sleep(0.06)
-    assert rl.hit("k", 1, 0.05)[0]
+    assert rl.hit("k", 1, 10)[0] is True      # 1st hit in the 10s window
+    assert rl.hit("k", 1, 10)[0] is False     # 2nd in-window → blocked
+    clock[0] += 11                            # advance past the window
+    assert rl.hit("k", 1, 10)[0] is True      # window elapsed → allowed again
 
 
 def test_enforce_raises_429():

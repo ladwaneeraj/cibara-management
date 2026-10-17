@@ -15,3 +15,6 @@ google-generativeai==0.8.3
 # qrcode — renders the guest-portal QR (routes/guest.py /api/guest-portal/qr.png).
 # Pillow comes in via the [pil] extra; xhtml2pdf already pulls Pillow too.
 qrcode[pil]==8.0
+# sentry-sdk — error monitoring (FastAPI + Flask), OFF unless SENTRY_DSN is set.
+# See backend/cibara_api/core/observability.py (PII is scrubbed before send).
+sentry-sdk[fastapi]==2.17.0

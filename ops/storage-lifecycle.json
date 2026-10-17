@@ -1,0 +1,13 @@
+{
+  "_comment": "Firebase Storage lifecycle for cibara-dev.firebasestorage.app. Acts on NONCURRENT object versions only (requires versioning), so live objects are never deleted. Apply with: gcloud storage buckets update gs://cibara-dev.firebasestorage.app --lifecycle-file=ops/storage-lifecycle.json --project cibara-dev",
+  "rule": [
+    {
+      "action": { "type": "Delete" },
+      "condition": { "daysSinceNoncurrentTime": 30 }
+    },
+    {
+      "action": { "type": "Delete" },
+      "condition": { "numNewerVersions": 5 }
+    }
+  ]
+}

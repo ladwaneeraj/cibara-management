@@ -63,6 +63,13 @@ class Settings(BaseSettings):
     # Cloud Run's front end appends exactly one entry (the real client IP).
     TRUSTED_PROXY_HOPS: int = 1
 
+    # ── Shared cache (Phase 3) ────────────────────────────────────────────
+    # Empty (default) = in-process state, the intended single Cloud Run
+    # instance. Set to a redis:// URL (e.g. Memorystore) to move rate-limit
+    # counters, access-token revocation and step-up tokens off-process so the
+    # service is safe with >1 instance. Reversible: unset it. See core/cache.py.
+    REDIS_URL: str = ""
+
     # ── Legacy bridge ─────────────────────────────────────────────────────
     # Enforce permissions on legacy routes that the Flask code leaves ungated
     # (see security/legacy_hardening.py). Only applies to requests that carry

@@ -22,7 +22,24 @@ class RateLimiter:
         self._max_keys = max_keys
 
     def hit(self, key: str, limit: int, window_s: float) -> tuple[bool, float]:
-        """Record one hit. Returns (allowed, retry_after_seconds)."""
+        """Record one hit. Returns (allowed, retry_after_seconds).
+
+        With a shared cache configured (REDIS_URL), the count is a fixed-window
+        counter in Redis so the limit is enforced across instances. Without it,
+        the in-process sliding window below is used (unchanged default). A Redis
+        error degrades to allow (fail-open): rate limiting is best-effort, not a
+        billing control."""
+        from . import cache
+        backend = cache.get_shared_backend()
+        if backend is not None:
+            try:
+                count = backend.incr(f"rl:{key}", int(window_s) or 1)
+                if count > limit:
+                    return False, float(int(window_s) or 1)
+                return True, 0.0
+            except Exception:  # pragma: no cover - Redis blip → fail open
+                pass
+
         now = time.monotonic()
         with self._lock:
             q = self._hits.get(key)

@@ -18,3 +18,6 @@ qrcode[pil]==8.0
 # sentry-sdk — error monitoring (FastAPI + Flask), OFF unless SENTRY_DSN is set.
 # See backend/cibara_api/core/observability.py (PII is scrubbed before send).
 sentry-sdk[fastapi]==2.17.0
+# redis — optional shared cache backend (Phase 3). Only used when REDIS_URL is
+# set; imported lazily. See backend/cibara_api/core/cache.py.
+redis==5.2.1

@@ -153,6 +153,18 @@ class RequestContextMiddleware:
                             headers.append((hdr, _CSP_CLASSIC.encode()))
                 if path.startswith("/api/v2/") and b"cache-control" not in names:
                     headers.append((b"cache-control", b"no-store"))
+                if path.startswith("/static/"):
+                    # CDN-friendly caching for the classic assets (so Cloud CDN /
+                    # the browser can cache them). They are requested via
+                    # asset_url(?v=<mtime>), so a versioned URL is content-addressed
+                    # and immutable; an unversioned hit gets a short TTL so a direct
+                    # edit still propagates. Overrides Flask's default.
+                    headers = [(k, v) for k, v in headers if k.lower() != b"cache-control"]
+                    versioned = b"v=" in (scope.get("query_string") or b"")
+                    headers.append((
+                        b"cache-control",
+                        b"public, max-age=31536000, immutable" if versioned else b"public, max-age=3600",
+                    ))
                 message["headers"] = headers
             await send(message)
 

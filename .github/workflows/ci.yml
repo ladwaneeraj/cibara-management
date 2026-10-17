@@ -1,0 +1,80 @@
+name: CI
+
+# PR gate: every pull request must pass the backend + legacy test suites, the
+# SPA lint/typecheck/tests, and the classic-UI lint before it can be merged.
+# (Enable these as *required status checks* in the branch protection rules so
+# a red run actually blocks merge — see CLAUDE.md §6.)
+on:
+  pull_request:
+  push:
+    branches: [main, feature/fastapi-react-migration]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Python tests (legacy + FastAPI)
+    runs-on: ubuntu-latest
+    env:
+      # Non-secret placeholder: the suites run fully offline with Firebase
+      # stubs; JWT_SECRET only has to exist and be >=32 chars for settings.
+      JWT_SECRET: ci-placeholder-not-a-real-secret-0123456789abcdef
+      CIBARA_ENV: UAT
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r backend/requirements-dev.txt
+      - name: Legacy suite (tests/)
+        run: python -m pytest tests -q
+      - name: FastAPI layer (backend/tests)
+        working-directory: backend
+        run: python -m pytest tests -q
+
+  frontend:
+    name: SPA lint + typecheck + tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install dependencies
+        working-directory: frontend
+        run: npm ci
+      - name: ESLint
+        working-directory: frontend
+        run: npm run lint
+      - name: Typecheck
+        working-directory: frontend
+        run: npm run typecheck
+      - name: Unit tests (Vitest)
+        working-directory: frontend
+        run: npm test
+
+  classic-lint:
+    name: Classic UI lint (no-undef)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: ESLint (static/)
+        run: npm run lint

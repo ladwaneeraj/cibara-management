@@ -1,0 +1,16 @@
+{
+  "name": "cibara-erp-lint",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Repo-root tooling: ESLint for the classic-UI vanilla JS in static/. Not shipped; not part of the Docker image (that only builds frontend/).",
+  "type": "module",
+  "scripts": {
+    "lint": "eslint static",
+    "lint:fix": "eslint static --fix"
+  },
+  "devDependencies": {
+    "@eslint/js": "9.13.0",
+    "eslint": "9.13.0",
+    "globals": "15.11.0"
+  }
+}

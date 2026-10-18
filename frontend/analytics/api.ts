@@ -35,7 +35,6 @@ export function useCustomerInsights() {
     queryKey: ['analytics', 'customers'],
     queryFn: ({ signal }) => get<CustomerInsights>('/customer_insights', undefined, signal),
     staleTime: 5 * 60_000,
-    retry: (n, e) => !isForbidden(e) && n < 1,
   })
 }
 

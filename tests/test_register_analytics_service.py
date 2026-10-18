@@ -8,6 +8,7 @@ from datetime import date
 from services.register_analytics_service import (
     build_stay_universe,
     channel_of,
+    compute_channel_mix,
     compute_overview,
 )
 
@@ -114,3 +115,71 @@ def test_overview_collections_use_register_classification():
                           window_to="2026-10-18", today=date(2026, 10, 18))
     c = ov["collections"]
     assert (c["cash"], c["online"], c["refunds"], c["net"]) == (1000, 200, 100, 1100)
+
+
+# ── Task 2: channel mix & net profitability ─────────────────────────────
+
+def test_channel_mix_nets_ota_commission():
+    stays = [
+        {"channel": "MMT", "room_charges_total": 10000, "ota_commission_gst": 1500,
+         "checkin_time": "2026-10-10 12:00", "checkout_time": "2026-10-12 10:00"},
+        {"channel": "Direct/Walk-in", "room_charges_total": 5000, "ota_commission_gst": 0,
+         "checkin_time": "2026-10-10 12:00", "checkout_time": "2026-10-11 10:00"},
+    ]
+    mix = compute_channel_mix(stays, commission_expenses=[])
+    mmt = next(c for c in mix["channels"] if c["channel"] == "MMT")
+    assert mmt["gross"] == 10000 and mmt["commission"] == 1500 and mmt["net"] == 8500
+    assert mix["total_net"] == 13500
+
+
+def test_channel_mix_net_adr_share_and_room_nights():
+    stays = [
+        {"channel": "MMT", "room_charges_total": 10000, "ota_commission": 1000,
+         "ota_commission_gst": 500,
+         "checkin_time": "2026-10-10 12:00", "checkout_time": "2026-10-12 10:00"},
+        {"channel": "Direct/Walk-in", "room_charges_total": 5000,
+         "checkin_time": "2026-10-10 12:00", "checkout_time": "2026-10-11 10:00"},
+    ]
+    mix = compute_channel_mix(stays, [])
+    mmt = next(c for c in mix["channels"] if c["channel"] == "MMT")
+    assert mmt["commission"] == 1500          # commission + GST on it
+    assert mmt["room_nights"] == 2 and mmt["net_adr"] == 4250.0
+    assert mmt["share_pct"] == 66.7           # 10000 / 15000
+    assert mix["total_gross"] == 15000
+
+
+def test_channel_mix_attributes_booking_commission_expenses():
+    stays = [{"channel": "Booking.com", "room_charges_total": 4000,
+              "checkin_time": "2026-10-10 12:00", "checkout_time": "2026-10-12 10:00"}]
+    exp = [
+        {"category": "booking_commission", "commission_platform": "booking.com",
+         "commission_amount": 400, "commission_gst": 72},
+        # settlement-generated mirror of a bill's own commission (has booking_id)
+        {"category": "booking_commission", "commission_platform": "booking.com",
+         "commission_amount": 999, "commission_gst": 1, "booking_id": "bk1"},
+        {"category": "salary", "amount": 5000},
+    ]
+    mix = compute_channel_mix(stays, exp)
+    bk = next(c for c in mix["channels"] if c["channel"] == "Booking.com")
+    assert bk["commission"] == 472 and bk["net"] == 3528
+
+
+def test_channel_mix_unmatched_platform_gets_own_row_and_empty_is_safe():
+    exp = [{"category": "booking_commission", "commission_platform": "goibibo",
+            "commission_amount": 100, "commission_gst": 18}]
+    mix = compute_channel_mix([], exp)
+    row = next(c for c in mix["channels"] if c["channel"] == "Other")
+    assert row["commission"] == 118 and row["gross"] == 0 and row["net_adr"] == 0
+    assert row["share_pct"] == 0
+    empty = compute_channel_mix([], [])
+    assert empty == {"channels": [], "total_gross": 0, "total_net": 0}
+
+
+def test_channel_mix_windowed_apportions_revenue_and_commission():
+    stays = [{"channel": "MMT", "room_charges_total": 4000, "ota_commission_gst": 400,
+              "checkin_time": "2026-10-10 12:00", "checkout_time": "2026-10-14 10:00"}]
+    # 4 nights at 1000; only the nights of the 12th and 13th fall in window.
+    mix = compute_channel_mix(stays, [], window_from="2026-10-12",
+                              window_to="2026-10-13", today=date(2026, 10, 18))
+    mmt = mix["channels"][0]
+    assert mmt["gross"] == 2000 and mmt["room_nights"] == 2 and mmt["commission"] == 200

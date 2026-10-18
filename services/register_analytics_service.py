@@ -214,3 +214,87 @@ def compute_overview(stays: list, payments: list, room_count: int,
     w_to = _to_date(window_to) or today
     kpis = compute_kpis(stays, room_count, w_from, w_to, today=today)
     return {"occupancy": kpis, "collections": _collections(payments)}
+
+
+# ── channel mix & net profitability ─────────────────────────────────────
+
+def _stay_span_end(stay: dict, today: date):
+    """Last occupied night of the stay (inclusive); in-house → through last night."""
+    co = _to_date(stay.get("checkout_time")) or today
+    return co - timedelta(days=1)
+
+
+def _stay_nights_in(stay: dict, ws: date, we: date, today: date):
+    """(in_window_nights, in_window_room_revenue, total_nights) via compute_kpis."""
+    ci = _to_date(stay.get("checkin_time"))
+    if ci is None:
+        return 0, 0.0, 0
+    whole = compute_kpis([stay], 1, ci, max(_stay_span_end(stay, today), ci - timedelta(days=1)),
+                         today=today)
+    part = compute_kpis([stay], 1, ws, we, today=today)
+    return part["occupied_room_nights"], part["room_revenue"], whole["occupied_room_nights"]
+
+
+def compute_channel_mix(stays: list, commission_expenses: list, *,
+                        window_from=None, window_to=None, today: date | None = None) -> dict:
+    """
+    Revenue by booking channel, net of OTA commission.
+
+        gross      = room revenue of the channel's stays (kpi_service basis);
+                     apportioned night-by-night onto [window_from, window_to]
+                     when a window is given, else the whole stay.
+        commission = (ota_commission + ota_commission_gst) on those stays,
+                     prorated by the in-window share of nights,
+                     + booking_commission expenses for the matching platform.
+        net        = gross - commission;  net_adr = net / room_nights.
+
+    Expenses that carry a booking_id are the bank-settlement mirror of a
+    commission already recorded on the bill, so they are not added again.
+    """
+    today = today or date.today()
+    ws = _to_date(window_from)
+    we = _to_date(window_to)
+    rows: dict = {}
+
+    def row(ch):
+        return rows.setdefault(ch, {"gross": 0.0, "commission": 0.0, "room_nights": 0})
+
+    for s in (stays or []):
+        ci = _to_date(s.get("checkin_time"))
+        if ci is None:
+            continue
+        ch = s.get("channel") or channel_of(s)
+        a, b = (ws, we) if (ws and we) else (ci, max(_stay_span_end(s, today), ci))
+        nights, revenue, total = _stay_nights_in(s, a, b, today)
+        r = row(ch)
+        r["gross"] += revenue
+        r["room_nights"] += nights
+        comm = _num(s.get("ota_commission")) + _num(s.get("ota_commission_gst"))
+        if comm and total > 0:
+            r["commission"] += comm * (nights / total)
+
+    for e in (commission_expenses or []):
+        if e.get("category") != "booking_commission" or e.get("booking_id"):
+            continue
+        ch = _source_channel(e.get("commission_platform")) or CH_OTHER
+        if ch == CH_DIRECT:
+            ch = CH_OTHER
+        row(ch)["commission"] += _num(e.get("commission_amount")) + _num(e.get("commission_gst"))
+
+    total_gross = sum(r["gross"] for r in rows.values())
+    channels = []
+    for ch, r in rows.items():
+        net = r["gross"] - r["commission"]
+        channels.append({
+            "channel": ch,
+            "gross": _r2(r["gross"]),
+            "commission": _r2(r["commission"]),
+            "net": _r2(net),
+            "net_adr": _r2(net / r["room_nights"]) if r["room_nights"] > 0 else 0,
+            "share_pct": round(r["gross"] / total_gross * 100.0, 1) if total_gross > 0 else 0,
+            "room_nights": r["room_nights"],
+        })
+    channels.sort(key=lambda c: (-c["gross"], c["channel"]))
+    return {"channels": channels,
+            "total_gross": _r2(sum(c["gross"] for c in channels)),
+            "total_net": _r2(sum(c["net"] for c in channels))}

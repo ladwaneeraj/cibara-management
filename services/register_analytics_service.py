@@ -378,3 +378,80 @@ def compute_booking_pace(stays: list, future_bookings: list, room_count: int,
             "on_books_revenue": _r2(revenue),
         }
     return {"horizons": out}
+
+
+# ── seasonality ─────────────────────────────────────────────────────────
+
+_WEEKDAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday",
+             "Saturday", "Sunday")
+
+
+def _month_start(d: date) -> date:
+    return d.replace(day=1)
+
+
+def _add_months(d: date, n: int) -> date:
+    idx = d.year * 12 + (d.month - 1) + n
+    return date(idx // 12, idx % 12 + 1, 1)
+
+
+def _overlapping(stays: list, ws: date, we_incl: date, today: date) -> list:
+    """Stays whose nights could touch [ws, we_incl] (cheap prefilter)."""
+    out = []
+    for s in stays:
+        ci = _to_date(s.get("checkin_time"))
+        if ci is None or ci > we_incl:
+            continue
+        co = _to_date(s.get("checkout_time")) or today
+        if co <= ws:
+            continue
+        out.append(s)
+    return out
+
+
+def _kpi_triplet(occupied: int, available: int, revenue: float) -> dict:
+    return {
+        "occupancy_pct": round(occupied / available * 100.0, 1) if available > 0 else 0,
+        "adr": round(revenue / occupied, 2) if occupied > 0 else 0,
+        "revpar": round(revenue / available, 2) if available > 0 else 0,
+    }
+
+
+def compute_seasonality(stays: list, room_count: int, window_from: str,
+                        window_to: str, today: date) -> dict:
+    """
+    Occupancy / ADR / RevPAR by weekday (over the window) and by calendar
+    month (trailing 12 months, regardless of the window).
+
+    Every figure is kpi_service.compute_kpis on a one-day (weekday) or
+    month-long window; weekday values are pooled (sum of nights and revenue
+    over that weekday's dates, then re-divided) rather than averaged, so a
+    weekday with more dates in the window weighs correctly. The window and the
+    current month are capped at `today` — the future is never "empty".
+    """
+    ws = _to_date(window_from) or today
+    we = min(_to_date(window_to) or today, today)
+
+    pool = [[0, 0, 0.0] for _ in range(7)]   # occupied, available, revenue
+    near = _overlapping(stays or [], ws, we, today)
+    d = ws
+    while d <= we:
+        k = compute_kpis(near, room_count, d, d, today=today)
+        p = pool[d.weekday()]
+        p[0] += k["occupied_room_nights"]
+        p[1] += k["available_room_nights"]
+        p[2] += k["room_revenue"]
+        d += timedelta(days=1)
+    weekday = [{"weekday": name, **_kpi_triplet(*pool[i])}
+               for i, name in enumerate(_WEEKDAYS)]
+
+    this_month = _month_start(today)
+    months = []
+    for back in range(11, -1, -1):
+        m0 = _add_months(this_month, -back)
+        m_end = min(_add_months(m0, 1) - timedelta(days=1), today)
+        k = compute_kpis(_overlapping(stays or [], m0, m_end, today),
+                         room_count, m0, m_end, today=today)
+        months.append({"month": m0.strftime("%Y-%m"), "occupancy_pct": k["occupancy_pct"],
+                       "adr": k["adr"], "revpar": k["revpar"]})
+    return {"weekday": weekday, "months": months}

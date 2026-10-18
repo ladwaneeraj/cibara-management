@@ -11,6 +11,7 @@ from services.register_analytics_service import (
     compute_booking_pace,
     compute_channel_mix,
     compute_overview,
+    compute_seasonality,
 )
 
 
@@ -258,6 +259,60 @@ def test_pace_overdue_expected_checkout_still_counts_tonight():
               "room_price_per_night": 1000, "expected_checkout": "2026-10-15"}]
     pace = compute_booking_pace(stays, [], 5, date(2026, 10, 18), horizons=(7,))
     assert pace["horizons"][7]["occupied_room_nights"] == 1
+
+
+# ── Task 4: seasonality ─────────────────────────────────────────────────
+
+def _stay(ci, co, total=1000, **kw):
+    d = {"checkin_time": f"{ci} 12:00", "checkout_time": f"{co} 10:00" if co else None,
+         "room_charges_total": total, "status": "completed" if co else "draft"}
+    d.update(kw)
+    return d
+
+
+def test_seasonality_shape_and_full_monday():
+    # Mon 12 Oct 2026, 1 room, 1 night at 1000 -> that Monday is 100% occupied.
+    stays = [_stay("2026-10-12", "2026-10-13", 1000)]
+    s = compute_seasonality(stays, room_count=1, window_from="2026-10-12",
+                            window_to="2026-10-18", today=date(2026, 10, 18))
+    assert len(s["weekday"]) == 7 and len(s["months"]) == 12
+    assert [w["weekday"] for w in s["weekday"]] == [
+        "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+    mon = s["weekday"][0]
+    assert mon["occupancy_pct"] == 100.0 and mon["adr"] == 1000.0 and mon["revpar"] == 1000.0
+    assert s["weekday"][1]["occupancy_pct"] == 0           # Tuesday: nobody
+
+
+def test_seasonality_weekday_aggregates_every_date_in_window():
+    # Two Mondays in the window (5th, 12th); only the 12th is occupied -> 50%.
+    stays = [_stay("2026-10-12", "2026-10-13", 1000)]
+    s = compute_seasonality(stays, 1, "2026-10-05", "2026-10-18", date(2026, 10, 18))
+    assert s["weekday"][0]["occupancy_pct"] == 50.0
+
+
+def test_seasonality_months_are_trailing_12_ending_current_month():
+    stays = [_stay("2026-10-12", "2026-10-13", 1000), _stay("2025-11-03", "2025-11-04", 700)]
+    s = compute_seasonality(stays, 1, "2026-10-12", "2026-10-18", date(2026, 10, 18))
+    keys = [m["month"] for m in s["months"]]
+    assert keys[0] == "2025-11" and keys[-1] == "2026-10" and len(set(keys)) == 12
+    nov = s["months"][0]
+    assert nov["adr"] == 700.0 and nov["occupancy_pct"] == round(1 / 30 * 100, 1)
+    # Current month is capped at today (18 nights), not the full 31.
+    assert s["months"][-1]["occupancy_pct"] == round(1 / 18 * 100, 1)
+
+
+def test_seasonality_empty_and_zero_rooms_safe():
+    s = compute_seasonality([], 0, "2026-10-18", "2026-10-18", date(2026, 10, 18))
+    assert all(w["occupancy_pct"] == 0 and w["adr"] == 0 and w["revpar"] == 0
+               for w in s["weekday"])
+    assert len(s["months"]) == 12
+
+
+def test_seasonality_in_house_stay_counted_to_today():
+    stays = [_stay("2026-10-16", None, 0, room_price_per_night=1000)]
+    s = compute_seasonality(stays, 1, "2026-10-16", "2026-10-18", date(2026, 10, 18))
+    sat = next(w for w in s["weekday"] if w["weekday"] == "Saturday")   # 17th
+    assert sat["occupancy_pct"] == 100.0
 
 
 def test_pace_zero_rooms_no_divide_by_zero():

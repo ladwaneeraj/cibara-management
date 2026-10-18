@@ -6,6 +6,7 @@ pace, seasonality, LOS / lead-time, snapshots and findings.
 from datetime import date
 
 from services.register_analytics_service import (
+    build_snapshot,
     build_stay_universe,
     channel_of,
     compute_booking_pace,
@@ -13,6 +14,7 @@ from services.register_analytics_service import (
     compute_los_leadtime,
     compute_overview,
     compute_seasonality,
+    pace_vs_prior,
 )
 
 
@@ -377,6 +379,70 @@ def test_stay_matched_by_room_and_checkin_date_is_not_walkin():
     out = compute_los_leadtime(stays, bookings)
     assert _bucket(out["lead_time"], "walk-in") == 0
     assert _bucket(out["lead_time"], "0-1") == 1
+
+
+# ── Task 6: snapshot + pace-vs-prior ────────────────────────────────────
+
+def _future(ci, co, amt=2000, status="confirmed"):
+    return {"check_in_date": ci, "check_out_date": co, "status": status,
+            "room": "101", "total_amount": amt}
+
+
+def test_build_snapshot_shape():
+    snap = build_snapshot([], [_future("2026-10-19", "2026-10-21")], 5, date(2026, 10, 18))
+    assert snap["date"] == "2026-10-18"
+    assert set(snap["horizons"]) == {7, 14, 30}
+    assert snap["horizons"][7] == {"occupancy_pct": round(2 / 35 * 100, 1),
+                                   "on_books_revenue": 2000}
+
+
+def test_pace_vs_prior_none_without_snapshots():
+    cur = compute_booking_pace([], [_future("2026-10-19", "2026-10-21")], 5, date(2026, 10, 18))
+    out = pace_vs_prior(cur, [], date(2026, 10, 18))
+    assert all(out["horizons"][h]["delta"] is None for h in (7, 14, 30))
+    assert out["compared_to"] is None
+
+
+def test_pace_vs_prior_delta_against_week_old_snapshot():
+    today = date(2026, 10, 18)
+    cur = compute_booking_pace([], [_future("2026-10-19", "2026-10-21", 2000)], 5, today)
+    old = build_snapshot([], [_future("2026-10-14", "2026-10-15", 1000)], 5, date(2026, 10, 11))
+    out = pace_vs_prior(cur, [old], today)
+    d = out["horizons"][7]["delta"]
+    assert d["on_books_revenue"] == 1000
+    assert d["occupancy_pct"] == round(round(2 / 35 * 100, 1) - round(1 / 35 * 100, 1), 1)
+    assert d["vs_date"] == "2026-10-11"
+    assert out["compared_to"] == "2026-10-11"
+    # the current figures are preserved alongside the delta
+    assert out["horizons"][7]["on_books_revenue"] == 2000
+
+
+def test_pace_vs_prior_picks_nearest_to_seven_days_ago_and_ignores_far_or_today():
+    today = date(2026, 10, 18)
+    cur = compute_booking_pace([], [], 5, today)
+    mk = lambda d: {"date": d, "horizons": {7: {"occupancy_pct": 10.0, "on_books_revenue": 100}}}
+    out = pace_vs_prior(cur, [mk("2026-10-18"), mk("2026-10-13"), mk("2026-10-10"),
+                              mk("2026-09-01")], today)
+    assert out["compared_to"] == "2026-10-10"          # 8 days ago is nearer to 7 than 5 days ago
+    far = pace_vs_prior(cur, [mk("2026-09-01"), mk("2026-10-18")], today)
+    assert far["compared_to"] is None
+
+
+def test_pace_vs_prior_accepts_string_horizon_keys_from_firestore():
+    today = date(2026, 10, 18)
+    cur = compute_booking_pace([], [], 5, today, horizons=(7,))
+    snap = {"date": "2026-10-11",
+            "horizons": {"7": {"occupancy_pct": 10.0, "on_books_revenue": 100}}}
+    d = pace_vs_prior(cur, [snap], today)["horizons"][7]["delta"]
+    assert d["occupancy_pct"] == -10.0 and d["on_books_revenue"] == -100
+
+
+def test_pace_vs_prior_horizon_missing_in_snapshot_is_none():
+    today = date(2026, 10, 18)
+    cur = compute_booking_pace([], [], 5, today, horizons=(7, 14))
+    snap = {"date": "2026-10-11", "horizons": {7: {"occupancy_pct": 0, "on_books_revenue": 0}}}
+    out = pace_vs_prior(cur, [snap], today)
+    assert out["horizons"][7]["delta"] is not None and out["horizons"][14]["delta"] is None
 
 
 def test_pace_zero_rooms_no_divide_by_zero():

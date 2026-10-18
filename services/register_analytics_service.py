@@ -547,3 +547,77 @@ def compute_los_leadtime(stays: list, bookings: list, *, today: date | None = No
 
     return {"los": [{"bucket": k, "count": v} for k, v in los.items()],
             "lead_time": [{"bucket": k, "count": v} for k, v in lead.items()]}
+
+
+# ── nightly snapshot + pace-vs-prior ────────────────────────────────────
+
+# How far from "exactly 7 days ago" a snapshot may be and still be comparable.
+_PRIOR_TARGET_DAYS = 7
+_PRIOR_TOLERANCE_DAYS = 3
+
+
+def build_snapshot(stays: list, future_bookings: list, room_count: int,
+                   today: date, horizons=DEFAULT_HORIZONS) -> dict:
+    """
+    What the nightly job stores: the on-the-books picture as of `today`.
+
+        {"date": "YYYY-MM-DD",
+         "horizons": {7: {"occupancy_pct", "on_books_revenue"}, 14: {...}, ...}}
+
+    (Firestore map keys must be strings — the route stringifies the horizon
+    keys on write; pace_vs_prior accepts both forms.)
+    """
+    pace = compute_booking_pace(stays, future_bookings, room_count, today, horizons)
+    return {
+        "date": today.isoformat(),
+        "horizons": {h: {"occupancy_pct": v["occupancy_pct"],
+                         "on_books_revenue": v["on_books_revenue"]}
+                     for h, v in pace["horizons"].items()},
+    }
+
+
+def _snapshot_horizon(snap: dict, h):
+    hz = snap.get("horizons") or {}
+    return hz.get(h) if h in hz else hz.get(str(h))
+
+
+def pace_vs_prior(current: dict, snapshots: list, today: date) -> dict:
+    """
+    Adds a "delta" to every horizon of `current` (a compute_booking_pace result):
+    current minus the snapshot taken nearest 7 days ago (within +-3 days; today's
+    own snapshot never counts; ties prefer the older one).
+
+        delta = {"occupancy_pct": +/-pts, "on_books_revenue": +/-amount,
+                 "vs_date": "YYYY-MM-DD"}      or None when no comparable
+                                               snapshot (or horizon) exists.
+    """
+    target = today - timedelta(days=_PRIOR_TARGET_DAYS)
+    best = None
+    best_key = None
+    for snap in (snapshots or []):
+        d = _to_date(snap.get("date"))
+        if d is None or d >= today:
+            continue
+        off = abs((d - target).days)
+        if off > _PRIOR_TOLERANCE_DAYS:
+            continue
+        key = (off, d)
+        if best_key is None or key < best_key:
+            best, best_key = snap, key
+
+    out = {}
+    for h, cur in (current.get("horizons") or {}).items():
+        row = dict(cur)
+        prior = _snapshot_horizon(best, h) if best else None
+        if prior is None:
+            row["delta"] = None
+        else:
+            row["delta"] = {
+                "occupancy_pct": round(_num(cur.get("occupancy_pct"))
+                                       - _num(prior.get("occupancy_pct")), 1),
+                "on_books_revenue": _r2(_num(cur.get("on_books_revenue"))
+                                        - _num(prior.get("on_books_revenue"))),
+                "vs_date": best["date"],
+            }
+        out[h] = row
+    return {"horizons": out, "compared_to": best["date"] if best else None}

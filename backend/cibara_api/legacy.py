@@ -140,7 +140,8 @@ def _cibara_api_step_up():
 import os as _os  # noqa: E402
 import re as _re  # noqa: E402
 
-_INGEST_PATHS = ("/mmt/ingest", "/mmt/create_test_booking", "/agoda/ingest", "/bank/settlements/ingest")
+_INGEST_PATHS = ("/mmt/ingest", "/mmt/create_test_booking", "/agoda/ingest", "/bank/settlements/ingest",
+                 "/analytics/snapshot")
 
 
 @flask_app.before_request

@@ -21,6 +21,7 @@ from routes.agoda_ingest import agoda_ingest_bp
 from routes.bank_settlement import bank_settlement_bp
 from routes.maintenance import maintenance_bp
 from routes.insights import insights_bp
+from routes.analytics import analytics_bp
 from routes.staff import staff_bp
 from routes.manual_bill import manual_bill_bp
 from routes.guest import guest_bp
@@ -136,6 +137,18 @@ def require_auth():
         if _bank_secret:
             _provided = request.headers.get("X-Ingest-Secret", "")
             if _provided == _bank_secret:
+                return None
+
+    # 1e. Nightly analytics snapshot — same shared-secret scheme (a dedicated
+    # ANALYTICS_INGEST_SECRET wins; else the scheduler secret used by the OTA
+    # pollers). The route re-checks the secret itself.
+    if path == "/analytics/snapshot":
+        _snap_secret = (os.environ.get("ANALYTICS_INGEST_SECRET", "")
+                        or os.environ.get("AGODA_INGEST_SECRET", "")
+                        or os.environ.get("MMT_INGEST_SECRET", ""))
+        if _snap_secret:
+            _provided = request.headers.get("X-Ingest-Secret", "")
+            if _provided == _snap_secret:
                 return None
 
     # 2. Firebase ID token
@@ -316,6 +329,7 @@ app.register_blueprint(agoda_ingest_bp, url_prefix="")  # /agoda/ingest, /agoda/
 app.register_blueprint(bank_settlement_bp, url_prefix="")  # /bank/settlements/ingest
 app.register_blueprint(maintenance_bp)   # /maintenance/* — deep-check rounds, issues, analytics
 app.register_blueprint(insights_bp)      # /insights/* — admin-only daily operations analytics
+app.register_blueprint(analytics_bp)     # /analytics/* — admin-only register-based analytics + nightly snapshot
 app.register_blueprint(staff_bp)         # /staff/* — attendance, advances, salary payroll
 app.register_blueprint(manual_bill_bp)   # /manual_bill/* — operator-authored backdated bills
 

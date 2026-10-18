@@ -6,7 +6,9 @@
   "description": "Cibara ERP staff app (React + Vite). Built to dist/, served by FastAPI at /app.",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
+    "build": "tsc -b && vite build && vite build --mode analytics",
+    "build:analytics": "vite build --mode analytics",
+    "dev:analytics": "vite --mode analytics",
     "preview": "vite preview",
     "typecheck": "tsc -b",
     "lint": "eslint .",

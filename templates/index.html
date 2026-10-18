@@ -1199,6 +1199,12 @@
           <i class="fas fa-clipboard-list profile-menu-icon"></i>
           <span>Audit Logs</span>
         </button>
+        <!-- Register analytics: the lean React page served at /analytics.
+             Hidden unless the user holds analytics.view (applyRoleGating in auth.js). -->
+        <a class="profile-menu-item" id="profile-menu-analytics" href="/analytics/" data-perm="analytics.view" role="menuitem" style="text-decoration: none">
+          <i class="fas fa-chart-line profile-menu-icon"></i>
+          <span>Analytics</span>
+        </a>
         <div class="profile-menu-divider"></div>
         <button class="profile-menu-item profile-menu-item-danger" id="profile-menu-signout" role="menuitem" type="button">
           <i class="fas fa-sign-out-alt profile-menu-icon"></i>

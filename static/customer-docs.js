@@ -262,9 +262,10 @@ window.initCheckoutDocAttach = function(mobile) {
     let added = 0, blocked = false;
     for (const picked of files) {
       if (_checkoutTray.length >= MAX_DOC_PHOTOS) { blocked = true; break; }
-      // Auto-detect → adjust → deskew → magic colour, one document at a time.
-      const scanned = await _scanIdDoc(picked);
-      if (!scanned) continue;              // cancelled this one in the editor
+      // Auto-detect → deskew → magic colour, headless (NO crop editor) — the
+      // same one-tap treatment the Register upload gives a gallery photo.
+      const scanned = await _autoScanIdDoc(picked);
+      if (!scanned) continue;              // never null; guard kept defensively
       const url = URL.createObjectURL(scanned);
       _checkoutTray.push({ blob: scanned, url, scanned: scanned !== picked });
       added++;
@@ -1707,6 +1708,26 @@ async function _scanIdDoc(file) {
     console.warn('[customer-docs] ID scan failed, keeping original:', e);
     return file;
   }
+}
+
+// Headless version of _scanIdDoc: auto-detect → deskew → magic colour with NO
+// crop editor, exactly like the Register upload (see _uploadRegisterDocs in
+// register.js). Falls back to a plain colour compress when the scanner is
+// unavailable, and to the original file on any error. Never returns null —
+// there is no editor to cancel — so the caller always gets a usable blob.
+async function _autoScanIdDoc(file) {
+  if (!file) return file;
+  try {
+    if (window.CibaraDocScan && typeof window.CibaraDocScan.autoScan === 'function') {
+      return await window.CibaraDocScan.autoScan(file, { autoDetect: true, enhance: 'magic' }) || file;
+    }
+    if (typeof _compressImage === 'function') {
+      return await _compressImage(file);
+    }
+  } catch (e) {
+    console.warn('[customer-docs] headless ID scan failed, keeping original:', e);
+  }
+  return file;
 }
 
 async function onDocFileSelected() {

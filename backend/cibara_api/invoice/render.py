@@ -140,6 +140,17 @@ def _fmt_dt(s) -> str:
         return str(s or "-")
 
 
+def _fmt_date(s) -> str:
+    """Date only, no time: 'Oct 17, 2026'. GST Rule 46 requires the invoice
+    date but not a time, so stay/invoice dates print without the clock."""
+    if not s:
+        return "-"
+    try:
+        return _fmt_dt(str(s).split(" ")[0])
+    except Exception:
+        return _fmt_dt(s)
+
+
 # ── branding ───────────────────────────────────────────────────────────────
 
 # Invoice settings live in Firestore (settings/invoice_branding, editable by an
@@ -498,7 +509,7 @@ def build_invoice_html(b: dict, view: str | None = None) -> str:
    {'<td style="width:64px">' + logo + '</td>' if logo else ''}
    <td>
     <div class="inv-brand-name">{B.SUPPLIER_NAME}</div>
-    <div class="inv-brand-sub">{B.SUPPLIER_ENTITY}<br/>{B.SUPPLIER_ADDRESS}<br/>{contact}</div>
+    <div class="inv-brand-sub"><i>{B.SUPPLIER_ENTITY}</i><br/>{B.SUPPLIER_ADDRESS}<br/>{contact}</div>
     <div class="inv-gstin">GSTIN: {B.SUPPLIER_GSTIN} &nbsp;&middot;&nbsp; State: {B.PLACE_OF_SUPPLY_STATE} ({B.PLACE_OF_SUPPLY_CODE})</div>
    </td>
   </tr></table>
@@ -539,13 +550,13 @@ def build_invoice_html(b: dict, view: str | None = None) -> str:
     meta = f"""
 <table class="inv-meta"><tr>
  <td><div class="inv-meta-h">INVOICE DETAILS</div>
-  {kv([("Invoice No", b.get("bill_number") or "N/A"), ("Invoice Date", _fmt_dt(b.get("checkout_time"))),
+  {kv([("Invoice No", b.get("bill_number") or "N/A"), ("Invoice Date", _fmt_date(b.get("checkout_time"))),
        ("Place of Supply", f"{B.PLACE_OF_SUPPLY_STATE} ({B.PLACE_OF_SUPPLY_CODE})"), ("Reverse Charge", "No")])}
  </td>
  <td><div class="inv-meta-h">BILLED TO{' (REGISTERED)' if inv_type == 'B2B' and gstin else ''}</div>{kv(billed)}</td>
  <td><div class="inv-meta-h">STAY DETAILS</div>
   {kv([("Room", b.get("room") or "-"), ("Guests", b.get("guest_count") or 1),
-       ("Check-in", _fmt_dt(b.get("checkin_time"))), ("Check-out", _fmt_dt(b.get("checkout_time"))),
+       ("Check-in", _fmt_date(b.get("checkin_time"))), ("Check-out", _fmt_date(b.get("checkout_time"))),
        ("Nights", b.get("days_stayed") or 1)])}
  </td>
 </tr></table>"""

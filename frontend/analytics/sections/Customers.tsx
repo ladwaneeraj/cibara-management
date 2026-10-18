@@ -11,7 +11,7 @@ import { Card, ErrorState, Skeleton, Spinner, StatCard, Tabs } from '@/component
 import { cls, count, money, shortDate } from '@/lib/format'
 import { isForbidden, useCustomerInsights, useCustomerSegment } from '../api'
 import { Lines } from '../charts'
-import { pct } from '../format'
+import { monthLabel, pct } from '../format'
 import type { CustomerInsights, CustomerRow, SegmentDimension } from '../types'
 
 const GROUPS: { dimension: SegmentDimension; title: string }[] = [
@@ -124,7 +124,7 @@ function Body({ d }: { d: CustomerInsights }) {
         <StatCard label="Guest base" tone="brand" value={count(k.total_customers)} hint={`${count(k.active_90d)} active in 90 days · ${count(k.new_30d)} new in 30`} />
         <StatCard label="Repeat rate" tone="green" value={pct(k.repeat_rate_pct)} hint={`${count(k.repeat_customers)} returning guests`} />
         <StatCard label="Lifetime revenue" tone="accent" value={money(k.total_revenue)} />
-        <StatCard label="Avg spend per guest" tone="violet" value={money(k.avg_spend)} hint={`${k.avg_stays} stays on average`} />
+        <StatCard label="Avg spend per guest" tone="violet" value={money(k.avg_spend)} hint={`${k.avg_stays} ${k.avg_stays === 1 ? 'stay' : 'stays'} on average`} />
         <StatCard label="Outstanding dues" tone={k.dues_total > 0 ? 'red' : 'slate'} value={money(k.dues_total)} hint={`${count(k.dues_count)} ${k.dues_count === 1 ? 'guest' : 'guests'}`} />
         <StatCard label="Top 10% of guests" tone="cyan" value={pct(k.top10_revenue_share_pct)} hint={`of revenue · top 20%: ${pct(k.top20_revenue_share_pct)}`} />
       </div>
@@ -137,7 +137,7 @@ function Body({ d }: { d: CustomerInsights }) {
         <div data-testid="acquisition-chart">
           <h3 className="mb-1 text-xs font-medium text-slate-500 dark:text-slate-400">New guests per month (last 12 months)</h3>
           <Lines
-            data={d.acquisition_trend.map((m) => ({ name: m.month.slice(2), value: m.count }))}
+            data={d.acquisition_trend.map((m) => ({ name: monthLabel(m.month), value: m.count }))}
             series={[{ key: 'value', name: 'New guests' }]}
             yFormat={(v) => String(Math.round(v))}
           />

@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { Card, EmptyState, Segmented } from '@/components/ui'
 import { compactInr, Columns, Lines } from '../charts'
 import { money } from '@/lib/format'
-import { pct } from '../format'
+import { monthLabel, pct } from '../format'
 import type { Seasonality as SeasonalityData, SeasonPoint } from '../types'
 
 type Metric = 'occupancy_pct' | 'adr' | 'revpar'
@@ -12,15 +12,6 @@ const METRICS: { value: Metric; label: string }[] = [
   { value: 'adr', label: 'ADR' },
   { value: 'revpar', label: 'RevPAR' },
 ]
-
-const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
-
-/** "2026-10" → "Oct '26" */
-function monthLabel(ym: string): string {
-  const [y, m] = ym.split('-')
-  const i = Number(m) - 1
-  return MONTHS[i] ? `${MONTHS[i]} '${(y ?? '').slice(2)}` : ym
-}
 
 /** A month with nothing at all recorded is "no history", not a soft month. */
 const hasData = (p: SeasonPoint) => p.occupancy_pct > 0 || p.adr > 0 || p.revpar > 0

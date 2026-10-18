@@ -43,18 +43,21 @@ export default defineConfig(({ mode }) => {
       chunkSizeWarningLimit: 900,
       rollupOptions: {
         output: {
-          manualChunks: (analytics
-            ? {
-                react: ['react', 'react-dom'],
-                query: ['@tanstack/react-query', 'zustand'],
-                charts: ['recharts'],
+          manualChunks: analytics
+            ? // Lean bundle: three vendor chunks (react / state / charts), no firebase, no router.
+              (id: string) => {
+                if (!id.includes('node_modules')) return undefined
+                if (/node_modules\/(react|react-dom|scheduler)\//.test(id)) return 'react'
+                if (/node_modules\/(@tanstack|zustand)\//.test(id)) return 'query'
+                if (/node_modules\/(recharts|recharts-scale|victory-vendor|d3-[a-z-]+|internmap|decimal\.js-light|eventemitter3|fast-equals|lodash|react-smooth|react-transition-group|tiny-invariant|clsx)\//.test(id)) return 'charts'
+                return undefined
               }
-            : {
+            : ({
                 react: ['react', 'react-dom', 'react-router-dom'],
                 query: ['@tanstack/react-query', 'zustand'],
                 charts: ['recharts'],
                 firebase: ['firebase/app', 'firebase/auth', 'firebase/firestore'],
-              }) as Record<string, string[]>,
+              } as Record<string, string[]>),
         },
       },
     },

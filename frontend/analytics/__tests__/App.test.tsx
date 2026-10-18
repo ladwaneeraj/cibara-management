@@ -1,28 +1,99 @@
-import { screen } from '@testing-library/react'
+import { screen, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import { json, mockFetch, renderWith, signIn } from '@/test/utils'
 import { useAuth } from '@/lib/auth'
 import { App, AuthGate } from '../App'
+import { CUSTOMERS, OVERVIEW } from './fixtures'
 
-const overview = { success: true, window: { from: '2026-10-12', to: '2026-10-18', days: 7 } }
+const ok = () => ({
+  'GET /api/v2/analytics/overview': OVERVIEW,
+  'GET /customer_insights': CUSTOMERS,
+})
 
-describe('analytics App shell', () => {
-  it('renders the page title and the section headers', async () => {
+describe('analytics App', () => {
+  it('renders every section in order, plus the findings strip', async () => {
     signIn('admin')
-    mockFetch({
-      'GET /api/v2/analytics/overview': overview,
-      'GET /customer_insights': () => json({ success: false, message: 'forbidden' }, 403),
-    })
+    mockFetch(ok())
     renderWith(<App />)
+
     expect(screen.getByRole('heading', { level: 1, name: /analytics/i })).toBeInTheDocument()
-    for (const name of ['Overview', 'Channel mix', 'Booking pace', 'Seasonality', 'Customers']) {
-      expect(await screen.findByRole('heading', { level: 2, name })).toBeInTheDocument()
-    }
+    await screen.findByText('Guest base') // customers loaded too
+
+    const order = screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent)
+    expect(order).toEqual([
+      'What to look at', 'Overview', 'Channel mix', 'Booking pace', 'Seasonality', 'Length of stay & lead time', 'Customers',
+    ])
+
+    const strip = screen.getByRole('region', { name: 'What to look at' })
+    expect(strip).toHaveTextContent('MMT net ADR trails direct by 24%')
+    expect(strip).toHaveTextContent('Next 7 nights are 48% booked')
+    expect(screen.getByText('62.5%')).toBeInTheDocument() // KPI strip is live data
+  })
+
+  it('omits the findings strip when the server has nothing to say', async () => {
+    signIn('admin')
+    mockFetch({ ...ok(), 'GET /api/v2/analytics/overview': { ...OVERVIEW, findings: [] } })
+    renderWith(<App />)
+    await screen.findByText('62.5%')
+    expect(screen.queryByRole('heading', { name: 'What to look at' })).not.toBeInTheDocument()
+  })
+
+  it('makes exactly one overview request (7-day default) and no raw bill/payment arrays are needed', async () => {
+    signIn('admin')
+    const { calls } = mockFetch(ok())
+    renderWith(<App />)
+    await screen.findByText('62.5%')
+    const ov = calls.filter((c) => c.url.startsWith('/api/v2/analytics/overview'))
+    expect(ov).toHaveLength(1)
+    const u = new URL(ov[0].url, 'http://x')
+    expect(u.searchParams.get('start')).toMatch(/^\d{4}-\d{2}-\d{2}$/)
+    expect(u.searchParams.get('end')).toMatch(/^\d{4}-\d{2}-\d{2}$/)
+    expect(calls.filter((c) => c.url.startsWith('/customer_insights'))).toHaveLength(1)
+  })
+
+  it('changing the range refetches with the new window', async () => {
+    signIn('admin')
+    const { calls } = mockFetch(ok())
+    renderWith(<App />)
+    await screen.findByText('62.5%')
+    await userEvent.click(screen.getByRole('radio', { name: 'Last 30 days' }))
+    await waitFor(() => expect(calls.filter((c) => c.url.startsWith('/api/v2/analytics/overview'))).toHaveLength(2))
+    const [a, b] = calls.filter((c) => c.url.startsWith('/api/v2/analytics/overview')).map((c) => new URL(c.url, 'http://x').searchParams)
+    expect(a.get('end')).toBe(b.get('end'))
+    expect(a.get('start')).not.toBe(b.get('start'))
+  })
+
+  it('Refresh asks the server to skip its cache', async () => {
+    signIn('admin')
+    const { calls } = mockFetch(ok())
+    renderWith(<App />)
+    await screen.findByText('62.5%')
+    await userEvent.click(screen.getByRole('button', { name: /refresh/i }))
+    await waitFor(() => expect(calls.some((c) => c.url.includes('fresh=true'))).toBe(true))
+  })
+
+  it('hides Customers on a 403 but keeps the rest of the page', async () => {
+    signIn('admin')
+    mockFetch({ ...ok(), 'GET /customer_insights': () => json({ success: false, message: 'Permission denied' }, 403) })
+    renderWith(<App />)
+    await screen.findByText('62.5%')
+    await waitFor(() => expect(screen.queryByRole('heading', { name: 'Customers' })).not.toBeInTheDocument())
+    expect(screen.getByRole('heading', { name: 'Channel mix' })).toBeInTheDocument()
+  })
+
+  it('shows an error with retry when the overview fails', async () => {
+    signIn('admin')
+    mockFetch({ ...ok(), 'GET /api/v2/analytics/overview': () => json({ success: false, message: 'Analytics is warming up' }, 500) })
+    renderWith(<App />)
+    expect(await screen.findByRole('alert')).toHaveTextContent('Analytics is warming up')
+    expect(screen.getByRole('button', { name: /try again/i })).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Channel mix' })).not.toBeInTheDocument()
   })
 
   it('links back to the classic app', () => {
     signIn('admin')
-    mockFetch({ 'GET /api/v2/analytics/overview': overview })
+    mockFetch(ok())
     renderWith(<App />)
     expect(screen.getByRole('link', { name: /back to app/i })).toHaveAttribute('href', '/')
   })

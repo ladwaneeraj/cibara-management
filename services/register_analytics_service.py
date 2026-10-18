@@ -298,3 +298,83 @@ def compute_channel_mix(stays: list, commission_expenses: list, *,
     return {"channels": channels,
             "total_gross": _r2(sum(c["gross"] for c in channels)),
             "total_net": _r2(sum(c["net"] for c in channels))}
+
+
+# ── booking pace / forward occupancy ────────────────────────────────────
+
+DEFAULT_HORIZONS = (7, 14, 30)
+# A booking in any of these states is not "future business on the books":
+# cancelled / no-show never happen; checked_in & later are already a stay
+# (in-house or billed), so counting them again would double the nights.
+_NON_PACE_BOOKING_STATUSES = frozenset({
+    "cancelled", "canceled", "no_show", "noshow", "checked_in", "checked_out",
+    "completed",
+})
+
+
+def _overlap_nights(start: date, end_excl: date, w_start: date, w_end_excl: date) -> int:
+    """Nights of [start, end_excl) that fall in [w_start, w_end_excl)."""
+    return max((min(end_excl, w_end_excl) - max(start, w_start)).days, 0)
+
+
+def compute_booking_pace(stays: list, future_bookings: list, room_count: int,
+                         today: date, horizons=DEFAULT_HORIZONS) -> dict:
+    """
+    Forward occupancy for the next N nights (window [today, today + N)).
+
+    Occupied forward nights =
+      * in-house stays (checkout_time is None) projected to their
+        `expected_checkout` — or tonight only when none is known; an overdue
+        expected checkout still holds tonight;
+      * + confirmed future bookings' nights inside the window.
+
+    on_books_revenue: in-house nights x room_price_per_night, plus each
+    booking's total_amount prorated by the share of its nights in the window.
+    Cancelled bookings and bookings with missing / unparseable / inverted dates
+    are skipped.
+    """
+    room_count = max(int(room_count or 0), 0)
+
+    in_house = []
+    for s in (stays or []):
+        if s.get("checkout_time"):
+            continue
+        ci = _to_date(s.get("checkin_time"))
+        if ci is None:
+            continue
+        exp = _to_date(s.get("expected_checkout"))
+        end = exp if (exp and exp > today) else today + timedelta(days=1)
+        in_house.append((max(ci, today), end, _num(s.get("room_price_per_night"))))
+
+    bookings = []
+    for b in (future_bookings or []):
+        if (b.get("status") or "").strip().lower() in _NON_PACE_BOOKING_STATUSES:
+            continue
+        ci = _to_date(b.get("check_in_date"))
+        co = _to_date(b.get("check_out_date"))
+        if ci is None or co is None or co <= ci:
+            continue
+        bookings.append((ci, co, _num(b.get("total_amount"))))
+
+    out = {}
+    for h in horizons:
+        w_start, w_end = today, today + timedelta(days=int(h))
+        nights = 0
+        revenue = 0.0
+        for start, end, rate in in_house:
+            n = _overlap_nights(start, end, w_start, w_end)
+            nights += n
+            revenue += n * rate
+        for ci, co, total in bookings:
+            n = _overlap_nights(ci, co, w_start, w_end)
+            if n:
+                nights += n
+                revenue += total * n / (co - ci).days
+        available = room_count * int(h)
+        out[h] = {
+            "occupied_room_nights": nights,
+            "available_room_nights": available,
+            "occupancy_pct": round(nights / available * 100.0, 1) if available > 0 else 0,
+            "on_books_revenue": _r2(revenue),
+        }
+    return {"horizons": out}

@@ -139,6 +139,18 @@ def require_auth():
             if _provided == _bank_secret:
                 return None
 
+    # 1e. Nightly analytics snapshot — same shared-secret scheme (a dedicated
+    # ANALYTICS_INGEST_SECRET wins; else the scheduler secret used by the OTA
+    # pollers). The route re-checks the secret itself.
+    if path == "/analytics/snapshot":
+        _snap_secret = (os.environ.get("ANALYTICS_INGEST_SECRET", "")
+                        or os.environ.get("AGODA_INGEST_SECRET", "")
+                        or os.environ.get("MMT_INGEST_SECRET", ""))
+        if _snap_secret:
+            _provided = request.headers.get("X-Ingest-Secret", "")
+            if _provided == _snap_secret:
+                return None
+
     # 2. Firebase ID token
     user = load_current_user()
     if user:

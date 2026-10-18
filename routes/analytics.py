@@ -34,6 +34,8 @@ Data notes
   * analytics_snapshots — the last two weeks of nightly pace snapshots.
 """
 
+import hmac
+import os
 import time as _time
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
@@ -46,7 +48,9 @@ from google.cloud.firestore_v1.base_query import FieldFilter
 from config import db, bills_ref, bookings_ref, expenses_ref, IST, logger, get_all_rooms
 from services import payment_service
 from services import register_analytics_service as svc
+from services import auth_service
 from services.auth_service import requires_permission
+from services.permissions import role_has_permission
 
 analytics_bp = Blueprint("analytics", __name__, url_prefix="/analytics")
 
@@ -235,3 +239,68 @@ def analytics_overview():
     except Exception as e:
         logger.error(f"analytics_overview failed: {e}", exc_info=True)
         return jsonify(success=False, message="Failed to compute analytics"), 500
+
+
+# ── POST /analytics/snapshot — nightly on-the-books snapshot ────────────
+#
+# Cloud Scheduler calls this once a night with the shared ingest secret (no
+# JWT), exactly like /mmt/ingest, /agoda/ingest and /bank/settlements/ingest.
+# It appends ONE small doc per date to `analytics_snapshots` (id == date, so a
+# re-run overwrites that night's doc — idempotent). It never touches money or
+# tax documents; the snapshots only feed the "vs a week ago" pace comparison.
+#
+# The global gate in app.py lets the request through when the secret matches;
+# this route re-checks it so it is also safe on its own. A signed-in admin may
+# trigger it by hand (useful the first night, before the scheduler exists).
+
+def _ingest_secret():
+    return (os.environ.get("ANALYTICS_INGEST_SECRET", "")
+            or os.environ.get("AGODA_INGEST_SECRET", "")
+            or os.environ.get("MMT_INGEST_SECRET", ""))
+
+
+def _snapshot_denied():
+    """None when allowed, else a (response, status) to return."""
+    secret = _ingest_secret()
+    provided = request.headers.get("X-Ingest-Secret", "")
+    if secret and provided and hmac.compare_digest(provided, secret):
+        return None
+    user = auth_service.load_current_user()
+    if not user:
+        return jsonify(success=False, message="Authentication required"), 401
+    if not role_has_permission(user["role"], "analytics.view"):
+        return jsonify(success=False, message="Forbidden"), 403
+    return None
+
+
+@analytics_bp.route("/snapshot", methods=["POST"])
+def analytics_snapshot():
+    denied = _snapshot_denied()
+    if denied is not None:
+        return denied
+    try:
+        now = datetime.now(IST).replace(tzinfo=None)
+        today = now.date()
+        rooms = get_all_rooms() or {}
+        bookings = _fetch_bookings(today, today)
+
+        # Pace only needs who is in the building now + what is booked ahead,
+        # so no bills are read at all.
+        stays = svc.attach_expected_checkout(svc.build_stay_universe(rooms, [], today),
+                                             bookings)
+        upcoming = [b for b in bookings if (b.get("check_in_date") or "") >= _iso(today)]
+        snap = svc.build_snapshot(stays, upcoming, len(rooms), today)
+
+        doc = {
+            "date": snap["date"],
+            # Firestore map keys must be strings.
+            "horizons": {str(h): v for h, v in snap["horizons"].items()},
+            "room_count": len(rooms),
+            "created_at": now.strftime("%Y-%m-%d %H:%M:%S"),
+        }
+        snapshots_ref.document(snap["date"]).set(doc)
+        logger.info(f"analytics: snapshot written for {snap['date']}")
+        return jsonify(success=True, date=doc["date"], horizons=doc["horizons"])
+    except Exception as e:
+        logger.error(f"analytics_snapshot failed: {e}", exc_info=True)
+        return jsonify(success=False, message="Failed to write snapshot"), 500

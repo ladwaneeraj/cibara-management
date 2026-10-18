@@ -152,6 +152,94 @@ def test_overview_fetch_failure_is_a_clean_500(app_client, monkeypatch):
     assert r.status_code == 500 and r.get_json()["success"] is False
 
 
+# ── POST /analytics/snapshot (nightly ingest) ───────────────────────────
+
+class _SnapDocRef:
+    def __init__(self, store, id_):
+        self.store, self.id = store, id_
+
+    def set(self, data, *a, **k):
+        self.store.writes.append((self.id, data))
+        self.store.docs[self.id] = data
+
+
+class _SnapColl:
+    def __init__(self):
+        self.docs, self.writes = {}, []
+
+    def document(self, id_):
+        return _SnapDocRef(self, id_)
+
+
+@pytest.fixture
+def snap_client(app_client, monkeypatch):
+    c, state = app_client
+    coll = _SnapColl()
+    monkeypatch.setattr(an, "snapshots_ref", coll)
+    monkeypatch.setenv("ANALYTICS_INGEST_SECRET", "s3cret")
+    monkeypatch.delenv("AGODA_INGEST_SECRET", raising=False)
+    monkeypatch.delenv("MMT_INGEST_SECRET", raising=False)
+    state["user"] = None      # the scheduler carries no JWT
+    return c, state, coll
+
+
+def test_snapshot_with_secret_writes_one_doc_for_today(snap_client):
+    c, _, coll = snap_client
+    r = c.post("/analytics/snapshot", headers={"X-Ingest-Secret": "s3cret"})
+    assert r.status_code == 200 and r.get_json()["success"] is True
+    assert len(coll.writes) == 1
+    doc_id, doc = coll.writes[0]
+    assert doc_id == _today().isoformat() == doc["date"]
+    assert set(doc["horizons"]) == {"7", "14", "30"}       # Firestore map keys are strings
+    assert set(doc["horizons"]["7"]) == {"occupancy_pct", "on_books_revenue"}
+    assert doc["room_count"] == 2
+    # in-house 101 (planned out on a linked booking? none) holds tonight + booking +2..+4
+    assert doc["horizons"]["7"]["on_books_revenue"] == 1000 + 2000
+
+
+def test_snapshot_is_idempotent_overwrites_same_date(snap_client):
+    c, _, coll = snap_client
+    for _ in range(2):
+        assert c.post("/analytics/snapshot",
+                      headers={"X-Ingest-Secret": "s3cret"}).status_code == 200
+    assert len(coll.docs) == 1 and len(coll.writes) == 2
+
+
+@pytest.mark.parametrize("headers", [{}, {"X-Ingest-Secret": "wrong"}, {"X-Ingest-Secret": ""}])
+def test_snapshot_rejects_missing_or_wrong_secret(snap_client, headers):
+    c, _, coll = snap_client
+    r = c.post("/analytics/snapshot", headers=headers)
+    assert r.status_code in (401, 403)
+    assert coll.writes == []
+
+
+def test_snapshot_with_no_secret_configured_needs_a_login(snap_client, monkeypatch):
+    c, state, coll = snap_client
+    monkeypatch.delenv("ANALYTICS_INGEST_SECRET")
+    assert c.post("/analytics/snapshot",
+                  headers={"X-Ingest-Secret": "anything"}).status_code in (401, 403)
+    assert coll.writes == []
+    state["user"] = ADMIN                      # an admin may trigger it by hand
+    assert c.post("/analytics/snapshot").status_code == 200
+    assert len(coll.writes) == 1
+
+
+def test_snapshot_manager_is_forbidden(snap_client):
+    c, state, coll = snap_client
+    state["user"] = MANAGER
+    assert c.post("/analytics/snapshot").status_code == 403
+    assert coll.writes == []
+
+
+def test_snapshot_shared_scheduler_secret_fallback(snap_client, monkeypatch):
+    c, _, coll = snap_client
+    monkeypatch.delenv("ANALYTICS_INGEST_SECRET")
+    monkeypatch.setenv("MMT_INGEST_SECRET", "shared")
+    assert c.post("/analytics/snapshot",
+                  headers={"X-Ingest-Secret": "shared"}).status_code == 200
+    assert len(coll.writes) == 1
+
+
 # ── projections: every Firestore read uses .select() ────────────────────
 
 class _Q:

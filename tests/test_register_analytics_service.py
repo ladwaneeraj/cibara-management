@@ -10,6 +10,7 @@ from services.register_analytics_service import (
     channel_of,
     compute_booking_pace,
     compute_channel_mix,
+    compute_los_leadtime,
     compute_overview,
     compute_seasonality,
 )
@@ -313,6 +314,69 @@ def test_seasonality_in_house_stay_counted_to_today():
     s = compute_seasonality(stays, 1, "2026-10-16", "2026-10-18", date(2026, 10, 18))
     sat = next(w for w in s["weekday"] if w["weekday"] == "Saturday")   # 17th
     assert sat["occupancy_pct"] == 100.0
+
+
+# ── Task 5: length of stay & lead time ──────────────────────────────────
+
+def _bucket(rows, name):
+    return next(r["count"] for r in rows if r["bucket"] == name)
+
+
+def test_los_two_night_stay_and_walkin_leadtime():
+    out = compute_los_leadtime([_stay("2026-10-10", "2026-10-12", stay_id="s1", room="101")], [])
+    assert _bucket(out["los"], "2") == 1
+    assert _bucket(out["lead_time"], "walk-in") == 1
+    assert _bucket(out["lead_time"], "0-1") == 0     # walk-ins must NOT pollute 0-1
+
+
+def test_los_and_leadtime_buckets_are_always_present_in_order():
+    out = compute_los_leadtime([], [])
+    assert [r["bucket"] for r in out["los"]] == ["1", "2", "3", "4-6", "7+"]
+    assert [r["bucket"] for r in out["lead_time"]] == ["walk-in", "0-1", "2-7", "8-30", "30+"]
+    assert all(r["count"] == 0 for r in out["los"] + out["lead_time"])
+
+
+def test_los_bucket_edges_and_in_house_to_today():
+    mk = lambda n: _stay("2026-10-01", f"2026-10-{1 + n:02d}", stay_id=f"s{n}")
+    out = compute_los_leadtime([mk(1), mk(3), mk(4), mk(6), mk(7), mk(9)], [])
+    assert [_bucket(out["los"], b) for b in ("1", "2", "3", "4-6", "7+")] == [1, 0, 1, 2, 2]
+    # in-house: nights counted up to today
+    inh = compute_los_leadtime([_stay("2026-10-15", None, stay_id="x")], [],
+                               today=date(2026, 10, 18))
+    assert _bucket(inh["los"], "3") == 1
+
+
+def test_same_day_stay_is_one_night_bucket():
+    out = compute_los_leadtime([_stay("2026-10-10", "2026-10-10", stay_id="s")], [])
+    assert _bucket(out["los"], "1") == 1
+
+
+def test_leadtime_from_booking_created_to_check_in():
+    bookings = [
+        {"stay_id": "s1", "check_in_date": "2026-10-10", "booking_date": "2026-10-10", "status": "checked_in"},
+        {"stay_id": "s2", "check_in_date": "2026-10-10", "booking_date": "2026-10-05", "status": "checked_in"},
+        {"check_in_date": "2026-10-20", "booking_date": "2026-10-01", "status": "confirmed"},   # 19 -> 8-30
+        {"check_in_date": "2026-10-20", "booking_created": "2026-08-01 10:00", "status": "confirmed"},  # 30+
+        {"check_in_date": "2026-10-20", "booking_date": "2026-10-01", "status": "cancelled"},
+        {"check_in_date": "2026-10-20", "booking_date": ""},                                    # no created date
+    ]
+    stays = [_stay("2026-10-10", "2026-10-11", stay_id="s1"),
+             _stay("2026-10-10", "2026-10-11", stay_id="s2"),
+             _stay("2026-10-10", "2026-10-11", stay_id="s3", room="9")]   # walk-in
+    out = compute_los_leadtime(stays, bookings)
+    lt = out["lead_time"]
+    assert _bucket(lt, "walk-in") == 1
+    assert _bucket(lt, "0-1") == 1 and _bucket(lt, "2-7") == 1
+    assert _bucket(lt, "8-30") == 1 and _bucket(lt, "30+") == 1
+
+
+def test_stay_matched_by_room_and_checkin_date_is_not_walkin():
+    stays = [_stay("2026-10-10", "2026-10-11", stay_id="s1", room="101")]
+    bookings = [{"room": "101", "check_in_date": "2026-10-10", "booking_date": "2026-10-09",
+                 "status": "checked_in"}]
+    out = compute_los_leadtime(stays, bookings)
+    assert _bucket(out["lead_time"], "walk-in") == 0
+    assert _bucket(out["lead_time"], "0-1") == 1
 
 
 def test_pace_zero_rooms_no_divide_by_zero():

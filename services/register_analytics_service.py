@@ -455,3 +455,95 @@ def compute_seasonality(stays: list, room_count: int, window_from: str,
         months.append({"month": m0.strftime("%Y-%m"), "occupancy_pct": k["occupancy_pct"],
                        "adr": k["adr"], "revpar": k["revpar"]})
     return {"weekday": weekday, "months": months}
+
+
+# ── length of stay & lead time ──────────────────────────────────────────
+
+_LOS_BUCKETS = ("1", "2", "3", "4-6", "7+")
+_LEAD_BUCKETS = ("walk-in", "0-1", "2-7", "8-30", "30+")
+# Booking-creation timestamp: manual bookings store `booking_date`, OTA ingest
+# stores `createdAt`; `booking_created` is accepted as the canonical name.
+_BOOKING_CREATED_FIELDS = ("booking_created", "booking_date", "createdAt")
+
+
+def _los_bucket(nights: int) -> str:
+    if nights <= 1:
+        return "1"          # same-day / day-use counts with one-night stays
+    if nights == 2:
+        return "2"
+    if nights == 3:
+        return "3"
+    if nights <= 6:
+        return "4-6"
+    return "7+"
+
+
+def _lead_bucket(days: int) -> str:
+    if days <= 1:
+        return "0-1"
+    if days <= 7:
+        return "2-7"
+    if days <= 30:
+        return "8-30"
+    return "30+"
+
+
+def _booking_created(b: dict):
+    for f in _BOOKING_CREATED_FIELDS:
+        d = _to_date(str(b.get(f) or "").replace("T", " "))
+        if d:
+            return d
+    return None
+
+
+def compute_los_leadtime(stays: list, bookings: list, *, today: date | None = None) -> dict:
+    """
+    Length-of-stay and lead-time distributions (fixed, ordered buckets).
+
+    LOS: nights from check-in to checkout (in-house: to `today`); same-day
+    stays count as 1.
+
+    Lead time: check_in_date - booking creation date, for booking rows only
+    (cancelled bookings and rows without a creation date are skipped).
+    Stays that no booking row accounts for — matched on stay_id, else on
+    (room, check-in date) — are walk-ins: their own "walk-in" bucket, never a
+    lead time of 0.
+    """
+    today = today or date.today()
+
+    los = dict.fromkeys(_LOS_BUCKETS, 0)
+    for s in (stays or []):
+        ci = _to_date(s.get("checkin_time"))
+        if ci is None:
+            continue
+        co = _to_date(s.get("checkout_time")) or today
+        los[_los_bucket(max((co - ci).days, 0))] += 1
+
+    lead = dict.fromkeys(_LEAD_BUCKETS, 0)
+    linked_ids = set()
+    linked_keys = set()
+    for b in (bookings or []):
+        if b.get("stay_id"):
+            linked_ids.add(b["stay_id"])
+        ci = _to_date(b.get("check_in_date"))
+        if b.get("room") and ci:
+            linked_keys.add((str(b["room"]), ci))
+        if (b.get("status") or "").strip().lower() in ("cancelled", "canceled"):
+            continue
+        created = _booking_created(b)
+        if ci is None or created is None:
+            continue
+        lead[_lead_bucket(max((ci - created).days, 0))] += 1
+
+    for s in (stays or []):
+        ci = _to_date(s.get("checkin_time"))
+        if ci is None:
+            continue
+        if s.get("stay_id") in linked_ids:
+            continue
+        if s.get("room") and (str(s["room"]), ci) in linked_keys:
+            continue
+        lead["walk-in"] += 1
+
+    return {"los": [{"bucket": k, "count": v} for k, v in los.items()],
+            "lead_time": [{"bucket": k, "count": v} for k, v in lead.items()]}

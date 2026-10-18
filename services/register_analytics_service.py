@@ -621,3 +621,133 @@ def pace_vs_prior(current: dict, snapshots: list, today: date) -> dict:
             }
         out[h] = row
     return {"horizons": out, "compared_to": best["date"] if best else None}
+
+
+# ── findings + compose ──────────────────────────────────────────────────
+
+# Rules only fire when the sample means something.
+_MIN_CHANNEL_NIGHTS = 5          # room-nights per channel before comparing
+_CHANNEL_GAP_PCT = 25            # net ADR this far below Direct -> flag
+_FORWARD_OCC_FLOOR_PCT = 30.0    # next-7-night occupancy considered thin
+_PACE_SWING_PTS = 10.0           # week-on-week change worth mentioning
+
+
+def attach_expected_checkout(stays: list, bookings: list) -> list:
+    """
+    Give each in-house stay its booking's check_out_date as `expected_checkout`
+    (bookings link to stays by `stay_id`). Rooms carry no planned checkout, so
+    this is the only forward signal for a stay that is still in the building.
+    Mutates and returns `stays`; checked-out stays are left alone.
+    """
+    out_by_stay = {b["stay_id"]: b.get("check_out_date")
+                   for b in (bookings or []) if b.get("stay_id") and b.get("check_out_date")}
+    for s in stays:
+        if s.get("checkout_time"):
+            continue
+        exp = out_by_stay.get(s.get("stay_id"))
+        if exp:
+            s["expected_checkout"] = exp
+    return stays
+
+
+def _money(x) -> str:
+    return "₹{:,.0f}".format(_num(x))
+
+
+def compute_findings(overview: dict, channel_mix: dict, pace: dict) -> list:
+    """
+    A few conservative, plain-language findings — same shape as
+    insights_service.generate_insights: {"level": good|warn|info, "icon", "text"}.
+    """
+    out = []
+
+    def add(level, icon, text):
+        out.append({"level": level, "icon": icon, "text": text})
+
+    # 1. A channel whose net ADR trails Direct by a wide margin.
+    chans = (channel_mix or {}).get("channels") or []
+    direct = next((c for c in chans if c.get("channel") == CH_DIRECT), None)
+    if direct and direct.get("room_nights", 0) >= _MIN_CHANNEL_NIGHTS and direct.get("net_adr", 0) > 0:
+        for c in chans:
+            if c is direct or c.get("room_nights", 0) < _MIN_CHANNEL_NIGHTS:
+                continue
+            gap = (direct["net_adr"] - c.get("net_adr", 0)) / direct["net_adr"] * 100.0
+            if gap >= _CHANNEL_GAP_PCT:
+                add("warn", "percent",
+                    f"{c['channel']} nets {_money(c['net_adr'])} per night after commission vs "
+                    f"{_money(direct['net_adr'])} direct ({gap:.0f}% less). Direct bookings "
+                    f"are worth pushing.")
+
+    # 2. Thin forward occupancy.
+    h7 = ((pace or {}).get("horizons") or {}).get(7)
+    if h7 and h7.get("available_room_nights", 0) > 0:
+        if h7.get("occupancy_pct", 0) < _FORWARD_OCC_FLOOR_PCT:
+            add("warn", "calendar",
+                f"Only {h7['occupancy_pct']:.0f}% of the next 7 nights are on the books. "
+                f"Consider a last-minute offer or a push on direct channels.")
+        # 3. Pace against last week.
+        d = h7.get("delta")
+        if d:
+            swing = d.get("occupancy_pct", 0)
+            if swing <= -_PACE_SWING_PTS:
+                add("warn", "arrow-trend-down",
+                    f"Next-7-night bookings are {abs(swing):.0f} points behind where they "
+                    f"were a week ago ({d.get('vs_date')}).")
+            elif swing >= _PACE_SWING_PTS:
+                add("good", "arrow-trend-up",
+                    f"Next-7-night bookings are {swing:.0f} points ahead of a week ago.")
+
+    # 4. Impossible occupancy → the room count is wrong.
+    if ((overview or {}).get("occupancy") or {}).get("occupancy_over_100"):
+        add("warn", "triangle-exclamation",
+            "Occupancy is above 100% - check the room count; figures use the "
+            "current number of rooms for every period.")
+    return out
+
+
+def compute_analytics_overview(*, rooms: dict, bills: list, payments: list, bookings: list,
+                               commission_expenses: list, snapshots: list, room_count: int,
+                               window_from: str, window_to: str, now: datetime) -> dict:
+    """
+    The whole /analytics/overview payload from already-fetched, projected rows.
+    Returns aggregates and chart series only — never the raw rows.
+    """
+    today = now.date()
+    wf = _to_date(window_from) or today
+    wt = min(_to_date(window_to) or today, today)
+    if wt < wf:
+        wf = wt
+    wf_s, wt_s = wf.isoformat(), wt.isoformat()
+
+    stays = build_stay_universe(rooms, bills, today)
+    attach_expected_checkout(stays, bookings)
+
+    overview = compute_overview(stays, payments, room_count, wf_s, wt_s, today)
+    channel_mix = compute_channel_mix(stays, commission_expenses,
+                                      window_from=wf_s, window_to=wt_s, today=today)
+
+    upcoming = [b for b in (bookings or [])
+                if (_to_date(b.get("check_in_date")) or date.min) >= today]
+    pace = pace_vs_prior(compute_booking_pace(stays, upcoming, room_count, today),
+                         snapshots, today)
+
+    seasonality = compute_seasonality(stays, room_count, wf_s, wt_s, today)
+
+    in_window_stays = [s for s in stays
+                       if (_to_date(s.get("checkin_time")) or date.min) >= wf
+                       and (_to_date(s.get("checkin_time")) or date.max) <= wt]
+    in_window_bookings = [b for b in (bookings or [])
+                          if wf <= (_to_date(b.get("check_in_date")) or date.min) <= wt]
+    los_leadtime = compute_los_leadtime(in_window_stays, in_window_bookings, today=today)
+
+    return {
+        "success": True,
+        "window": {"from": wf_s, "to": wt_s},
+        "overview": overview,
+        "channel_mix": channel_mix,
+        "pace": pace,
+        "seasonality": seasonality,
+        "los_leadtime": los_leadtime,
+        "findings": compute_findings(overview, channel_mix, pace),
+        "generated_at": now.strftime("%Y-%m-%d %H:%M:%S"),
+    }

@@ -3,14 +3,17 @@ Unit tests for services/register_analytics_service.py (pure — no Firestore,
 no Flask). Register-basis stay universe, overview KPIs, channel mix, booking
 pace, seasonality, LOS / lead-time, snapshots and findings.
 """
-from datetime import date
+from datetime import date, datetime
 
 from services.register_analytics_service import (
+    attach_expected_checkout,
     build_snapshot,
     build_stay_universe,
     channel_of,
+    compute_analytics_overview,
     compute_booking_pace,
     compute_channel_mix,
+    compute_findings,
     compute_los_leadtime,
     compute_overview,
     compute_seasonality,
@@ -443,6 +446,145 @@ def test_pace_vs_prior_horizon_missing_in_snapshot_is_none():
     snap = {"date": "2026-10-11", "horizons": {7: {"occupancy_pct": 0, "on_books_revenue": 0}}}
     out = pace_vs_prior(cur, [snap], today)
     assert out["horizons"][7]["delta"] is not None and out["horizons"][14]["delta"] is None
+
+
+# ── Task 7: findings + compose ──────────────────────────────────────────
+
+def _seed_compose(**over):
+    """A small, fully-seeded register: 4 rooms, one in-house MMT guest, a
+    completed direct stay and a completed (pricey-commission) MMT stay."""
+    rooms = {
+        "101": {"status": "occupied", "active_bill_id": "s1",
+                "checkin_time": "2026-10-17 12:00", "room_price_per_night": 1000,
+                "booking_source": "mmt", "payment_source": "ota"},
+        "102": {"status": "vacant"}, "103": {"status": "vacant"}, "104": {"status": "vacant"},
+    }
+    bills = [
+        {"id": "b1", "status": "completed", "room": "102", "booking_source": "normal",
+         "payment_source": "hotel", "checkin_time": "2026-10-10 12:00",
+         "checkout_time": "2026-10-16 10:00", "room_charges_total": 12000},
+        {"id": "b2", "status": "completed", "room": "103", "booking_source": "mmt",
+         "payment_source": "ota", "checkin_time": "2026-10-10 12:00",
+         "checkout_time": "2026-10-16 10:00", "room_charges_total": 12000,
+         "ota_commission": 4000, "ota_commission_gst": 720},
+        {"id": "s1", "status": "draft", "room": "101", "checkin_time": "2026-10-17 12:00",
+         "checkout_time": None, "room_price_per_night": 1000},   # the in-house draft
+    ]
+    kw = dict(
+        rooms=rooms, bills=bills,
+        payments=[{"method": "cash", "type": "checkin", "amount": 5000, "date": "2026-10-17"}],
+        bookings=[
+            {"stay_id": "s1", "room": "101", "status": "checked_in",
+             "check_in_date": "2026-10-17", "check_out_date": "2026-10-20",
+             "booking_date": "2026-10-10"},
+            {"room": "102", "status": "confirmed", "check_in_date": "2026-10-19",
+             "check_out_date": "2026-10-21", "total_amount": 3000, "booking_date": "2026-10-01"},
+        ],
+        commission_expenses=[], snapshots=[], room_count=4,
+        window_from="2026-10-10", window_to="2026-10-18",
+        now=datetime(2026, 10, 18, 9, 30),
+    )
+    kw.update(over)
+    return compute_analytics_overview(**kw)
+
+
+def test_compose_has_all_top_level_keys_and_register_numbers():
+    out = _seed_compose()
+    assert out["success"] is True
+    for k in ("window", "overview", "channel_mix", "pace", "seasonality",
+              "los_leadtime", "findings", "generated_at"):
+        assert k in out
+    assert out["window"] == {"from": "2026-10-10", "to": "2026-10-18"}
+    # b1 6 nights + b2 6 nights + in-house s1 (17th) 1 night; the draft b9 is
+    # the same stay as s1 and must not be counted twice.
+    assert out["overview"]["occupancy"]["occupied_room_nights"] == 13
+    assert out["overview"]["occupancy"]["counted_stays"] == 3
+    assert out["overview"]["collections"]["cash"] == 5000
+    assert out["generated_at"] == "2026-10-18 09:30:00"
+
+
+def test_compose_in_house_projected_to_linked_booking_checkout():
+    out = _seed_compose()
+    h7 = out["pace"]["horizons"][7]
+    # s1: 18th,19th (checkout 20th) + confirmed booking 19th,20th = 4
+    assert h7["occupied_room_nights"] == 4
+    assert h7["on_books_revenue"] == 2000 + 3000
+    assert h7["delta"] is None
+
+
+def test_compose_channel_mix_nets_commission_and_includes_findings():
+    out = _seed_compose()
+    mmt = next(c for c in out["channel_mix"]["channels"] if c["channel"] == "MMT")
+    assert mmt["commission"] > 0 and mmt["net"] < mmt["gross"]
+    assert isinstance(out["findings"], list) and out["findings"]
+    f = out["findings"][0]
+    assert set(f) == {"level", "icon", "text"}
+    # MMT nets far below Direct per night -> the channel finding fires.
+    assert any("MMT" in x["text"] for x in out["findings"])
+
+
+def test_compose_los_leadtime_only_counts_window_checkins():
+    out = _seed_compose()
+    los = {r["bucket"]: r["count"] for r in out["los_leadtime"]["los"]}
+    assert sum(los.values()) == 3          # b1, b2, s1 (draft of s1 deduped)
+    lt = {r["bucket"]: r["count"] for r in out["los_leadtime"]["lead_time"]}
+    assert lt["walk-in"] == 2              # b1, b2 have no booking doc
+    assert lt["2-7"] == 1                  # s1's booking: made 7 days ahead
+    assert sum(lt.values()) == 3           # the 19th booking is outside the window
+
+
+def test_compose_response_is_small_no_raw_rows():
+    import json
+    out = _seed_compose()
+    blob = json.dumps(out, default=str)
+    for raw in ('"b1"', '"b2"', '"s1"', '"stay_id"', '"checkin_time"', '"checkout_time"',
+                '"room_charges_total"', '"guest_name"', '"payments"', '"bills"'):
+        assert raw not in blob
+
+
+def test_compose_empty_everything_does_not_crash():
+    out = compute_analytics_overview(
+        rooms={}, bills=[], payments=[], bookings=[], commission_expenses=[],
+        snapshots=[], room_count=0, window_from="2026-10-18", window_to="2026-10-18",
+        now=datetime(2026, 10, 18, 9, 30))
+    assert out["success"] is True
+    assert out["overview"]["occupancy"]["occupancy_pct"] == 0
+
+
+def test_findings_low_forward_occupancy_fires():
+    ov = {"occupancy": {"occupancy_over_100": False}}
+    pace = {"horizons": {7: {"occupancy_pct": 10.0, "available_room_nights": 35,
+                             "delta": None}}}
+    out = compute_findings(ov, {"channels": []}, pace)
+    assert any("next 7 nights" in f["text"] for f in out)
+
+
+def test_findings_silent_on_small_samples_and_healthy_pace():
+    ov = {"occupancy": {"occupancy_over_100": False}}
+    mix = {"channels": [
+        {"channel": "Direct/Walk-in", "net_adr": 1000, "room_nights": 2},
+        {"channel": "MMT", "net_adr": 100, "room_nights": 2}]}     # too few nights
+    pace = {"horizons": {7: {"occupancy_pct": 80.0, "available_room_nights": 35, "delta": None}}}
+    assert compute_findings(ov, mix, pace) == []
+
+
+def test_findings_pace_delta_and_over_capacity():
+    ov = {"occupancy": {"occupancy_over_100": True}}
+    pace = {"horizons": {7: {"occupancy_pct": 60.0, "available_room_nights": 35,
+                             "delta": {"occupancy_pct": -15.0, "on_books_revenue": -500,
+                                       "vs_date": "2026-10-11"}}}}
+    texts = " ".join(f["text"] for f in compute_findings(ov, {"channels": []}, pace))
+    assert "behind" in texts and "room count" in texts
+
+
+def test_attach_expected_checkout_links_by_stay_id_only_for_in_house():
+    stays = [{"stay_id": "s1", "checkout_time": None},
+             {"stay_id": "s2", "checkout_time": "2026-10-12 10:00"}]
+    bookings = [{"stay_id": "s1", "check_out_date": "2026-10-21"},
+                {"stay_id": "s2", "check_out_date": "2026-10-13"}]
+    attach_expected_checkout(stays, bookings)
+    assert stays[0]["expected_checkout"] == "2026-10-21"
+    assert "expected_checkout" not in stays[1]
 
 
 def test_pace_zero_rooms_no_divide_by_zero():

@@ -139,6 +139,33 @@ def create_app() -> FastAPI:
         async def _spa_off(path: str = ""):
             return RedirectResponse("/", status_code=302)
 
+    # ── /analytics: the lean register-analytics React bundle ──────────────
+    # Built by `vite build --mode analytics` into <FRONTEND_DIST>/analytics and
+    # always served (classic or SPA mode). Deliberately narrow: only the page
+    # itself and /analytics/assets/*. Every other /analytics/<x> path — notably
+    # the Flask blueprint's /analytics/overview and POST /analytics/snapshot —
+    # falls through to the legacy app below.
+    analytics_dist = dist / "analytics"
+
+    @app.get("/analytics", include_in_schema=False)
+    async def _analytics_slash():
+        return RedirectResponse("/analytics/", status_code=302)
+
+    @app.get("/analytics/", include_in_schema=False)
+    async def _analytics_index():
+        page = analytics_dist / "index.html"
+        if not page.is_file():
+            return JSONResponse(_error_body("Analytics not built. Run `npm run build` in frontend/."), status_code=503)
+        return FileResponse(page, headers={"Cache-Control": "no-cache"})
+
+    @app.get("/analytics/assets/{path:path}", include_in_schema=False)
+    async def _analytics_asset(path: str):
+        base = (analytics_dist / "assets").resolve()
+        target = (base / path).resolve()
+        if base in target.parents and target.is_file():
+            return FileResponse(target, headers={"Cache-Control": "public, max-age=31536000, immutable"})
+        return JSONResponse(_error_body("Not found"), status_code=404)
+
     # ── legacy catch-all (must be last) ───────────────────────────────────
     app.mount("/", WSGIMiddleware(legacy.legacy_wsgi, workers=s.LEGACY_WSGI_WORKERS))
 

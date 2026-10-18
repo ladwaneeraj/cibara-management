@@ -1,0 +1,9 @@
+/*
+ * Entry stylesheet for the /analytics bundle.
+ * Reuses the SPA design tokens (src/index.css). The bundle's Vite root is
+ * frontend/analytics, so Tailwind must be told to also scan the shared
+ * components it imports from ../src.
+ */
+@import "../src/index.css";
+@source "../src";
+@source ".";

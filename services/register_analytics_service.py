@@ -203,8 +203,11 @@ def _collections(payments: list) -> dict:
             cash += amt
         elif method == "online":
             online += amt
+    net = cash + online - refunds
+    # `net_revenue` is the headline period figure the Overview tile shows;
+    # `net` is the same money viewed as collections (cash/online/refunds).
     return {"cash": _r2(cash), "online": _r2(online), "refunds": _r2(refunds),
-            "net": _r2(cash + online - refunds)}
+            "net": _r2(net), "net_revenue": _r2(net)}
 
 
 def compute_overview(stays: list, payments: list, room_count: int,
@@ -726,10 +729,20 @@ def compute_analytics_overview(*, rooms: dict, bills: list, payments: list, book
     channel_mix = compute_channel_mix(stays, commission_expenses,
                                       window_from=wf_s, window_to=wt_s, today=today)
 
-    upcoming = [b for b in (bookings or [])
-                if (_to_date(b.get("check_in_date")) or date.min) >= today]
-    pace = pace_vs_prior(compute_booking_pace(stays, upcoming, room_count, today),
+    # Pass ALL bookings and let compute_booking_pace exclude cancelled/in-house
+    # statuses and clip each one to the horizon window. Pre-filtering to
+    # check_in_date >= today here would drop a confirmed booking that started
+    # before today but still spans the horizon (I3 undercount).
+    pace = pace_vs_prior(compute_booking_pace(stays, bookings, room_count, today),
                          snapshots, today)
+
+    # The Overview strip's "next 7 nights" tile reads from pace horizon 7.
+    _h = pace.get("horizons") or {}
+    _h7 = _h.get(7) or _h.get("7") or {}
+    overview["on_books_next7"] = {
+        "occupancy_pct": _h7.get("occupancy_pct", 0),
+        "on_books_revenue": _h7.get("on_books_revenue", 0),
+    }
 
     seasonality = compute_seasonality(stays, room_count, wf_s, wt_s, today)
 
@@ -742,7 +755,7 @@ def compute_analytics_overview(*, rooms: dict, bills: list, payments: list, book
 
     return {
         "success": True,
-        "window": {"from": wf_s, "to": wt_s},
+        "window": {"from": wf_s, "to": wt_s, "days": (wt - wf).days + 1},
         "overview": overview,
         "channel_mix": channel_mix,
         "pace": pace,

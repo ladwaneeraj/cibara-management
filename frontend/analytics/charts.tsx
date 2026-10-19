@@ -13,6 +13,13 @@ export const AXIS = { fontSize: 11, fill: '#94a3b8' }
 export const GRID = 'rgba(148,163,184,.18)'
 export const TIP_STYLE = { borderRadius: 12, border: '1px solid rgba(148,163,184,.25)', fontSize: 12 }
 
+// Muted, semantic colours (deliberately not bright). Cash is green, online is
+// blue; NEUTRAL is a calm blue-grey for single-series bars.
+export const CASH_COLOR = '#4a9d77'
+export const ONLINE_COLOR = '#4f7cb8'
+export const ADDON_COLOR = '#8a7fb0'
+export const NEUTRAL = '#6b89b5'
+
 /** Stable colour per name so a channel keeps its colour across charts. */
 export const colorAt = (i: number) => PALETTE[i % PALETTE.length]
 

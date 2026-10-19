@@ -3,8 +3,8 @@
  * access JWT, refresh-on-401, success:false => ApiError) — no bespoke fetch.
  */
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ApiError, get } from '@/lib/api'
-import type { AnalyticsOverview, CustomerInsights, CustomerSegment, SegmentDimension } from './types'
+import { ApiError, get, post } from '@/lib/api'
+import type { AnalyticsOverview, CustomerInsights, CustomerSegment, Demographics, FinancialsReport, Gstr1Summary, SegmentDimension } from './types'
 
 const overviewKey = (from: string, to: string) => ['analytics', 'overview', from, to] as const
 
@@ -27,6 +27,41 @@ export function useRefreshOverview(from: string, to: string) {
     onSuccess: (data) => qc.setQueryData(overviewKey(from, to), data),
   })
   return { refresh: () => m.mutateAsync(), pending: m.isPending, error: m.error }
+}
+
+const financialsKey = (from: string, to: string) => ['analytics', 'financials', from, to] as const
+
+/** Payment/expense-basis figures for the Financial performance section:
+ *  POST /reports (the old Analytics tab's source). `from`/`to` are inclusive
+ *  YYYY-MM-DD; the legacy route makes `to` exclusive itself. */
+export function useFinancials(from: string, to: string) {
+  return useQuery({
+    queryKey: financialsKey(from, to),
+    queryFn: () => post<FinancialsReport>('/reports', { start_date: from, end_date: to }),
+    enabled: Boolean(from && to),
+    placeholderData: (prev) => prev,
+  })
+}
+
+/** Guest demographics (customer.manage): age distribution + pincode/taluk
+ *  footfall + resolved geo points for the map. All-time, OCR-sourced. */
+export function useDemographics() {
+  return useQuery({
+    queryKey: ['analytics', 'demographics'],
+    queryFn: ({ signal }) => get<Demographics>('/customer_analytics', undefined, signal),
+    staleTime: 5 * 60_000,
+  })
+}
+
+/** GSTR-1 summary for the window (analytics.view via the Reports gate).
+ *  `enabled` lets the caller defer the fetch until the Reports tab is open. */
+export function useGstr1(from: string, to: string, enabled = true) {
+  return useQuery({
+    queryKey: ['analytics', 'gstr1', from, to],
+    queryFn: () => post<Gstr1Summary>('/reports/gstr1_summary', { start_date: from, end_date: to }),
+    enabled: enabled && Boolean(from && to),
+    placeholderData: (prev) => prev,
+  })
 }
 
 /** Existing CRM insights (customer.manage). Cached server-side for 5 minutes. */

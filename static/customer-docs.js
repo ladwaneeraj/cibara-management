@@ -39,6 +39,29 @@ let _viewerUrls              = [];
 window.CibaraSecureImg = (function () {
   const cache = new Map();
   const meta  = {};
+  // 1x1 transparent GIF. Secure images can't be set as a plain `src` (they
+  // need an authenticated fetch), so the <img> sits src-less while that fetch
+  // is in flight — and a src-less <img> with an `alt` renders the browser's
+  // broken-image glyph. Parking this transparent pixel on it keeps the slot
+  // clean and lets the CSS skeleton/placeholder below show through instead.
+  const BLANK_PX = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+
+  // Inject the skeleton / error styles once. Self-contained here so the fix
+  // ships with this file (cache-busted via asset_url) — no separate CSS edit.
+  (function injectStyle() {
+    if (typeof document === 'undefined' || document.getElementById('secimg-style')) return;
+    const st = document.createElement('style');
+    st.id = 'secimg-style';
+    st.textContent =
+      '@keyframes secimg-shimmer{0%{background-position:-160px 0}100%{background-position:160px 0}}' +
+      'img.secimg-loading{background-color:#eef2f7;' +
+      'background-image:linear-gradient(90deg,#eef2f7 0%,#f6f9fc 50%,#eef2f7 100%);' +
+      'background-size:320px 100%;animation:secimg-shimmer 1.1s linear infinite}' +
+      'img.secimg-error{animation:none;background:#f3f4f6 center/44% no-repeat ' +
+      "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%239aa3af' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3' y='5' width='18' height='14' rx='2'/%3E%3Ccircle cx='8.5' cy='11' r='2'/%3E%3Cpath d='M13 10h5M13 14h5M5.5 16c.6-1.6 2-2.4 3-2.4s2.4.8 3 2.4'/%3E%3C/svg%3E\")}";
+    (document.head || document.documentElement).appendChild(st);
+  })();
+
   const isSecure = (u) => typeof u === 'string' && u.startsWith('/api/v2/customers/');
   function src(url, variant) {
     if (!isSecure(url)) return Promise.resolve(url);
@@ -56,8 +79,21 @@ window.CibaraSecureImg = (function () {
   function apply(img, url, variant) {
     if (!isSecure(url)) { img.src = url; return; }
     img.dataset.secureSrc = url;
-    src(url, variant).then((u) => { if (img.dataset.secureSrc === url) img.src = u; })
-      .catch(() => { img.alt = 'Could not load'; });
+    // Skeleton immediately — no broken-image flash while the authed fetch runs.
+    img.classList.remove('secimg-error');
+    img.classList.add('secimg-loading');
+    if (!img.getAttribute('src')) img.src = BLANK_PX;
+    src(url, variant).then((u) => {
+      if (img.dataset.secureSrc !== url) return;   // a newer apply() superseded us
+      img.src = u;
+      img.classList.remove('secimg-loading', 'secimg-error');
+    }).catch(() => {
+      if (img.dataset.secureSrc !== url) return;
+      img.src = BLANK_PX;                           // keep the pixel, never the glyph
+      img.classList.remove('secimg-loading');
+      img.classList.add('secimg-error');
+      img.alt = 'Document unavailable';
+    });
   }
   function open(url) {
     if (!isSecure(url)) { window.open(url, '_blank'); return; }

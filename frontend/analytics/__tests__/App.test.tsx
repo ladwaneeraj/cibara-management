@@ -4,10 +4,13 @@ import { describe, expect, it, vi } from 'vitest'
 import { json, mockFetch, renderWith, signIn } from '@/test/utils'
 import { useAuth } from '@/lib/auth'
 import { App, AuthGate } from '../App'
-import { CUSTOMERS, OVERVIEW } from './fixtures'
+import { CUSTOMERS, DEMOGRAPHICS, FINANCIALS, GSTR1, OVERVIEW } from './fixtures'
 
 const ok = () => ({
   'GET /api/v2/analytics/overview': OVERVIEW,
+  'POST /reports': FINANCIALS,
+  'POST /reports/gstr1_summary': GSTR1,
+  'GET /customer_analytics': DEMOGRAPHICS,
   'GET /customer_insights': CUSTOMERS,
 })
 
@@ -22,7 +25,7 @@ describe('analytics App', () => {
 
     const order = screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent)
     expect(order).toEqual([
-      'What to look at', 'Overview', 'Channel mix', 'Booking pace', 'Seasonality', 'Length of stay & lead time', 'Customers',
+      'What to look at', 'Financial performance', 'Overview', 'Channel mix', 'Booking pace', 'Seasonality', 'Length of stay & lead time', 'Guests',
     ])
 
     const strip = screen.getByRole('region', { name: 'What to look at' })
@@ -96,6 +99,27 @@ describe('analytics App', () => {
     mockFetch(ok())
     renderWith(<App />)
     expect(screen.getByRole('link', { name: /back to app/i })).toHaveAttribute('href', '/')
+  })
+
+  it('merges CRM + demographics into one Guests section', async () => {
+    signIn('admin')
+    mockFetch(ok())
+    renderWith(<App />)
+    expect(await screen.findByRole('heading', { level: 2, name: 'Guests' })).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: 'Guest base & loyalty' })).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: 'Age distribution' })).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Footfall by pincode' })).not.toBeInTheDocument()
+  })
+
+  it('switches to the Reports tab: transactions, export and GSTR-1', async () => {
+    signIn('admin')
+    mockFetch(ok())
+    renderWith(<App />)
+    await screen.findByText('62.5%')
+    await userEvent.click(screen.getByRole('tab', { name: 'Reports' }))
+    expect(await screen.findByRole('heading', { name: 'Transactions' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'GSTR-1 summary' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /export csv/i })).toBeInTheDocument()
   })
 })
 

@@ -1,4 +1,4 @@
-import type { AnalyticsOverview, CustomerInsights } from '../types'
+import type { AnalyticsOverview, CustomerInsights, Demographics, FinancialsReport, Gstr1Summary } from '../types'
 
 export const OVERVIEW: AnalyticsOverview = {
   success: true,
@@ -67,4 +67,52 @@ export const CUSTOMERS: CustomerInsights = {
     { name: 'Meera Iyer', mobile: '9000000003', total_stays: 12, total_spent: 24000, last_stay_date: '2026-10-02', is_flagged: false },
   ],
   generated_at: '2026-10-18T10:00:00+00:00',
+}
+
+export const FINANCIALS: FinancialsReport = {
+  success: true,
+  cash_total: 12000, online_total: 8000, addon_total: 1500, refund_total: 200,
+  expense_total: 500, transaction_expense_total: 500, report_expense_total: 0,
+  total_revenue: 19300, checkins: 3, renewals: 12,
+  cash_logs: [
+    { date: '2026-10-14 10:00', amount: 7000, room: '201', method: 'cash' },
+    { date: '2026-10-16 12:00', amount: 5000, room: '208', method: 'cash' },
+  ],
+  online_logs: [
+    { date: '2026-10-14 11:00', amount: 5000, room: '201', method: 'online' },
+    { date: '2026-10-17 09:00', amount: 3000, room: '210', method: 'online' },
+  ],
+  addon_logs: [{ date: '2026-10-15 13:00', amount: 1500, room: '201', type: 'addon' }],
+  refund_logs: [{ date: '2026-10-16 14:00', amount: 200, room: '208', type: 'refund' }],
+  renewal_logs: [],
+  expense_logs: [{ date: '2026-10-15 18:00', amount: 500, type: 'expense' }],
+}
+
+export const DEMOGRAPHICS: Demographics = {
+  success: true,
+  age: {
+    buckets: [
+      { label: '<18', count: 0 }, { label: '18-25', count: 3 }, { label: '26-35', count: 8 },
+      { label: '36-45', count: 4 }, { label: '46-55', count: 1 }, { label: '56-65', count: 0 }, { label: '65+', count: 0 },
+    ],
+    average: 31.2, count: 16,
+  },
+  pincodes: [{ pincode: '560001', guests: 6, visits: 9 }, { pincode: '580001', guests: 4, visits: 5 }],
+  geo_points: [], // empty so the Leaflet map stays an empty-state in jsdom
+  totals: { customers_scanned: 23, with_demographics: 16 },
+  geo_available: true,
+}
+
+export const GSTR1: Gstr1Summary = {
+  success: true,
+  totals: { taxable: 23704.77, cgst: 592.61, sgst: 592.62, igst: 0, invoice_value: 36939, invoices: 20 },
+  rate_summary: {
+    '0': { taxable: 0, cgst: 0, sgst: 0, igst: 0 },
+    '5': { taxable: 23704.77, cgst: 592.61, sgst: 592.62, igst: 0 },
+  },
+  b2b: [{}, {}, {}],
+  b2cl: [],
+  b2cs: [{ taxable: 276.19, cgst: 6.9, sgst: 6.91, igst: 0, count: 10, gst_rate: 0, place_of_supply: 'Karnataka (29)', state_code: '29', invoice_value: 10939 }],
+  credit_notes: [],
+  documents: 20,
 }

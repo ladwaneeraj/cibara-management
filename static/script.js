@@ -6224,13 +6224,40 @@ function closeSettingsModal() {
 }
 
 function handleSettingsReportsClick() {
-  // Settings is already password-gated — go straight to analytics
+  // Unified analytics now lives on the React page at /analytics (revenue,
+  // occupancy, channels, pace, seasonality, guests). GST filings & Excel
+  // exports are still reachable from there via "GST reports & Excel"
+  // (→ /?view=reports), which opens the classic Reports view below.
   closeSettingsModal();
-  reportPasswordVerified = true;
-  showReportsTab();
+  window.location.assign("/analytics/");
 }
 
 // No initMgrAccessModal / initSettingsModal needed — all wired via inline onclick in HTML.
+
+// Deep link from the React /analytics page: "/?view=reports" opens the classic
+// GST Reports & Excel view (the report exports stay in the classic screen).
+document.addEventListener("DOMContentLoaded", function () {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("view") !== "reports") return;
+    const open = function () {
+      if (typeof showReportsTab !== "function") return;
+      reportPasswordVerified = true;
+      showReportsTab();
+      setTimeout(function () {
+        const btn = document.querySelector('.view-btn[data-view="reports"]');
+        if (btn) btn.click();
+      }, 150);
+    };
+    if (window.CibaraAuth && typeof window.CibaraAuth.ready === "function") {
+      window.CibaraAuth.ready().then(open).catch(open);
+    } else {
+      setTimeout(open, 250);
+    }
+  } catch (e) {
+    /* deep link is best-effort; never block boot */
+  }
+});
 
 // Function to handle reports tab access (kept for legacy compatibility)
 function handleReportsTabAccess() {

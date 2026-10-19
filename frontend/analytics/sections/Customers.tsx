@@ -7,10 +7,11 @@
  * and this whole section renders nothing; the rest of the page is unaffected.
  */
 import { useState } from 'react'
-import { Card, ErrorState, Skeleton, Spinner, StatCard, Tabs } from '@/components/ui'
+import { ErrorState, Skeleton, Spinner, StatCard, Tabs } from '@/components/ui'
 import { cls, count, money, shortDate } from '@/lib/format'
 import { isForbidden, useCustomerInsights, useCustomerSegment } from '../api'
 import { Lines } from '../charts'
+import { ChartCard } from '../Panel'
 import { monthLabel, pct } from '../format'
 import type { CustomerInsights, CustomerRow, SegmentDimension } from '../types'
 
@@ -157,14 +158,16 @@ function Body({ d }: { d: CustomerInsights }) {
 }
 
 /** Hidden (renders nothing) when the viewer lacks customer.manage. */
+/** CRM insights, rendered as a body (h3 card) for the merged "Guests" section.
+ *  Returns null if the viewer lacks customer.manage (403). */
 export function Customers() {
   const q = useCustomerInsights()
   if (q.isError && isForbidden(q.error)) return null
   return (
-    <Card title="Customers">
+    <ChartCard title="Guest base & loyalty">
       {q.isPending ? <Skeleton className="h-40" />
         : q.isError ? <ErrorState error={q.error} onRetry={() => void q.refetch()} />
         : <Body d={q.data} />}
-    </Card>
+    </ChartCard>
   )
 }

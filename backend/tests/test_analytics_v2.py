@@ -44,7 +44,7 @@ def test_overview_via_v2_facade(client, admin):
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["success"] is True
-    assert body["window"] == {"from": _d(-6), "to": _d(0)}
+    assert body["window"] == {"from": _d(-6), "to": _d(0), "days": 7}
     for k in ("overview", "channel_mix", "pace", "seasonality", "los_leadtime", "findings"):
         assert k in body
     # b1 = 2 nights counted; the cancelled b2 contributes nothing.

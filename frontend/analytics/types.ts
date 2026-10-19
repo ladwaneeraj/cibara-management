@@ -136,3 +136,83 @@ export interface CustomerInsights {
 }
 
 export interface CustomerSegment { success: boolean; customers: CustomerRow[]; count: number }
+
+/* ── Financials (reused POST /reports — payment/expense basis) ──────────────
+ * Mirrors routes/reports.get_reports(): collection totals + the raw per-txn
+ * logs the old Analytics tab derived its KPIs, Key Insights and charts from.
+ */
+export interface PaymentLog {
+  date?: string
+  amount?: number
+  room?: string | number
+  method?: string
+  type?: string
+  time?: string
+  name?: string
+}
+
+export interface FinancialsReport {
+  success: boolean
+  cash_total: number
+  online_total: number
+  addon_total: number
+  refund_total: number
+  expense_total: number
+  transaction_expense_total: number
+  report_expense_total: number
+  total_revenue: number
+  checkins: number
+  renewals: number
+  cash_logs: PaymentLog[]
+  online_logs: PaymentLog[]
+  addon_logs: PaymentLog[]
+  refund_logs: PaymentLog[]
+  renewal_logs: PaymentLog[]
+  expense_logs: PaymentLog[]
+}
+
+/* ── Guest demographics (GET /customer_analytics, perm customer.manage) ──────
+ * Aggregated from guest ID-document OCR: age distribution, footfall per
+ * pincode and resolved geo points (lat/lon + place/taluk name).
+ */
+export interface AgeBucket { label: string; count: number }
+export interface PincodeRow { pincode: string; guests: number; visits: number }
+export interface GeoPoint {
+  pincode: string
+  guests: number
+  visits: number
+  lat: number
+  lon: number
+  place?: string
+  state?: string
+}
+export interface Demographics {
+  success: boolean
+  age: { buckets: AgeBucket[]; average: number | null; count?: number }
+  pincodes: PincodeRow[]
+  geo_points: GeoPoint[]
+  totals: { customers_scanned: number; with_demographics: number }
+  geo_available: boolean
+  ocr_enabled?: boolean
+}
+
+/* ── GSTR-1 summary (POST /reports/gstr1_summary) ───────────────────────────*/
+export interface GstrRate { taxable: number; cgst: number; sgst: number; igst: number }
+export interface GstrTotals extends GstrRate { invoice_value: number; invoices: number }
+export interface GstrB2cs extends GstrRate {
+  count: number
+  gst_rate: number
+  place_of_supply: string
+  state_code: string
+  invoice_value: number
+}
+export interface Gstr1Summary {
+  success: boolean
+  totals: GstrTotals
+  rate_summary: Record<string, GstrRate>
+  b2b: unknown[]
+  b2cl: unknown[]
+  b2cs: GstrB2cs[]
+  credit_notes: unknown[]
+  documents?: number
+}

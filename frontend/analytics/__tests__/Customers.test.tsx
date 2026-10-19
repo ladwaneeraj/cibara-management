@@ -11,7 +11,7 @@ describe('Customers section', () => {
     mockFetch({ 'GET /customer_insights': CUSTOMERS })
     renderWith(<Customers />)
     expect(await screen.findByText('Guest base')).toBeInTheDocument()
-    expect(screen.getByRole('heading', { level: 2, name: 'Customers' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Guest base & loyalty' })).toBeInTheDocument()
 
     const tile = (label: string) => screen.getByText(label).closest('.card') as HTMLElement
     expect(within(tile('Guest base')).getByText('1,200')).toBeInTheDocument()
@@ -40,7 +40,7 @@ describe('Customers section', () => {
     const { calls } = mockFetch({ 'GET /customer_insights': () => json({ success: false, message: 'Permission denied' }, 403) })
     const { container } = renderWith(<Customers />)
     await waitFor(() => expect(calls.length).toBeGreaterThan(0))
-    await waitFor(() => expect(screen.queryByRole('heading', { name: 'Customers' })).not.toBeInTheDocument())
+    await waitFor(() => expect(screen.queryByRole('heading', { name: 'Guest base & loyalty' })).not.toBeInTheDocument())
     expect(container).toBeEmptyDOMElement()
   })
 
@@ -49,7 +49,7 @@ describe('Customers section', () => {
     mockFetch({ 'GET /customer_insights': () => json({ success: false, message: 'boom' }, 500) })
     renderWith(<Customers />)
     expect(await screen.findByRole('alert')).toHaveTextContent(/boom|server error/i)
-    expect(screen.getByRole('heading', { level: 2, name: 'Customers' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Guest base & loyalty' })).toBeInTheDocument()
   })
 
   it('clicking a segment drills through to the guests in it', async () => {

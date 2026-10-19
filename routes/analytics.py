@@ -288,8 +288,10 @@ def analytics_snapshot():
         # so no bills are read at all.
         stays = svc.attach_expected_checkout(svc.build_stay_universe(rooms, [], today),
                                              bookings)
-        upcoming = [b for b in bookings if (b.get("check_in_date") or "") >= _iso(today)]
-        snap = svc.build_snapshot(stays, upcoming, len(rooms), today)
+        # Pass all bookings; build_snapshot → compute_booking_pace excludes
+        # cancelled/in-house statuses and clips each to the horizon itself, so
+        # a booking that began before today but still spans it is not dropped.
+        snap = svc.build_snapshot(stays, bookings, len(rooms), today)
 
         doc = {
             "date": snap["date"],

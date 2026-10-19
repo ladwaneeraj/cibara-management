@@ -494,12 +494,17 @@ def test_compose_has_all_top_level_keys_and_register_numbers():
     for k in ("window", "overview", "channel_mix", "pace", "seasonality",
               "los_leadtime", "findings", "generated_at"):
         assert k in out
-    assert out["window"] == {"from": "2026-10-10", "to": "2026-10-18"}
+    assert out["window"] == {"from": "2026-10-10", "to": "2026-10-18", "days": 9}
     # b1 6 nights + b2 6 nights + in-house s1 (17th) 1 night; the draft b9 is
     # the same stay as s1 and must not be counted twice.
     assert out["overview"]["occupancy"]["occupied_room_nights"] == 13
     assert out["overview"]["occupancy"]["counted_stays"] == 3
     assert out["overview"]["collections"]["cash"] == 5000
+    # Fields the analytics Overview section dereferences directly: if the
+    # backend stops emitting them the page crashes to its error boundary, so
+    # assert them here (the frontend fixtures mock them and cannot catch it).
+    assert "net_revenue" in out["overview"]["collections"]
+    assert set(out["overview"]["on_books_next7"]) >= {"occupancy_pct", "on_books_revenue"}
     assert out["generated_at"] == "2026-10-18 09:30:00"
 
 

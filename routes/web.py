@@ -28,11 +28,24 @@ def _is_int(value):
     return isinstance(value, int) and not isinstance(value, bool)
 
 
+def _client_ip():
+    """Best-effort guest IP for rate limiting.
+
+    Behind the reverse proxy ``remote_addr`` is the proxy, which would put every
+    guest in one bucket. Use the left-most X-Forwarded-For entry when present.
+    XFF is spoofable; that is acceptable here because the endpoint is read-only
+    (no money, no state) -- the aim is to stop collapsing all guests into one
+    bucket, not to be abuse-proof.
+    """
+    xff = request.headers.get("X-Forwarded-For", "")
+    first = xff.split(",")[0].strip()
+    return first or request.remote_addr or "unknown"
+
+
 def _rate_limited():
     """True when this client IP has exceeded the per-minute cap."""
     from cibara_api.core.ratelimit import limiter
-    ok, _ = limiter.hit(f"web_availability:{request.remote_addr or 'unknown'}",
-                        _AVAIL_LIMIT_PER_MIN, 60)
+    ok, _ = limiter.hit(f"web_availability:{_client_ip()}", _AVAIL_LIMIT_PER_MIN, 60)
     return not ok
 
 

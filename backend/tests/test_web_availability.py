@@ -140,3 +140,19 @@ def test_rate_limited_per_ip(client):
     r = client.post("/web/availability", json=_body())
     assert r.status_code == 429
     limiter.reset()
+
+
+def test_rate_limit_buckets_are_per_forwarded_ip(client):
+    """Different X-Forwarded-For IPs get independent buckets (guests behind one proxy)."""
+    heavy, other = {"X-Forwarded-For": "203.0.113.7"}, {"X-Forwarded-For": "198.51.100.9"}
+    try:
+        for _ in range(60):
+            assert client.post("/web/availability", json=_body(), headers=heavy).status_code == 200
+        assert client.post("/web/availability", json=_body(), headers=heavy).status_code == 429
+        # A different guest is unaffected; proxy chain: left-most entry is the client.
+        assert client.post("/web/availability", json=_body(), headers=other).status_code == 200
+        chained = {"X-Forwarded-For": "198.51.100.9, 10.0.0.1"}
+        assert client.post("/web/availability", json=_body(), headers=chained).status_code == 200
+        assert client.post("/web/availability", json=_body(), headers=heavy).status_code == 429
+    finally:
+        limiter.reset()

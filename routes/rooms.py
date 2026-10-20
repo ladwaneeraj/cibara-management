@@ -36,6 +36,7 @@ from services import stay_timeline
 from services import rate_segments
 from services import room_photos
 from services import guest_portal
+from services import blocks_service
 from services.request_guard import guard_duplicate_submit
 from routes.billing import auto_generate_bill_pdf
 
@@ -3501,6 +3502,58 @@ def add_room():
     except Exception as e:
         logger.error(f"Error adding new room: {str(e)}")
         return jsonify(success=False, message=f"Error adding new room: {str(e)}")
+
+# ══════════════════════════════════════════════════════════════════════════
+# BLOCKS — take a room (or a category's whole pool) out of sale for a range
+# ══════════════════════════════════════════════════════════════════════════
+@rooms_bp.route("/blocks", methods=["POST"])
+@requires_permission("room.update")
+def create_block_endpoint():
+    try:
+        data = request.get_json(silent=True) or {}
+        scope = data.get("scope")
+        uid = (_safe_user() or {}).get("userId") or "system"
+        start = data.get("start") or datetime.now(IST).isoformat()
+        try:
+            block_id = blocks_service.create_block(
+                scope, room=data.get("room"), category=data.get("category"),
+                start=start, end=data.get("end") or None,
+                reason=data.get("reason") or "", created_by=uid)
+        except (ValueError, TypeError) as ve:
+            return jsonify(success=False, message=str(ve)), 400
+        write_log("room.block.create", target_collection="blocks", target_id=block_id,
+                  metadata={k: data.get(k) for k in ("scope", "room", "category", "start", "end", "reason")})
+        invalidate_rooms_and_totals()
+        return jsonify(success=True, block_id=block_id, message="Block created")
+    except Exception as e:
+        logger.error(f"Error creating block: {e}", exc_info=True)
+        return jsonify(success=False, message=f"Error creating block: {e}"), 500
+
+
+@rooms_bp.route("/blocks", methods=["GET"])
+@requires_permission("room.view")
+def list_blocks_endpoint():
+    try:
+        return jsonify(success=True, blocks=blocks_service.list_blocks(),
+                       blocked_now=blocks_service.blocked_now_map())
+    except Exception as e:
+        logger.error(f"Error listing blocks: {e}", exc_info=True)
+        return jsonify(success=False, message=f"Error listing blocks: {e}"), 500
+
+
+@rooms_bp.route("/blocks/<block_id>", methods=["DELETE"])
+@requires_permission("room.update")
+def delete_block_endpoint(block_id):
+    try:
+        if not blocks_service.delete_block(block_id):
+            return jsonify(success=False, message="Block not found"), 404
+        write_log("room.block.delete", target_collection="blocks", target_id=block_id)
+        invalidate_rooms_and_totals()
+        return jsonify(success=True, message="Block removed")
+    except Exception as e:
+        logger.error(f"Error deleting block: {e}", exc_info=True)
+        return jsonify(success=False, message=f"Error deleting block: {e}"), 500
+
 
 @rooms_bp.route("/apply_discount", methods=["POST"])
 @requires_permission("discount.apply")

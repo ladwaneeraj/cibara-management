@@ -7366,3 +7366,48 @@ body.gr-panel-open { overflow: hidden; }
 @media (max-width: 576px) {
   .cm-cohort-banner { margin: 0 .75rem .4rem; flex-wrap: wrap; }
 }
+
+/* ── Room blocks ─────────────────────────────────────────────────────────── */
+.room-card.room-blocked {
+  background-image: repeating-linear-gradient(135deg, rgba(100,116,139,0.14) 0 8px, transparent 8px 16px);
+  opacity: 0.85;
+}
+.room-card.room-blocked .room-status { background-color: var(--gray) !important; animation: none; }
+.room-block-btn {
+  position: absolute;
+  right: 0.35rem;
+  bottom: 0.3rem;
+  z-index: 2;
+  border: none;
+  background: transparent;
+  color: #c2cad6;
+  font-size: 0.7rem;
+  cursor: pointer;
+  padding: 2px 4px;
+}
+.room-block-btn:hover { color: #dc2626; }
+.room-blocked-chip {
+  display: block;
+  margin: 0.3rem auto 0.5rem;
+  padding: 2px 8px;
+  border: none;
+  border-radius: 999px;
+  background: #64748b;
+  color: #fff;
+  font-size: 0.6rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  position: relative;
+  z-index: 2;
+}
+button.room-unblock-btn { cursor: pointer; }
+.blocks-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.5rem 0;
+  border-bottom: 1px solid #e5e7eb;
+}
+.blocks-row-meta { font-size: 0.78rem; color: var(--gray); }
+.blocks-row-del { padding: 0.3rem 0.7rem; font-size: 0.8rem; }

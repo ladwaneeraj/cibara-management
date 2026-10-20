@@ -251,3 +251,21 @@ def test_overstaying_walkin_still_blocks_now():
     _occupy("200", "2026-10-19 08:00")
     assert "200" not in av.pool_free_rooms("premium", _dt(2026, 10, 20, 13, 0), 1, 2, now=now)
     assert "200" in av.pool_free_rooms("premium", _dt(2026, 10, 20, 14, 0), 1, 2, now=now)
+
+
+def test_web_booking_without_check_out_date_still_busy():
+    # Precise web interval needs no check_out_date; a missing field must not free the room.
+    config.bookings_ref.document("w1").set({
+        "room": "200", "guest_name": "G", "guest_mobile": "9999999999",
+        "check_in_date": "2026-10-21", "check_in_time": "10:00", "days": 1,
+        "status": "confirmed", "booking_source": "web", "guest_count": 2,
+    })
+    assert "200" not in _free(checkin=_dt(2026, 10, 21, 20, 0))
+    assert "200" not in av.web_offerable_rooms("premium", _dt(2026, 10, 21, 20, 0), 1, 2, now=NOW)
+    assert "200" in _free(checkin=_dt(2026, 10, 24, 20, 0))
+
+
+def test_date_only_booking_with_empty_check_out_date_busy_one_night():
+    _booking("e1", "200", "2026-10-21", "", source="normal", time="")
+    assert "200" not in _free(checkin=_dt(2026, 10, 21, 12, 0))      # 1-night fallback
+    assert "200" in _free(checkin=_dt(2026, 10, 22, 12, 0))

@@ -134,11 +134,14 @@ def occupied_intervals(pool_rooms, window_start: datetime, window_end: datetime,
     gap = timedelta(minutes=_gap_minutes())
     out = {r: [] for r in pool}
 
-    # 1. Bookings. Single-inequality query (cheap); precise overlap in Python.
-    #    One day of slack on the lower bound: a precise web interval can run past
-    #    its stored check_out_date by a few hours.
-    query_from = (ws - timedelta(days=1)).strftime("%Y-%m-%d")
-    for doc in config.bookings_ref.where("check_out_date", ">=", query_from).stream():
+    # 1. Bookings. Gate only on check_in_date <= window end: a booking starting
+    # after the window can never overlap it, and (unlike check_out_date) every
+    # placeable booking has a check_in_date. Do NOT gate on check_out_date: a
+    # precise web interval does not need it, and Firestore drops docs where it is
+    # missing/empty, which would silently report a busy room as free. Precise
+    # overlap is filtered in Python.
+    last_day = we.strftime("%Y-%m-%d")
+    for doc in config.bookings_ref.where("check_in_date", "<=", last_day).stream():
         if exclude_booking_id is not None and doc.id == exclude_booking_id:
             continue
         b = doc.to_dict() or {}

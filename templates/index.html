@@ -2817,6 +2817,29 @@
             </div>
           </section>
 
+          <!-- ── Website (online booking) ── -->
+          <section class="set-group">
+            <h3 class="set-group-title">Website</h3>
+            <div class="set-list">
+              <!-- Master switch for online bookings on the guest website.
+                   Flag: web_config.online_bookings_enabled (CLOSED by default).
+                   Persisted via POST /settings/web_config; the website reads
+                   the public GET /web/config. -->
+              <div class="set-row" data-perm="settings.update">
+                <span class="set-ico set-ico--sky"><i class="fas fa-globe"></i></span>
+                <span class="set-text">
+                  <span class="set-title">Online bookings</span>
+                  <span class="set-sub" id="settings-webbook-sub">Loading…</span>
+                </span>
+                <label class="settings-toggle set-switch" title="Accept bookings from the guest website">
+                  <input type="checkbox" id="settings-webbook-toggle" onchange="toggleOnlineBookings(this)" />
+                  <span class="set-switch-track" id="settings-webbook-slider"></span>
+                  <span class="set-switch-knob" id="settings-webbook-knob"></span>
+                </label>
+              </div>
+            </div>
+          </section>
+
           <!-- ── Setup ── -->
           <section class="set-group">
             <h3 class="set-group-title">Setup</h3>

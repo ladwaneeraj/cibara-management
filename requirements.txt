@@ -4,6 +4,7 @@ pytz==2024.1
 werkzeug==3.0.1
 gunicorn==21.2.0
 flask-compress==1.15
+flask-cors==6.0.5
 xhtml2pdf==0.2.16
 # pypdf — reads + decrypts the password-protected bank payment-advice PDFs
 # (services/bank_settlement_service.py) to auto-settle OTA payouts.

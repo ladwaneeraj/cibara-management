@@ -25,6 +25,8 @@ from routes.analytics import analytics_bp
 from routes.staff import staff_bp
 from routes.manual_bill import manual_bill_bp
 from routes.guest import guest_bp
+from routes.web import web_bp
+from flask_cors import CORS
 from services.auth_service import load_current_user
 from flask import g
 import os
@@ -40,6 +42,15 @@ app = Flask(__name__,
             template_folder=os.path.join(BASE_DIR, 'templates'))
 
 Compress(app)
+
+# Cross-origin access for the guest website: /web/* only, from the origins in
+# WEB_ALLOWED_ORIGINS (comma-separated, read once at init). Unset/empty → no
+# origin is allowed. No credentials: the public endpoints never use cookies.
+def _origins_from_env():
+    raw = os.environ.get("WEB_ALLOWED_ORIGINS", "")
+    return [o.strip() for o in raw.split(",") if o.strip()]
+
+CORS(app, resources={r"/web/*": {"origins": _origins_from_env()}})
 
 
 # ---------------------------------------------------------------------------
@@ -73,7 +84,7 @@ for _var in ["API_KEY"]:
 # (kept for backwards compat with any external integrations). Per-route
 # role checks are applied via @requires_permission inside each blueprint.
 # ---------------------------------------------------------------------------
-_PUBLIC_PREFIXES = ("/static/", "/uploads/", "/firebase-config.js")
+_PUBLIC_PREFIXES = ("/static/", "/uploads/", "/firebase-config.js", "/web/")
 _PUBLIC_EXACT    = ("/", "/login", "/health", "/verify-pin", "/sw.js", "/manifest.webmanifest")
 
 @app.before_request
@@ -332,6 +343,7 @@ app.register_blueprint(insights_bp)      # /insights/* — admin-only daily oper
 app.register_blueprint(analytics_bp)     # /analytics/* — admin-only register-based analytics + nightly snapshot
 app.register_blueprint(staff_bp)         # /staff/* — attendance, advances, salary payroll
 app.register_blueprint(manual_bill_bp)   # /manual_bill/* — operator-authored backdated bills
+app.register_blueprint(web_bp)           # /web/* — public guest-website endpoints (CORS via WEB_ALLOWED_ORIGINS)
 
 # ---------------------------------------------------------------------------
 # Error handlers

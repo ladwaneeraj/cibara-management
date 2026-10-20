@@ -557,6 +557,57 @@ def invalidate_ui_config_cache():
             del _cache[k]
 
 
+# ── Web booking config ────────────────────────────────────────────────────────
+# Settings for the guest-facing online booking site. Stored in
+# `settings/web_config`. Online bookings are CLOSED by default.
+#   - online_bookings_enabled (bool, default False): master switch.
+#   - buffer (int, default 1): rooms per category held back from online sale.
+#   - cleaning_gap_minutes (int, default 120): turnaround gap between stays.
+#   - hold_ttl_minutes (int, default 10): how long a checkout hold lasts.
+
+_WEB_CONFIG_DEFAULTS = {
+    "online_bookings_enabled": False,
+    "buffer": 1,
+    "cleaning_gap_minutes": 120,
+    "hold_ttl_minutes": 10,
+}
+
+# Sellable room pools per web category. Lives here (not in a service module) so
+# blocks_service and availability_service can both import it without a cycle.
+CATEGORY_POOLS = {
+    "premium": [str(n) for n in range(200, 207)],
+    "deluxe": [str(n) for n in range(223, 228)],
+}
+
+
+@cached(ttl=5)
+def get_web_config():
+    """Return the web-config doc as a plain dict with all known keys filled in.
+
+    Read failures fall back to defaults (i.e. online bookings closed).
+    """
+    try:
+        doc = settings_ref.document('web_config').get()
+        data = doc.to_dict() if doc.exists else {}
+    except Exception as e:
+        logger.warning(f"get_web_config: read failed, using defaults: {e}")
+        data = {}
+    merged = dict(_WEB_CONFIG_DEFAULTS)
+    if isinstance(data, dict):
+        for k in _WEB_CONFIG_DEFAULTS:
+            if k in data:
+                merged[k] = data[k]
+    return merged
+
+
+def invalidate_web_config_cache():
+    """Drop the cached web config so the next read sees fresh values."""
+    with _cache_lock:
+        keys_to_remove = [k for k in _cache if 'get_web_config' in k]
+        for k in keys_to_remove:
+            del _cache[k]
+
+
 def get_last_rent_check():
     settings_doc = settings_ref.document('app_settings').get()
     if settings_doc.exists:

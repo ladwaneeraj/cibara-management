@@ -5777,6 +5777,7 @@ function openSettingsModal() {
       // where the flag was changed on another device.
       loadBillingConfig();
       loadUIConfig();
+      loadWebConfig();
     }
   );
 }
@@ -6114,6 +6115,67 @@ function toggleCleaningPhotos(inputEl) {
   return _savePhotoFlag("cleaning_photos", inputEl,
     "Cleaning photos ON for housekeeping (rooms 200-228).",
     "Cleaning photos OFF. Housekeeping uses the checklist.");
+}
+
+// ── Web config (online bookings switch) ───────────────────────────────────────
+// settings/web_config.online_bookings_enabled — CLOSED by default. Same
+// optimistic save / revert shape as the ui_config toggles above, but against
+// /settings/web_config (the website reads the public GET /web/config).
+function _setOnlineBookingsToggleUI(enabled) {
+  _setPhotoToggleUI("webbook", enabled,
+    "On · guests can book online on the website",
+    "Off · online booking is closed");
+}
+
+async function loadWebConfig() {
+  const sub = document.getElementById("settings-webbook-sub");
+  if (sub) sub.textContent = "Loading…";
+  try {
+    const res = await apiFetch("/settings/web_config");
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    if (!data.success) throw new Error(data.message || "Failed to load");
+    _setOnlineBookingsToggleUI(!!(data.config || {}).online_bookings_enabled);
+  } catch (err) {
+    console.warn("[web_config] load failed:", err);
+    if (sub) sub.textContent = "Could not load — reopen Settings to retry";
+    const toggle = document.getElementById("settings-webbook-toggle");
+    if (toggle) toggle.checked = false;
+  }
+}
+
+async function toggleOnlineBookings(inputEl) {
+  const desired = !!(inputEl && inputEl.checked);
+  _setOnlineBookingsToggleUI(desired);
+  if (inputEl) inputEl.disabled = true;
+  try {
+    const res = await apiFetch("/settings/web_config", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ online_bookings_enabled: desired }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    if (!data.success) throw new Error(data.message || "Save failed");
+    _setOnlineBookingsToggleUI(!!(data.config || {}).online_bookings_enabled);
+    if (typeof showNotification === "function") {
+      showNotification(
+        desired ? "Online bookings ON." : "Online bookings OFF.",
+        "success",
+      );
+    }
+  } catch (err) {
+    console.error("[web_config] save failed:", err);
+    _setOnlineBookingsToggleUI(!desired);
+    if (typeof showNotification === "function") {
+      showNotification(
+        "Could not save setting: " + (err.message || "network error"),
+        "error",
+      );
+    }
+  } finally {
+    if (inputEl) inputEl.disabled = false;
+  }
 }
 
 async function toggleIncognitoMode(inputEl) {

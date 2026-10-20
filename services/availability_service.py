@@ -203,6 +203,17 @@ def web_offerable_rooms(category, checkin_dt: datetime, days: int, guests, *, no
     return free[:max(0, len(free) - buffer)]
 
 
+# --- Public web categories ----------------------------------------------------
+
+# The public API ``category`` -> internal pool / AC flag / max occupancy.
+# Shared by POST /web/availability and the booking-hold endpoint.
+WEB_BOOKABLE = {
+    "premium_ac": {"pool": "premium", "ac": True,  "max_guests": 4},
+    "premium":    {"pool": "premium", "ac": False, "max_guests": 4},
+    "deluxe":     {"pool": "deluxe",  "ac": False, "max_guests": 3},
+}
+
+
 # --- Web pricing (server-authoritative) --------------------------------------
 
 # Representative room per web category: pricing is per category, so the rate

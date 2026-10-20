@@ -26,7 +26,10 @@ Design notes:
 from __future__ import annotations
 
 import logging
+import os
 from datetime import datetime
+
+import requests
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +74,20 @@ def record_alert(kind: str, message: str, *,
         logger.error(f"system_alerts.record_alert FAILED for {kind!r}: {e}",
                      exc_info=True)
         return None
+
+
+def notify_owner(message: str, title: str | None = None) -> None:
+    """Best-effort owner push via ntfy.sh (server-side twin of the website's
+    NEXT_PUBLIC_NTFY_TOPIC). No-op when NTFY_TOPIC is unset. NEVER raises."""
+    topic = (os.environ.get("NTFY_TOPIC") or "").strip()
+    if not topic:
+        return
+    try:
+        headers = {"Title": title.encode("ascii", "ignore").decode()} if title else {}
+        requests.post(f"https://ntfy.sh/{topic}", data=str(message).encode("utf-8"),
+                      headers=headers, timeout=5)
+    except Exception as e:  # noqa: BLE001 — a push failure must never break the caller
+        logger.warning(f"system_alerts.notify_owner failed: {type(e).__name__}")
 
 
 def list_alerts(*, unresolved_only: bool = True, limit: int = 50) -> list[dict]:

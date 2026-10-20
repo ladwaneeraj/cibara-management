@@ -3,6 +3,8 @@
 All endpoints here live under /web/ which is in app._PUBLIC_PREFIXES, so they
 need no staff auth. Never expose secrets or internal tuning knobs from here.
 """
+import json
+import logging
 import os
 import uuid
 from datetime import datetime, timedelta
@@ -12,9 +14,11 @@ from flask import Blueprint, jsonify, request
 from google.api_core import exceptions as gexc
 
 import config
-from config import get_web_config
+from config import get_web_config, invalidate_rooms_and_totals
 from services import availability_service as av
-from services import razorpay_service
+from services import payment_service, razorpay_service, system_alerts
+
+logger = logging.getLogger(__name__)
 
 web_bp = Blueprint('web', __name__)
 
@@ -304,3 +308,242 @@ def web_order():
     order = razorpay_service.create_order(amount_paise, receipt=booking_id)
     return jsonify(order_id=order["id"], key_id=os.environ.get("RAZORPAY_KEY_ID", ""),
                    amount=amount_paise)
+
+
+# --------------------------------------------------------------- Razorpay webhook
+class _PaymentWriteFailed(Exception):
+    """The ledger row could not be queued; the confirm must roll back."""
+
+
+def _guest_phone(mobile):
+    """Digits-only with the 91 country prefix, as send_booking_confirmation does."""
+    phone = "".join(ch for ch in str(mobile or "") if ch.isdigit())
+    if phone.startswith("0"):
+        phone = phone[1:]
+    if phone and not phone.startswith("91"):
+        phone = "91" + phone
+    return phone
+
+
+def _confirmation_message(booking_id, b):
+    nights = b.get("days") or 1
+    plural = "s" if nights != 1 else ""
+    try:
+        ci = datetime.strptime(b["check_in_date"], "%Y-%m-%d").strftime("%d %b %Y")
+        co = datetime.strptime(b["check_out_date"], "%Y-%m-%d").strftime("%d %b %Y")
+    except (KeyError, TypeError, ValueError):
+        ci, co = b.get("check_in_date", ""), b.get("check_out_date", "")
+    at = f" at {b['check_in_time']}" if b.get("check_in_time") else ""
+    return (
+        "\U0001F3E8 *BOOKING CONFIRMATION*\n\n"
+        f"Hello {b.get('guest_name', '')},\n\n"
+        "Your booking at our lodge has been confirmed!\n\n"
+        "\U0001F4CB *Booking Details:*\n"
+        f"• Booking ID: {booking_id[:8].upper()}\n"
+        f"• Check-in: {ci}{at}\n"
+        f"• Check-out: {co}\n"
+        f"• Duration: {nights} night{plural}\n"
+        f"• Guests: {b.get('guest_count', 1)}\n\n"
+        "\U0001F4B0 *Payment Status:*\n"
+        f"• Total Amount: ₹{b.get('total_amount')}\n"
+        f"• Paid: ₹{b.get('paid_amount')}\n"
+        f"• Balance Due: ₹{b.get('balance')}\n\n"
+        "\U0001F4CD *Location:*\nhttps://maps.app.goo.gl/Mz5rTrvC3ctyMmUt5\n\n"
+        "If you have any questions, please feel free to contact us.\n\n"
+        "Thank you for choosing us! \U0001F64F"
+    )
+
+
+def _alert_owner(kind, message, context, *, severity="critical"):
+    system_alerts.record_alert(kind=kind, message=message, severity=severity, context=context)
+    system_alerts.notify_owner(message, title="Cibara: " + kind)
+
+
+@web_bp.route("/web/razorpay_webhook", methods=["POST"])
+def razorpay_webhook():
+    """Razorpay ``order.paid`` -> the ONLY place a web booking becomes paid.
+
+    Order of operations matters: the HMAC is checked over the RAW bytes before
+    anything is parsed or written. Everything that changes state (idempotency
+    marker, booking confirm, ledger row, totals) commits in ONE Firestore
+    transaction, so a retry/duplicate/concurrent delivery can never double-count:
+    the second one finds ``processed_webhooks/{payment_id}`` and no-ops.
+    Side effects (WhatsApp, alerts, ntfy) fire only after that commit, and only
+    for the delivery that actually applied it.
+    """
+    raw = request.get_data()  # raw bytes first; do not touch request.json before this
+    if not razorpay_service.verify_webhook_signature(
+            raw, request.headers.get("X-Razorpay-Signature", "")):
+        return jsonify(error="Invalid signature"), 400
+
+    try:
+        event = json.loads(raw)
+        if not isinstance(event, dict):
+            raise ValueError("not an object")
+    except ValueError:
+        return jsonify(error="Invalid payload"), 400
+
+    if event.get("event") != "order.paid":
+        return jsonify(status="ignored"), 200
+
+    try:
+        payload = event["payload"]
+        order = payload["order"]["entity"]
+        payment_id = payload["payment"]["entity"]["id"]
+        booking_id = order.get("receipt")
+        order_id = order.get("id")
+        paid_paise = order.get("amount_paid", order.get("amount"))
+    except (KeyError, TypeError, AttributeError):
+        _alert_owner("web_webhook_malformed",
+                     "Razorpay order.paid webhook had an unexpected shape; check the dashboard.", {})
+        return jsonify(status="malformed"), 200
+    if (not isinstance(payment_id, str) or not payment_id or "/" in payment_id
+            or not isinstance(booking_id, str) or not booking_id.strip() or "/" in booking_id):
+        _alert_owner("web_webhook_malformed",
+                     "Razorpay order.paid webhook had no usable payment id / receipt.",
+                     {"payment_id": str(payment_id)[:64], "order_id": str(order_id)[:64]})
+        return jsonify(status="malformed"), 200
+
+    proc_ref = config.db.collection("processed_webhooks").document(payment_id)
+    booking_ref = config.bookings_ref.document(booking_id)
+    totals_doc = config.totals_ref.document("current_totals")
+    now = datetime.now(config.IST)
+    out = {}
+
+    @firestore.transactional
+    def _apply(txn):
+        out.clear()  # the transaction body can be retried
+        # All reads first (Firestore requires reads before writes in a txn).
+        if proc_ref.get(transaction=txn).exists:
+            out["outcome"] = "duplicate"
+            return
+        snap = booking_ref.get(transaction=txn)
+        mark = {"payment_id": payment_id, "booking_id": booking_id, "order_id": order_id,
+                "processed_at": now.isoformat()}
+
+        if not snap.exists:
+            out["outcome"] = "no_booking"
+            txn.set(proc_ref, {**mark, "outcome": "no_booking"})
+            return
+        b = snap.to_dict() or {}
+        out["booking"] = b
+        status = b.get("status")
+
+        if status == "confirmed":
+            # A SECOND distinct payment for an already-paid booking: never
+            # re-confirm, never write a second ledger row. Owner refunds.
+            out["outcome"] = "dup_payment"
+            txn.set(proc_ref, {**mark, "outcome": "dup_payment"})
+            return
+        if status not in ("pending_payment", "expired"):
+            out["outcome"] = "bad_status"
+            txn.set(proc_ref, {**mark, "outcome": "bad_status"})
+            return
+
+        try:
+            expected_paise = av.to_paise(b["total_amount"])
+        except (KeyError, TypeError, ValueError):
+            expected_paise = None
+        if expected_paise is None or not _is_int(paid_paise) or paid_paise != expected_paise:
+            out["outcome"] = "mismatch"
+            out["expected_paise"] = expected_paise
+            txn.set(proc_ref, {**mark, "outcome": "mismatch"})
+            return
+
+        if status == "expired":
+            # A swept hold released its room; someone may have taken it since.
+            # Do not double-book: leave it expired and let the owner refund/reassign.
+            ci = av._parse_date(b.get("check_in_date"))
+            hm = av._parse_time(b.get("check_in_time"))
+            days = av._parse_days(b.get("days"))
+            if ci is not None and hm is not None and days is not None:
+                ws = ci.replace(hour=hm[0], minute=hm[1])
+                busy = av.occupied_intervals([b.get("room")], ws, ws + timedelta(hours=24 * days),
+                                             now=now, exclude_booking_id=booking_id)
+                if busy.get(str(b.get("room"))):
+                    out["outcome"] = "revive_conflict"
+                    txn.set(proc_ref, {**mark, "outcome": "revive_conflict"})
+                    return
+
+        total = b["total_amount"]
+        rupees = int(total)
+        updates = {
+            "status": "confirmed", "paid_amount": total, "balance": 0,
+            "razorpay_payment_id": payment_id, "razorpay_order_id": order_id,
+            "expires_at": firestore.DELETE_FIELD, "confirmed_at": now.isoformat(),
+        }
+        txn.update(booking_ref, updates)
+        # Ledger row, mirroring create_booking's online advance (FK = booking_id).
+        # Written through the transaction so it commits atomically with the confirm.
+        if not payment_service.write_payment({
+            "room": b.get("room"), "name": b.get("guest_name"), "amount": rupees,
+            "method": "online", "type": "booking_advance",
+            "transaction_type": "booking_advance",
+            "date": now.strftime("%Y-%m-%d"), "time": now.strftime("%H:%M"),
+            "booking_id": booking_id, "booking_source": "web",
+            "mobile": b.get("guest_mobile"),
+            "stay_checkin_date": b.get("check_in_date", ""),
+            "razorpay_payment_id": payment_id,
+        }, batch=txn):
+            raise _PaymentWriteFailed()
+        txn.set(totals_doc, {"online": firestore.Increment(rupees),
+                             "advance_bookings": firestore.Increment(rupees)}, merge=True)
+        txn.set(proc_ref, {**mark, "outcome": "confirmed", "was_expired": status == "expired"})
+        out["outcome"] = "confirmed"
+        out["revived"] = status == "expired"
+        out["booking"] = {**b, "status": "confirmed", "paid_amount": total, "balance": 0}
+
+    try:
+        _apply(config.db.transaction())
+    except Exception:  # noqa: BLE001 -- nothing was committed; ask Razorpay to retry
+        logger.exception("web webhook: confirm failed for booking %s (will be retried)", booking_id)
+        system_alerts.record_alert(
+            kind="web_webhook_failed",
+            message=f"Payment {payment_id} for web booking {booking_id[:8].upper()} could not be "
+                    "recorded; Razorpay will retry. If this persists, reconcile manually.",
+            context={"booking_id": booking_id, "payment_id": payment_id})
+        return jsonify(error="Temporary failure"), 500
+
+    outcome = out.get("outcome")
+    b = out.get("booking") or {}
+    ref = booking_id[:8].upper()
+    ctx = {"booking_id": booking_id, "payment_id": payment_id, "order_id": order_id}
+
+    if outcome == "duplicate":
+        return jsonify(status="duplicate"), 200
+    if outcome == "no_booking":
+        _alert_owner("web_payment_no_booking",
+                     f"Money captured (payment {payment_id}) but there is no booking "
+                     f"{ref}. Refund or recreate it manually.", ctx)
+    elif outcome == "dup_payment":
+        _alert_owner("web_duplicate_payment",
+                     f"Possible duplicate charge: payment {payment_id} arrived for booking "
+                     f"{ref}, which is already paid. Check and refund.", ctx)
+    elif outcome == "bad_status":
+        _alert_owner("web_payment_bad_status",
+                     f"Payment {payment_id} captured for booking {ref} in status "
+                     f"{b.get('status')!r}; not confirmed. Review/refund.", ctx)
+    elif outcome == "mismatch":
+        _alert_owner("web_amount_mismatch",
+                     f"Payment {payment_id} for booking {ref} paid {paid_paise} paise but "
+                     f"{out.get('expected_paise')} was due; NOT confirmed. Review/refund.", ctx)
+    elif outcome == "revive_conflict":
+        _alert_owner("web_revive_conflict",
+                     f"Payment {payment_id} captured for an expired hold ({ref}) but room "
+                     f"{b.get('room')} has since been taken; NOT confirmed. Refund or reassign.", ctx)
+    elif outcome == "confirmed":
+        invalidate_rooms_and_totals()
+        if out.get("revived"):
+            _alert_owner("web_hold_revived",
+                         f"A swept (expired) hold {ref} was revived by captured payment "
+                         f"{payment_id}; booking is now confirmed.", ctx)
+        _alert_owner("web_booking",
+                     f"New web booking {ref}: {b.get('guest_name')}, room {b.get('room')}, "
+                     f"{b.get('check_in_date')}, ₹{b.get('total_amount')} paid online.",
+                     ctx, severity="warning")
+        try:
+            config.send_whatsapp_message(_guest_phone(b.get("guest_mobile")),
+                                         _confirmation_message(booking_id, b))
+        except Exception:  # noqa: BLE001 -- the guest message must never undo a confirmed booking
+            logger.exception("web webhook: WhatsApp confirmation failed for %s", booking_id)
+    return jsonify(status=outcome), 200

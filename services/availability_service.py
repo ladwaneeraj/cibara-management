@@ -201,3 +201,28 @@ def web_offerable_rooms(category, checkin_dt: datetime, days: int, guests, *, no
     except (TypeError, ValueError):
         buffer = 0
     return free[:max(0, len(free) - buffer)]
+
+
+# --- Web pricing (server-authoritative) --------------------------------------
+
+# Representative room per web category: pricing is per category, so the rate
+# comes from config.room_base_price for the category's standard room.
+_WEB_PRICING_ROOM = {"premium": "200", "deluxe": "223"}
+
+
+def web_quote(category, guests, days, *, ac=False) -> int:
+    """Total stay price in rupees for a web booking.
+
+    premium: (base(200, guests) [+ AC_SURCHARGE if ac]) * days
+    deluxe:  base(223, guests) * days (no AC option)
+    """
+    room = _WEB_PRICING_ROOM[category]
+    per_night = config.room_base_price(room, guests)
+    if category == "premium" and ac:
+        per_night += config.AC_SURCHARGE
+    return per_night * int(days)
+
+
+def to_paise(rupees) -> int:
+    """Rupees -> paise (Razorpay amounts are integer paise)."""
+    return int(rupees) * 100

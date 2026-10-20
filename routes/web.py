@@ -4,6 +4,7 @@ All endpoints here live under /web/ which is in app._PUBLIC_PREFIXES, so they
 need no staff auth. Never expose secrets or internal tuning knobs from here.
 """
 import json
+import hmac
 import logging
 import os
 import uuid
@@ -308,6 +309,75 @@ def web_order():
     order = razorpay_service.create_order(amount_paise, receipt=booking_id)
     return jsonify(order_id=order["id"], key_id=os.environ.get("RAZORPAY_KEY_ID", ""),
                    amount=amount_paise)
+
+
+# ------------------------------------------------------------------- hold sweep
+def _hold_expiry(booking):
+    """IST-aware ``expires_at`` of a hold, or ``None`` when absent/unparseable."""
+    raw = booking.get("expires_at")
+    if not isinstance(raw, str):
+        return None
+    try:
+        dt = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    return config.IST.localize(dt) if dt.tzinfo is None else dt.astimezone(config.IST)
+
+
+def sweep_expired_holds(now=None):
+    """Flip ``pending_payment`` holds past ``expires_at`` to ``"expired"``; return the count.
+
+    The status is EXACTLY ``"expired"``: availability's busy set is
+    {confirmed, pending_payment}, so this frees the room, and the Razorpay
+    webhook revives a swept hold only when ``status == "expired"`` (a late
+    payment still confirms it, unless the room was taken meanwhile).
+
+    A hold whose ``expires_at`` is missing or malformed is LEFT as-is (and
+    logged): we cannot prove it expired, and releasing a room a guest may be
+    paying for is worse than a stuck hold. The hold code always writes an ISO
+    IST expiry, so this only guards against hand-edited data. Idempotent: swept
+    docs no longer match the ``pending_payment`` query. The status is re-checked
+    inside a transaction so a payment that confirmed the hold between the query
+    and the write is never overwritten.
+    """
+    now = now or datetime.now(config.IST)
+    swept = 0
+    for doc in config.bookings_ref.where("status", "==", "pending_payment").stream():
+        b = doc.to_dict() or {}
+        expires = _hold_expiry(b)
+        if expires is None:
+            logger.warning("sweep: pending hold %s has no usable expires_at; leaving it", doc.id)
+            continue
+        if expires >= now:
+            continue
+        ref = config.bookings_ref.document(doc.id)
+
+        @firestore.transactional
+        def _expire(txn, ref=ref):
+            cur = (ref.get(transaction=txn).to_dict() or {})
+            if cur.get("status") != "pending_payment":
+                return False  # confirmed (or otherwise changed) since the query
+            txn.update(ref, {"status": "expired", "expired_at": now.isoformat()})
+            return True
+
+        if _expire(config.db.transaction()):
+            swept += 1
+    return swept
+
+
+@web_bp.route("/web/sweep", methods=["POST"])
+def web_sweep():
+    """Cloud Scheduler hook (every minute): release expired holds.
+
+    Not a browser endpoint (no CORS, no closed-flag). Guarded by a shared token:
+    ``X-Sweep-Token`` must equal env ``WEB_SWEEP_TOKEN``; an unset env token
+    rejects everything, so a public caller can never force-expire holds.
+    """
+    expected = os.environ.get("WEB_SWEEP_TOKEN", "")
+    supplied = request.headers.get("X-Sweep-Token", "")
+    if not expected or not hmac.compare_digest(supplied.encode(), expected.encode()):
+        return jsonify(error="Forbidden"), 403
+    return jsonify(swept=sweep_expired_holds())
 
 
 # --------------------------------------------------------------- Razorpay webhook

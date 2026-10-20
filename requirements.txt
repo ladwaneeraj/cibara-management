@@ -22,3 +22,5 @@ sentry-sdk[fastapi]==2.17.0
 # redis — optional shared cache backend (Phase 3). Only used when REDIS_URL is
 # set; imported lazily. See backend/cibara_api/core/cache.py.
 redis==5.2.1
+# razorpay SDK — services/razorpay_service.py (web booking payments). Keys via env only.
+razorpay==2.0.1

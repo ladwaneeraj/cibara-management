@@ -3,6 +3,7 @@
 All endpoints here live under /web/ which is in app._PUBLIC_PREFIXES, so they
 need no staff auth. Never expose secrets or internal tuning knobs from here.
 """
+import os
 import uuid
 from datetime import datetime, timedelta
 
@@ -13,6 +14,7 @@ from google.api_core import exceptions as gexc
 import config
 from config import get_web_config
 from services import availability_service as av
+from services import razorpay_service
 
 web_bp = Blueprint('web', __name__)
 
@@ -265,3 +267,40 @@ def web_hold():
         return jsonify(error="Busy, please retry"), 503
 
     return jsonify(booking_id=booking_id, amount=total, expires_at=expires_at)
+
+
+@web_bp.route("/web/order", methods=["POST"])
+def web_order():
+    """Create a Razorpay order for a held booking.
+
+    The amount comes from the HELD BOOKING's total_amount, never the request body.
+    Returns ``{order_id, key_id, amount (paise)}`` -- only the publishable key id,
+    never the key secret. 404 when the hold is missing/expired; 409 if already paid.
+    """
+    data = request.get_json(silent=True)
+    booking_id = data.get("booking_id") if isinstance(data, dict) else None
+    if not isinstance(booking_id, str) or not booking_id.strip():
+        return jsonify(error="Booking not found"), 404
+
+    snap = config.bookings_ref.document(booking_id).get()
+    if not snap.exists:
+        return jsonify(error="Booking not found"), 404
+    booking = snap.to_dict() or {}
+
+    if booking.get("status") == "confirmed":
+        return jsonify(error="Already paid"), 409
+    if booking.get("status") != "pending_payment":
+        return jsonify(error="Booking not found"), 404
+    try:
+        expires = datetime.fromisoformat(booking["expires_at"])
+        if expires.tzinfo is None:
+            expires = config.IST.localize(expires)
+    except (KeyError, TypeError, ValueError):
+        return jsonify(error="Hold expired"), 404
+    if expires < datetime.now(config.IST):
+        return jsonify(error="Hold expired"), 404
+
+    amount_paise = av.to_paise(booking["total_amount"])
+    order = razorpay_service.create_order(amount_paise, receipt=booking_id)
+    return jsonify(order_id=order["id"], key_id=os.environ.get("RAZORPAY_KEY_ID", ""),
+                   amount=amount_paise)

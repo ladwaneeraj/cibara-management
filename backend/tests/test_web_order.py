@@ -38,6 +38,20 @@ def test_order_amount_from_booking(client):
     assert r.json() == {"order_id": "order_X1", "key_id": KEY_ID, "amount": expected}
 
 
+def test_order_is_idempotent_per_booking(client):
+    """Repeated /web/order calls must reuse one Razorpay order (no double-charge)."""
+    bid = _hold(total=4500)
+    with patch.object(razorpay_service, "create_order", return_value={"id": "order_ONCE"}) as m:
+        r1 = client.post("/web/order", json={"booking_id": bid})
+        r2 = client.post("/web/order", json={"booking_id": bid})
+    assert r1.status_code == 200 and r2.status_code == 200
+    assert r1.json()["order_id"] == r2.json()["order_id"] == "order_ONCE"
+    assert r2.json()["amount"] == av.to_paise(4500)
+    assert r2.json()["key_id"] == KEY_ID
+    m.assert_called_once()
+    assert config.bookings_ref.document(bid).get().to_dict()["razorpay_order_id"] == "order_ONCE"
+
+
 def test_order_returns_key_id_not_secret(client):
     bid = _hold()
     with patch.object(razorpay_service, "create_order", return_value={"id": "order_X2"}):

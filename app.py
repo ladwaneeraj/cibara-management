@@ -50,7 +50,23 @@ def _origins_from_env():
     raw = os.environ.get("WEB_ALLOWED_ORIGINS", "")
     return [o.strip() for o in raw.split(",") if o.strip()]
 
-CORS(app, resources={r"/web/*": {"origins": _origins_from_env()}})
+_web_origins = _origins_from_env()
+
+# DEPLOY RULE: this Flask app is mounted under the FastAPI app, whose own
+# CORSMiddleware uses CORS_ORIGINS. A website origin must be in
+# WEB_ALLOWED_ORIGINS OR CORS_ORIGINS, never both -- otherwise /web/* responses
+# carry duplicate Access-Control-Allow-Origin headers and browsers reject them.
+# We only warn (no hard failure) so a misconfig can never brick startup.
+_overlap = sorted(set(_web_origins) & {
+    o.strip() for o in os.environ.get("CORS_ORIGINS", "").split(",") if o.strip()})
+if _overlap:
+    logger.warning(
+        "CORS MISCONFIGURATION: origin(s) %s are in BOTH WEB_ALLOWED_ORIGINS and "
+        "CORS_ORIGINS. A website origin must be in WEB_ALLOWED_ORIGINS OR "
+        "CORS_ORIGINS, never both, or /web/* returns duplicate CORS headers and "
+        "browsers will reject every guest call.", ", ".join(_overlap))
+
+CORS(app, resources={r"/web/*": {"origins": _web_origins}})
 
 
 # ---------------------------------------------------------------------------

@@ -31,6 +31,7 @@ _AVAIL_LIMIT_PER_MIN = 60
 # /web/hold writes state (a pending booking that blocks inventory), so it gets
 # its own bucket: a guest needs one hold, not dozens.
 _HOLD_LIMIT_PER_MIN = 20
+_limiter_warned = False
 
 _MAX_NAME_LEN = 100
 _MAX_MOBILE_LEN = 20
@@ -60,8 +61,20 @@ def _client_ip():
 
 
 def _rate_limited(bucket="web_availability", limit=_AVAIL_LIMIT_PER_MIN):
-    """True when this client IP has exceeded the per-minute cap for ``bucket``."""
-    from cibara_api.core.ratelimit import limiter
+    """True when this client IP has exceeded the per-minute cap for ``bucket``.
+
+    Fails OPEN (never rate-limited) if the limiter cannot be imported, e.g. when
+    the Flask app runs outside the FastAPI wrapper -- a warning is logged once.
+    """
+    global _limiter_warned
+    try:
+        from cibara_api.core.ratelimit import limiter
+    except ImportError:
+        if not _limiter_warned:
+            _limiter_warned = True
+            logger.warning("cibara_api rate limiter unavailable; /web/* endpoints "
+                           "are running WITHOUT rate limiting (fail-open)")
+        return False
     ok, _ = limiter.hit(f"{bucket}:{_client_ip()}", limit, 60)
     return not ok
 
@@ -306,9 +319,17 @@ def web_order():
         return jsonify(error="Hold expired"), 404
 
     amount_paise = av.to_paise(booking["total_amount"])
+    key_id = os.environ.get("RAZORPAY_KEY_ID", "")
+
+    # Idempotent per booking: reuse the stored order so repeated "Pay" clicks can
+    # never produce two separately-capturable Razorpay orders (double charge).
+    existing = booking.get("razorpay_order_id")
+    if existing:
+        return jsonify(order_id=existing, key_id=key_id, amount=amount_paise)
+
     order = razorpay_service.create_order(amount_paise, receipt=booking_id)
-    return jsonify(order_id=order["id"], key_id=os.environ.get("RAZORPAY_KEY_ID", ""),
-                   amount=amount_paise)
+    config.bookings_ref.document(booking_id).update({"razorpay_order_id": order["id"]})
+    return jsonify(order_id=order["id"], key_id=key_id, amount=amount_paise)
 
 
 # ------------------------------------------------------------------- hold sweep

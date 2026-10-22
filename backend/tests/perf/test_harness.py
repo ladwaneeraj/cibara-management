@@ -15,6 +15,7 @@ Semantics locked here (mirror metrics.py):
 """
 from cibara_api.core import metrics
 from tests.fakes import fake_firestore as FF
+from tests.perf.harness import Screen, run_baseline
 
 
 def test_fake_counting_matches_gapic_semantics():
@@ -65,3 +66,15 @@ def test_fake_counting_matches_gapic_semantics():
         assert counter.writes - w0 == 2
     finally:
         metrics.stop(token)
+
+
+def test_harness_reports_reads(client, admin):
+    """The baseline harness drives a classic-screen endpoint and reports the
+    ground-truth Firestore read count plus a latency sample."""
+    screens = [Screen(name="front_desk", method="GET", path="/get_data",
+                      params={"fresh": "1"})]
+    rows = run_baseline(client, admin, screens, repeats=30)
+    assert len(rows) == 1
+    row = rows[0]
+    assert row.n == 30
+    assert row.reads >= 1  # /get_data reads at least the rooms collection

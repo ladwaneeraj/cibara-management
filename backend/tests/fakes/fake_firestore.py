@@ -380,7 +380,7 @@ class Query:
             out.append((path, data))
         return out
 
-    def _run(self):
+    def _run(self, count_reads=True):
         st = self._client._store
         with st.lock:
             rows = []
@@ -412,8 +412,11 @@ class Query:
                 rows = rows[self._offset:]
             if self._limit is not None:
                 rows = rows[-self._limit:] if self._limit_to_last else rows[: self._limit]
-            st.read_count += max(1, len(rows))
-            _hook(on_read, max(1, len(rows)))
+            # Aggregation queries (count()) bill no per-document reads — the real
+            # client issues run_aggregation_query, which metrics.py counts as 0.
+            if count_reads:
+                st.read_count += max(1, len(rows))
+                _hook(on_read, max(1, len(rows)))
             snaps = []
             for ref, data in rows:
                 meta = st.meta.get(ref.path, {})
@@ -506,7 +509,7 @@ class _CountQuery:
         self._q = q
 
     def get(self, **_kw):
-        return [[_AggResult(len(self._q._run()))]]
+        return [[_AggResult(len(self._q._run(count_reads=False)))]]
 
     def stream(self, **_kw):
         return iter(self.get())

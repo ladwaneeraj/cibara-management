@@ -4549,6 +4549,7 @@ def get_data():
     """
     try:
         from concurrent.futures import ThreadPoolExecutor
+        import contextvars
         t0 = _time.time()
 
         # Cache-bypass: the refresh button appends ?_t=<ts> (or ?fresh=1) to
@@ -4573,14 +4574,22 @@ def get_data():
         # tab is the renewal-history badge, which is covered by today's renewals.
         # Totals are accurate from the `totals` collection regardless of date range.
         # Run all 4 Firestore queries in parallel (rooms, totals, payments, expenses)
+        # Propagate the request context (incl. the core.metrics Firestore
+        # read/write counter) into the worker threads with a fresh copy per
+        # task, so X-Firestore-Reads and /admin/metrics account for these
+        # parallel reads instead of reporting 0. A fresh copy per submit avoids
+        # the "context already entered" error of sharing one Context object
+        # across threads; all copies share the same request Counter.
         with ThreadPoolExecutor(max_workers=4) as pool:
-            f_rooms    = pool.submit(get_all_rooms)
-            f_totals   = pool.submit(get_totals)
+            f_rooms    = pool.submit(contextvars.copy_context().run, get_all_rooms)
+            f_totals   = pool.submit(contextvars.copy_context().run, get_totals)
             f_payments = pool.submit(
+                contextvars.copy_context().run,
                 payment_service.query_payments_by_date_range,
                 today_str, tomorrow
             )
             f_expenses = pool.submit(
+                contextvars.copy_context().run,
                 expense_service.query_expenses_for_today,
                 today_str
             )

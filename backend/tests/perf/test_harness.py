@@ -68,6 +68,22 @@ def test_fake_counting_matches_gapic_semantics():
         metrics.stop(token)
 
 
+def test_get_data_reads_counted_across_threads(client, admin):
+    """/get_data fetches rooms/totals/payments/expenses in a ThreadPoolExecutor.
+    The per-request counter (and thus the X-Firestore-Reads header) must see
+    those reads — i.e. equal the fake's thread-complete ground-truth total —
+    otherwise production read monitoring is blind to the busiest screen."""
+    from tests.fakes import fake_firebase as F
+    store = F.FAKE_DB._store
+    r0 = store.read_count
+    resp = client.get("/get_data", params={"fresh": "1"}, headers=admin)
+    assert resp.status_code == 200, resp.text
+    ground_truth = store.read_count - r0
+    header = int(resp.headers.get("X-Firestore-Reads", "-1"))
+    assert ground_truth >= 10, f"expected a real rooms scan, got {ground_truth}"
+    assert header == ground_truth, f"header {header} != ground-truth {ground_truth} reads"
+
+
 def test_harness_reports_reads(client, admin):
     """The baseline harness drives a classic-screen endpoint and reports the
     ground-truth Firestore read count plus a latency sample."""

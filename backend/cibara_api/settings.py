@@ -90,6 +90,16 @@ class Settings(BaseSettings):
 
     SLOW_REQUEST_MS: int = 1500
 
+    # ── Performance (classic-UI read-baseline pass) ───────────────────────────
+    # Cache the GET /rooms/tariffs payload (the static room list + pure pricing
+    # functions). Its only Firestore read is get_all_rooms(), which is cached 30s
+    # but invalidated on every checkin/payment — so at a busy desk tariffs
+    # re-scans all rooms after each room write. This dedicated cache survives
+    # those invalidations; it is reference data and refreshes within the TTL of
+    # a room-config change. Set false for an instant revert.
+    PERF_TARIFFS_CACHE: bool = True
+    PERF_TARIFFS_CACHE_TTL: int = 300
+
     # Classic-UI Content-Security-Policy mode: "enforce" (default), "report-only"
     # (send Content-Security-Policy-Report-Only so violations are visible in the
     # console/Sentry without breaking the page — use this to vet the policy after

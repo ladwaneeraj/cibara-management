@@ -84,6 +84,57 @@ def test_get_data_reads_counted_across_threads(client, admin):
     assert header == ground_truth, f"header {header} != ground-truth {ground_truth} reads"
 
 
+def _reads(resp) -> int:
+    return int(resp.headers.get("X-Firestore-Reads", "-1"))
+
+
+def test_tariffs_cache_survives_room_cache_invalidation(client, admin):
+    """With the flag on, /rooms/tariffs must keep serving without a rooms
+    re-scan even after a checkin/payment invalidates the shared 30s rooms
+    cache — tariffs only needs the static room list + pure pricing."""
+    import config
+    from cibara_api.settings import get_settings
+    from cibara_api.routers import rooms as rr
+
+    s = get_settings()
+    old = s.PERF_TARIFFS_CACHE
+    s.PERF_TARIFFS_CACHE = True
+    rr._clear_tariffs_cache()
+    try:
+        r1 = client.get("/api/v2/rooms/tariffs", headers=admin)
+        assert r1.status_code == 200, r1.text
+        config.invalidate_cache()  # simulate a checkin/payment write
+        r2 = client.get("/api/v2/rooms/tariffs", headers=admin)
+        assert r2.status_code == 200, r2.text
+        assert _reads(r2) == 0, "cached tariffs must not re-scan rooms"
+        assert r2.json()["tariffs"] == r1.json()["tariffs"], "cached payload must match"
+    finally:
+        s.PERF_TARIFFS_CACHE = old
+        rr._clear_tariffs_cache()
+
+
+def test_tariffs_flag_off_rescans_after_invalidation(client, admin):
+    """Control: with the flag off, the same sequence re-scans rooms, proving
+    the cache (not some other layer) is what removes the reads."""
+    import config
+    from cibara_api.settings import get_settings
+    from cibara_api.routers import rooms as rr
+
+    s = get_settings()
+    old = s.PERF_TARIFFS_CACHE
+    s.PERF_TARIFFS_CACHE = False
+    rr._clear_tariffs_cache()
+    try:
+        client.get("/api/v2/rooms/tariffs", headers=admin)  # warm config cache
+        config.invalidate_cache()
+        r2 = client.get("/api/v2/rooms/tariffs", headers=admin)
+        assert r2.status_code == 200, r2.text
+        assert _reads(r2) >= 1, "flag off must re-scan rooms after invalidation"
+    finally:
+        s.PERF_TARIFFS_CACHE = old
+        rr._clear_tariffs_cache()
+
+
 def test_harness_reports_reads(client, admin):
     """The baseline harness drives a classic-screen endpoint and reports the
     ground-truth Firestore read count plus a latency sample."""

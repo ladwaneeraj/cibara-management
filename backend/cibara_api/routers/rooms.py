@@ -25,9 +25,25 @@ from typing import Literal, Optional, Union
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Path, Query, Request, UploadFile
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+import threading
+import time as _time
+
+from starlette.concurrency import run_in_threadpool
+
 from ..legacy import legacy_config
 from ..security.deps import Principal, get_principal, require_permission
+from ..settings import get_settings
 from ._forward import forward
+
+# Reference-data cache for GET /rooms/tariffs (see Settings.PERF_TARIFFS_CACHE).
+_tariffs_cache: dict = {"payload": None, "ts": 0.0}
+_tariffs_lock = threading.Lock()
+
+
+def _clear_tariffs_cache() -> None:
+    with _tariffs_lock:
+        _tariffs_cache["payload"] = None
+        _tariffs_cache["ts"] = 0.0
 
 router = APIRouter(prefix="/api/v2", tags=["rooms"])
 
@@ -185,7 +201,20 @@ async def tariffs(p: Principal = Depends(get_principal)):
                 "ac_surcharge": legacy_config.AC_SURCHARGE if _is_premium(rid) else 0,
             }
         return out
-    from starlette.concurrency import run_in_threadpool
+
+    s = get_settings()
+    if s.PERF_TARIFFS_CACHE:
+        now = _time.monotonic()
+        with _tariffs_lock:
+            cached = _tariffs_cache["payload"]
+            if cached is not None and (now - _tariffs_cache["ts"]) < s.PERF_TARIFFS_CACHE_TTL:
+                return {"success": True, "tariffs": cached}
+        payload = await run_in_threadpool(build)
+        with _tariffs_lock:
+            _tariffs_cache["payload"] = payload
+            _tariffs_cache["ts"] = now
+        return {"success": True, "tariffs": payload}
+
     return {"success": True, "tariffs": await run_in_threadpool(build)}
 
 

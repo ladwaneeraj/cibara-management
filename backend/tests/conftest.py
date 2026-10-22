@@ -104,6 +104,11 @@ def _reset_state():
         legacy_rooms._invalidate_get_data_cache()
     except Exception:
         pass
+    try:
+        from cibara_api.routers import rooms as api_rooms
+        api_rooms._clear_tariffs_cache()
+    except Exception:
+        pass
     yield
 
 

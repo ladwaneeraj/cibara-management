@@ -135,6 +135,39 @@ def test_tariffs_flag_off_rescans_after_invalidation(client, admin):
         rr._clear_tariffs_cache()
 
 
+def test_get_room_numbers_light_avoids_full_scan(client, admin):
+    """/get_room_numbers only needs room IDs, but streamed every full room doc
+    (~47 reads). With PERF_ROOM_NUMBERS_LIGHT on it must use list_documents()
+    (no per-doc reads) and return the identical room list."""
+    import os
+    from tests.fakes import fake_firebase as F
+    store = F.FAKE_DB._store
+
+    prev = os.environ.get("PERF_ROOM_NUMBERS_LIGHT")
+    try:
+        os.environ["PERF_ROOM_NUMBERS_LIGHT"] = "0"  # legacy full stream
+        r0 = store.read_count
+        off = client.get("/get_room_numbers", headers=admin)
+        reads_off = store.read_count - r0
+
+        os.environ["PERF_ROOM_NUMBERS_LIGHT"] = "1"  # light path
+        r1 = store.read_count
+        on = client.get("/get_room_numbers", headers=admin)
+        reads_on = store.read_count - r1
+
+        assert off.status_code == 200 and on.status_code == 200
+        assert reads_off >= 10, f"legacy path should scan all rooms, got {reads_off}"
+        assert reads_on == 0, f"light path should read no documents, got {reads_on}"
+        assert on.json()["rooms"] == off.json()["rooms"], "room list must be identical"
+        assert on.json()["first_floor"] == off.json()["first_floor"]
+        assert on.json()["second_floor"] == off.json()["second_floor"]
+    finally:
+        if prev is None:
+            os.environ.pop("PERF_ROOM_NUMBERS_LIGHT", None)
+        else:
+            os.environ["PERF_ROOM_NUMBERS_LIGHT"] = prev
+
+
 def test_harness_reports_reads(client, admin):
     """The baseline harness drives a classic-screen endpoint and reports the
     ground-truth Firestore read count plus a latency sample."""

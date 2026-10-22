@@ -4796,8 +4796,16 @@ def get_history():
 @rooms_bp.route("/get_room_numbers", methods=["GET"])
 def get_room_numbers():
     try:
-        rooms_stream = rooms_ref.stream()
-        room_numbers = [doc.id for doc in rooms_stream]
+        import os
+        if os.environ.get("PERF_ROOM_NUMBERS_LIGHT", "1") != "0":
+            # Only the room IDs are needed here. list_documents() returns the
+            # document references without reading (and billing) every room
+            # document — the old `rooms_ref.stream()` cost one read per room
+            # (~47) just to collect doc.id. Set PERF_ROOM_NUMBERS_LIGHT=0 to
+            # restore the previous full-stream behaviour.
+            room_numbers = [doc.id for doc in rooms_ref.list_documents()]
+        else:
+            room_numbers = [doc.id for doc in rooms_ref.stream()]
 
         def room_sort_key(room_num):
             if room_num.startswith('2'):

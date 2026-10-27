@@ -6,6 +6,8 @@ Expense reads use the dedicated `expenses` collection via expense_service.
 Old `logs` collection is NOT used for reads anymore.
 """
 
+import contextvars as _ctx
+import os
 import re
 from html import escape as _html_escape
 from flask import Blueprint, request, jsonify
@@ -192,24 +194,37 @@ def get_register_data():
         )
 
         stay_payment_futures = {}  # stay_id -> Future[list[payment]]
+        # In CHECKOUT mode the rooms snapshot is never consumed (active rooms
+        # are excluded and the stay-payment prefetch below is checkin-only), so
+        # fetching every room doc there is a pure ~full-collection dead read.
+        # Skip it. PERF_REGISTER_SKIP_ROOMS_CHECKOUT=0 restores the old fetch.
+        _skip_rooms = (mode == "checkout"
+                       and os.environ.get("PERF_REGISTER_SKIP_ROOMS_CHECKOUT", "1") != "0")
         with ThreadPoolExecutor(max_workers=16) as pool:
-            f_rooms = pool.submit(get_all_rooms)
-            f_payments = pool.submit(
+            # copy_context().run carries the per-request Firestore-metrics
+            # counter into the worker threads so X-Firestore-Reads /
+            # /admin/metrics see these reads (an un-propagated pool is blind —
+            # the same fix already applied to legacy /get_data).
+            def _submit(fn, *a):
+                return pool.submit(_ctx.copy_context().run, fn, *a)
+
+            f_rooms = None if _skip_rooms else _submit(get_all_rooms)
+            f_payments = _submit(
                 payment_service.query_payments_by_date_range,
                 start_date, end_dt.strftime("%Y-%m-%d")
             )
-            f_bills = pool.submit(lambda: list(_bills_query.stream()))
-            f_today_pay = pool.submit(
+            f_bills = _submit(lambda: list(_bills_query.stream()))
+            f_today_pay = _submit(
                 payment_service.query_payments_by_date_range, today_str, today_str
             )
-            f_today_exp = pool.submit(
+            f_today_exp = _submit(
                 expense_service.query_expenses_for_today, today_str
             )
-            f_mmt_pending = pool.submit(
+            f_mmt_pending = _submit(
                 lambda: [d.to_dict() for d in _mmt_pending_query.stream()]
             )
 
-            rooms_data = f_rooms.result()
+            rooms_data = {} if f_rooms is None else f_rooms.result()
 
             # Pre-submit the per-occupied-room stay-payment lookups so they
             # run concurrently instead of one-by-one inside the loop below.
@@ -228,7 +243,7 @@ def get_register_data():
                     if (_rd.get("stay_payment_for") == _sid
                             and _rd.get("stay_payment_cash") is not None):
                         continue
-                    stay_payment_futures[_sid] = pool.submit(
+                    stay_payment_futures[_sid] = _submit(
                         payment_service.query_payments_by_stay_id, _sid
                     )
 

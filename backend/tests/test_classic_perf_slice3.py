@@ -51,16 +51,19 @@ def _cold_reads(fn):
     return store.read_count - r0, out
 
 
+_VOLATILE = ("generated_at", "generatedAt", "timestamp", "server_time",
+             "elapsed_min")
+
+
 def _volatile_stripped(d):
-    """Drop fields that legitimately vary call-to-call (wall-clock stamps)."""
+    """Drop fields that legitimately vary call-to-call — wall-clock stamps, and
+    `elapsed_min` which _live_pending derives from datetime.now. Recurses into
+    lists as well as dicts (so stamps inside live.pending[] are dropped too)."""
+    if isinstance(d, list):
+        return [_volatile_stripped(x) for x in d]
     if not isinstance(d, dict):
         return d
-    out = {}
-    for k, v in d.items():
-        if k in ("generated_at", "generatedAt", "timestamp", "server_time"):
-            continue
-        out[k] = _volatile_stripped(v) if isinstance(v, dict) else v
-    return out
+    return {k: _volatile_stripped(v) for k, v in d.items() if k not in _VOLATILE}
 
 
 # ── Fix 1: monitoring context propagation (header must see the real reads) ──
@@ -113,20 +116,30 @@ def test_register_checkout_skips_rooms_without_changing_payload(seeded, monkeypa
 # ── Fix 3: insights uses count() + status==cleaning instead of a full scan ──
 
 def test_insights_rooms_light_preserves_payload(seeded, monkeypatch):
+    # Put a room into 'cleaning' so the live "cleaning now" strip is non-empty
+    # and the _cleaning_rooms() vs full-scan equivalence is actually exercised
+    # (the demo seed otherwise leaves no room in that status).
+    from config import rooms_ref
+    rid = next(d.id for d in rooms_ref.stream()
+               if (d.to_dict() or {}).get("status") != "occupied")
+    rooms_ref.document(rid).set(
+        {"status": "cleaning", "cleaning_start_time": "2026-10-27 10:00:00",
+         "cleaning_status": "in_progress", "cleanedBy": "hk1"}, merge=True)
+
     monkeypatch.setenv("PERF_INSIGHTS_ROOMS_LIGHT", "0")
-    _, off = _cold_reads(lambda: client_get_insights(seeded))
+    off_reads, off = _cold_reads(lambda: client_get_insights(seeded))
     assert off.status_code == 200, off.text
 
     monkeypatch.setenv("PERF_INSIGHTS_ROOMS_LIGHT", "1")
     on_reads, on = _cold_reads(lambda: client_get_insights(seeded))
     assert on.status_code == 200, on.text
 
-    monkeypatch.setenv("PERF_INSIGHTS_ROOMS_LIGHT", "0")
-    off_reads, _ = _cold_reads(lambda: client_get_insights(seeded))
-
     # room_count (occupancy denominator) and the live "cleaning now" strip must
     # be identical whether we scan all rooms or use count() + a status query.
-    assert _volatile_stripped(on.json()) == _volatile_stripped(off.json())
+    # elapsed_min is wall-clock-derived, so _volatile_stripped drops it.
+    off_j, on_j = _volatile_stripped(off.json()), _volatile_stripped(on.json())
+    assert on_j["live"]["pending"], "seeded cleaning room should appear in the strip"
+    assert on_j == off_j
     assert on_reads <= off_reads - 30, f"expected big drop, got {off_reads}->{on_reads}"
 
 

@@ -109,13 +109,19 @@
     return "≈ ₹" + Math.round(inr).toLocaleString("en-IN");
   }
 
-  // Automated uptime/health probes (e.g. Cloud Monitoring hitting
-  // /api/v2/health every few minutes from several regions) are not a staff
-  // "screen". Excluded from this view so they can't masquerade as the busiest
-  // screen or pad the table / totals.
+  // Automated uptime/health probes (Cloud Monitoring hitting /api/v2/health
+  // every few minutes from several regions) are not a staff "screen". Excluded
+  // from this view so they can't masquerade as the busiest screen or pad the
+  // table / totals. Rows are recorded as "{METHOD} {path}" (e.g.
+  // "GET /api/v2/health"), so strip the method and match the probe's EXACT
+  // path — a suffix match would also catch real endpoints like
+  // "POST /api/v2/rooms/{id}/ready".
+  var PROBE_PATHS = { "/api/v2/health": 1 };
   function isProbeRoute(route) {
     var p = String(route || "");
-    return p === "/api/v2/health" || /\/(health|healthz|ready|readyz|livez)$/.test(p);
+    var sp = p.indexOf(" ");
+    var path = sp === -1 ? p : p.slice(sp + 1);
+    return PROBE_PATHS[path] === 1;
   }
 
   // Pure: snapshot -> everything the view needs. No DOM, no network — so the

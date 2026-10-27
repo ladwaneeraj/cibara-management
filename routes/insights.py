@@ -34,7 +34,6 @@ Data notes
     LIVE "in cleaning right now" strip.
 """
 
-import contextvars as _ctx
 import os
 import time as _time
 from collections import OrderedDict
@@ -45,7 +44,7 @@ from threading import Lock
 from flask import Blueprint, request, jsonify
 from google.cloud.firestore_v1.base_query import FieldFilter
 
-from config import db, bills_ref, rooms_ref, IST, logger, get_all_rooms
+from config import db, bills_ref, rooms_ref, IST, logger, get_all_rooms, submit_in_context
 from services import payment_service
 from services import insights_service as svc
 from services.auth_service import requires_permission
@@ -216,37 +215,39 @@ def insights_summary():
         from_str, to_str = cache_key
         t0 = _time.time()
 
-        # The three Firestore reads are independent — run them concurrently.
-        # copy_context().run carries the per-request Firestore-metrics counter
-        # into the worker threads so X-Firestore-Reads / /admin/metrics see the
-        # reads (an un-propagated pool is blind — same fix as legacy /get_data).
-        f_events = _POOL.submit(
-            _ctx.copy_context().run, _fetch_audit_events, from_date, to_date)
-        f_payments = _POOL.submit(
-            _ctx.copy_context().run,
-            payment_service.query_payments_by_date_range,
+        # The independent Firestore reads run concurrently on _POOL, each
+        # carrying the request context so their reads show in X-Firestore-Reads
+        # / /admin/metrics (an un-propagated pool is blind — same fix as legacy
+        # /get_data; shared contract: config.submit_in_context).
+        f_events = submit_in_context(_POOL, _fetch_audit_events, from_date, to_date)
+        f_payments = submit_in_context(
+            _POOL, payment_service.query_payments_by_date_range,
             from_str, (to_date + timedelta(days=1)).strftime("%Y-%m-%d"),
         )
-        f_bills = _POOL.submit(
-            _ctx.copy_context().run, _fetch_bills, from_date, to_date)
+        f_bills = submit_in_context(_POOL, _fetch_bills, from_date, to_date)
 
         # Rooms: insights needs only the TOTAL room count (occupancy
         # denominator) and the rooms in `cleaning` status right now (the live
         # strip) — never the full room docs. A count() aggregation (0 reads) +
-        # a single-field status query reads a handful of docs instead of the
-        # whole room collection. PERF_INSIGHTS_ROOMS_LIGHT=0 restores the full
-        # 30s-cached get_all_rooms() scan.
-        if os.environ.get("PERF_INSIGHTS_ROOMS_LIGHT", "1") != "0":
-            room_count = _count_rooms()
-            rooms_for_pending = _cleaning_rooms()
-        else:
-            rooms = get_all_rooms() or {}
-            room_count = len(rooms)
-            rooms_for_pending = rooms
+        # a single-field status query read a handful of docs instead of the
+        # whole room collection, and run on _POOL alongside the reads above
+        # (not serially on the request thread). PERF_INSIGHTS_ROOMS_LIGHT=0
+        # restores the full 30s-cached get_all_rooms() scan.
+        _rooms_light = os.environ.get("PERF_INSIGHTS_ROOMS_LIGHT", "1") != "0"
+        if _rooms_light:
+            f_count = submit_in_context(_POOL, _count_rooms)
+            f_cleaning = submit_in_context(_POOL, _cleaning_rooms)
 
         events = f_events.result()
         payments = f_payments.result() or []
         bills = f_bills.result()
+        if _rooms_light:
+            room_count = f_count.result()
+            rooms_for_pending = f_cleaning.result()
+        else:
+            rooms = get_all_rooms() or {}
+            room_count = len(rooms)
+            rooms_for_pending = rooms
 
         payload = svc.compute_daily_insights(
             events, from_str, to_str,

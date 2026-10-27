@@ -391,6 +391,22 @@ def invalidate_rooms_and_totals():
             del _cache[k]
 
 
+def submit_in_context(pool, fn, *args):
+    """Submit ``fn`` to ``pool`` carrying the CURRENT context into the worker
+    thread (a fresh copy per task), so the per-request Firestore read/write
+    counter set by the API layer stays visible there.
+
+    Hand-rolled ThreadPoolExecutors whose tasks don't inherit the request
+    context are blind to X-Firestore-Reads / /admin/metrics — the reads happen
+    on a thread with no counter. Centralised here so every parallel-fetch site
+    (/get_data, /insights/summary, /get_register_data) uses the same contract.
+    A fresh copy per submit avoids the "context already entered" error of
+    sharing one Context object across threads; all copies share the same
+    request Counter."""
+    import contextvars
+    return pool.submit(contextvars.copy_context().run, fn, *args)
+
+
 # ── Billing config ─────────────────────────────────────────────────────────────
 # A single Firestore doc (`settings/billing_config`) holds tenant-wide toggles
 # that affect bill generation. Currently:

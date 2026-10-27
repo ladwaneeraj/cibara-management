@@ -6,7 +6,6 @@ Expense reads use the dedicated `expenses` collection via expense_service.
 Old `logs` collection is NOT used for reads anymore.
 """
 
-import contextvars as _ctx
 import os
 import re
 from html import escape as _html_escape
@@ -20,7 +19,7 @@ from config import (
     metadata_ref, IST, logger, settlements_ref, settings_ref,
     credit_notes_ref, bookings_ref,
     _build_active_entry_fast, _find_serial_fast, _batch_fill_serials,
-    get_all_rooms, invalidate_rooms_and_totals,
+    get_all_rooms, invalidate_rooms_and_totals, submit_in_context,
     get_billing_config, invalidate_billing_config_cache,
     get_ui_config, invalidate_ui_config_cache,
     validate_gstin, derive_state_from_gstin, classify_invoice_type,
@@ -201,12 +200,11 @@ def get_register_data():
         _skip_rooms = (mode == "checkout"
                        and os.environ.get("PERF_REGISTER_SKIP_ROOMS_CHECKOUT", "1") != "0")
         with ThreadPoolExecutor(max_workers=16) as pool:
-            # copy_context().run carries the per-request Firestore-metrics
-            # counter into the worker threads so X-Firestore-Reads /
-            # /admin/metrics see these reads (an un-propagated pool is blind —
-            # the same fix already applied to legacy /get_data).
+            # Carry the request context (Firestore-metrics counter) into the
+            # worker threads so these reads aren't blind to X-Firestore-Reads /
+            # /admin/metrics. Shared contract in config.submit_in_context.
             def _submit(fn, *a):
-                return pool.submit(_ctx.copy_context().run, fn, *a)
+                return submit_in_context(pool, fn, *a)
 
             f_rooms = None if _skip_rooms else _submit(get_all_rooms)
             f_payments = _submit(

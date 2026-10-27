@@ -17,7 +17,7 @@ from google.cloud.firestore_v1.base_query import FieldFilter
 from config import (
     db, rooms_ref, totals_ref, bookings_ref, metadata_ref,
     counters_ref, bills_ref, IST, logger, invalidate_cache,
-    invalidate_rooms_and_totals, get_all_rooms,
+    invalidate_rooms_and_totals, get_all_rooms, submit_in_context,
     get_totals, is_log_from_current_stay, get_next_serial_number,
     store_transaction_metadata, create_bill_record, BillCreationError,
     allocate_and_finalize_bill,
@@ -4549,7 +4549,6 @@ def get_data():
     """
     try:
         from concurrent.futures import ThreadPoolExecutor
-        import contextvars
         t0 = _time.time()
 
         # Cache-bypass: the refresh button appends ?_t=<ts> (or ?fresh=1) to
@@ -4581,15 +4580,15 @@ def get_data():
         # the "context already entered" error of sharing one Context object
         # across threads; all copies share the same request Counter.
         with ThreadPoolExecutor(max_workers=4) as pool:
-            f_rooms    = pool.submit(contextvars.copy_context().run, get_all_rooms)
-            f_totals   = pool.submit(contextvars.copy_context().run, get_totals)
-            f_payments = pool.submit(
-                contextvars.copy_context().run,
+            f_rooms    = submit_in_context(pool, get_all_rooms)
+            f_totals   = submit_in_context(pool, get_totals)
+            f_payments = submit_in_context(
+                pool,
                 payment_service.query_payments_by_date_range,
                 today_str, tomorrow
             )
-            f_expenses = pool.submit(
-                contextvars.copy_context().run,
+            f_expenses = submit_in_context(
+                pool,
                 expense_service.query_expenses_for_today,
                 today_str
             )

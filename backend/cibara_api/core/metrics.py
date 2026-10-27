@@ -28,6 +28,14 @@ _current: contextvars.ContextVar["Counter | None"] = contextvars.ContextVar("fs_
 class Counter:
     reads: int = 0
     writes: int = 0
+    # /get_data (and /dashboard, which calls it) fan their Firestore reads out
+    # across a ThreadPoolExecutor that shares this one per-request Counter, so
+    # count_reads/count_writes run concurrently. `+=` is a non-atomic
+    # read-modify-write, so without this lock concurrent increments can be lost
+    # and X-Firestore-Reads / /admin/metrics under-report. The lock is
+    # per-Counter (per request), so single-threaded requests never contend and
+    # distinct requests never serialize against each other.
+    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False, compare=False)
 
 
 def start() -> tuple[Counter, contextvars.Token]:
@@ -50,13 +58,15 @@ def current() -> Counter | None:
 def count_reads(n: int) -> None:
     c = _current.get()
     if c is not None:
-        c.reads += n
+        with c._lock:
+            c.reads += n
 
 
 def count_writes(n: int) -> None:
     c = _current.get()
     if c is not None:
-        c.writes += n
+        with c._lock:
+            c.writes += n
 
 
 # ── registry ──────────────────────────────────────────────────────────────

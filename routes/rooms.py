@@ -4803,6 +4803,10 @@ def get_room_numbers():
             # document — the old `rooms_ref.stream()` cost one read per room
             # (~47) just to collect doc.id. Set PERF_ROOM_NUMBERS_LIGHT=0 to
             # restore the previous full-stream behaviour.
+            # NOTE: unlike stream(), list_documents() can also return an id that
+            # exists only as a subcollection parent (no fields). The rooms
+            # collection has no subcollections, so the two return the same set
+            # today; revisit this if rooms ever gain one.
             room_numbers = [doc.id for doc in rooms_ref.list_documents()]
         else:
             room_numbers = [doc.id for doc in rooms_ref.stream()]

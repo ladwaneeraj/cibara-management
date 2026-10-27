@@ -109,10 +109,21 @@
     return "≈ ₹" + Math.round(inr).toLocaleString("en-IN");
   }
 
+  // Automated uptime/health probes (e.g. Cloud Monitoring hitting
+  // /api/v2/health every few minutes from several regions) are not a staff
+  // "screen". Excluded from this view so they can't masquerade as the busiest
+  // screen or pad the table / totals.
+  function isProbeRoute(route) {
+    var p = String(route || "");
+    return p === "/api/v2/health" || /\/(health|healthz|ready|readyz|livez)$/.test(p);
+  }
+
   // Pure: snapshot -> everything the view needs. No DOM, no network — so the
   // interpretation is easy to reason about and test in isolation.
   function deriveInsights(snap) {
-    var routes = (snap && snap.routes) || [];
+    var routes = ((snap && snap.routes) || []).filter(function (r) {
+      return r && !isProbeRoute(r.route);
+    });
     var totals = (snap && snap.totals) || { requests: 0, reads: 0, writes: 0 };
 
     var failedActions = 0;

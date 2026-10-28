@@ -89,8 +89,10 @@ console.info(
 // and, across devices, pay billed reads for every delta — pure idle background
 // load. Detaching them while the tab is hidden removes it; on return we
 // re-attach and the SDK delivers the current snapshot (from the IndexedDB cache
-// + resume token), so the screen self-heals. Per-device kill switch:
-//   localStorage['cibara_pause_hidden_listeners'] = '0'   (default ON).
+// + resume token), so the screen self-heals. DEFAULT OFF until verified on a
+// live-Firebase UAT run (it can't be exercised on the in-memory demo); opt in
+// per device with  localStorage['cibara_pause_hidden_listeners'] = '1'  , and
+// flip the default in _pauseHiddenFlagOn() back to ON once UAT confirms it.
 let _lf_fullAccess = null;    // role scope, remembered so re-attach matches it
 let _lf_unsubs = [];          // active onSnapshot unsubscribe handles
 let _lf_attached = false;
@@ -104,7 +106,7 @@ function _pauseHiddenFlagOn() {
     if (v === "0" || v === "false") return false;
     if (v === "1" || v === "true") return true;
   } catch (e) { /* storage blocked (private mode) — fall through to default */ }
-  return true;
+  return false;   // DEFAULT OFF until UAT-verified; set the flag to '1' to opt in
 }
 
 // Format a Date using LOCAL (IST) calendar components. The backend stores each

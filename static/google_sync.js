@@ -82,6 +82,31 @@ console.info(
   "Cibara sync: " + (LISTENER_FIRST ? "listener-first" : "legacy /get_data") + " mode",
 );
 
+// ─── Pause live listeners while the tab is hidden (PERF) ────────────────────
+// ~12 front-desk tabs stay signed in but only 1–2 are in use at a time. A
+// hidden tab's onSnapshot listeners still wake on every remote change (each
+// payment / check-in made on the active tabs) to re-render an off-screen grid
+// and, across devices, pay billed reads for every delta — pure idle background
+// load. Detaching them while the tab is hidden removes it; on return we
+// re-attach and the SDK delivers the current snapshot (from the IndexedDB cache
+// + resume token), so the screen self-heals. Per-device kill switch:
+//   localStorage['cibara_pause_hidden_listeners'] = '0'   (default ON).
+let _lf_fullAccess = null;    // role scope, remembered so re-attach matches it
+let _lf_unsubs = [];          // active onSnapshot unsubscribe handles
+let _lf_attached = false;
+function _track(unsub) {
+  if (typeof unsub === "function") _lf_unsubs.push(unsub);
+  return unsub;
+}
+function _pauseHiddenFlagOn() {
+  try {
+    const v = localStorage.getItem("cibara_pause_hidden_listeners");
+    if (v === "0" || v === "false") return false;
+    if (v === "1" || v === "true") return true;
+  } catch (e) { /* storage blocked (private mode) — fall through to default */ }
+  return true;
+}
+
 // Format a Date using LOCAL (IST) calendar components. The backend stores each
 // document's `date` as the IST calendar day, so the date-filtered listener
 // queries below must compare against the IST day too. `.toISOString()` would
@@ -187,6 +212,11 @@ window.CibaraAuth.ready().then((user) => {
 });
 
 function startListeners(fullAccess) {
+  // Remember the scope and reset the unsubscribe registry so a visibility
+  // re-attach registers a fresh, non-duplicated listener set.
+  _lf_fullAccess = fullAccess;
+  _lf_unsubs = [];
+  _lf_attached = true;
 
 // ─── Rooms listener ────────────────────────────────────────────────────────
 // Skip the first snapshot (page already loaded via fetchData on startup).
@@ -194,7 +224,7 @@ function startListeners(fullAccess) {
 // `rooms` object and re-render — no full round-trip to Flask needed.
 let roomsInitialLoad = true;
 
-db.collection("rooms").onSnapshot((snapshot) => {
+_track(db.collection("rooms").onSnapshot((snapshot) => {
   if (roomsInitialLoad) {
     roomsInitialLoad = false;
     if (!LISTENER_FIRST) return;
@@ -249,13 +279,13 @@ db.collection("rooms").onSnapshot((snapshot) => {
     window.dispatchEvent(new CustomEvent("cibaraRoomUpdate", { detail: { type: "remote_sync" } }));
     showSyncToast();
   }
-}, onListenerError("rooms"));
+}, onListenerError("rooms")));
 
 // ─── Totals listener ───────────────────────────────────────────────────────
 // Keeps the dashboard stats bar in sync without a full fetchData() call.
 let totalsInitialLoad = true;
 
-if (fullAccess) db.collection("totals").doc("current_totals").onSnapshot((snap) => {
+if (fullAccess) _track(db.collection("totals").doc("current_totals").onSnapshot((snap) => {
   if (totalsInitialLoad) {
     totalsInitialLoad = false;
     if (!LISTENER_FIRST) return;
@@ -280,7 +310,7 @@ if (fullAccess) db.collection("totals").doc("current_totals").onSnapshot((snap) 
     if (typeof updateStats === "function") updateStats();
     console.log("⚡ Remote totals update — stats refreshed");
   }
-}, onListenerError("totals"));
+}, onListenerError("totals")));
 
 // ─── UI config listener ───────────────────────────────────────────────────
 // Single-doc listener on settings/ui_config. Carries flags like
@@ -294,7 +324,7 @@ if (fullAccess) db.collection("totals").doc("current_totals").onSnapshot((snap) 
 // fromCache: SDK restoring offline state — ignore.
 let uiConfigInitialLoad = true;
 
-db.collection("settings").doc("ui_config").onSnapshot((snap) => {
+_track(db.collection("settings").doc("ui_config").onSnapshot((snap) => {
   if (uiConfigInitialLoad) {
     uiConfigInitialLoad = false;
     return;
@@ -307,7 +337,7 @@ db.collection("settings").doc("ui_config").onSnapshot((snap) => {
   window.dispatchEvent(
     new CustomEvent("cibaraUIConfigChanged", { detail: cfg || {} }),
   );
-}, onListenerError("settings"));
+}, onListenerError("settings")));
 
 // ─── Guest requests (room-service portal) ─────────────────────────────────
 // Every open request from every occupied room, live. Housekeeping's role may
@@ -317,7 +347,7 @@ db.collection("settings").doc("ui_config").onSnapshot((snap) => {
 // from it wholesale and works out what is new by comparing ids.
 let guestRequestsQuery = db.collection("guestRequests").where("active", "==", true);
 if (!fullAccess) guestRequestsQuery = guestRequestsQuery.where("team", "==", "housekeeping");
-guestRequestsQuery.onSnapshot((snapshot) => {
+_track(guestRequestsQuery.onSnapshot((snapshot) => {
   const items = snapshot.docs.map((d) => Object.assign({ id: d.id }, d.data()));
   window.dispatchEvent(new CustomEvent("cibaraGuestRequests", {
     detail: {
@@ -328,7 +358,7 @@ guestRequestsQuery.onSnapshot((snapshot) => {
         .map((c) => Object.assign({ id: c.doc.id }, c.doc.data())),
     },
   }));
-}, onListenerError("guest requests"));
+}, onListenerError("guest requests")));
 
 // ─── Payments listener (today only) ───────────────────────────────────────
 // Filtered to today's date so only ~today's docs are transferred on load.
@@ -351,7 +381,7 @@ function _rebuildLogs() {
   S().paint({ txns: true });
 }
 
-if (fullAccess) db.collection("payments").where("date", "==", _todayStr).onSnapshot(
+if (fullAccess) _track(db.collection("payments").where("date", "==", _todayStr).onSnapshot(
   (snapshot) => {
     if (LISTENER_FIRST) {
       _todayPayments = snapshot.docs.map((d) => d.data());
@@ -426,7 +456,7 @@ if (fullAccess) db.collection("payments").where("date", "==", _todayStr).onSnaps
       showSyncToast();
     });
   }
-, onListenerError("payments"));
+, onListenerError("payments")));
 
 // ─── Bills listener (today only) ──────────────────────────────────────────
 // Filtered to bills checked out today. `checkout_time` is stored as
@@ -434,7 +464,7 @@ if (fullAccess) db.collection("payments").where("date", "==", _todayStr).onSnaps
 // Previously listened to all historical bills — very costly.
 let billsInitialLoad = true;
 
-if (fullAccess) db.collection("bills")
+if (fullAccess) _track(db.collection("bills")
   .where("checkout_time", ">=", _todayStr + " 00:00")
   .where("checkout_time", "<=", _todayStr + " 23:59")
   .onSnapshot(
@@ -459,7 +489,7 @@ if (fullAccess) db.collection("bills")
       }
     });
   }
-, onListenerError("bills"));
+, onListenerError("bills")));
 
 // ─── Bookings listener (today .. +BOOKINGS_HORIZON_DAYS) ──────────────────
 // Watches bookings checking in between today and the horizon so that any new
@@ -472,7 +502,7 @@ if (fullAccess) db.collection("bills")
 // composite index, so this is a query-shape change only.
 let bookingsInitialLoad = true;
 
-if (fullAccess) db.collection("bookings")
+if (fullAccess) _track(db.collection("bookings")
   .where("check_in_date", ">=", _todayStr)
   .where("check_in_date", "<=", _horizonStr)
   .onSnapshot(
@@ -536,14 +566,14 @@ if (fullAccess) db.collection("bookings")
 
     if (hasModified && !hasAdded) showSyncToast("📋 Booking Updated");
   }
-, onListenerError("bookings"));
+, onListenerError("bookings")));
 
 // ─── Expenses listener (today only) ───────────────────────────────────────
 // Expenses are written to the `expenses` collection (not `payments`).
 // Listen for new expenses so the transaction tab stays current on all devices.
 let expensesInitialLoad = true;
 
-if (fullAccess) db.collection("expenses").where("date", "==", _todayStr).onSnapshot(
+if (fullAccess) _track(db.collection("expenses").where("date", "==", _todayStr).onSnapshot(
   (snapshot) => {
     if (LISTENER_FIRST) {
       // `_doc_id` is NOT optional. The server adds it in
@@ -597,7 +627,7 @@ if (fullAccess) db.collection("expenses").where("date", "==", _todayStr).onSnaps
       showSyncToast("🧾 Expense Added");
     });
   }
-, onListenerError("expenses"));
+, onListenerError("expenses")));
 
 // ─── Daily serial counter (listener-first only) ───────────────────────────
 // Replaces the /get_transaction_metadata call that lived inside fetchData().
@@ -606,15 +636,38 @@ if (fullAccess) db.collection("expenses").where("date", "==", _todayStr).onSnaps
 // also stays live, so the next check-in serial is correct on every device
 // without a refresh. One document: the cheapest listener in this file.
 if (LISTENER_FIRST && fullAccess) {
-  db.collection("daily_counters").doc(_todayStr).onSnapshot((snap) => {
+  _track(db.collection("daily_counters").doc(_todayStr).onSnapshot((snap) => {
     const count = snap.exists ? ((snap.data() || {}).count || 0) : 0;
     const map = {};
     map[_todayStr] = count;
     S().setDailyCounters(map);
-  }, onListenerError("daily counter"));
+  }, onListenerError("daily counter")));
 }
 
 }
+
+// ─── Visibility-driven pause / resume (PERF) ────────────────────────────────
+function _detachLiveListeners() {
+  _lf_unsubs.forEach((fn) => { try { fn(); } catch (e) { /* already gone */ } });
+  _lf_unsubs = [];
+  _lf_attached = false;
+}
+function _reattachLiveListeners() {
+  if (_lf_attached || _lf_fullAccess === null) return;
+  startListeners(_lf_fullAccess);   // re-registers every listener (fresh snapshot)
+  // Legacy mode deliberately SKIPS each listener's first snapshot, so a repaint
+  // from the server is needed to catch anything that changed while hidden.
+  // Listener-first mode seeds + paints from the first snapshot (and fetchData()
+  // is intentionally avoided there), so it self-heals with no HTTP call.
+  if (!LISTENER_FIRST && typeof fetchData === "function") {
+    try { fetchData(); } catch (e) { /* refresh is best-effort */ }
+  }
+}
+document.addEventListener("visibilitychange", function () {
+  if (!_pauseHiddenFlagOn()) return;
+  if (document.visibilityState === "hidden") _detachLiveListeners();
+  else _reattachLiveListeners();
+});
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
 

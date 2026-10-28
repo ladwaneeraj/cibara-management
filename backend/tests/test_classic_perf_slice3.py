@@ -15,6 +15,7 @@ the header, via the baseline harness helpers.
 """
 from __future__ import annotations
 
+import json
 import os
 import uuid
 
@@ -52,7 +53,13 @@ def _cold_reads(fn):
 
 
 _VOLATILE = ("generated_at", "generatedAt", "timestamp", "server_time",
-             "elapsed_min")
+             "elapsed_min",
+             # pdf_url / pdf_updated_at are written by the async bill-PDF daemon
+             # that checkout spawns (CLAUDE.md §2). For a just-checked-out bill
+             # they appear/change between two back-to-back calls depending on
+             # whether the daemon has finished — a timing artifact unrelated to
+             # the flag under test, so drop them from the comparison.
+             "pdf_url", "pdf_updated_at")
 
 
 def _volatile_stripped(d):
@@ -99,6 +106,24 @@ def test_register_pool_reads_are_counted(seeded, monkeypatch):
 def test_register_checkout_skips_rooms_without_changing_payload(seeded, monkeypatch):
     body = {"start_date": S, "end_date": E, "mode": "checkout"}
 
+    # Freeze "today" across both calls. /get_register_data derives today_str
+    # from datetime.now(IST) (billing.py:175) to build the daily tally — the
+    # only wall-clock-dependent part of the response. Two back-to-back calls
+    # that straddle the IST-midnight boundary (18:30 UTC on the CI runner)
+    # otherwise compute different tallies, so the payload-equality assertion
+    # below flakes (green locally in IST, red on CI's UTC host). Pinning now()
+    # to a single real instant makes the flag-invariance check deterministic
+    # without weakening it.
+    import routes.billing as _billing
+    _fixed = _billing.datetime.now(_billing.IST)
+
+    class _FrozenDT(_billing.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return _fixed.astimezone(tz) if tz is not None else _fixed.replace(tzinfo=None)
+
+    monkeypatch.setattr(_billing, "datetime", _FrozenDT)
+
     monkeypatch.setenv("PERF_REGISTER_SKIP_ROOMS_CHECKOUT", "0")
     off_reads, off = _cold_reads(lambda: client_post_register(seeded, body))
     assert off.status_code == 200, off.text
@@ -107,8 +132,22 @@ def test_register_checkout_skips_rooms_without_changing_payload(seeded, monkeypa
     on_reads, on = _cold_reads(lambda: client_post_register(seeded, body))
     assert on.status_code == 200, on.text
 
-    # Checkout mode never consumes rooms_data → payload must be byte-identical.
-    assert _volatile_stripped(on.json()) == _volatile_stripped(off.json())
+    # Checkout mode never consumes rooms_data → the register CONTENT must be
+    # identical with the flag on or off. The entries list is ordered only by
+    # check-in date (billing.py:841), so rows that share a date can be assembled
+    # in a different order by the handler's parallel fetch wave between the two
+    # calls; that tie-order is not part of the contract. Compare the content
+    # order-insensitively so a benign reordering never fails the flag-invariance
+    # check (a real content change would still differ after sorting).
+    def _norm(resp_json):
+        j = _volatile_stripped(resp_json)
+        ents = j.get("entries")
+        if isinstance(ents, list):
+            j = {**j, "entries": sorted(
+                ents, key=lambda e: json.dumps(e, sort_keys=True, default=str))}
+        return j
+
+    assert _norm(on.json()) == _norm(off.json())
     # And it must save roughly the whole rooms scan.
     assert on_reads <= off_reads - 30, f"expected big drop, got {off_reads}->{on_reads}"
 

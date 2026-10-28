@@ -3949,8 +3949,12 @@ tr.rp-svc-voided .rp-actions-cell { opacity:.9; }
       const addTile = _rdocAddTileHTML(freeSlots);
 
       if (content) setTimeout(() => {
+        // Grid tiles are small previews, so fetch the cheap "thumb" variant
+        // (plain resize, no server watermark re-encode, no Firestore view
+        // write, no audit). The full watermarked "view" is loaded only when a
+        // tile is clicked and the lightbox (openPhotoViewer) opens it.
         content.querySelectorAll("img[data-secure-src]").forEach((im) =>
-          window.CibaraSecureImg.apply(im, im.dataset.secureSrc, "view"));
+          window.CibaraSecureImg.apply(im, im.dataset.secureSrc, "thumb"));
         // Open the shared lightbox on tile click. Falls back to a plain
         // full-size open if customer-docs.js (which defines openPhotoViewer)
         // did not load for some reason.

@@ -63,11 +63,17 @@ window.CibaraSecureImg = (function () {
   })();
 
   const isSecure = (u) => typeof u === 'string' && u.startsWith('/api/v2/customers/');
+  // Default variant is the cheap "thumb" (plain resize on the server — no
+  // watermark re-encode, no Firestore view write, no audit entry). The full
+  // watermarked "view" and the "original" download are CPU- and write-heavy,
+  // so every caller that actually opens/enlarges a doc passes them explicitly
+  // (open() and setViewerPhoto() do). An omitted variant must never land on
+  // the expensive path.
   function src(url, variant) {
     if (!isSecure(url)) return Promise.resolve(url);
-    const key = url + '|' + (variant || 'view');
+    const key = url + '|' + (variant || 'thumb');
     if (!cache.has(key)) {
-      const p = apiFetch(url + '?variant=' + (variant || 'view')).then(async (r) => {
+      const p = apiFetch(url + '?variant=' + (variant || 'thumb')).then(async (r) => {
         if (!r.ok) throw new Error('HTTP ' + r.status);
         return URL.createObjectURL(await r.blob());
       });

@@ -1869,7 +1869,7 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
       </button>
     </div>
     <div class="bl-wa-hint" id="bl-wa-hint">
-      On a phone the PDF is attached from the share sheet. On a PC, WhatsApp opens on the guest's chat with a link to download the invoice PDF.
+      WhatsApp opens on the guest's chat with the invoice link filled in. A copy of the PDF is saved to your Downloads so you can attach it in the chat.
     </div>
   </div>
 </div>`;
@@ -3405,10 +3405,6 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
     return `Dear *${guestName || "Guest"}*,\n\nThank you for staying with Cibara Comforts. ${intro}\n\n*Invoice no:* ${invoiceNo}\n*Total:* ₹${inr(amount)}${link}\n\nFor any questions about this invoice, please contact us.\n\nWarm regards,\nCibara Comforts`;
   }
 
-  function _isPhone() {
-    return /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
-  }
-
   function _pdfFileName(s) {
     const base = String(s.invoiceNo || (s._isCN ? "credit-note" : "invoice")).replace(/[^A-Za-z0-9_.-]+/g, "_");
     return (s._isCN ? "CreditNote-" : "Invoice-") + base + ".pdf";
@@ -3506,43 +3502,30 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
       if (errEl) errEl.textContent = "PDF isn't ready yet — wait a moment and try again.";
       return;
     }
-    // Validate the number first. Everything below starts straight from this
-    // tap: browsers only allow window.open and the share sheet inside a click,
-    // so nothing is awaited before them.
+    // Validate the number first. Opening the chat starts straight from this
+    // tap: browsers only allow window.open inside a click, so nothing is
+    // awaited before it.
     const target = _waTargetMobile();
     if (!target) return;
-    // The share sheet attaches the file, so its text says "attached". The chat
-    // link carries the download URL, because a PC cannot attach the file.
-    const attachedText = _buildWaFileMessage(s.guestName, s.invoiceNo, s.amount, s._isCN, null);
+    // The chat always opens on the number provided (every device), so the message
+    // carries the invoice download link — a web page cannot attach a file to a
+    // specific WhatsApp chat. Only the generic OS share sheet can carry a file,
+    // and it cannot target a number, so it is no longer used: it opened a contact
+    // picker instead of the guest's chat. A copy of the PDF is saved to Downloads
+    // so it can be attached in the chat by hand.
     const linkText = _buildWaFileMessage(s.guestName, s.invoiceNo, s.amount, s._isCN, s.pdfUrl);
     const waUrl = `https://wa.me/91${target}?text=${encodeURIComponent(linkText)}`;
     const ready = s._pdfFileUrl === s.pdfUrl ? s.pdfFile : null;
-    const isPhone = _isPhone();
 
-    // 1) Phone: the native share sheet carries the PDF itself into WhatsApp.
-    if (isPhone && ready && navigator.canShare && navigator.share) {
-      let ok = false;
-      try { ok = navigator.canShare({ files: [ready] }); } catch (_) { ok = false; }
-      if (ok) {
-        try {
-          await navigator.share({ files: [ready], title: ready.name, text: attachedText });
-          if (!s._isCN) _logBillActivity(s.billId, "whatsapp", "share-sheet");
-          closeWhatsAppModal();
-          return;
-        } catch (err) {
-          if (err && err.name === "AbortError") return;   // operator closed the sheet
-          console.warn("[Bills] share failed, opening chat instead:", err);
-        }
-      }
-    }
-
-    // 2) Open the guest's WhatsApp chat right away, message filled in
-    //    (WhatsApp desktop app or WhatsApp Web).
+    // 1) Open the guest's WhatsApp chat right away, message filled in, on every
+    //    device (WhatsApp desktop app or WhatsApp Web / the phone's WhatsApp).
+    //    Runs first and synchronously — browsers only allow window.open straight
+    //    from the tap, so nothing is awaited before it.
     window.open(waUrl, "_blank", "noopener,noreferrer");
     if (!s._isCN) _logBillActivity(s.billId, "whatsapp", target);
     closeWhatsAppModal();
 
-    // 3) Deliver the PDF. A web page cannot attach a file to a WhatsApp chat by
+    // 2) Deliver the PDF. A web page cannot attach a file to a WhatsApp chat by
     //    itself, so the PDF is saved to Downloads for a single attach in the chat.
     const file = ready || await _prefetchWaPdf();
     if (!file) {
@@ -3559,24 +3542,24 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
     a.remove();
     setTimeout(function () { URL.revokeObjectURL(objUrl); }, 60000);
     if (typeof showNotification === "function")
-      showNotification(`The invoice link is in the WhatsApp message. A copy of the PDF is in Downloads.`, "info", 9000);
+      showNotification(`The invoice link is in the WhatsApp message. A copy of the PDF is in Downloads to attach.`, "info", 9000);
   }
 
   function _updateWaPreview() {
     const s = state.waModal;
     const preview = dom("bl-wa-preview");
     if (!preview) return;
-    // Show what will be sent: the attached-file wording on a phone, the download
-    // link on a PC (where no file can be attached). The long signed URL is shown
-    // as a short label here only; the full link is what goes into the message.
-    const phone = _isPhone();
-    const sentText = _buildWaFileMessage(s.guestName, s.invoiceNo, s.amount, s._isCN,
-                                         phone ? null : s.pdfUrl);
-    preview.textContent = (!phone && s.pdfUrl)
+    // Every device now opens the guest's chat with the invoice link filled in (a
+    // web page cannot attach a file to a targeted chat), so the preview always
+    // shows the link wording. The long signed URL is shown as a short label here
+    // only; the full link is what goes into the message. A copy of the PDF is
+    // saved to Downloads to attach by hand, so the attachment chip stays visible.
+    const sentText = _buildWaFileMessage(s.guestName, s.invoiceNo, s.amount, s._isCN, s.pdfUrl);
+    preview.textContent = s.pdfUrl
       ? sentText.split(s.pdfUrl).join("invoice PDF link")
       : sentText;
     const attachRow = preview.parentNode && preview.parentNode.querySelector(".bl-wa-attach");
-    if (attachRow) attachRow.style.display = (phone || s._isCN) ? "" : "none";
+    if (attachRow) attachRow.style.display = "";
     const fname = _pdfFileName(s);
     const setText = (id, v) => { const el = dom(id); if (el) el.textContent = v; };
     setText("bl-wa-attach-name", fname);

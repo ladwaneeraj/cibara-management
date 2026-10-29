@@ -73,7 +73,14 @@ function initSettleLater() {
 
         // Update filter and refresh display
         currentSettlementFilter = this.dataset.filter;
-        renderPendingSettlements();
+        // Fast lane fetches per tab (the Pending tab uses the cheap indexed
+        // query), so a tab switch needs a re-fetch. Legacy loaded every row
+        // once and filters client-side, so it just re-renders — unchanged.
+        if (_settlementsFastlaneOn()) {
+          fetchPendingSettlements().then(renderPendingSettlements);
+        } else {
+          renderPendingSettlements();
+        }
       });
     });
   }
@@ -317,10 +324,37 @@ function enhanceCheckoutConfirmation() {
   }
 }
 
+// Fast lane: when enabled, the Pending tab reads the native
+// /api/v2/settlements?status=open endpoint (a single indexed Firestore query)
+// instead of the legacy /get_pending_settlements, which streams the WHOLE
+// settlements collection on every load. The Paid / Cancelled / All tabs still
+// read the full set (status=all), because the summary always shows the true
+// outstanding total regardless of which tab is open — so `pendingSettlements`
+// must keep a superset of the open rows and every `.filter(isOpen)` stays
+// correct. Both endpoints return the identical {success, settlements:[...]}
+// shape (same _attach_bill_summary helper), covered by backend parity tests.
+// Off by default — flip per browser to verify on UAT, then make it the default:
+//   localStorage.setItem('cibara_fastlane_settlements', '1')
+function _settlementsFastlaneOn() {
+  try {
+    return localStorage.getItem("cibara_fastlane_settlements") === "1";
+  } catch (_e) {
+    return false;
+  }
+}
+
+function _settlementsEndpoint() {
+  if (!_settlementsFastlaneOn()) return "/get_pending_settlements";
+  // Only the default open view uses the cheap indexed filter (the read win);
+  // every other tab needs the whole set for the outstanding summary.
+  const status = currentSettlementFilter === "pending" ? "open" : "all";
+  return "/api/v2/settlements?status=" + status;
+}
+
 // Fetch pending settlements from the server
 async function fetchPendingSettlements() {
   try {
-    const response = await apiFetch("/get_pending_settlements");
+    const response = await apiFetch(_settlementsEndpoint());
     if (!response.ok) {
       throw new Error(`Server responded with status: ${response.status}`);
     }

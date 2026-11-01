@@ -18,6 +18,10 @@ export default [
     rules: {
       ...tsPlugin.configs.recommended.rules,
       ...reactHooks.configs.recommended.rules,
+      // TypeScript's own checker handles undefined identifiers and ambient
+      // DOM lib types (HeadersInit, BodyInit, …); ESLint's no-undef does not
+      // know them and would false-positive.
+      'no-undef': 'off',
       '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
     },
   },

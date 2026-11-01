@@ -4,6 +4,17 @@
    so the island inherits the ERP theme automatically; raw hex is avoided.
    Components add their own rules here as the island grows. */
 
+/* Carve-out: the React island owns the Bookings tab. Hide every legacy
+   booking.js-rendered child of #bookings-tab (toolbar, filter pills, view
+   selector, #bookings-list, #bookings-calendar-view) so only the island
+   renders. booking.js's tab rendering is already inert once the island
+   overrides window.fetchBookings; this hides the static Jinja markup. The
+   booking modals live outside #bookings-tab and are untouched. (This single
+   selector is the one rule here that intentionally reaches outside the root.) */
+#bookings-tab > :not(#bookings-react-root) {
+  display: none !important;
+}
+
 #bookings-react-root {
   font-family: var(--font-family, "Segoe UI", Tahoma, Geneva, Verdana, sans-serif);
   color: var(--text-primary, #1f2937);

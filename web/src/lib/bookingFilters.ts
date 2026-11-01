@@ -5,6 +5,7 @@
 import type { Booking } from '../types/booking'
 
 export type BookingFilter = 'upcoming' | 'today' | 'all' | 'completed' | 'cancelled'
+export type SortKey = 'checkin' | 'amount' | 'balance' | 'recent'
 
 function startOfToday(): number {
   const t = new Date()
@@ -51,7 +52,23 @@ export function applyFilter(bookings: Booking[], filter: BookingFilter): Booking
   })
 }
 
-export function sortBookings(list: Booking[], filter: BookingFilter): Booking[] {
+export function sortBookings(
+  list: Booking[],
+  filter: BookingFilter,
+  sortBy: SortKey = 'checkin',
+): Booking[] {
+  if (sortBy === 'amount') {
+    return [...list].sort((a, b) => (b.total_amount || 0) - (a.total_amount || 0))
+  }
+  if (sortBy === 'balance') {
+    const bal = (x: Booking) => (x.balance != null ? x.balance : (x.total_amount || 0) - (x.paid_amount || 0))
+    return [...list].sort((a, b) => bal(b) - bal(a))
+  }
+  if (sortBy === 'recent') {
+    const ts = (x: Booking) => new Date(x.created_at || x.check_in_date || 0).getTime()
+    return [...list].sort((a, b) => ts(b) - ts(a))
+  }
+  // 'checkin' — the classic parity sort (date, then time, direction by filter).
   const past = filter === 'completed' || filter === 'cancelled'
   return [...list].sort((a, b) => {
     const da = new Date(a.check_in_date).getTime()

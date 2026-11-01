@@ -8,7 +8,7 @@ import { installBridge, uninstallBridge } from './bridge'
 import { useBookings } from './state/useBookings'
 import { ListView } from './views/ListView'
 import { CalendarView } from './views/CalendarView'
-import type { BookingFilter } from './lib/bookingFilters'
+import type { BookingFilter, SortKey } from './lib/bookingFilters'
 
 type View = 'list' | 'calendar' | 'timeline'
 
@@ -43,6 +43,7 @@ export function BookingsApp() {
   const [filter, setFilter] = useState<BookingFilter>('upcoming')
   const [view, setView] = useState<View>('list')
   const [query, setQuery] = useState('')
+  const [sortBy, setSortBy] = useState<SortKey>('checkin')
   const [calMonth, setCalMonth] = useState<Date>(() => new Date())
   const [selectedId, setSelectedId] = useState<string | null>(null) // drawer (Task 11)
   const [newBooking, setNewBooking] = useState<{ date?: string } | null>(null) // Task 13
@@ -99,14 +100,29 @@ export function BookingsApp() {
         ))}
       </div>
 
-      <input
-        className="bki-search"
-        type="search"
-        placeholder="Search guest, phone or room"
-        value={query}
-        onChange={(e) => setQuery(e.target.value)}
-        aria-label="Search bookings"
-      />
+      <div className="bki-row">
+        <input
+          className="bki-search"
+          type="search"
+          placeholder="Search guest, phone or room"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          aria-label="Search bookings"
+        />
+        <label className="bki-sort">
+          Sort
+          <select
+            value={sortBy}
+            onChange={(e) => setSortBy(e.target.value as SortKey)}
+            aria-label="Sort bookings"
+          >
+            <option value="checkin">Check-in</option>
+            <option value="amount">Amount</option>
+            <option value="balance">Balance due</option>
+            <option value="recent">Most recent</option>
+          </select>
+        </label>
+      </div>
 
       <div className="view-selector bk-view-selector">
         {VIEWS.map((v) => (
@@ -132,7 +148,7 @@ export function BookingsApp() {
           <span className="bki-spinner" /> Loading bookings…
         </div>
       ) : view === 'list' ? (
-        <ListView bookings={bookings} filter={filter} query={query} onOpen={openDrawer} />
+        <ListView bookings={bookings} filter={filter} query={query} sortBy={sortBy} onOpen={openDrawer} />
       ) : view === 'calendar' ? (
         <CalendarView bookings={bookings} month={calMonth} onMonthChange={setCalMonth} onOpen={openDrawer} />
       ) : (

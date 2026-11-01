@@ -8,6 +8,7 @@ import {
   searchBookings,
   sortBookings,
   type BookingFilter,
+  type SortKey,
 } from '../lib/bookingFilters'
 import { BookingCard } from '../components/BookingCard'
 import { EmptyState } from '../components/EmptyState'
@@ -24,15 +25,16 @@ export interface ListViewProps {
   bookings: Booking[]
   filter: BookingFilter
   query: string
+  sortBy?: SortKey
   onOpen: (bookingId: string) => void
 }
 
-export function ListView({ bookings, filter, query, onOpen }: ListViewProps) {
+export function ListView({ bookings, filter, query, sortBy = 'checkin', onOpen }: ListViewProps) {
   const groupIndex = useMemo(() => buildBookingGroupIndex(bookings), [bookings])
   const rows = useMemo(() => {
     const filtered = searchBookings(applyFilter(bookings, filter), query)
-    return sortBookings(filtered, filter)
-  }, [bookings, filter, query])
+    return sortBookings(filtered, filter, sortBy)
+  }, [bookings, filter, query, sortBy])
 
   if (rows.length === 0) {
     const word = FILTER_WORD[filter]

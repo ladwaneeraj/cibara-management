@@ -99,6 +99,20 @@ describe('sortBookings (parity with booking.js)', () => {
   })
 })
 
+describe('sortBookings sortBy override', () => {
+  const list = [
+    b({ booking_id: 'a', total_amount: 500, paid_amount: 0, balance: 500 }),
+    b({ booking_id: 'b', total_amount: 3000, paid_amount: 3000, balance: 0 }),
+    b({ booking_id: 'c', total_amount: 1000, paid_amount: 100, balance: 900 }),
+  ]
+  it('amount sorts by total descending', () => {
+    expect(sortBookings(list, 'all', 'amount').map((x) => x.booking_id)).toEqual(['b', 'c', 'a'])
+  })
+  it('balance sorts by balance due descending', () => {
+    expect(sortBookings(list, 'all', 'balance').map((x) => x.booking_id)).toEqual(['c', 'a', 'b'])
+  })
+})
+
 describe('searchBookings', () => {
   const list = [
     b({ guest_name: 'Asha Rao', guest_mobile: '9811111111', room: '201' }),

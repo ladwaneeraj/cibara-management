@@ -19,8 +19,10 @@ import { NewBookingModal } from './modals/NewBookingModal'
 import { MultiBookingModal } from './modals/MultiBookingModal'
 import { ArrivalsSheet } from './modals/ArrivalsSheet'
 import { OtaSettlementsModal } from './modals/OtaSettlementsModal'
-import { fetchFromMmt, updateBooking } from './api/bookings'
+import { convertToCheckin, fetchFromMmt, updateBooking } from './api/bookings'
 import { buildWhatsappUrl } from './lib/whatsapp'
+import { getGroupMembers } from './lib/booking'
+import { groupCheckin } from './lib/groupCheckin'
 import type { Booking } from './types/booking'
 import type { BookingFilter, SortKey } from './lib/bookingFilters'
 
@@ -82,7 +84,23 @@ export function BookingsApp() {
   const openDrawer = useCallback((id: string) => setSelectedId(id), [])
   const openNewBooking = useCallback((opts?: { date?: string }) => setNewBooking(opts ?? {}), [])
 
+  const [groupBusy, setGroupBusy] = useState(false)
   const selectedBooking = selectedId ? bookings.find((b) => b.booking_id === selectedId) ?? null : null
+  const groupMembers = useMemo(
+    () => (selectedBooking ? getGroupMembers(bookings, selectedBooking) : []),
+    [bookings, selectedBooking],
+  )
+
+  const handleGroupCheckin = useCallback(async () => {
+    setGroupBusy(true)
+    try {
+      await groupCheckin(groupMembers, (id) => convertToCheckin({ booking_id: id }).then(() => undefined))
+    } finally {
+      setGroupBusy(false)
+      setSelectedId(null)
+      void refresh()
+    }
+  }, [groupMembers, refresh])
 
   const handleAction = useCallback((action: BookingAction, booking: Booking) => {
     if (action === 'whatsapp') {
@@ -232,7 +250,14 @@ export function BookingsApp() {
         />
       )}
 
-      <BookingDrawer booking={selectedBooking} onAction={handleAction} onClose={() => setSelectedId(null)} />
+      <BookingDrawer
+        booking={selectedBooking}
+        members={groupMembers}
+        onAction={handleAction}
+        onGroupCheckin={handleGroupCheckin}
+        groupBusy={groupBusy}
+        onClose={() => setSelectedId(null)}
+      />
 
       {modalAction?.kind === 'collect' ? (
         <PaymentModal booking={modalAction.booking} onClose={closeModal} onDone={afterAction} />

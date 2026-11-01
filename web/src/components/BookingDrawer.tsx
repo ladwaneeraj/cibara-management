@@ -10,12 +10,24 @@ import { QuickActions, type BookingAction } from './QuickActions'
 
 export interface BookingDrawerProps {
   booking: Booking | null
+  members?: Booking[]
   onAction: (action: BookingAction, booking: Booking) => void
+  onGroupCheckin?: () => void
+  groupBusy?: boolean
   onClose: () => void
 }
 
-export function BookingDrawer({ booking, onAction, onClose }: BookingDrawerProps) {
+export function BookingDrawer({
+  booking,
+  members = [],
+  onAction,
+  onGroupCheckin,
+  groupBusy,
+  onClose,
+}: BookingDrawerProps) {
   if (!booking) return null
+  const isGroup = members.length > 1
+  const anyConfirmed = members.some((m) => m.status === 'confirmed')
   const balance = bookingBalance(booking)
   const n = nights(booking.check_in_date, booking.check_out_date)
   const ota = isOtaPrepaid(booking.booking_source)
@@ -61,6 +73,28 @@ export function BookingDrawer({ booking, onAction, onClose }: BookingDrawerProps
               </>
             ) : null}
           </dl>
+          {isGroup ? (
+            <div className="bki-group">
+              <h4>Group · {members.length} rooms</h4>
+              <ul className="bki-group-list">
+                {members.map((m) => (
+                  <li key={m.booking_id}>
+                    Room {m.room} · {m.guest_name} · {statusLabel[m.status] ?? m.status}
+                  </li>
+                ))}
+              </ul>
+              {anyConfirmed && onGroupCheckin ? (
+                <button
+                  type="button"
+                  className="action-btn btn-sm btn-primary"
+                  onClick={onGroupCheckin}
+                  disabled={groupBusy}
+                >
+                  {groupBusy ? 'Checking in…' : 'Group check-in'}
+                </button>
+              ) : null}
+            </div>
+          ) : null}
           <QuickActions booking={booking} onAction={(a) => onAction(a, booking)} />
         </div>
       </aside>

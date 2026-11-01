@@ -373,3 +373,13 @@
 .bki-portal .bki-actions {
   margin-top: 8px;
 }
+.bki-portal .bki-group {
+  border: 1px solid var(--border, #e2e8f0);
+  border-radius: var(--border-radius, 8px);
+  padding: 10px 12px;
+}
+.bki-portal .bki-group-list {
+  margin: 6px 0;
+  padding-left: 18px;
+  font-size: 13px;
+}

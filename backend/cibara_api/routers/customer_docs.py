@@ -25,12 +25,13 @@ import re
 from typing import Literal
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Path, Query, UploadFile
-from fastapi.responses import Response
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
 from ..core import audit
 from ..security.deps import Principal, require_permission
+from ..settings import get_settings
 
 log = logging.getLogger("cibara_api.customer_docs")
 router = APIRouter(prefix="/api/v2/customers", tags=["customer-docs"])
@@ -122,11 +123,32 @@ async def upload_id_doc(mobile: str = Mobile,
 @router.get("/{mobile}/id-docs/{doc_id}/image")
 async def id_doc_image(mobile: str = Mobile, doc_id: str = DocId,
                        variant: Literal["thumb", "display", "view", "original"] = Query("view"),
+                       link: int = Query(0),
                        p: Principal = Depends(require_permission("customer_doc.view"))):
     svc = _svc()
     if variant == "original" and not p.can("customer_doc.download"):
         raise HTTPException(403, "Forbidden: missing permission 'customer_doc.download'")
     admin_view = p.can("customer_doc.remove")
+
+    # Fast lane for grids: hand back a short-lived signed URL to the thumbnail so
+    # the browser loads it straight from storage (off the single worker) and
+    # caches it. Opt-in via &link=1 so older clients / the SPA still get bytes.
+    # Any signing or storage failure falls through to the proxy path below.
+    s = get_settings()
+    if variant == "thumb" and link and s.PERF_SIGNED_IMAGE_URLS:
+        try:
+            url, _rec = await run_in_threadpool(
+                svc.signed_thumb_url, mobile, doc_id,
+                ttl=s.PERF_SIGNED_IMAGE_TTL, include_removed=admin_view)
+        except svc.IdDocError as e:
+            raise _fail(e) from e
+        except Exception as e:  # signing/storage hiccup → proxy the bytes instead
+            log.warning("id_docs: signed thumb url failed for %s, proxying: %s", doc_id, e)
+        else:
+            return JSONResponse(
+                {"success": True, "url": url, "expires_in": s.PERF_SIGNED_IMAGE_TTL},
+                headers={"Cache-Control": "private, no-store, max-age=0",
+                         "Referrer-Policy": "no-referrer"})
 
     def _do():
         data, rec = svc.read_image(mobile, doc_id, variant=variant,

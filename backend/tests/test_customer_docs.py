@@ -350,3 +350,34 @@ def test_unlabelled_photos_never_archive_each_other_until_the_limit(client, mana
     docs = client.get(BASE, headers=manager).json()["documents"]
     assert [d["status"] for d in docs] == ["active"] * 3
     assert {d["side"] for d in docs} == {"other"}
+
+
+def test_thumb_link_returns_signed_url_and_is_not_a_view(client, manager):
+    """variant=thumb&link=1 hands back a short-lived signed storage URL (JSON),
+    builds the cached thumb derivative, and does NOT count or audit a view — the
+    browser fetches the bytes itself, off the single worker."""
+    doc_id = _upload(client, manager, _jpeg(size=(2000, 1500), mark=7)).json()["document"]["id"]
+    orig_path, = [p for p in _objects() if p.endswith(f"{doc_id}.jpg")]
+
+    r = client.get(f"{BASE}/{doc_id}/image?variant=thumb&link=1", headers=manager)
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("application/json")
+    body = r.json()
+    assert body["success"] is True
+    assert body["url"].startswith("https://")           # signed storage link
+    assert body["expires_in"] >= 1
+    assert orig_path[:-4] + "__thumb.jpg" in _objects()  # derivative cached once
+
+    rec = DB.collection("customers").document(M).collection("id_docs").document(doc_id).get().to_dict()
+    assert rec.get("views", 0) == 0                      # handing out a link is not a view
+    assert not _audits("customer_doc.view")
+
+
+def test_thumb_without_link_still_streams_bytes(client, manager):
+    """The signed-URL path is strictly opt-in: without &link=1 (an older client
+    or the SPA) the thumb is still served as image bytes, exactly as before."""
+    doc_id = _upload(client, manager).json()["document"]["id"]
+    r = client.get(f"{BASE}/{doc_id}/image?variant=thumb", headers=manager)
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "image/jpeg"
+    assert max(Image.open(io.BytesIO(r.content)).size) <= 360

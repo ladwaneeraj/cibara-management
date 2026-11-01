@@ -1,4 +1,4 @@
-import { getGroupMembers, isOtaPrepaid, otaSourceLabel, paymentLabel } from './booking'
+import { getGroupMembers, isOtaPrepaid, otaSourceLabel, paymentLabel, repeatGuestMobiles } from './booking'
 
 describe('isOtaPrepaid', () => {
   it('is true for mmt and agoda only', () => {
@@ -32,6 +32,20 @@ describe('getGroupMembers', () => {
     const all = [mk('a', '305', 'G'), mk('b', '201', 'G'), mk('c', '101', 'G', 'cancelled')]
     const members = getGroupMembers(all, all[0])
     expect(members.map((m) => m.room)).toEqual(['201', '305'])
+  })
+})
+
+describe('repeatGuestMobiles', () => {
+  const mk = (mobile: string) =>
+    ({
+      booking_id: Math.random().toString(36).slice(2), room: '1', guest_name: 'G', guest_mobile: mobile,
+      check_in_date: '2026-11-05', check_out_date: '2026-11-06', status: 'confirmed',
+      booking_source: 'normal', total_amount: 0, paid_amount: 0, balance: 0,
+    }) as import('../types/booking').Booking
+  it('returns mobiles that appear more than once', () => {
+    const set = repeatGuestMobiles([mk('999'), mk('999'), mk('888')])
+    expect(set.has('999')).toBe(true)
+    expect(set.has('888')).toBe(false)
   })
 })
 

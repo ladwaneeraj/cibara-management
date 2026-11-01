@@ -28,6 +28,19 @@ export function bookingBalance(b: Booking): number {
   return b.balance != null ? b.balance : (b.total_amount || 0) - (b.paid_amount || 0)
 }
 
+// Guest mobiles that appear on more than one booking → "repeat guest" badge.
+export function repeatGuestMobiles(all: Booking[]): Set<string> {
+  const counts = new Map<string, number>()
+  for (const b of all) {
+    const m = (b.guest_mobile || '').trim()
+    if (!m) continue
+    counts.set(m, (counts.get(m) ?? 0) + 1)
+  }
+  const repeats = new Set<string>()
+  for (const [m, n] of counts) if (n > 1) repeats.add(m)
+  return repeats
+}
+
 // Non-cancelled members that share this booking's group (sorted by room).
 // Returns [booking] for a plain single-room booking. Mirrors booking.js
 // getBookingGroupMembers.

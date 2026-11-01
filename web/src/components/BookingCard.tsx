@@ -21,10 +21,11 @@ const PAYMENT_TEXT = { paid: 'Fully Paid', partial: 'Partially Paid', unpaid: 'U
 export interface BookingCardProps {
   booking: Booking
   groupSize?: number
+  isRepeat?: boolean
   onOpen: (bookingId: string) => void
 }
 
-export function BookingCard({ booking, groupSize = 0, onOpen }: BookingCardProps) {
+export function BookingCard({ booking, groupSize = 0, isRepeat = false, onOpen }: BookingCardProps) {
   const src = booking.booking_source || 'normal'
   const ota = isOtaPrepaid(src)
   const n = nights(booking.check_in_date, booking.check_out_date)
@@ -65,6 +66,7 @@ export function BookingCard({ booking, groupSize = 0, onOpen }: BookingCardProps
             {statusLabel[booking.status] ?? 'Unknown'}
           </span>
           {isToday ? <span className="today-badge">Today</span> : null}
+          {isRepeat ? <span className="bk-group-chip" title="Returning guest">★ Repeat</span> : null}
           {groupSize > 1 ? (
             <span className="bk-group-chip">
               <i className="fas fa-layer-group" aria-hidden="true" /> Group · {groupSize}

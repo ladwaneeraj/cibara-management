@@ -23,8 +23,10 @@ import { convertToCheckin, fetchFromMmt, updateBooking } from './api/bookings'
 import { buildWhatsappUrl } from './lib/whatsapp'
 import { getGroupMembers } from './lib/booking'
 import { groupCheckin } from './lib/groupCheckin'
+import { downloadCsv } from './lib/exportCsv'
+import { getDeepLinkBookingId } from './lib/deepLink'
 import type { Booking } from './types/booking'
-import type { BookingFilter, SortKey } from './lib/bookingFilters'
+import { applyFilter, searchBookings, sortBookings, type BookingFilter, type SortKey } from './lib/bookingFilters'
 
 type View = 'list' | 'calendar' | 'timeline'
 
@@ -135,6 +137,17 @@ export function BookingsApp() {
     return () => uninstallBridge()
   }, [refresh, openDrawer, openNewBooking])
 
+  // Deep link: ?booking=<id> opens that booking's drawer on load.
+  useEffect(() => {
+    const id = getDeepLinkBookingId(window.location.search)
+    if (id) setSelectedId(id)
+  }, [])
+
+  const visible = useMemo(
+    () => sortBookings(searchBookings(applyFilter(bookings, filter), query), filter, sortBy),
+    [bookings, filter, query, sortBy],
+  )
+
   return (
     <div
       className="bki-app"
@@ -213,6 +226,14 @@ export function BookingsApp() {
             <option value="recent">Most recent</option>
           </select>
         </label>
+        <button
+          type="button"
+          className="action-btn btn-sm"
+          onClick={() => downloadCsv(visible)}
+          disabled={visible.length === 0}
+        >
+          Export CSV
+        </button>
       </div>
 
       <div className="view-selector bk-view-selector">

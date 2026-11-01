@@ -12,6 +12,7 @@ import {
 } from '../lib/bookingFilters'
 import { BookingCard } from '../components/BookingCard'
 import { EmptyState } from '../components/EmptyState'
+import { repeatGuestMobiles } from '../lib/booking'
 
 const FILTER_WORD: Record<BookingFilter, string> = {
   upcoming: 'upcoming',
@@ -31,6 +32,7 @@ export interface ListViewProps {
 
 export function ListView({ bookings, filter, query, sortBy = 'checkin', onOpen }: ListViewProps) {
   const groupIndex = useMemo(() => buildBookingGroupIndex(bookings), [bookings])
+  const repeats = useMemo(() => repeatGuestMobiles(bookings), [bookings])
   const rows = useMemo(() => {
     const filtered = searchBookings(applyFilter(bookings, filter), query)
     return sortBookings(filtered, filter, sortBy)
@@ -48,6 +50,7 @@ export function ListView({ bookings, filter, query, sortBy = 'checkin', onOpen }
           key={b.booking_id}
           booking={b}
           groupSize={b.group_booking_id ? (groupIndex.get(b.group_booking_id)?.length ?? 0) : 0}
+          isRepeat={!!b.guest_mobile && repeats.has(b.guest_mobile.trim())}
           onOpen={onOpen}
         />
       ))}

@@ -1,0 +1,74 @@
+/* Bookings island styles. Every selector is scoped under #bookings-react-root
+   so nothing leaks into the classic UI. Values reference the classic CSS
+   custom properties defined on :root in static/style.css (var(--primary) etc.)
+   so the island inherits the ERP theme automatically; raw hex is avoided.
+   Components add their own rules here as the island grows. */
+
+#bookings-react-root {
+  font-family: var(--font-family, "Segoe UI", Tahoma, Geneva, Verdana, sans-serif);
+  color: var(--text-primary, #1f2937);
+}
+
+#bookings-react-root *,
+#bookings-react-root *::before,
+#bookings-react-root *::after {
+  box-sizing: border-box;
+}
+
+/* Generic island surface + spacing helpers (shared by views/components). */
+#bookings-react-root .bki-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+#bookings-react-root .bki-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+#bookings-react-root .bki-empty {
+  text-align: center;
+  padding: 40px 16px;
+  color: var(--text-secondary, #64748b);
+}
+
+#bookings-react-root .bki-spinner {
+  display: inline-block;
+  width: 18px;
+  height: 18px;
+  border: 2px solid var(--border, #e2e8f0);
+  border-top-color: var(--primary, #4361ee);
+  border-radius: 50%;
+  animation: bki-spin 0.7s linear infinite;
+}
+
+@keyframes bki-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* A right-side drawer anchored to the viewport (portaled to <body>). */
+#bookings-react-root .bki-drawer-backdrop,
+.bki-portal .bki-drawer-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.35);
+  z-index: 1200;
+}
+
+.bki-portal .bki-drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  height: 100%;
+  width: min(460px, 100%);
+  background: var(--surface, #fff);
+  box-shadow: var(--shadow-lg, 0 5px 20px rgba(0, 0, 0, 0.2));
+  overflow-y: auto;
+  z-index: 1201;
+}

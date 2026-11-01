@@ -31,6 +31,8 @@ os.environ.setdefault("RATE_LIMIT_WRITES_PER_USER_PER_MIN", "100000")
 # Step-up re-auth gate off by default in tests (it is off in a running env until
 # the client prompt ships); test_step_up.py enables it per-test to exercise it.
 os.environ.setdefault("STEP_UP_AUTH", "false")
+# Guest website origin allowed to call /web/* cross-origin (read once at app init).
+os.environ.setdefault("WEB_ALLOWED_ORIGINS", "https://cibaracomforts.test")
 os.environ.pop("API_KEY", None)
 
 from tests.fakes import fake_firebase as F  # noqa: E402

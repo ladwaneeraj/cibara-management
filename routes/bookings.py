@@ -11,7 +11,7 @@ from config import (
     create_cancellation_charge_bill,
     is_ota_prepaid, OTA_PREPAID_SOURCES,
 )
-from services import payment_service, customer_service, bills_service, expense_service
+from services import payment_service, customer_service, bills_service, expense_service, blocks_service
 from services.auth_service import requires_permission
 from services.audit_log import write_log, attribution_create, attribution_update, _safe_user
 from services.request_guard import guard_duplicate_submit
@@ -473,6 +473,10 @@ def create_multi_booking():
             for room_doc in rooms_ref.stream():
                 if room_doc.id in seen_rooms and room_doc.to_dict().get("status") == "occupied":
                     conflicting.add(room_doc.id)
+
+        # A blocked room (maintenance/hold) can't be booked by staff either.
+        conflicting |= seen_rooms & blocks_service.active_blocked_rooms(
+            IST.localize(check_in), IST.localize(check_out))
 
         if conflicting:
             return jsonify(success=False, message="Room(s) already booked for these dates: " + ", ".join(sorted(conflicting)))
@@ -1347,6 +1351,10 @@ def check_availability():
                     booked_rooms.add(room_doc.id)
 
         all_rooms      = [room_doc.id for room_doc in all_room_docs]
+        # Blocked rooms (maintenance/hold) are not available to staff either.
+        booked_rooms |= blocks_service.active_blocked_rooms(
+            IST.localize(check_in), IST.localize(check_out))
+
         available_rooms = [room for room in all_rooms if room not in booked_rooms]
         available_rooms.sort(key=lambda r: (int(r) if r.isdigit() else float('inf'), r))
 

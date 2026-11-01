@@ -2841,6 +2841,29 @@
             </div>
           </section>
 
+          <!-- ── Website (online booking) ── -->
+          <section class="set-group">
+            <h3 class="set-group-title">Website</h3>
+            <div class="set-list">
+              <!-- Master switch for online bookings on the guest website.
+                   Flag: web_config.online_bookings_enabled (CLOSED by default).
+                   Persisted via POST /settings/web_config; the website reads
+                   the public GET /web/config. -->
+              <div class="set-row" data-perm="settings.update">
+                <span class="set-ico set-ico--sky"><i class="fas fa-globe"></i></span>
+                <span class="set-text">
+                  <span class="set-title">Online bookings</span>
+                  <span class="set-sub" id="settings-webbook-sub">Loading…</span>
+                </span>
+                <label class="settings-toggle set-switch" title="Accept bookings from the guest website">
+                  <input type="checkbox" id="settings-webbook-toggle" onchange="toggleOnlineBookings(this)" />
+                  <span class="set-switch-track" id="settings-webbook-slider"></span>
+                  <span class="set-switch-knob" id="settings-webbook-knob"></span>
+                </label>
+              </div>
+            </div>
+          </section>
+
           <!-- ── Setup ── -->
           <section class="set-group">
             <h3 class="set-group-title">Setup</h3>
@@ -4119,6 +4142,12 @@
           <span>Transfer Room</span>
         </div>
 
+        <!-- Block rooms / categories out of sale (static/script.js "Room blocks") -->
+        <div class="quick-action-item" id="quick-blocks-btn" data-perm="room.update">
+          <i class="fas fa-ban"></i>
+          <span>Block Rooms</span>
+        </div>
+
         <!-- Laundry and Staff moved to the bottom nav (Rooms/.../Bookings
              row) since they're primary sections now, not one-off actions —
              see the nav-item[data-tab="laundry"/"staff"] entries below.
@@ -4133,6 +4162,50 @@
              (maintenance.js / the settlements handlers) is
              untouched. -->
 
+      </div>
+    </div>
+    <!-- Blocks modal: date-range block (room or category) + active blocks -->
+    <div class="modal-backdrop" id="blocks-modal">
+      <div class="modal-content" style="max-width: 460px">
+        <div class="modal-header">
+          <h2>Block Rooms</h2>
+          <button class="close-btn" aria-label="Close">&times;</button>
+        </div>
+        <form id="blocks-form">
+          <div class="form-group">
+            <label class="form-label" for="blocks-scope">Block</label>
+            <select id="blocks-scope" class="form-control">
+              <option value="room">A single room</option>
+              <option value="category">A whole category</option>
+            </select>
+          </div>
+          <div class="form-group" id="blocks-room-group">
+            <label class="form-label" for="blocks-room">Room</label>
+            <select id="blocks-room" class="form-control"></select>
+          </div>
+          <div class="form-group" id="blocks-category-group" style="display: none">
+            <label class="form-label" for="blocks-category">Category</label>
+            <select id="blocks-category" class="form-control">
+              <option value="premium">Premium (200-206)</option>
+              <option value="deluxe">Deluxe (223-227)</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="blocks-start">From</label>
+            <input type="datetime-local" id="blocks-start" class="form-control" required />
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="blocks-end">Until (leave empty for open-ended)</label>
+            <input type="datetime-local" id="blocks-end" class="form-control" />
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="blocks-reason">Reason</label>
+            <input type="text" id="blocks-reason" class="form-control" maxlength="120" placeholder="Maintenance, owner use..." />
+          </div>
+          <button type="submit" class="btn btn-primary" style="width: 100%">Create block</button>
+        </form>
+        <h3 style="margin: 1.2rem 0 0.5rem; font-size: 1rem">Active blocks</h3>
+        <div id="blocks-list"></div>
       </div>
     </div>
     <!-- Checkout Confirmation Modal -->

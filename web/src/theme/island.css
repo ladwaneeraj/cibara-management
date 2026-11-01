@@ -41,6 +41,18 @@
   align-items: center;
 }
 
+/* Status badge fallbacks for statuses booking.css doesn't define. */
+#bookings-react-root .status-badge.checked-out,
+.bki-portal .status-badge.checked_out {
+  background: var(--gray, #6c757d);
+  color: #fff;
+}
+#bookings-react-root .status-badge.no-show,
+.bki-portal .status-badge.no_show {
+  background: var(--warning, #ff9f1c);
+  color: #fff;
+}
+
 #bookings-react-root .bki-search {
   width: 100%;
   max-width: 420px;

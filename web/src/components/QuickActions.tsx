@@ -1,7 +1,7 @@
 import type { Booking } from '../types/booking'
 import { bookingBalance, isOtaPrepaid } from '../lib/booking'
 
-export type BookingAction = 'convert' | 'cancel' | 'collect' | 'whatsapp' | 'edit'
+export type BookingAction = 'convert' | 'cancel' | 'collect' | 'whatsapp' | 'edit' | 'noshow'
 
 export interface QuickActionsProps {
   booking: Booking
@@ -25,6 +25,7 @@ export function QuickActions({ booking, onAction }: QuickActionsProps) {
       {booking.status === 'confirmed' ? <Btn action="convert" label="Check-in" cls="btn-primary" /> : null}
       {canCollect ? <Btn action="collect" label="Collect payment" /> : null}
       {booking.status === 'confirmed' ? <Btn action="cancel" label="Cancel" cls="bk-tool-slate" /> : null}
+      {booking.status === 'confirmed' ? <Btn action="noshow" label="No-show" cls="bk-tool-slate" /> : null}
       {booking.guest_mobile ? <Btn action="whatsapp" label="WhatsApp" /> : null}
       {live ? <Btn action="edit" label="Edit" /> : null}
     </div>

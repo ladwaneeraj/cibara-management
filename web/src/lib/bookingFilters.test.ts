@@ -65,6 +65,13 @@ describe('applyFilter (parity with booking.js)', () => {
     expect(applyFilter(list, 'all')).toHaveLength(4)
   })
 
+  it('hides no-show bookings from upcoming and today', () => {
+    const list = [b({ status: 'no_show', check_in_date: plusDays(1) })]
+    expect(applyFilter(list, 'upcoming')).toHaveLength(0)
+    expect(applyFilter(list, 'today')).toHaveLength(0)
+    expect(applyFilter(list, 'all')).toHaveLength(1)
+  })
+
   it('does not throw on a malformed check_in_date', () => {
     const list = [b({ check_in_date: 'not-a-date', status: 'confirmed' })]
     expect(() => applyFilter(list, 'upcoming')).not.toThrow()

@@ -40,6 +40,13 @@ it('offers no check-in or cancel once cancelled', () => {
   expect(screen.queryByRole('button', { name: /^Cancel/ })).not.toBeInTheDocument()
 })
 
+it('offers No-show for a confirmed booking and fires it', async () => {
+  const onAction = vi.fn()
+  render(<QuickActions booking={b({})} onAction={onAction} />)
+  await userEvent.click(screen.getByRole('button', { name: /No-show/ }))
+  expect(onAction).toHaveBeenCalledWith('noshow')
+})
+
 it('fires onAction with the kind', async () => {
   const onAction = vi.fn()
   render(<QuickActions booking={b({})} onAction={onAction} />)

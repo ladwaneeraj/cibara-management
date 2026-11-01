@@ -19,7 +19,7 @@ import { NewBookingModal } from './modals/NewBookingModal'
 import { MultiBookingModal } from './modals/MultiBookingModal'
 import { ArrivalsSheet } from './modals/ArrivalsSheet'
 import { OtaSettlementsModal } from './modals/OtaSettlementsModal'
-import { fetchFromMmt } from './api/bookings'
+import { fetchFromMmt, updateBooking } from './api/bookings'
 import { buildWhatsappUrl } from './lib/whatsapp'
 import type { Booking } from './types/booking'
 import type { BookingFilter, SortKey } from './lib/bookingFilters'
@@ -90,9 +90,16 @@ export function BookingsApp() {
       window.open(buildWhatsappUrl(booking.guest_mobile, text), '_blank', 'noopener')
       return
     }
+    if (action === 'noshow') {
+      void updateBooking({ booking_id: booking.booking_id, status: 'no_show' }).then(() => {
+        setSelectedId(null)
+        void refresh()
+      })
+      return
+    }
     // convert / cancel / collect / edit → open the matching action modal
     setModalAction({ kind: action, booking })
-  }, [])
+  }, [refresh])
 
   const closeModal = useCallback(() => setModalAction(null), [])
   const afterAction = useCallback(() => {

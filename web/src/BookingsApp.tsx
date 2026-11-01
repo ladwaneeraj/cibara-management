@@ -16,6 +16,9 @@ import { ConvertCheckinModal } from './modals/ConvertCheckinModal'
 import { UpdateBookingModal } from './modals/UpdateBookingModal'
 import { NewBookingModal } from './modals/NewBookingModal'
 import { MultiBookingModal } from './modals/MultiBookingModal'
+import { ArrivalsSheet } from './modals/ArrivalsSheet'
+import { OtaSettlementsModal } from './modals/OtaSettlementsModal'
+import { fetchFromMmt } from './api/bookings'
 import { buildWhatsappUrl } from './lib/whatsapp'
 import type { Booking } from './types/booking'
 import type { BookingFilter, SortKey } from './lib/bookingFilters'
@@ -58,7 +61,22 @@ export function BookingsApp() {
   const [selectedId, setSelectedId] = useState<string | null>(null) // drawer
   const [newBooking, setNewBooking] = useState<{ date?: string; multi?: boolean } | null>(null)
   const [modalAction, setModalAction] = useState<{ kind: BookingAction; booking: Booking } | null>(null) // Task 12
+  const [arrivalsOpen, setArrivalsOpen] = useState(false)
+  const [otaOpen, setOtaOpen] = useState(false)
+  const [fetching, setFetching] = useState(false)
   const canOta = useMemo(() => hasPerm('settlement.manage'), [])
+
+  const doFetchFromMmt = useCallback(async () => {
+    setFetching(true)
+    try {
+      await fetchFromMmt()
+      await refresh()
+    } catch {
+      /* surfaced by the list error state on the next load */
+    } finally {
+      setFetching(false)
+    }
+  }, [refresh])
 
   const openDrawer = useCallback((id: string) => setSelectedId(id), [])
   const openNewBooking = useCallback((opts?: { date?: string }) => setNewBooking(opts ?? {}), [])
@@ -100,14 +118,27 @@ export function BookingsApp() {
       <div className="section-title bk-section-title">
         <h2>Room Bookings</h2>
         <div className="bk-toolbar bki-toolbar">
-          <button className="action-btn btn-sm bk-tool-btn bk-tool-slate" type="button">
+          <button
+            className="action-btn btn-sm bk-tool-btn bk-tool-slate"
+            type="button"
+            onClick={() => setArrivalsOpen(true)}
+          >
             <i className="fas fa-print" aria-hidden="true" /> <span>Arrivals Sheet</span>
           </button>
-          <button className="action-btn btn-sm bk-tool-btn bk-tool-orange" type="button">
-            <i className="fas fa-sync-alt" aria-hidden="true" /> <span>Fetch Bookings</span>
+          <button
+            className="action-btn btn-sm bk-tool-btn bk-tool-orange"
+            type="button"
+            onClick={doFetchFromMmt}
+            disabled={fetching}
+          >
+            <i className="fas fa-sync-alt" aria-hidden="true" /> <span>{fetching ? 'Fetching…' : 'Fetch Bookings'}</span>
           </button>
           {canOta ? (
-            <button className="action-btn btn-sm bk-tool-btn bk-tool-blue" type="button">
+            <button
+              className="action-btn btn-sm bk-tool-btn bk-tool-blue"
+              type="button"
+              onClick={() => setOtaOpen(true)}
+            >
               <i className="fas fa-university" aria-hidden="true" /> <span>OTA Settlements</span>
             </button>
           ) : null}
@@ -215,6 +246,9 @@ export function BookingsApp() {
       {newBooking?.multi ? (
         <MultiBookingModal onClose={() => setNewBooking(null)} onDone={afterNew} />
       ) : null}
+
+      {arrivalsOpen ? <ArrivalsSheet onClose={() => setArrivalsOpen(false)} /> : null}
+      {otaOpen ? <OtaSettlementsModal onClose={() => setOtaOpen(false)} onChanged={() => void refresh()} /> : null}
     </div>
   )
 }

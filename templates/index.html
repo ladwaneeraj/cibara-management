@@ -57,6 +57,7 @@
     <link rel="stylesheet" href="{{ asset_url('style.css') }}" />
     <link rel="stylesheet" href="{{ asset_url('booking.css') }}" />
     <link rel="stylesheet" href="{{ asset_url('room-calendar.css') }}" />
+    <link rel="stylesheet" href="{{ asset_url('react/bookings.css') }}" />
     <link rel="stylesheet" href="/static/laundry.css" />
     <link rel="stylesheet" href="/static/maintenance.css" />
     <!-- asset_url appends ?v=mtime so browsers pick up new versions on the
@@ -1741,6 +1742,10 @@
           </div>
         </div>
         <div class="tab-content hidden" id="bookings-tab">
+          <!-- React island mount (web/ → static/react/bookings.js). The island
+               renders the Bookings UI; the legacy booking.js list/calendar
+               rendering below is removed in a later change. -->
+          <div id="bookings-react-root"></div>
           <div class="section-title bk-section-title">
             <h2>Room Bookings</h2>
             <div class="bk-toolbar">
@@ -6350,6 +6355,9 @@
     <script defer src="{{ asset_url('expense.js') }}"></script>
     <script defer src="/static/expense-presets-admin.js"></script>
     <script defer src="{{ asset_url('booking.js') }}"></script>
+    <!-- Bookings React island bundle (web/ → static/react). Loads after
+         auth.js (window.apiFetch) and booking.js; defer preserves order. -->
+    <script defer src="{{ asset_url('react/bookings.js') }}"></script>
     <!-- Rooms tab Calendar view (timeline of stays + bookings). Loads after
          script.js and booking.js because it reuses their modals and data. -->
     <script defer src="{{ asset_url('room-calendar.js') }}"></script>

@@ -62,6 +62,90 @@
   }
 }
 
+/* Modal (portaled to body). */
+.bki-portal .bki-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  z-index: 1200;
+}
+.bki-portal .bki-modal {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: min(460px, 94vw);
+  max-height: 90vh;
+  overflow-y: auto;
+  background: var(--surface, #fff);
+  border-radius: var(--border-radius-lg, 12px);
+  box-shadow: var(--shadow-lg, 0 5px 20px rgba(0, 0, 0, 0.2));
+  z-index: 1201;
+  font-family: var(--font-family, "Segoe UI", Tahoma, Geneva, Verdana, sans-serif);
+  color: var(--text-primary, #1f2937);
+}
+.bki-portal .bki-modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border, #e2e8f0);
+}
+.bki-portal .bki-modal-head h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+.bki-portal .bki-modal-body {
+  padding: 16px;
+}
+.bki-portal .bki-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.bki-portal .bki-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+  color: var(--text-secondary, #64748b);
+}
+.bki-portal .bki-field input,
+.bki-portal .bki-field textarea {
+  padding: 8px 10px;
+  border: 1px solid var(--border, #e2e8f0);
+  border-radius: var(--border-radius, 8px);
+  font: inherit;
+  color: var(--text-primary, #1f2937);
+}
+.bki-portal .bki-check {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  font-size: 13px;
+}
+.bki-portal .bki-methods .payment-btn {
+  padding: 6px 12px;
+  border: 1px solid var(--border, #e2e8f0);
+  border-radius: 999px;
+  background: var(--light, #f8f9fa);
+  cursor: pointer;
+  font: inherit;
+}
+.bki-portal .bki-methods .payment-btn.active {
+  background: var(--primary, #4361ee);
+  color: #fff;
+  border-color: var(--primary, #4361ee);
+}
+.bki-portal .bki-error {
+  color: var(--danger, #e63946);
+  font-size: 13px;
+}
+.bki-portal .bki-note {
+  color: var(--text-secondary, #64748b);
+  font-size: 13px;
+}
+
 /* Calendar fallback layout (the classic booking.css styles these in the real
    app; these rules make the grid usable standalone too). */
 #bookings-react-root .calendar-weekdays,

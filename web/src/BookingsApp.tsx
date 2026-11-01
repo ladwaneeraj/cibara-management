@@ -10,6 +10,10 @@ import { ListView } from './views/ListView'
 import { CalendarView } from './views/CalendarView'
 import { BookingDrawer } from './components/BookingDrawer'
 import type { BookingAction } from './components/QuickActions'
+import { PaymentModal } from './modals/PaymentModal'
+import { CancelModal } from './modals/CancelModal'
+import { ConvertCheckinModal } from './modals/ConvertCheckinModal'
+import { UpdateBookingModal } from './modals/UpdateBookingModal'
 import { buildWhatsappUrl } from './lib/whatsapp'
 import type { Booking } from './types/booking'
 import type { BookingFilter, SortKey } from './lib/bookingFilters'
@@ -65,9 +69,16 @@ export function BookingsApp() {
       window.open(buildWhatsappUrl(booking.guest_mobile, text), '_blank', 'noopener')
       return
     }
-    // convert / cancel / collect / edit → open the matching action modal (Task 12)
+    // convert / cancel / collect / edit → open the matching action modal
     setModalAction({ kind: action, booking })
   }, [])
+
+  const closeModal = useCallback(() => setModalAction(null), [])
+  const afterAction = useCallback(() => {
+    setModalAction(null)
+    setSelectedId(null)
+    void refresh()
+  }, [refresh])
 
   useEffect(() => {
     installBridge({ refresh, openDrawer, openNewBooking })
@@ -173,6 +184,19 @@ export function BookingsApp() {
       )}
 
       <BookingDrawer booking={selectedBooking} onAction={handleAction} onClose={() => setSelectedId(null)} />
+
+      {modalAction?.kind === 'collect' ? (
+        <PaymentModal booking={modalAction.booking} onClose={closeModal} onDone={afterAction} />
+      ) : null}
+      {modalAction?.kind === 'cancel' ? (
+        <CancelModal booking={modalAction.booking} onClose={closeModal} onDone={afterAction} />
+      ) : null}
+      {modalAction?.kind === 'convert' ? (
+        <ConvertCheckinModal booking={modalAction.booking} onClose={closeModal} onDone={afterAction} />
+      ) : null}
+      {modalAction?.kind === 'edit' ? (
+        <UpdateBookingModal booking={modalAction.booking} onClose={closeModal} onDone={afterAction} />
+      ) : null}
     </div>
   )
 }

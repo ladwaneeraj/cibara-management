@@ -320,6 +320,31 @@
   }
   window.addEventListener("cibaraAuthReady", renderTabs);
 
+  // ── Refresh-on-focus (cross-device freshness) ─────────────────────────────
+  // Staff data (wages, attendance, advances, salary) is server-only: there is
+  // no firestore.rules block for the staff collections, so the browser can't
+  // read them and the Firestore real-time listeners the Register/Bookings
+  // screens use are not available here. Rather than poll — which would re-read
+  // the whole view every interval and bill reads we don't want — reload the
+  // active Staff view only when the operator returns to this browser tab or
+  // window. That is exactly the moment a change made on another device would
+  // otherwise look stale, and it costs reads only when someone is actually
+  // looking. We gate on #staff-tab being the visible screen so a focus while
+  // any other screen is open does nothing at all (no stray cache busting);
+  // refreshStaffModule() then re-fetches the active sub-tab authoritatively.
+  var _stfFocusTimer = null;
+  function _stfRefreshOnFocus() {
+    if (document.visibilityState === "hidden") return;
+    var tabWrap = document.getElementById("staff-tab");
+    if (!tabWrap || tabWrap.classList.contains("hidden")) return;  // Staff not on screen
+    clearTimeout(_stfFocusTimer);
+    _stfFocusTimer = setTimeout(function () {
+      if (typeof window.refreshStaffModule === "function") window.refreshStaffModule();
+    }, 300);
+  }
+  document.addEventListener("visibilitychange", _stfRefreshOnFocus);
+  window.addEventListener("focus", _stfRefreshOnFocus);
+
   function switchTab(tab) {
     var modal = document.getElementById("staff-modal");
     if (!modal) return;

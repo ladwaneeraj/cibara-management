@@ -14,6 +14,8 @@ import { PaymentModal } from './modals/PaymentModal'
 import { CancelModal } from './modals/CancelModal'
 import { ConvertCheckinModal } from './modals/ConvertCheckinModal'
 import { UpdateBookingModal } from './modals/UpdateBookingModal'
+import { NewBookingModal } from './modals/NewBookingModal'
+import { MultiBookingModal } from './modals/MultiBookingModal'
 import { buildWhatsappUrl } from './lib/whatsapp'
 import type { Booking } from './types/booking'
 import type { BookingFilter, SortKey } from './lib/bookingFilters'
@@ -54,7 +56,7 @@ export function BookingsApp() {
   const [sortBy, setSortBy] = useState<SortKey>('checkin')
   const [calMonth, setCalMonth] = useState<Date>(() => new Date())
   const [selectedId, setSelectedId] = useState<string | null>(null) // drawer
-  const [newBooking, setNewBooking] = useState<{ date?: string } | null>(null) // Task 13
+  const [newBooking, setNewBooking] = useState<{ date?: string; multi?: boolean } | null>(null)
   const [modalAction, setModalAction] = useState<{ kind: BookingAction; booking: Booking } | null>(null) // Task 12
   const canOta = useMemo(() => hasPerm('settlement.manage'), [])
 
@@ -77,6 +79,10 @@ export function BookingsApp() {
   const afterAction = useCallback(() => {
     setModalAction(null)
     setSelectedId(null)
+    void refresh()
+  }, [refresh])
+  const afterNew = useCallback(() => {
+    setNewBooking(null)
     void refresh()
   }, [refresh])
 
@@ -196,6 +202,18 @@ export function BookingsApp() {
       ) : null}
       {modalAction?.kind === 'edit' ? (
         <UpdateBookingModal booking={modalAction.booking} onClose={closeModal} onDone={afterAction} />
+      ) : null}
+
+      {newBooking && !newBooking.multi ? (
+        <NewBookingModal
+          initialDate={newBooking.date}
+          onClose={() => setNewBooking(null)}
+          onDone={afterNew}
+          onSwitchToMulti={() => setNewBooking({ multi: true })}
+        />
+      ) : null}
+      {newBooking?.multi ? (
+        <MultiBookingModal onClose={() => setNewBooking(null)} onDone={afterNew} />
       ) : null}
     </div>
   )

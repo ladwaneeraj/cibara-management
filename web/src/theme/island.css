@@ -145,6 +145,28 @@
   color: var(--text-secondary, #64748b);
   font-size: 13px;
 }
+.bki-portal .bki-rooms {
+  flex-wrap: wrap;
+}
+.bki-portal .bki-multi-row {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 6px;
+  border: 1px solid var(--border, #e2e8f0);
+  border-radius: var(--border-radius, 8px);
+  padding: 8px 10px;
+}
+.bki-portal .bki-multi-row legend {
+  font-size: 12px;
+  text-transform: uppercase;
+  color: var(--text-secondary, #64748b);
+}
+.bki-portal .bki-multi-row input {
+  padding: 6px 8px;
+  border: 1px solid var(--border, #e2e8f0);
+  border-radius: 6px;
+  font: inherit;
+}
 
 /* Calendar fallback layout (the classic booking.css styles these in the real
    app; these rules make the grid usable standalone too). */

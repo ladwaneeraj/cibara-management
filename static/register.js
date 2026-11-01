@@ -3470,6 +3470,36 @@ tr.rp-svc-voided .rp-actions-cell { opacity:.9; }
     _patchBillFromEvent(e.detail);
   });
 
+  // ── Remote payment EDITS / DELETES (another device) ───────────────────────
+  // A new payment arrives as `cibaraPaymentAdded` and is patched above. An
+  // EDIT or DELETE arrives as `cibaraTransactionRevised` (google_sync.js) and
+  // cannot be patched in place here: `_applyPaymentToActiveRow` only *adds* a
+  // delta, and `_activeEntryFromRoom` rebuilds an active row with
+  // `payment_cash` / `payment_online` carried over from its previous value —
+  // so neither path can lower or correct a sum. Without this listener an
+  // edited or deleted payment stayed wrong on every other device until a
+  // manual refresh. Mirror the Transactions tab (transaction-tracking.js):
+  // re-pull the authoritative range. We deliberately do NOT gate on the
+  // event's `date` — that is the payment (transaction) date, which for an
+  // active or multi-night stay differs from the check-in date Register ranges
+  // by, so a strict date match would skip exactly the active-stay case this
+  // fixes. Remote edits/deletes are infrequent; the debounce coalesces a burst
+  // into a single read, and a hidden tab spends none.
+  let _rgRevisedReloadTimer = null;
+  window.addEventListener("cibaraTransactionRevised", () => {
+    const tab = dom("register-tab");
+    const visible = tab && !tab.classList.contains("hidden");
+    if (!visible) {
+      // Hidden: don't spend a (heavy) read now. Drop the cache marker so
+      // watchTab()'s next loadData(false) on show re-fetches from the server.
+      if (state.lastLoadedRange) state.lastLoadedRange = null;
+      return;
+    }
+    if (!state.lastLoadedRange) return;   // nothing loaded yet; first load will include it
+    clearTimeout(_rgRevisedReloadTimer);
+    _rgRevisedReloadTimer = setTimeout(() => { loadData(true); }, 500);
+  });
+
   // ── Active stays, live from the room documents ─────────────────────────
   // A completed stay is a bill, and bills arrive above. An ACTIVE stay is a
   // room document plus the stay's payments, and until now those rows only

@@ -21,6 +21,13 @@ bookings_bp = Blueprint('bookings', __name__)
 # Fix 6: whitelist of accepted payment method values
 VALID_PAYMENT_METHODS = {"cash", "upi", "card", "online", "balance", "ota", "already_paid", "bank_settlement"}
 
+# Transient web-booking hold states. A /web/hold writes a `pending_payment`
+# booking to reserve a room, and the sweep flips an abandoned hold to `expired`.
+# Neither is a webhook-confirmed reservation, so the human-facing booking views
+# (calendar + list, fed by /get_bookings) must never show them.
+_HIDDEN_BOOKING_STATUSES = {"pending_payment", "expired"}
+
+
 @bookings_bp.route("/get_bookings", methods=["GET"])
 def get_bookings():
     try:
@@ -35,6 +42,12 @@ def get_bookings():
         bookings_list = []
         for booking_doc in bookings_stream:
             booking = booking_doc.to_dict()
+            # Hide transient web-hold states (see _HIDDEN_BOOKING_STATUSES).
+            # Filtered in Python, not via a Firestore `not-in` query, so legacy
+            # docs with no `status` field are still returned; real ERP statuses
+            # (confirmed / cancelled / checked_in / checked_out) are unaffected.
+            if (booking.get("status") or "").lower() in _HIDDEN_BOOKING_STATUSES:
+                continue
             booking["booking_id"] = booking_doc.id
             bookings_list.append(booking)
         bookings_list.sort(key=lambda b: b.get("check_in_date", ""), reverse=True)

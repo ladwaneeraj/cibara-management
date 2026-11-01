@@ -2863,7 +2863,7 @@ async function _loadCheckoutGst(roomNumber) {
 
   if (!mobile) return;
   try {
-    const res = await apiFetch(`/get_customer/${mobile}`);
+    const res = await apiFetch(`/get_customer/${mobile}?docs_only=1`);
     if (!res.ok) return;
     const data = await res.json();
     const p = data && data.success && data.customer && data.customer.gst_profile;

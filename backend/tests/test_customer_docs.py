@@ -138,6 +138,48 @@ def test_view_is_watermarked_counted_and_audited(client, manager):
     assert _audits("customer_doc.view")
 
 
+def test_view_and_thumb_are_cached_derivatives(client, manager, admin):
+    """Resize-once: the first view/thumb builds a smaller cached copy, and later
+    requests are served from it without re-reading the full-size original."""
+    doc_id = _upload(client, manager, _jpeg(size=(2000, 1500), mark=3)).json()["document"]["id"]
+    orig_path, = [p for p in _objects() if p.endswith(f"{doc_id}.jpg")]
+
+    v = client.get(f"{BASE}/{doc_id}/image", headers=manager)   # default variant = view
+    assert v.status_code == 200
+    disp_path = orig_path[:-4] + "__display.jpg"
+    assert disp_path in _objects()                              # cached on first view
+    assert max(Image.open(io.BytesIO(_objects()[disp_path]["data"])).size) <= 1400
+
+    t = client.get(f"{BASE}/{doc_id}/image?variant=thumb", headers=manager)
+    assert t.status_code == 200 and orig_path[:-4] + "__thumb.jpg" in _objects()
+
+    # Drop the full original: a view must still succeed from the cached copy …
+    F.FAKE_BUCKET.blob(orig_path).delete()
+    assert client.get(f"{BASE}/{doc_id}/image", headers=manager).status_code == 200
+    # … while the download-only original is genuinely gone.
+    assert client.get(f"{BASE}/{doc_id}/image?variant=original", headers=admin).status_code == 404
+
+
+def test_display_variant_is_unwatermarked_resized_and_counted(client, manager):
+    """The in-app viewer loads 'display': the cached small copy served as-is (no
+    server watermark — that is drawn in the browser), but still counted/audited
+    as a view."""
+    doc_id = _upload(client, manager, _jpeg(size=(2000, 1500), mark=4)).json()["document"]["id"]
+    orig_path, = [p for p in _objects() if p.endswith(f"{doc_id}.jpg")]
+
+    d = client.get(f"{BASE}/{doc_id}/image?variant=display", headers=manager)
+    assert d.status_code == 200 and d.headers["content-type"] == "image/jpeg"
+    # served the cached display copy verbatim (no watermark burned in) …
+    disp_path = orig_path[:-4] + "__display.jpg"
+    assert disp_path in _objects() and d.content == _objects()[disp_path]["data"]
+    # … resized for the screen …
+    assert max(Image.open(io.BytesIO(d.content)).size) <= 1400
+    # … and a full-size on-screen view is still counted + audited (unlike a thumb).
+    rec = DB.collection("customers").document(M).collection("id_docs").document(doc_id).get().to_dict()
+    assert rec["views"] == 1
+    assert _audits("customer_doc.view")
+
+
 def test_original_download_is_admin_only(client, manager, admin):
     doc_id = _upload(client, manager).json()["document"]["id"]
     assert client.get(f"{BASE}/{doc_id}/image?variant=original", headers=manager).status_code == 403

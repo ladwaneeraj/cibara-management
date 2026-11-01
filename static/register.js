@@ -3849,7 +3849,7 @@ tr.rp-svc-voided .rp-actions-cell { opacity:.9; }
     const origHTML = btn ? btn.innerHTML : "";
     if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>'; }
     try {
-      const res  = await apiFetch(`/get_customer/${encodeURIComponent(mobile)}`);
+      const res  = await apiFetch(`/get_customer/${encodeURIComponent(mobile)}?docs_only=1`);
       const data = await res.json();
       if (!data.success || !data.customer) {
         toast("No customer record found for this number.", "error");
@@ -3903,7 +3903,7 @@ tr.rp-svc-voided .rp-actions-cell { opacity:.9; }
     overlay.classList.add("show");
 
     try {
-      const res  = await apiFetch(`/get_customer/${encodeURIComponent(mobile)}`);
+      const res  = await apiFetch(`/get_customer/${encodeURIComponent(mobile)}?docs_only=1`);
       const data = await res.json();
 
       if (!data.success || !data.customer) {

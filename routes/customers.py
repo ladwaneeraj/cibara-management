@@ -155,7 +155,11 @@ def get_customer_route(mobile):
             customer.pop("_id", None)
             out = _format_customer(customer)
             out.update(_id_doc_links(customer.get("mobile") or mobile))
-            out.update(_pending_from_settlements(customer.get("mobile") or mobile, out))
+            # `?docs_only=1` skips the settlements lookup (a Firestore query not
+            # needed when the caller — e.g. the ID-document viewer — only wants
+            # the guest's name and photos). Default behaviour is unchanged.
+            if request.args.get("docs_only") not in ("1", "true", "yes"):
+                out.update(_pending_from_settlements(customer.get("mobile") or mobile, out))
             return jsonify(success=True, customer=out)
         return jsonify(success=False, message="Customer not found")
     except Exception as e:

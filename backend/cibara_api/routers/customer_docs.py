@@ -121,7 +121,7 @@ async def upload_id_doc(mobile: str = Mobile,
 
 @router.get("/{mobile}/id-docs/{doc_id}/image")
 async def id_doc_image(mobile: str = Mobile, doc_id: str = DocId,
-                       variant: Literal["thumb", "view", "original"] = Query("view"),
+                       variant: Literal["thumb", "display", "view", "original"] = Query("view"),
                        p: Principal = Depends(require_permission("customer_doc.view"))):
     svc = _svc()
     if variant == "original" and not p.can("customer_doc.download"):

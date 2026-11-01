@@ -226,7 +226,7 @@ window.populateCheckoutDocView = async function (mobile) {
   if (digits.length !== 10) return;
 
   try {
-    const res  = await apiFetch(`/get_customer/${digits}`);
+    const res  = await apiFetch(`/get_customer/${digits}?docs_only=1`);
     const data = await res.json();
     if (data.success && data.customer) {
       window.CibaraSecureImg.remember(data.customer);
@@ -1884,17 +1884,67 @@ let _viewerLoadToken = 0;
 
 // Warm the session image cache (window.CibaraSecureImg keeps a Map of blob
 // URLs) so navigating between a guest's photos — and re-opening the same
-// guest — is instant. Thumbs are small, so warm them all; the heavier
-// watermarked views only for the current photo and its immediate neighbours,
-// to avoid asking the server to generate every watermark at once.
+// guest — is instant. Thumbs are small, so warm them all; the larger on-screen
+// "display" copy only for the current photo and its immediate neighbours. The
+// watermark is now drawn in the browser (see _applyViewerWatermark), so the
+// server no longer burns it into the image on every view.
 function _prefetchViewerImages(urls, idx) {
   const Secure = window.CibaraSecureImg;
   if (!Secure || !urls) return;
   urls.forEach((u, i) => {
     if (!Secure.isSecure(u)) return;
     Secure.src(u, 'thumb').catch(() => {});
-    if (Math.abs(i - idx) <= 1) Secure.src(u, 'view').catch(() => {});
+    if (Math.abs(i - idx) <= 1) Secure.src(u, 'display').catch(() => {});
   });
+}
+
+// Browser-drawn watermark for the in-app viewer: the viewer's name + time are
+// laid over the image as a DOM overlay (captured in any screenshot, so it keeps
+// the same traceability) instead of being composited into the pixels on the
+// server. This takes the heavy image-CPU off every view — the change that makes
+// opening a document fast on the single, low-CPU instance. The burned-in copy
+// (variant "view") is still used for the open-in-new-tab path, which can't carry
+// an overlay.
+function _viewerWatermarkText() {
+  let name = '';
+  try {
+    const u = window.CibaraAuth && typeof window.CibaraAuth.currentUser === 'function'
+      && window.CibaraAuth.currentUser();
+    name = (u && u.name) || '';
+  } catch (_) { /* ignore */ }
+  let when = '';
+  try {
+    when = new Date().toLocaleString('en-IN',
+      { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+  } catch (_) { /* ignore */ }
+  return `Cibara · ID verification only · ${name || '—'}${when ? ' · ' + when : ''}`;
+}
+
+function _applyViewerWatermark(show) {
+  const stage = document.getElementById('doc-viewer-stage');
+  if (!stage) return;
+  let wm = document.getElementById('doc-viewer-watermark');
+  if (!show) { if (wm) wm.style.display = 'none'; return; }
+  if (!wm) {
+    wm = document.createElement('div');
+    wm.id = 'doc-viewer-watermark';
+    wm.setAttribute('aria-hidden', 'true');
+    const footer = document.createElement('div');
+    footer.className = 'doc-viewer-wm-footer';
+    wm.appendChild(footer);
+    stage.appendChild(wm);
+  }
+  const text = _viewerWatermarkText();
+  const esc = (window.escHtml ? window.escHtml(text) : text);
+  const svg =
+    "<svg xmlns='http://www.w3.org/2000/svg' width='360' height='130'>" +
+    "<text x='-10' y='95' transform='rotate(-28 0 95)' " +
+    "font-family='Arial, sans-serif' font-size='17' fill='rgba(150,150,150,0.30)'>" +
+    esc + "</text></svg>";
+  wm.style.backgroundImage = "url(\"data:image/svg+xml," + encodeURIComponent(svg) + "\")";
+  const footerEl = wm.querySelector('.doc-viewer-wm-footer');
+  if (footerEl) footerEl.textContent = text;   // textContent — never innerHTML
+  wm.style.display = 'block';
 }
 
 function openPhotoViewer(urls, startIdx, mobile) {
@@ -1960,13 +2010,15 @@ function setViewerPhoto(idx) {
     const Secure = window.CibaraSecureImg;
     if (Secure && Secure.isSecure(url)) {
       // Blank the previous image at once so another guest's document is never
-      // left on screen while the new (watermarked, server-generated) view
-      // loads. Show a spinner, then paint the small thumb the moment it is
-      // ready (fast, usually cached) and sharpen to the full view after.
+      // left on screen while the new copy loads. Show a spinner, then paint the
+      // small thumb the moment it is ready (fast, usually cached) and sharpen to
+      // the full "display" copy after. The watermark rides on top as a DOM
+      // overlay (browser-drawn), so no server image CPU is spent per view.
       mainImg.removeAttribute('src');
       mainImg.alt = '';
       mainImg.classList.add('doc-lowres');
       _showViewerSpinner(true);
+      _applyViewerWatermark(true);
 
       let gotFull = false;
       Secure.src(url, 'thumb').then((u) => {
@@ -1974,7 +2026,7 @@ function setViewerPhoto(idx) {
         mainImg.src = u;
         _showViewerSpinner(false);
       }).catch(() => {});
-      Secure.src(url, 'view').then((u) => {
+      Secure.src(url, 'display').then((u) => {
         if (token !== _viewerLoadToken) return;
         gotFull = true;
         mainImg.src = u;
@@ -1991,8 +2043,11 @@ function setViewerPhoto(idx) {
       _prefetchViewerImages(_viewerUrls, idx);
     } else {
       // Local blob URL (a not-yet-uploaded capture) — no fetch, show it now.
+      // No overlay: it is the staff member's own just-taken photo, not a stored
+      // document being viewed.
       mainImg.classList.remove('doc-lowres');
       _showViewerSpinner(false);
+      _applyViewerWatermark(false);
       mainImg.src = url;
     }
   }

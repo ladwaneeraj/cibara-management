@@ -511,6 +511,30 @@
       #doc-viewer-main-img.doc-lowres {
         filter: blur(7px);
       }
+      /* Browser-drawn watermark: the viewer's name + time over the document,
+         so viewing costs the server no image CPU (the old burned-in watermark
+         was the slowest thing in the app). pointer-events:none keeps click-to-
+         zoom working through it. */
+      #doc-viewer-watermark {
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+        background-repeat: repeat;
+        z-index: 5;
+      }
+      #doc-viewer-watermark .doc-viewer-wm-footer {
+        position: absolute;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        padding: 3px 10px;
+        font: 11px/1.4 Arial, sans-serif;
+        color: rgba(35, 35, 35, 0.92);
+        background: rgba(255, 255, 255, 0.82);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
       /* Thumbnail in viewer */
       .doc-thumb {
         width: 54px;

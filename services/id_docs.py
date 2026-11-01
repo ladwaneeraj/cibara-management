@@ -66,6 +66,7 @@ MAX_PIXELS = 40_000_000                  # decompression-bomb guard
 MAX_EDGE = 2400                          # stored long edge (readable at 100 %)
 JPEG_QUALITY = 90
 THUMB_EDGE = 360
+VIEW_EDGE = 1400                         # on-screen "view" copy (watermark target)
 MAX_ACTIVE_OTHER = 6                     # "other" pages kept active at once
 MAX_HISTORY = 60                         # history entries kept per document
 
@@ -195,6 +196,48 @@ def make_thumb(jpeg: bytes) -> bytes:
     out = io.BytesIO()
     img.save(out, format="JPEG", quality=78, optimize=True)
     return out.getvalue()
+
+
+def make_display(jpeg: bytes) -> bytes:
+    """A smaller on-screen copy. The watermark composites over THIS instead of
+    the 2400px original — same look, a fraction of the CPU and bytes."""
+    from PIL import Image
+    img = Image.open(io.BytesIO(jpeg))
+    img = img.convert("RGB")
+    if max(img.size) > VIEW_EDGE:
+        img.thumbnail((VIEW_EDGE, VIEW_EDGE), Image.LANCZOS)
+    out = io.BytesIO()
+    img.save(out, format="JPEG", quality=85, optimize=True, progressive=True)
+    return out.getvalue()
+
+
+def _derivative_path(path: str, kind: str) -> str:
+    """Storage path for a cached derivative (thumb/display) of `path`, in the
+    same private folder: customer_docs/<m>/<doc>.jpg -> <doc>__<kind>.jpg."""
+    base = path[:-4] if path.lower().endswith(".jpg") else path
+    return f"{base}__{kind}.jpg"
+
+
+def _cached_derivative(path: str, kind: str, make) -> bytes:
+    """Resize once, then serve the stored copy: return the `kind` derivative of
+    the object at `path`, generating it from the original and caching it on the
+    first request. Falls back to building it in-memory (no cache) if the write
+    fails, so a storage hiccup never blocks a view. May raise if the ORIGINAL
+    cannot be read — the caller maps that to a 404 exactly as before."""
+    bucket = _bucket()
+    dblob = bucket.blob(_derivative_path(path, kind))
+    try:
+        return dblob.download_as_bytes()
+    except Exception:
+        pass  # not generated yet (or unreadable) — build it from the original
+    out = make(bucket.blob(path).download_as_bytes())
+    try:
+        dblob.metadata = {"derived_from": path, "kind": kind}
+        dblob.cache_control = "private, no-store"
+        dblob.upload_from_string(out, content_type="image/jpeg")
+    except Exception as e:
+        logger.warning("id_docs: could not cache %s derivative for %s: %s", kind, path, e)
+    return out
 
 
 def _font(size: int):
@@ -497,18 +540,26 @@ def read_image(mobile: str, doc_id: str, *, variant: str, user: dict | None,
     ref, rec = get_record(mobile, doc_id)
     if rec.get("status") == "removed" and not include_removed:
         raise IdDocError("This document was removed.", 410)
+    path = rec["path"]
     try:
-        data = _bucket().blob(rec["path"]).download_as_bytes()
+        if variant == "thumb":
+            # cheap cached resize; thumbnails are never counted as a view
+            return _cached_derivative(path, "thumb", make_thumb), rec
+        if variant in ("display", "view"):
+            # "display" = the small on-screen copy, watermarked in the browser
+            # (no server image CPU). "view" = the same copy with the watermark
+            # burned in, for the new-tab/share path that can't carry an overlay.
+            data = _cached_derivative(path, "display", make_display)
+        else:  # original — the raw stored file, download-permission gated
+            data = _bucket().blob(path).download_as_bytes()
     except Exception as e:
-        logger.warning("id_docs: download %s failed: %s", rec.get("path"), e)
+        logger.warning("id_docs: download %s failed: %s", path, e)
         raise IdDocError("The image file could not be read from storage.", 404) from e
-    if variant == "thumb":
-        return make_thumb(data), rec
     if variant == "view":
         who = _who(user)
         stamp = datetime.now(IST).strftime("%d %b %Y %H:%M")
         out = watermark(data, f"Cibara · ID verification only · {who['name']} · {stamp}")
-    else:
+    else:  # display or original — bytes as-is
         out = data
     try:
         upd = {"views": _fs().Increment(1),

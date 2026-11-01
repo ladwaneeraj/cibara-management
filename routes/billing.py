@@ -22,6 +22,7 @@ from config import (
     get_all_rooms, invalidate_rooms_and_totals, submit_in_context,
     get_billing_config, invalidate_billing_config_cache,
     get_ui_config, invalidate_ui_config_cache,
+    get_web_config, invalidate_web_config_cache,
     validate_gstin, derive_state_from_gstin, classify_invoice_type,
     compute_gst_split, _STATE_CODE_TO_NAME, _slab_for_value,
     create_credit_note, compute_credit_components, CN_REASONS,
@@ -1264,6 +1265,45 @@ def update_ui_config_endpoint():
         return jsonify(success=True, config=cfg)
     except Exception as e:
         logger.error(f"update_ui_config_endpoint error: {e}")
+        return jsonify(success=False, message=str(e)), 500
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# WEB CONFIG (Settings → online booking)
+# ══════════════════════════════════════════════════════════════════════════════
+# Staff-side switches for the guest website. The public read-only subset is
+# served by GET /web/config (routes/web.py).
+
+@billing_bp.route("/settings/web_config", methods=["GET"])
+def get_web_config_endpoint():
+    try:
+        return jsonify(success=True, config=get_web_config())
+    except Exception as e:
+        logger.error(f"get_web_config_endpoint error: {e}")
+        return jsonify(success=False, message=str(e)), 500
+
+
+@billing_bp.route("/settings/web_config", methods=["POST"])
+@requires_permission("settings.update")
+def update_web_config_endpoint():
+    try:
+        data = request.get_json(silent=True) or {}
+
+        update = {}
+        if "online_bookings_enabled" in data:
+            update["online_bookings_enabled"] = bool(data["online_bookings_enabled"])
+
+        if not update:
+            return jsonify(success=False,
+                           message="No recognised settings keys in body"), 400
+
+        settings_ref.document('web_config').set(update, merge=True)
+        invalidate_web_config_cache()
+        cfg = get_web_config()
+        logger.info(f"web_config updated: {update}")
+        return jsonify(success=True, config=cfg)
+    except Exception as e:
+        logger.error(f"update_web_config_endpoint error: {e}")
         return jsonify(success=False, message=str(e)), 500
 
 

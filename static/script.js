@@ -31,6 +31,10 @@ let rooms = {};
 let dailyCounters = {}; // today's check-in serial counter, keyed by date string
 // Upcoming bookings map: roomNumber (string) → booking info object
 let upcomingBookings = {};
+// Blocks (see "Room blocks" section): {room: blockId} in force right now, and
+// the full list of current/upcoming blocks for the Blocks modal.
+let blockedNowMap = {};
+let blocksList = [];
 
 // Keep logs and totals variables as they're used throughout the app
 let logs = {
@@ -969,6 +973,12 @@ function renderRooms() {
 
     roomContent += `</div>`; // close room-content
 
+    // Blocks: a blocked room is visibly greyed with an "Unblock" chip; every
+    // other card gets a small "Block now" action (room.update only).
+    const _blockedBy = blockedNowMap[roomNumber];
+    if (_blockedBy) roomCard.classList.add("room-blocked");
+    roomContent += roomBlockMarkup(roomNumber, _blockedBy);
+
     // ── Upcoming booking indicator dot ──────────────────────────────────────
     // Shown on any room with a booking arriving within 24 hrs (not cancelled/checked_in)
     const upcoming = upcomingBookings[roomNumber];
@@ -1668,6 +1678,9 @@ async function fetchData() {
     } catch (error) {
       console.warn("Could not fetch upcoming bookings:", error);
     }
+
+    // Blocks load in the background; renderRooms() is re-run only if they changed.
+    if (typeof loadBlocks === "function") loadBlocks();
 
     // Process rooms to ensure they have renewal data
     Object.entries(rooms).forEach(([roomNumber, roomInfo]) => {
@@ -5777,6 +5790,7 @@ function openSettingsModal() {
       // where the flag was changed on another device.
       loadBillingConfig();
       loadUIConfig();
+      loadWebConfig();
     }
   );
 }
@@ -6114,6 +6128,67 @@ function toggleCleaningPhotos(inputEl) {
   return _savePhotoFlag("cleaning_photos", inputEl,
     "Cleaning photos ON for housekeeping (rooms 200-228).",
     "Cleaning photos OFF. Housekeeping uses the checklist.");
+}
+
+// ── Web config (online bookings switch) ───────────────────────────────────────
+// settings/web_config.online_bookings_enabled — CLOSED by default. Same
+// optimistic save / revert shape as the ui_config toggles above, but against
+// /settings/web_config (the website reads the public GET /web/config).
+function _setOnlineBookingsToggleUI(enabled) {
+  _setPhotoToggleUI("webbook", enabled,
+    "On · guests can book online on the website",
+    "Off · online booking is closed");
+}
+
+async function loadWebConfig() {
+  const sub = document.getElementById("settings-webbook-sub");
+  if (sub) sub.textContent = "Loading…";
+  try {
+    const res = await apiFetch("/settings/web_config");
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    if (!data.success) throw new Error(data.message || "Failed to load");
+    _setOnlineBookingsToggleUI(!!(data.config || {}).online_bookings_enabled);
+  } catch (err) {
+    console.warn("[web_config] load failed:", err);
+    if (sub) sub.textContent = "Could not load — reopen Settings to retry";
+    const toggle = document.getElementById("settings-webbook-toggle");
+    if (toggle) toggle.checked = false;
+  }
+}
+
+async function toggleOnlineBookings(inputEl) {
+  const desired = !!(inputEl && inputEl.checked);
+  _setOnlineBookingsToggleUI(desired);
+  if (inputEl) inputEl.disabled = true;
+  try {
+    const res = await apiFetch("/settings/web_config", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ online_bookings_enabled: desired }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    if (!data.success) throw new Error(data.message || "Save failed");
+    _setOnlineBookingsToggleUI(!!(data.config || {}).online_bookings_enabled);
+    if (typeof showNotification === "function") {
+      showNotification(
+        desired ? "Online bookings ON." : "Online bookings OFF.",
+        "success",
+      );
+    }
+  } catch (err) {
+    console.error("[web_config] save failed:", err);
+    _setOnlineBookingsToggleUI(!desired);
+    if (typeof showNotification === "function") {
+      showNotification(
+        "Could not save setting: " + (err.message || "network error"),
+        "error",
+      );
+    }
+  } finally {
+    if (inputEl) inputEl.disabled = false;
+  }
 }
 
 async function toggleIncognitoMode(inputEl) {
@@ -8002,3 +8077,193 @@ document.addEventListener("DOMContentLoaded", function () {
 // [perf] optimistic-write UI applied (add-service / add-payment / check-in).
 // Kill-switch: window.CIBARA_OPTIMISTIC=false or localStorage CIBARA_OPTIMISTIC=0
 
+// ══════════════════════════════════════════════════════════════════════════════
+// Room blocks — take a room (or a whole category) out of sale for a time range
+// ══════════════════════════════════════════════════════════════════════════════
+// Backend: POST/GET /blocks, DELETE /blocks/<id> (routes/rooms.py). The grid
+// shows blocked rooms greyed; "Block now" on a card blocks that room from this
+// moment, open-ended; the Blocks modal (quick-actions menu) takes a date range
+// for a room or a category and lists/removes active blocks.
+function _blkCanManage() {
+  const a = window.CibaraAuth;
+  return !!(a && a.userCan && a.userCan("room.update"));
+}
+
+function roomBlockMarkup(roomNumber, blockId) {
+  if (!_blkCanManage()) {
+    return blockId ? `<div class="room-blocked-chip" title="Blocked — not for sale">BLOCKED</div>` : "";
+  }
+  if (blockId) {
+    return `<button class="room-blocked-chip room-unblock-btn" data-perm="room.update"
+              onclick="handleUnblockClick(event, '${blockId}', '${roomNumber}')"
+              title="Blocked — tap to remove the block" aria-label="Unblock room ${roomNumber}">
+              <i class="fas fa-ban"></i> Blocked · Unblock</button>`;
+  }
+  return `<button class="room-block-btn" data-perm="room.update"
+            onclick="handleBlockNowClick(event, '${roomNumber}')"
+            title="Block this room from sale, starting now" aria-label="Block room ${roomNumber}">
+            <i class="fas fa-ban"></i></button>`;
+}
+
+async function loadBlocks() {
+  try {
+    const res = await apiFetch("/blocks");
+    if (!res.ok) return;
+    const data = await res.json();
+    if (!data.success) return;
+    const nextMap = data.blocked_now || {};
+    const changed = JSON.stringify(nextMap) !== JSON.stringify(blockedNowMap);
+    blockedNowMap = nextMap;
+    blocksList = data.blocks || [];
+    if (changed && typeof renderRooms === "function") renderRooms();
+    const modal = document.getElementById("blocks-modal");
+    if (modal && modal.classList.contains("show")) renderBlocksList();
+  } catch (err) {
+    console.warn("[blocks] load failed:", err);
+  }
+}
+
+async function _blkPost(body) {
+  const res = await apiFetch("/blocks", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data.success) throw new Error(data.message || `HTTP ${res.status}`);
+  return data;
+}
+
+async function _blkDelete(blockId) {
+  const res = await apiFetch(`/blocks/${encodeURIComponent(blockId)}`, { method: "DELETE" });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data.success) throw new Error(data.message || `HTTP ${res.status}`);
+}
+
+async function handleBlockNowClick(event, roomNumber) {
+  event.stopPropagation();
+  if (!confirm(`Block room ${roomNumber} from sale starting now? It stays blocked until you unblock it.`)) return;
+  try {
+    await _blkPost({ scope: "room", room: roomNumber, start: new Date().toISOString(), end: null, reason: "Blocked from room grid" });
+    showNotification(`Room ${roomNumber} blocked.`, "success");
+    await loadBlocks();
+  } catch (err) {
+    showNotification("Could not block room: " + err.message, "error");
+  }
+}
+
+async function handleUnblockClick(event, blockId, roomNumber) {
+  event.stopPropagation();
+  if (!confirm(`Remove the block affecting room ${roomNumber}? (If it is a category block, every room in it is released.)`)) return;
+  try {
+    await _blkDelete(blockId);
+    showNotification("Block removed.", "success");
+    await loadBlocks();
+  } catch (err) {
+    showNotification("Could not remove block: " + err.message, "error");
+  }
+}
+
+function _blkFmt(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  return isNaN(d.getTime()) ? String(iso) : d.toLocaleString("en-IN", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+}
+
+function renderBlocksList() {
+  const box = document.getElementById("blocks-list");
+  if (!box) return;
+  if (!blocksList.length) {
+    box.innerHTML = `<div style="color:var(--gray);font-size:0.85rem;">No active blocks.</div>`;
+    return;
+  }
+  box.innerHTML = blocksList.map((b) => {
+    const what = b.scope === "category" ? `All ${escHtml(b.category)} rooms` : `Room ${escHtml(b.room)}`;
+    const span = `${_blkFmt(b.start)} → ${b.end ? _blkFmt(b.end) : "until unblocked"}`;
+    return `<div class="blocks-row">
+      <div class="blocks-row-text"><strong>${what}</strong>
+        <div class="blocks-row-meta">${escHtml(span)}${b.reason ? " · " + escHtml(b.reason) : ""}</div></div>
+      <button type="button" class="btn btn-danger blocks-row-del" data-block-id="${escHtml(b.id)}">Unblock</button>
+    </div>`;
+  }).join("");
+}
+
+function openBlocksModal() {
+  const modal = document.getElementById("blocks-modal");
+  if (!modal) return;
+  const sel = document.getElementById("blocks-room");
+  if (sel) {
+    const nums = Object.keys(rooms).sort((a, b) => parseInt(a) - parseInt(b));
+    sel.innerHTML = nums.map((n) => `<option value="${escHtml(n)}">${escHtml(n)}</option>`).join("");
+  }
+  renderBlocksList();
+  modal.classList.add("show");
+  loadBlocks();
+}
+
+document.addEventListener("DOMContentLoaded", function () {
+  const modal = document.getElementById("blocks-modal");
+  const openBtn = document.getElementById("quick-blocks-btn");
+  if (!modal) return;
+  const close = () => modal.classList.remove("show");
+  if (openBtn) {
+    openBtn.addEventListener("click", function () {
+      const menu = document.querySelector(".quick-action-menu");
+      if (menu) menu.classList.remove("show");
+      openBlocksModal();
+    });
+  }
+  const closeBtn = modal.querySelector(".close-btn");
+  if (closeBtn) closeBtn.addEventListener("click", close);
+
+  const scopeSel = document.getElementById("blocks-scope");
+  const syncScope = () => {
+    const isRoom = !scopeSel || scopeSel.value === "room";
+    document.getElementById("blocks-room-group").style.display = isRoom ? "" : "none";
+    document.getElementById("blocks-category-group").style.display = isRoom ? "none" : "";
+  };
+  if (scopeSel) { scopeSel.addEventListener("change", syncScope); syncScope(); }
+
+  const form = document.getElementById("blocks-form");
+  if (form) {
+    form.addEventListener("submit", async function (e) {
+      e.preventDefault();
+      const scope = scopeSel.value;
+      const startVal = document.getElementById("blocks-start").value;
+      const endVal = document.getElementById("blocks-end").value;
+      if (!startVal) { showNotification("Choose a start date and time.", "error"); return; }
+      if (endVal && endVal <= startVal) { showNotification("End must be after start.", "error"); return; }
+      const body = {
+        scope,
+        start: startVal,                 // datetime-local, no offset -> server treats as IST
+        end: endVal || null,
+        reason: document.getElementById("blocks-reason").value.trim(),
+      };
+      if (scope === "room") body.room = document.getElementById("blocks-room").value;
+      else body.category = document.getElementById("blocks-category").value;
+      try {
+        await _blkPost(body);
+        showNotification("Block created.", "success");
+        form.reset(); syncScope();
+        await loadBlocks();
+      } catch (err) {
+        showNotification("Could not create block: " + err.message, "error");
+      }
+    });
+  }
+
+  const list = document.getElementById("blocks-list");
+  if (list) {
+    list.addEventListener("click", async function (e) {
+      const btn = e.target.closest(".blocks-row-del");
+      if (!btn) return;
+      try {
+        await _blkDelete(btn.getAttribute("data-block-id"));
+        showNotification("Block removed.", "success");
+        await loadBlocks();
+      } catch (err) {
+        showNotification("Could not remove block: " + err.message, "error");
+      }
+    });
+  }
+});

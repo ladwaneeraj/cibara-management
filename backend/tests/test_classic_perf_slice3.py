@@ -18,13 +18,27 @@ from __future__ import annotations
 import json
 import os
 import uuid
+from datetime import datetime, timedelta
 
 import pytest
 
+from config import IST
 from tests.demo_server import seed
 from tests.perf.harness import _bust_caches, _fake_store
 
-S, E = "2026-10-01", "2026-10-31"  # 31-day window covering the seeded "today"
+# A 31-day window centred on "today" (IST). The demo seed stamps every check-in,
+# bill and expense with the CURRENT date (tests/demo_server.py uses
+# time.strftime and live check-in calls), so a fixed calendar window silently
+# empties as real time moves past it — which is exactly what broke this file:
+# the old hardcoded "2026-10-01".."2026-10-31" stopped covering the seeded day
+# once the clock reached November, the register/insights calls then read an
+# empty range, and the read-count floors below failed with no real regression.
+# Deriving the window from now() keeps it over the seeded day for good. The
+# ±15-day margin means it never straddles the IST-midnight boundary between this
+# module's import and the request under test, so it needs no datetime freezing.
+_center = datetime.now(IST)
+S = (_center - timedelta(days=15)).strftime("%Y-%m-%d")
+E = (_center + timedelta(days=15)).strftime("%Y-%m-%d")
 
 
 @pytest.fixture

@@ -30,6 +30,16 @@
   align-items: center;
 }
 
+#bookings-react-root .bki-search {
+  width: 100%;
+  max-width: 420px;
+  padding: 8px 12px;
+  margin: 10px 0;
+  border: 1px solid var(--border, #e2e8f0);
+  border-radius: var(--border-radius, 8px);
+  font: inherit;
+}
+
 #bookings-react-root .bki-empty {
   text-align: center;
   padding: 40px 16px;

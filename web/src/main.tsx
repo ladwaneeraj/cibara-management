@@ -1,6 +1,7 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import './theme/island.css'
+import { BookingsApp } from './BookingsApp'
 
 // Mount the Bookings island into a host element. Exported so tests can mount
 // into an arbitrary root; in production it auto-mounts into the
@@ -8,7 +9,7 @@ import './theme/island.css'
 export function mount(root: HTMLElement): void {
   createRoot(root).render(
     <StrictMode>
-      <div data-testid="bookings-island">Bookings island</div>
+      <BookingsApp />
     </StrictMode>,
   )
 }

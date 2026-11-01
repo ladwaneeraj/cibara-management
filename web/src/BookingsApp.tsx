@@ -1,0 +1,139 @@
+// Bookings tab shell: toolbar, filter pills, search, view switch, and the
+// active view. Mounts once at page load (so the room-calendar bridge globals
+// are always available) and renders into #bookings-react-root. No top stat
+// cards (per the brief). Drawer + modals are wired in later tasks via the
+// selectedId / newBooking state already tracked here.
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { installBridge, uninstallBridge } from './bridge'
+import { useBookings } from './state/useBookings'
+import { ListView } from './views/ListView'
+import type { BookingFilter } from './lib/bookingFilters'
+
+type View = 'list' | 'calendar' | 'timeline'
+
+const FILTERS: { key: BookingFilter; label: string }[] = [
+  { key: 'upcoming', label: 'Upcoming' },
+  { key: 'today', label: 'Today' },
+  { key: 'all', label: 'All' },
+  { key: 'completed', label: 'Checked In' },
+  { key: 'cancelled', label: 'Cancelled' },
+]
+
+const VIEWS: { key: View; label: string; icon: string }[] = [
+  { key: 'list', label: 'List', icon: 'fa-list' },
+  { key: 'calendar', label: 'Calendar', icon: 'fa-calendar-alt' },
+  { key: 'timeline', label: 'Timeline', icon: 'fa-stream' },
+]
+
+function hasPerm(perm: string): boolean {
+  const a = window.CibaraAuth
+  if (a && typeof a.hasPermission === 'function') {
+    try {
+      return !!a.hasPermission(perm)
+    } catch {
+      return false
+    }
+  }
+  return true // no gate available (dev harness) → show
+}
+
+export function BookingsApp() {
+  const { bookings, loading, error, refresh } = useBookings()
+  const [filter, setFilter] = useState<BookingFilter>('upcoming')
+  const [view, setView] = useState<View>('list')
+  const [query, setQuery] = useState('')
+  const [selectedId, setSelectedId] = useState<string | null>(null) // drawer (Task 11)
+  const [newBooking, setNewBooking] = useState<{ date?: string } | null>(null) // Task 13
+  const canOta = useMemo(() => hasPerm('settlement.manage'), [])
+
+  const openDrawer = useCallback((id: string) => setSelectedId(id), [])
+  const openNewBooking = useCallback((opts?: { date?: string }) => setNewBooking(opts ?? {}), [])
+
+  useEffect(() => {
+    installBridge({ refresh, openDrawer, openNewBooking })
+    return () => uninstallBridge()
+  }, [refresh, openDrawer, openNewBooking])
+
+  return (
+    <div
+      className="bki-app"
+      data-selected={selectedId ?? ''}
+      data-newbooking={newBooking ? '1' : ''}
+    >
+      <div className="section-title bk-section-title">
+        <h2>Room Bookings</h2>
+        <div className="bk-toolbar bki-toolbar">
+          <button className="action-btn btn-sm bk-tool-btn bk-tool-slate" type="button">
+            <i className="fas fa-print" aria-hidden="true" /> <span>Arrivals Sheet</span>
+          </button>
+          <button className="action-btn btn-sm bk-tool-btn bk-tool-orange" type="button">
+            <i className="fas fa-sync-alt" aria-hidden="true" /> <span>Fetch Bookings</span>
+          </button>
+          {canOta ? (
+            <button className="action-btn btn-sm bk-tool-btn bk-tool-blue" type="button">
+              <i className="fas fa-university" aria-hidden="true" /> <span>OTA Settlements</span>
+            </button>
+          ) : null}
+          <button
+            className="action-btn btn-sm btn-primary bk-tool-btn bk-tool-primary"
+            type="button"
+            onClick={() => openNewBooking()}
+          >
+            <i className="fas fa-plus" aria-hidden="true" /> <span>New Booking</span>
+          </button>
+        </div>
+      </div>
+
+      <div className="filter-container bk-filter-row">
+        {FILTERS.map((f) => (
+          <button
+            key={f.key}
+            type="button"
+            className={`booking-filter-btn ${filter === f.key ? 'active' : ''}`}
+            onClick={() => setFilter(f.key)}
+          >
+            {f.label}
+          </button>
+        ))}
+      </div>
+
+      <input
+        className="bki-search"
+        type="search"
+        placeholder="Search guest, phone or room"
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        aria-label="Search bookings"
+      />
+
+      <div className="view-selector bk-view-selector">
+        {VIEWS.map((v) => (
+          <button
+            key={v.key}
+            type="button"
+            className={`view-btn ${view === v.key ? 'active' : ''}`}
+            onClick={() => setView(v.key)}
+          >
+            <i className={`fas ${v.icon}`} aria-hidden="true" /> <span>{v.label}</span>
+          </button>
+        ))}
+      </div>
+
+      {error ? (
+        <div className="bki-empty" role="alert">
+          {error}
+        </div>
+      ) : null}
+
+      {loading && bookings.length === 0 ? (
+        <div className="bki-empty">
+          <span className="bki-spinner" /> Loading bookings…
+        </div>
+      ) : view === 'list' ? (
+        <ListView bookings={bookings} filter={filter} query={query} onOpen={openDrawer} />
+      ) : (
+        <div className="bki-empty">{view === 'calendar' ? 'Calendar' : 'Timeline'} view coming up…</div>
+      )}
+    </div>
+  )
+}

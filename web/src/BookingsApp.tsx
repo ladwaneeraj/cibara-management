@@ -8,6 +8,10 @@ import { installBridge, uninstallBridge } from './bridge'
 import { useBookings } from './state/useBookings'
 import { ListView } from './views/ListView'
 import { CalendarView } from './views/CalendarView'
+import { BookingDrawer } from './components/BookingDrawer'
+import type { BookingAction } from './components/QuickActions'
+import { buildWhatsappUrl } from './lib/whatsapp'
+import type { Booking } from './types/booking'
 import type { BookingFilter, SortKey } from './lib/bookingFilters'
 
 type View = 'list' | 'calendar' | 'timeline'
@@ -45,12 +49,25 @@ export function BookingsApp() {
   const [query, setQuery] = useState('')
   const [sortBy, setSortBy] = useState<SortKey>('checkin')
   const [calMonth, setCalMonth] = useState<Date>(() => new Date())
-  const [selectedId, setSelectedId] = useState<string | null>(null) // drawer (Task 11)
+  const [selectedId, setSelectedId] = useState<string | null>(null) // drawer
   const [newBooking, setNewBooking] = useState<{ date?: string } | null>(null) // Task 13
+  const [modalAction, setModalAction] = useState<{ kind: BookingAction; booking: Booking } | null>(null) // Task 12
   const canOta = useMemo(() => hasPerm('settlement.manage'), [])
 
   const openDrawer = useCallback((id: string) => setSelectedId(id), [])
   const openNewBooking = useCallback((opts?: { date?: string }) => setNewBooking(opts ?? {}), [])
+
+  const selectedBooking = selectedId ? bookings.find((b) => b.booking_id === selectedId) ?? null : null
+
+  const handleAction = useCallback((action: BookingAction, booking: Booking) => {
+    if (action === 'whatsapp') {
+      const text = `Hello ${booking.guest_name}, regarding your booking (Room ${booking.room}).`
+      window.open(buildWhatsappUrl(booking.guest_mobile, text), '_blank', 'noopener')
+      return
+    }
+    // convert / cancel / collect / edit → open the matching action modal (Task 12)
+    setModalAction({ kind: action, booking })
+  }, [])
 
   useEffect(() => {
     installBridge({ refresh, openDrawer, openNewBooking })
@@ -60,8 +77,8 @@ export function BookingsApp() {
   return (
     <div
       className="bki-app"
-      data-selected={selectedId ?? ''}
       data-newbooking={newBooking ? '1' : ''}
+      data-modal={modalAction?.kind ?? ''}
     >
       <div className="section-title bk-section-title">
         <h2>Room Bookings</h2>
@@ -154,6 +171,8 @@ export function BookingsApp() {
       ) : (
         <div className="bki-empty">Timeline view coming up…</div>
       )}
+
+      <BookingDrawer booking={selectedBooking} onAction={handleAction} onClose={() => setSelectedId(null)} />
     </div>
   )
 }

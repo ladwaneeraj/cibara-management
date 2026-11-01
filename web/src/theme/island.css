@@ -130,4 +130,55 @@
   box-shadow: var(--shadow-lg, 0 5px 20px rgba(0, 0, 0, 0.2));
   overflow-y: auto;
   z-index: 1201;
+  font-family: var(--font-family, "Segoe UI", Tahoma, Geneva, Verdana, sans-serif);
+  color: var(--text-primary, #1f2937);
+}
+.bki-portal .bki-drawer-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 16px;
+  border-bottom: 1px solid var(--border, #e2e8f0);
+}
+.bki-portal .bki-drawer-head h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+.bki-portal .bki-drawer-close {
+  border: 0;
+  background: transparent;
+  font-size: 1.6rem;
+  line-height: 1;
+  cursor: pointer;
+  color: var(--text-secondary, #64748b);
+}
+.bki-portal .bki-drawer-body {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.bki-portal .bki-drawer-row {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.bki-portal .bki-drawer-dl {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 6px 12px;
+  margin: 0;
+}
+.bki-portal .bki-drawer-dl dt {
+  color: var(--text-secondary, #64748b);
+  font-size: 12px;
+  text-transform: uppercase;
+}
+.bki-portal .bki-drawer-dl dd {
+  margin: 0;
+}
+.bki-portal .bki-actions {
+  margin-top: 8px;
 }

@@ -7,6 +7,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { installBridge, uninstallBridge } from './bridge'
 import { useBookings } from './state/useBookings'
 import { ListView } from './views/ListView'
+import { CalendarView } from './views/CalendarView'
 import type { BookingFilter } from './lib/bookingFilters'
 
 type View = 'list' | 'calendar' | 'timeline'
@@ -42,6 +43,7 @@ export function BookingsApp() {
   const [filter, setFilter] = useState<BookingFilter>('upcoming')
   const [view, setView] = useState<View>('list')
   const [query, setQuery] = useState('')
+  const [calMonth, setCalMonth] = useState<Date>(() => new Date())
   const [selectedId, setSelectedId] = useState<string | null>(null) // drawer (Task 11)
   const [newBooking, setNewBooking] = useState<{ date?: string } | null>(null) // Task 13
   const canOta = useMemo(() => hasPerm('settlement.manage'), [])
@@ -131,8 +133,10 @@ export function BookingsApp() {
         </div>
       ) : view === 'list' ? (
         <ListView bookings={bookings} filter={filter} query={query} onOpen={openDrawer} />
+      ) : view === 'calendar' ? (
+        <CalendarView bookings={bookings} month={calMonth} onMonthChange={setCalMonth} onOpen={openDrawer} />
       ) : (
-        <div className="bki-empty">{view === 'calendar' ? 'Calendar' : 'Timeline'} view coming up…</div>
+        <div className="bki-empty">Timeline view coming up…</div>
       )}
     </div>
   )

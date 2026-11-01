@@ -62,6 +62,55 @@
   }
 }
 
+/* Calendar fallback layout (the classic booking.css styles these in the real
+   app; these rules make the grid usable standalone too). */
+#bookings-react-root .calendar-weekdays,
+#bookings-react-root .calendar-days-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 4px;
+}
+#bookings-react-root .calendar-weekday {
+  text-align: center;
+  font-size: 11px;
+  text-transform: uppercase;
+  color: var(--text-secondary, #64748b);
+  padding: 4px 0;
+}
+#bookings-react-root .calendar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+#bookings-react-root .calendar-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 8px 0;
+  flex-wrap: wrap;
+}
+#bookings-react-root .bki-day-details {
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid var(--border, #e2e8f0);
+  border-radius: var(--border-radius, 8px);
+  background: var(--surface, #fff);
+}
+#bookings-react-root .bki-day-booking {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 8px 10px;
+  margin: 4px 0;
+  border: 1px solid var(--border, #e2e8f0);
+  border-radius: var(--border-radius, 8px);
+  background: var(--light, #f8f9fa);
+  cursor: pointer;
+  font: inherit;
+}
+
 /* A right-side drawer anchored to the viewport (portaled to <body>). */
 #bookings-react-root .bki-drawer-backdrop,
 .bki-portal .bki-drawer-backdrop {

@@ -228,6 +228,68 @@
   font: inherit;
 }
 
+/* Timeline (rooms × dates). */
+#bookings-react-root .bki-timeline-scroll {
+  overflow-x: auto;
+}
+#bookings-react-root .bki-timeline-grid {
+  display: grid;
+  align-items: stretch;
+  min-width: 640px;
+  gap: 4px;
+}
+#bookings-react-root .bki-tl-corner {
+  grid-column: 1;
+}
+#bookings-react-root .bki-tl-date {
+  font-size: 11px;
+  text-align: center;
+  padding: 4px 0;
+  border: 0;
+  background: var(--light, #f8f9fa);
+  border-radius: 4px;
+  cursor: pointer;
+}
+#bookings-react-root .bki-tl-room {
+  grid-column: 1;
+  font-size: 13px;
+  padding: 6px 8px;
+  white-space: nowrap;
+}
+#bookings-react-root .bki-tl-lane {
+  display: grid;
+  gap: 2px;
+  align-items: center;
+  min-height: 32px;
+  background: repeating-linear-gradient(
+    90deg,
+    transparent,
+    transparent calc(100% / 14 - 1px),
+    var(--border, #e2e8f0) calc(100% / 14 - 1px),
+    var(--border, #e2e8f0) calc(100% / 14)
+  );
+}
+#bookings-react-root .bki-tl-bar {
+  border: 0;
+  border-radius: 6px;
+  background: var(--primary, #4361ee);
+  color: #fff;
+  font-size: 11px;
+  padding: 4px 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+#bookings-react-root .bki-tl-bar.conflict {
+  background: var(--danger, #e63946);
+  outline: 2px solid var(--warning, #ff9f1c);
+}
+#bookings-react-root .bki-timeline-range {
+  font-size: 13px;
+  color: var(--text-secondary, #64748b);
+}
+
 /* A right-side drawer anchored to the viewport (portaled to <body>). */
 #bookings-react-root .bki-drawer-backdrop,
 .bki-portal .bki-drawer-backdrop {

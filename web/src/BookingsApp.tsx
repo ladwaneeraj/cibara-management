@@ -8,6 +8,7 @@ import { installBridge, uninstallBridge } from './bridge'
 import { useBookings } from './state/useBookings'
 import { ListView } from './views/ListView'
 import { CalendarView } from './views/CalendarView'
+import { TimelineView } from './views/TimelineView'
 import { BookingDrawer } from './components/BookingDrawer'
 import type { BookingAction } from './components/QuickActions'
 import { PaymentModal } from './modals/PaymentModal'
@@ -217,7 +218,11 @@ export function BookingsApp() {
       ) : view === 'calendar' ? (
         <CalendarView bookings={bookings} month={calMonth} onMonthChange={setCalMonth} onOpen={openDrawer} />
       ) : (
-        <div className="bki-empty">Timeline view coming up…</div>
+        <TimelineView
+          bookings={bookings}
+          onOpen={openDrawer}
+          onNewForDate={(d) => setNewBooking({ date: d })}
+        />
       )}
 
       <BookingDrawer booking={selectedBooking} onAction={handleAction} onClose={() => setSelectedId(null)} />

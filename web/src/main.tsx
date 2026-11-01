@@ -1,5 +1,6 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
+import './theme/island.css'
 
 // Mount the Bookings island into a host element. Exported so tests can mount
 // into an arbitrary root; in production it auto-mounts into the

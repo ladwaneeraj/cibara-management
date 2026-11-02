@@ -13,6 +13,8 @@ declare global {
       hasPermission?: (perm: string) => boolean
       ready?: () => Promise<unknown>
     }
+    /** Legacy Room-blocks modal opener (static/script.js). */
+    openBlocksModal?: () => void
     /** Compat globals the island installs for room-calendar.js. */
     fetchBookings?: () => Promise<void>
     showBookingDetails?: (bookingId: string) => void

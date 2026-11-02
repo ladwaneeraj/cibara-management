@@ -32,6 +32,7 @@ const future = () => {
 afterEach(() => {
   vi.resetAllMocks()
   delete (window as unknown as { CibaraAuth?: unknown }).CibaraAuth
+  delete (window as unknown as { openBlocksModal?: unknown }).openBlocksModal
 })
 
 it('renders 5 filter pills, 3 view buttons and the toolbar', async () => {
@@ -70,6 +71,34 @@ it('shows OTA Settlements when permitted', async () => {
   render(<BookingsApp />)
   await waitFor(() => expect(screen.getByText('Room Bookings')).toBeInTheDocument())
   expect(screen.getByRole('button', { name: /OTA Settlements/ })).toBeInTheDocument()
+})
+
+it('shows Block Rooms with room.update and opens the legacy modal', async () => {
+  mockGet.mockResolvedValue([])
+  window.CibaraAuth = { hasPermission: (p: string) => p === 'room.update' }
+  const openBlocks = vi.fn()
+  ;(window as unknown as { openBlocksModal?: () => void }).openBlocksModal = openBlocks
+  render(<BookingsApp />)
+  const btn = await screen.findByRole('button', { name: /Block Rooms/ })
+  await userEvent.click(btn)
+  expect(openBlocks).toHaveBeenCalledTimes(1)
+})
+
+it('hides Block Rooms without room.update permission', async () => {
+  mockGet.mockResolvedValue([])
+  window.CibaraAuth = { hasPermission: () => false }
+  render(<BookingsApp />)
+  await waitFor(() => expect(screen.getByText('Room Bookings')).toBeInTheDocument())
+  expect(screen.queryByRole('button', { name: /Block Rooms/ })).not.toBeInTheDocument()
+})
+
+it('does not throw when Block Rooms is clicked and the legacy global is absent', async () => {
+  mockGet.mockResolvedValue([])
+  window.CibaraAuth = { hasPermission: (p: string) => p === 'room.update' }
+  render(<BookingsApp />)
+  const btn = await screen.findByRole('button', { name: /Block Rooms/ })
+  await userEvent.click(btn) // window.openBlocksModal is undefined → no-op, no throw
+  expect(btn).toBeInTheDocument()
 })
 
 it('installs the room-calendar bridge globals while mounted', async () => {

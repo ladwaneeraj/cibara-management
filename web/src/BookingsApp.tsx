@@ -60,6 +60,7 @@ export function BookingsApp() {
   const [otaOpen, setOtaOpen] = useState(false)
   const [fetching, setFetching] = useState(false)
   const canOta = useMemo(() => hasPerm('settlement.manage'), [])
+  const canBlock = useMemo(() => hasPerm('room.update'), [])
 
   const doFetchFromMmt = useCallback(async () => {
     setFetching(true)
@@ -169,6 +170,16 @@ export function BookingsApp() {
               onClick={() => setOtaOpen(true)}
             >
               <i className="fas fa-university" aria-hidden="true" /> <span>OTA Settlements</span>
+            </button>
+          ) : null}
+          {canBlock ? (
+            <button
+              className="action-btn btn-sm bk-tool-btn bk-tool-slate"
+              type="button"
+              onClick={() => window.openBlocksModal?.()}
+              title="Take a room or category out of sale for a date range"
+            >
+              <i className="fas fa-ban" aria-hidden="true" /> <span>Block Rooms</span>
             </button>
           ) : null}
           <button

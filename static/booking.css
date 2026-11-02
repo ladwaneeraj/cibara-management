@@ -761,6 +761,32 @@
   border: 1px solid rgba(12, 111, 205, 0.3);
 }
 
+/* Online-bookings on/off toggle in the toolbar (web_config). Pill matching
+   the tool buttons, with the shared .set-switch inside. */
+#bookings-tab .bk-webbook {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 36px;
+  padding: 0.3rem 0.7rem;
+  border-radius: 9px;
+  background: #eef1f6;
+  border: 1px solid #dde3ec;
+  color: #475569;
+  font-size: 0.8rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+#bookings-tab .bk-webbook-txt {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+#bookings-tab .bk-webbook-txt small {
+  color: #0c6fcd;
+  font-weight: 700;
+}
+
 /* ── Filter pills: one scrollable row instead of a wrapping block ─────── */
 #bookings-tab .bk-filter-row {
   display: flex;

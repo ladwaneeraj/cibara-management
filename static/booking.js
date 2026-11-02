@@ -40,6 +40,10 @@ document.addEventListener("DOMContentLoaded", function () {
       if (bookingsTab) {
         bookingsTab.classList.remove("hidden");
         fetchBookings(); // Refresh bookings when tab is opened
+        // Reflect the current online-bookings setting on the toolbar toggle.
+        // (loadWebConfig lives in script.js; reach it via window to satisfy
+        // the per-file no-undef lint.)
+        if (typeof window.loadWebConfig === "function") window.loadWebConfig();
       }
     });
   }

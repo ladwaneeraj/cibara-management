@@ -86,7 +86,7 @@ def notify_owner(message: str, title: str | None = None) -> None:
         headers = {"Title": title.encode("ascii", "ignore").decode()} if title else {}
         requests.post(f"https://ntfy.sh/{topic}", data=str(message).encode("utf-8"),
                       headers=headers, timeout=5)
-    except Exception as e:  # noqa: BLE001 — a push failure must never break the caller
+    except Exception as e:  # noqa: BLE001 â€” a push failure must never break the caller
         logger.warning(f"system_alerts.notify_owner failed: {type(e).__name__}")
 
 

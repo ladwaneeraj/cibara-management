@@ -25,6 +25,8 @@ import { getGroupMembers } from './lib/booking'
 import { groupCheckin } from './lib/groupCheckin'
 import { downloadCsv } from './lib/exportCsv'
 import { getDeepLinkBookingId } from './lib/deepLink'
+import { hasPerm } from './lib/perm'
+import { OnlineBookingsToggle } from './components/OnlineBookingsToggle'
 import type { Booking } from './types/booking'
 import { applyFilter, searchBookings, sortBookings, type BookingFilter, type SortKey } from './lib/bookingFilters'
 
@@ -43,18 +45,6 @@ const VIEWS: { key: View; label: string; icon: string }[] = [
   { key: 'calendar', label: 'Calendar', icon: 'fa-calendar-alt' },
   { key: 'timeline', label: 'Timeline', icon: 'fa-stream' },
 ]
-
-function hasPerm(perm: string): boolean {
-  const a = window.CibaraAuth
-  if (a && typeof a.hasPermission === 'function') {
-    try {
-      return !!a.hasPermission(perm)
-    } catch {
-      return false
-    }
-  }
-  return true // no gate available (dev harness) → show
-}
 
 export function BookingsApp() {
   const { bookings, loading, error, refresh } = useBookings()
@@ -188,6 +178,7 @@ export function BookingsApp() {
           >
             <i className="fas fa-plus" aria-hidden="true" /> <span>New Booking</span>
           </button>
+          <OnlineBookingsToggle />
         </div>
       </div>
 

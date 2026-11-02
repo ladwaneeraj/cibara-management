@@ -6,12 +6,16 @@
 // #bookings-tab. The carve-out must hide ONLY the legacy direct children and
 // must NOT use the blunt `:not(#bookings-react-root)` catch-all (which also
 // hid #day-details-modal and would hide any future direct child).
+// Read the stylesheet from disk: vitest's `css: false` makes a `?raw` import
+// return empty, so we go through node's fs. The island tsconfig is browser-only
+// (no @types/node), so the builtin import is type-suppressed on this one line;
+// it resolves fine at runtime under vitest/node.
+// @ts-expect-error node builtin, available at runtime under vitest
 import { readFileSync } from 'node:fs'
-import { resolve } from 'node:path'
 import { describe, it, expect } from 'vitest'
 
-// vitest runs with cwd = web/; read the stylesheet text straight from disk.
-const css = readFileSync(resolve(process.cwd(), 'src/theme/island.css'), 'utf8')
+// vitest runs with cwd = web/; a relative path resolves against it.
+const css: string = readFileSync('src/theme/island.css', 'utf8')
 
 // Collapse whitespace so assertions don't depend on formatting.
 const flat = css.replace(/\s+/g, ' ')

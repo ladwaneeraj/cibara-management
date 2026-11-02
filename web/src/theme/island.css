@@ -48,6 +48,87 @@
   align-items: center;
 }
 
+/* Online-bookings switch (toolbar). Pill with an accessible native checkbox
+   (visually hidden) driving a track/knob. Tokens only. */
+#bookings-react-root .bki-webtoggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 12px;
+  border: 1px solid var(--border, #e2e8f0);
+  border-radius: 999px;
+  background: var(--light, #f8f9fa);
+  cursor: pointer;
+  user-select: none;
+  min-height: 34px;
+  color: var(--text-secondary, #64748b);
+}
+#bookings-react-root .bki-webtoggle.is-on {
+  border-color: var(--success, #2ec4b6);
+  background: color-mix(in srgb, var(--success, #2ec4b6) 10%, #fff);
+  color: var(--text-primary, #1f2937);
+}
+#bookings-react-root .bki-webtoggle.is-busy {
+  opacity: 0.6;
+  cursor: progress;
+}
+#bookings-react-root .bki-webtoggle > i {
+  font-size: 13px;
+}
+#bookings-react-root .bki-webtoggle-text {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.15;
+  font-size: 12px;
+  font-weight: 600;
+}
+#bookings-react-root .bki-webtoggle-text small {
+  font-weight: 400;
+  font-size: 10px;
+  color: var(--text-secondary, #64748b);
+}
+/* Visually hidden but focusable/queryable checkbox. */
+#bookings-react-root .bki-webtoggle-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+#bookings-react-root .bki-webtoggle-track {
+  position: relative;
+  flex: 0 0 auto;
+  width: 34px;
+  height: 18px;
+  border-radius: 999px;
+  background: var(--gray, #6c757d);
+  transition: background 0.15s ease;
+}
+#bookings-react-root .bki-webtoggle.is-on .bki-webtoggle-track {
+  background: var(--success, #2ec4b6);
+}
+#bookings-react-root .bki-webtoggle-knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform 0.15s ease;
+}
+#bookings-react-root .bki-webtoggle.is-on .bki-webtoggle-knob {
+  transform: translateX(16px);
+}
+#bookings-react-root .bki-webtoggle-input:focus-visible + .bki-webtoggle-track {
+  outline: 2px solid var(--primary, #4361ee);
+  outline-offset: 2px;
+}
+
 /* Status badge fallbacks for statuses booking.css doesn't define. */
 #bookings-react-root .status-badge.checked-out,
 .bki-portal .status-badge.checked_out {

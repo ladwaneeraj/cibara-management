@@ -6138,6 +6138,15 @@ function _setOnlineBookingsToggleUI(enabled) {
   _setPhotoToggleUI("webbook", enabled,
     "On · guests can book online on the website",
     "Off · online booking is closed");
+  // Mirror onto the Bookings-tab toolbar toggle (same setting, second entry point).
+  const t = document.getElementById("bk-webbook-toggle");
+  const sl = document.getElementById("bk-webbook-slider");
+  const kn = document.getElementById("bk-webbook-knob");
+  const sub = document.getElementById("bk-webbook-sub");
+  if (t) t.checked = !!enabled;
+  if (sl) sl.style.background = enabled ? "var(--primary)" : "#cbd5e1";
+  if (kn) kn.style.transform = enabled ? "translateX(20px)" : "translateX(0)";
+  if (sub) sub.textContent = enabled ? "On" : "Off";
 }
 
 async function loadWebConfig() {
@@ -6154,6 +6163,10 @@ async function loadWebConfig() {
     if (sub) sub.textContent = "Could not load — reopen Settings to retry";
     const toggle = document.getElementById("settings-webbook-toggle");
     if (toggle) toggle.checked = false;
+    const bkToggle = document.getElementById("bk-webbook-toggle");
+    if (bkToggle) bkToggle.checked = false;
+    const bkSub = document.getElementById("bk-webbook-sub");
+    if (bkSub) bkSub.textContent = "—";
   }
 }
 
@@ -8212,6 +8225,11 @@ document.addEventListener("DOMContentLoaded", function () {
       if (menu) menu.classList.remove("show");
       openBlocksModal();
     });
+  }
+  // Second entry point: the Bookings-tab toolbar "Block Rooms" button.
+  const bkBlocksBtn = document.getElementById("bk-blocks-btn");
+  if (bkBlocksBtn) {
+    bkBlocksBtn.addEventListener("click", openBlocksModal);
   }
   const closeBtn = modal.querySelector(".close-btn");
   if (closeBtn) closeBtn.addEventListener("click", close);

@@ -1767,11 +1767,43 @@
                 <i class="fas fa-university"></i> <span>OTA Settlements</span>
               </button>
               <button
+                id="bk-blocks-btn"
+                class="action-btn btn-sm bk-tool-btn bk-tool-slate"
+                data-perm="room.update"
+                title="Block a room or category out of sale for a date range"
+              >
+                <i class="fas fa-ban"></i> <span>Block Rooms</span>
+              </button>
+              <button
                 id="new-booking-btn"
                 class="action-btn btn-sm btn-primary bk-tool-btn bk-tool-primary"
               >
                 <i class="fas fa-plus"></i> <span>New Booking</span>
               </button>
+              <!-- Accept/stop guest-website bookings (web_config.online_bookings_enabled).
+                   Same handler as Settings → Website; mirrored by _setOnlineBookingsToggleUI.
+                   Loaded on tab open via loadWebConfig(). -->
+              <span
+                class="bk-webbook"
+                data-perm="settings.update"
+                title="Accept bookings from the guest website"
+              >
+                <span class="bk-webbook-txt">
+                  <i class="fas fa-globe"></i>
+                  <span class="bk-webbook-label">Online bookings</span>
+                  <small id="bk-webbook-sub">…</small>
+                </span>
+                <label class="set-switch">
+                  <input
+                    type="checkbox"
+                    id="bk-webbook-toggle"
+                    onchange="toggleOnlineBookings(this)"
+                    aria-label="Accept online bookings"
+                  />
+                  <span class="set-switch-track" id="bk-webbook-slider"></span>
+                  <span class="set-switch-knob" id="bk-webbook-knob"></span>
+                </label>
+              </span>
             </div>
           </div>
 

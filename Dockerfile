@@ -15,15 +15,6 @@ RUN npm ci --no-audit --no-fund
 COPY frontend/ ./
 RUN npm run build
 
-# Bookings React island (web/) → a single external bundle served at
-# /static/react. Independent of the SPA/analytics `web` stage above.
-FROM node:22-slim AS islands
-WORKDIR /islands
-COPY web/package.json web/package-lock.json ./
-RUN npm ci --no-audit --no-fund
-COPY web/ ./
-RUN npm run build
-
 FROM python:3.11-slim
 
 # Same system packages as before: xhtml2pdf / pycairo (bill PDFs).
@@ -45,7 +36,6 @@ RUN pip install --upgrade pip && pip install -r backend/requirements.txt
 
 COPY . .
 COPY --from=web /web/dist ./frontend/dist
-COPY --from=islands /islands/dist ./static/react
 
 # Run unprivileged. The legacy code writes lodge.log and uploads/ relative to
 # the working directory, so /app stays writable for this user.

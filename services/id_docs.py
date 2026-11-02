@@ -270,25 +270,45 @@ def ensure_derivative_blob(path: str, kind: str, make, *, cache_control: str):
     return dblob
 
 
-def signed_thumb_url(mobile: str, doc_id: str, *, ttl: int,
-                     include_removed: bool = False) -> tuple[str, dict]:
-    """A short-lived V4 signed Storage URL for the THUMBNAIL derivative, so the
-    browser loads it straight from storage instead of streaming it through the
-    app. Only the cheap, un-watermarked, un-audited `thumb` is eligible.
+def signed_image_url(mobile: str, doc_id: str, *, kind: str, ttl: int,
+                     include_removed: bool = False,
+                     user: dict | None = None) -> tuple[str, dict]:
+    """A short-lived V4 signed Storage URL for the `thumb` or `display` derivative,
+    so the browser loads it straight from storage instead of streaming it through
+    the single app worker. Both are un-watermarked — the lightbox draws the
+    watermark as a DOM overlay — so neither re-encodes on the server. The full
+    `display` copy is the one the desk actually opens; serving it as a link (not
+    proxied bytes) is the real fix for "images are slow". Because those bytes no
+    longer pass through read_image, `display` records the view (count +
+    last_viewed_by) here so the audit trail is unchanged.
 
     Raises `IdDocError` for a removed/unknown document (a real HTTP error). Any
     storage- or signing-level failure propagates as a plain exception so the
     caller can fall back to proxying the bytes — images must never break."""
     from datetime import timedelta
-    _ref, rec = get_record(mobile, doc_id)
+    ref, rec = get_record(mobile, doc_id)
     if rec.get("status") == "removed" and not include_removed:
         raise IdDocError("This document was removed.", 410)
-    dblob = ensure_derivative_blob(rec["path"], "thumb", make_thumb,
+    make = make_thumb if kind == "thumb" else make_display
+    dblob = ensure_derivative_blob(rec["path"], kind, make,
                                    cache_control=f"private, max-age={int(ttl)}")
     url = dblob.generate_signed_url(version="v4",
                                     expiration=timedelta(seconds=int(ttl)),
                                     method="GET")
+    if kind == "display":
+        try:
+            ref.update({"views": _fs().Increment(1),
+                        "last_viewed_by": _who(user), "last_viewed_at": now_iso()})
+        except Exception as e:
+            logger.warning("id_docs: view stamp failed for %s: %s", doc_id, e)
     return url, rec
+
+
+def signed_thumb_url(mobile: str, doc_id: str, *, ttl: int,
+                     include_removed: bool = False) -> tuple[str, dict]:
+    """Back-compat wrapper: signed URL for the un-watermarked, un-audited thumb."""
+    return signed_image_url(mobile, doc_id, kind="thumb", ttl=ttl,
+                            include_removed=include_removed)
 
 
 def _font(size: int):

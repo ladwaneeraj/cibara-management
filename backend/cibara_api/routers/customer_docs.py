@@ -130,21 +130,25 @@ async def id_doc_image(mobile: str = Mobile, doc_id: str = DocId,
         raise HTTPException(403, "Forbidden: missing permission 'customer_doc.download'")
     admin_view = p.can("customer_doc.remove")
 
-    # Fast lane for grids: hand back a short-lived signed URL to the thumbnail so
-    # the browser loads it straight from storage (off the single worker) and
-    # caches it. Opt-in via &link=1 so older clients / the SPA still get bytes.
-    # Any signing or storage failure falls through to the proxy path below.
+    # Fast lane: hand back a short-lived signed URL to the thumb or the full
+    # on-screen "display" copy so the browser loads it straight from storage (off
+    # the single worker) and caches it — the display link is what unblocks the
+    # slow full-image view. Opt-in via &link=1 so older clients / the SPA still
+    # get bytes. Any signing or storage failure falls through to the proxy path.
     s = get_settings()
-    if variant == "thumb" and link and s.PERF_SIGNED_IMAGE_URLS:
+    if variant in ("thumb", "display") and link and s.PERF_SIGNED_IMAGE_URLS:
         try:
-            url, _rec = await run_in_threadpool(
-                svc.signed_thumb_url, mobile, doc_id,
-                ttl=s.PERF_SIGNED_IMAGE_TTL, include_removed=admin_view)
+            url, rec = await run_in_threadpool(
+                svc.signed_image_url, mobile, doc_id, kind=variant,
+                ttl=s.PERF_SIGNED_IMAGE_TTL, include_removed=admin_view,
+                user=p.user.as_legacy_user())
         except svc.IdDocError as e:
             raise _fail(e) from e
         except Exception as e:  # signing/storage hiccup → proxy the bytes instead
-            log.warning("id_docs: signed thumb url failed for %s, proxying: %s", doc_id, e)
+            log.warning("id_docs: signed %s url failed for %s, proxying: %s", variant, doc_id, e)
         else:
+            if variant == "display":  # viewing a document is audited, link or not
+                _audit(p, "customer_doc.view", mobile, doc_id=doc_id, side=rec.get("side"))
             return JSONResponse(
                 {"success": True, "url": url, "expires_in": s.PERF_SIGNED_IMAGE_TTL},
                 headers={"Cache-Control": "private, no-store, max-age=0",

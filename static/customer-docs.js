@@ -76,13 +76,14 @@ window.CibaraSecureImg = (function () {
     const now = Date.now();
     const hit = cache.get(key);
     if (hit && (!hit.exp || hit.exp > now)) return hit.p;
-    // The thumbnail can come back as a short-lived signed storage link
-    // (&link=1): a tiny authed JSON call, then the browser loads and caches the
-    // image itself straight from storage — no bytes through the app. The
-    // watermarked "view" and the "original" stay authed blob fetches. If the
-    // server isn't serving links (flag off / old build / signing hiccup) it
-    // returns the image bytes as before and we fall back to a blob URL.
-    const wantLink = (v === 'thumb');
+    // The thumbnail AND the full on-screen "display" copy can come back as a
+    // short-lived signed storage link (&link=1): a tiny authed JSON call, then
+    // the browser loads and caches the image itself straight from storage — no
+    // bytes through the app. Both are un-watermarked (the lightbox draws the
+    // watermark as a DOM overlay); the burned-in "view" and the "original" stay
+    // authed blob fetches. If the server isn't serving links (flag off / old
+    // build / signing hiccup) it returns the bytes as before → blob-URL fallback.
+    const wantLink = (v === 'thumb' || v === 'display');
     const p = apiFetch(url + '?variant=' + v + (wantLink ? '&link=1' : '')).then(async (r) => {
       if (!r.ok) throw new Error('HTTP ' + r.status);
       const ct = r.headers.get('content-type') || '';
@@ -614,6 +615,10 @@ function renderMobileSuggestions(customers) {
     item.addEventListener('click', () => {
       const mi = document.getElementById('guest-mobile');
       if (mi) mi.value = c.mobile;
+      // Show the name the search row already has right away — don't make the
+      // desk wait on the /get_customer round-trip just to see who they picked.
+      const ni = document.getElementById('guest-name');
+      if (ni) ni.value = _fmtName(c.name) || '';
       hideMobileSuggestions();
       lookupAndFillCustomer(c.mobile);
     });

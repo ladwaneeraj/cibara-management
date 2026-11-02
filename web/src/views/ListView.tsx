@@ -44,7 +44,7 @@ export function ListView({ bookings, filter, query, sortBy = 'checkin', onOpen }
   }
 
   return (
-    <div className="bookings-container" id="bookings-list">
+    <div className="bookings-container bki-list" id="bookings-list">
       {rows.map((b) => (
         <BookingCard
           key={b.booking_id}

@@ -471,3 +471,339 @@
   padding-left: 18px;
   font-size: 13px;
 }
+
+/* ════════════════════════════════════════════════════════════════════════
+   REDESIGN (Task 4): list card, toolbar, controls row, states, responsive.
+   All scoped under #bookings-react-root; colours are ERP tokens only.
+   ════════════════════════════════════════════════════════════════════════ */
+
+#bookings-react-root .bki-app {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* Header: title + action toolbar */
+#bookings-react-root .bk-section-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 0;
+}
+#bookings-react-root .bk-section-title h2 {
+  margin: 0;
+  font-size: 1.15rem;
+  font-weight: 700;
+  color: var(--text-primary, #1f2937);
+}
+#bookings-react-root .bki-toolbar {
+  gap: 6px;
+}
+#bookings-react-root .bki-toolbar .bk-tool-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 6px 12px;
+  border-radius: 8px;
+  font-size: 0.82rem;
+  white-space: nowrap;
+}
+
+/* Filter pills: one line, scrollable on narrow screens */
+#bookings-react-root .bk-filter-row {
+  display: flex;
+  gap: 6px;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+  padding-bottom: 2px;
+}
+#bookings-react-root .bk-filter-row::-webkit-scrollbar {
+  display: none;
+}
+#bookings-react-root .bk-filter-row .booking-filter-btn {
+  flex: 0 0 auto;
+  min-height: 34px;
+  padding: 6px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--border, #e2e8f0);
+  background: var(--surface, #fff);
+  color: var(--text-secondary, #64748b);
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+#bookings-react-root .bk-filter-row .booking-filter-btn.active {
+  background: var(--primary, #4361ee);
+  border-color: var(--primary, #4361ee);
+  color: #fff;
+}
+
+/* Controls row: search grows, sort + export sit tight */
+#bookings-react-root .bki-controls {
+  gap: 8px;
+  align-items: stretch;
+}
+#bookings-react-root .bki-controls .bki-search {
+  flex: 1 1 220px;
+  width: auto;
+  max-width: none;
+  margin: 0;
+  min-height: 38px;
+}
+#bookings-react-root .bki-sort {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.78rem;
+  color: var(--text-secondary, #64748b);
+  white-space: nowrap;
+}
+#bookings-react-root .bki-sort select {
+  min-height: 38px;
+  padding: 6px 10px;
+  border: 1px solid var(--border, #e2e8f0);
+  border-radius: 8px;
+  background: var(--surface, #fff);
+  color: var(--text-primary, #1f2937);
+  font: inherit;
+}
+#bookings-react-root .bki-controls .action-btn {
+  flex: 0 0 auto;
+  min-height: 38px;
+  white-space: nowrap;
+}
+
+/* View selector (segmented) */
+#bookings-react-root .bk-view-selector {
+  display: flex;
+  gap: 4px;
+  padding: 3px;
+  background: var(--light, #f8f9fa);
+  border: 1px solid var(--border, #e2e8f0);
+  border-radius: 10px;
+  width: fit-content;
+}
+#bookings-react-root .bk-view-selector .view-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  padding: 5px 14px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-secondary, #64748b);
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+#bookings-react-root .bk-view-selector .view-btn.active {
+  background: var(--surface, #fff);
+  color: var(--primary, #4361ee);
+  box-shadow: var(--shadow-sm, 0 2px 4px rgba(0, 0, 0, 0.05));
+}
+
+/* List + card */
+#bookings-react-root .bki-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 10px;
+  align-items: start;
+}
+#bookings-react-root .bki-card {
+  display: flex;
+  background: var(--surface, #fff);
+  border: 1px solid var(--border, #e2e8f0);
+  border-radius: 10px;
+  overflow: hidden;
+  cursor: pointer;
+  transition: box-shadow 0.15s ease, border-color 0.15s ease, transform 0.05s ease;
+}
+#bookings-react-root .bki-card:hover {
+  box-shadow: var(--shadow-md, 0 5px 15px rgba(0, 0, 0, 0.1));
+  border-color: color-mix(in srgb, var(--primary, #4361ee) 35%, var(--border, #e2e8f0));
+}
+#bookings-react-root .bki-card:focus-visible {
+  outline: 2px solid var(--primary, #4361ee);
+  outline-offset: 2px;
+}
+#bookings-react-root .bki-card:active {
+  transform: scale(0.997);
+}
+#bookings-react-root .bki-card-rail {
+  flex: 0 0 4px;
+  background: var(--gray, #6c757d);
+}
+#bookings-react-root .bki-card[data-status="confirmed"] .bki-card-rail {
+  background: var(--primary, #4361ee);
+}
+#bookings-react-root .bki-card[data-status="checked_in"] .bki-card-rail {
+  background: var(--success, #2ec4b6);
+}
+#bookings-react-root .bki-card[data-status="checked_out"] .bki-card-rail {
+  background: var(--gray, #6c757d);
+}
+#bookings-react-root .bki-card[data-status="cancelled"] .bki-card-rail {
+  background: var(--danger, #e63946);
+}
+#bookings-react-root .bki-card[data-status="no_show"] .bki-card-rail {
+  background: var(--warning, #ff9f1c);
+}
+#bookings-react-root .bki-card[data-status="cancelled"] .bki-card-guest {
+  text-decoration: line-through;
+  color: var(--text-secondary, #64748b);
+}
+#bookings-react-root .bki-card-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 11px 13px;
+}
+#bookings-react-root .bki-card-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+#bookings-react-root .bki-card-room {
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--text-primary, #1f2937);
+  white-space: nowrap;
+}
+#bookings-react-root .bki-card-ac {
+  font-size: 0.72rem;
+  margin-left: 3px;
+}
+#bookings-react-root .bki-card-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  justify-content: flex-end;
+}
+#bookings-react-root .bki-card-guest {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--text-primary, #1f2937);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#bookings-react-root .bki-card-stay {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.78rem;
+  color: var(--text-secondary, #64748b);
+}
+#bookings-react-root .bki-card-stay i {
+  opacity: 0.7;
+  margin-right: 2px;
+}
+#bookings-react-root .bki-card-arrow {
+  margin: 0 3px;
+  opacity: 0.7;
+}
+#bookings-react-root .bki-card-dot {
+  opacity: 0.5;
+}
+#bookings-react-root .bki-card-time {
+  margin-left: auto;
+  white-space: nowrap;
+}
+#bookings-react-root .bki-card-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 3px;
+  padding-top: 7px;
+  border-top: 1px dashed var(--border, #e2e8f0);
+}
+#bookings-react-root .bki-card-pay {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+#bookings-react-root .bki-card-due {
+  font-size: 0.74rem;
+  font-weight: 600;
+  color: var(--danger, #e63946);
+  white-space: nowrap;
+}
+#bookings-react-root .bki-card-amount {
+  font-size: 0.98rem;
+  font-weight: 700;
+  color: var(--text-primary, #1f2937);
+  white-space: nowrap;
+}
+
+/* States: empty / loading / error */
+#bookings-react-root .bki-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  text-align: center;
+  padding: 44px 16px;
+  color: var(--text-secondary, #64748b);
+  background: var(--surface, #fff);
+  border: 1px dashed var(--border, #e2e8f0);
+  border-radius: 12px;
+}
+#bookings-react-root .bki-state-icon {
+  font-size: 1.9rem;
+  color: var(--border, #e2e8f0);
+}
+#bookings-react-root .bki-state-error .bki-state-icon {
+  color: var(--warning, #ff9f1c);
+}
+#bookings-react-root .bki-state-title {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--text-primary, #1f2937);
+}
+#bookings-react-root .bki-state-hint {
+  margin: 0;
+  font-size: 0.82rem;
+}
+#bookings-react-root .bki-state-error .bki-state-title {
+  color: var(--danger, #e63946);
+}
+
+/* Phones / tablets */
+@media (max-width: 640px) {
+  #bookings-react-root .bk-section-title h2 {
+    width: 100%;
+  }
+  #bookings-react-root .bki-toolbar {
+    width: 100%;
+  }
+  #bookings-react-root .bki-toolbar .bk-tool-btn,
+  #bookings-react-root .bki-webtoggle {
+    flex: 1 1 auto;
+    justify-content: center;
+  }
+  #bookings-react-root .bki-list {
+    grid-template-columns: 1fr;
+  }
+  #bookings-react-root .bki-controls .bki-search {
+    flex: 1 1 100%;
+  }
+  #bookings-react-root .bki-sort,
+  #bookings-react-root .bki-sort select,
+  #bookings-react-root .bki-controls .action-btn {
+    flex: 1 1 auto;
+  }
+}

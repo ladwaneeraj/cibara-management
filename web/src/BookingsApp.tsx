@@ -206,7 +206,7 @@ export function BookingsApp() {
         ))}
       </div>
 
-      <div className="bki-row">
+      <div className="bki-row bki-controls">
         <input
           className="bki-search"
           type="search"
@@ -252,14 +252,19 @@ export function BookingsApp() {
       </div>
 
       {error ? (
-        <div className="bki-empty" role="alert">
-          {error}
+        <div className="bki-state bki-state-error" role="alert">
+          <i className="fas fa-triangle-exclamation bki-state-icon" aria-hidden="true" />
+          <p className="bki-state-title">{error}</p>
+          <button type="button" className="action-btn btn-sm" onClick={() => void refresh()}>
+            Retry
+          </button>
         </div>
       ) : null}
 
       {loading && bookings.length === 0 ? (
-        <div className="bki-empty">
-          <span className="bki-spinner" /> Loading bookings…
+        <div className="bki-state" role="status">
+          <span className="bki-spinner" />
+          <p className="bki-state-title">Loading bookings…</p>
         </div>
       ) : view === 'list' ? (
         <ListView bookings={bookings} filter={filter} query={query} sortBy={sortBy} onOpen={openDrawer} />

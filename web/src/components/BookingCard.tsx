@@ -1,7 +1,9 @@
-// Booking list card. Reuses the classic booking.css classes (.booking-item,
-// .status-badge, .booking-source-badge, …) so it is visually identical to the
-// classic UI. Structure mirrors booking.js:1455-1483. The whole card is the
-// tap target (role=button + Enter/Space), opening the detail drawer.
+// Booking list card (island redesign). A denser, clearer card with a coloured
+// left status rail, a prominent guest name, an icon stay-line and a footer that
+// pairs the payment state with the amount. Island-scoped .bki-card-* classes
+// (see island.css) own the layout; the status/source chips keep the classic
+// ERP badge classes so they read the same as the rest of the app. The whole
+// card is the tap target (role=button + Enter/Space) and opens the drawer.
 import type { KeyboardEvent } from 'react'
 import type { Booking } from '../types/booking'
 import { statusLabel } from '../theme/tokens'
@@ -34,11 +36,6 @@ export function BookingCard({ booking, groupSize = 0, isRepeat = false, onOpen }
   const balance = bookingBalance(booking)
   const pay = paymentLabel(booking)
 
-  let stateClass = ''
-  if (booking.status === 'cancelled') stateClass = 'bk-cancelled'
-  else if (booking.status === 'checked_in') stateClass = 'bk-checked-in'
-  else if (isToday) stateClass = 'bk-arriving-today'
-
   const open = () => onOpen(booking.booking_id)
   const onKey = (e: KeyboardEvent) => {
     if (e.key === 'Enter' || e.key === ' ') {
@@ -49,63 +46,61 @@ export function BookingCard({ booking, groupSize = 0, isRepeat = false, onOpen }
 
   return (
     <div
-      className={`booking-item ${stateClass}`}
+      className="bki-card"
+      data-status={booking.status}
       data-id={booking.booking_id}
       role="button"
       tabIndex={0}
       onClick={open}
       onKeyDown={onKey}
     >
-      <div className="booking-header">
-        <div className="booking-room">
-          Room {booking.room}
-          {booking.is_ac ? <span style={{ fontSize: '0.7rem', color: '#0ea5e9' }}> ❄️</span> : null}
-        </div>
-        <div className="booking-badges">
-          <span className={`status-badge ${STATUS_CLASS[booking.status] ?? ''}`}>
-            {statusLabel[booking.status] ?? 'Unknown'}
+      <span className="bki-card-rail" aria-hidden="true" />
+      <div className="bki-card-main">
+        <div className="bki-card-top">
+          <span className="bki-card-room">
+            Room {booking.room}
+            {booking.is_ac ? <span className="bki-card-ac" title="AC room">❄️</span> : null}
           </span>
-          {isToday ? <span className="today-badge">Today</span> : null}
-          {isRepeat ? <span className="bk-group-chip" title="Returning guest">★ Repeat</span> : null}
-          {groupSize > 1 ? (
-            <span className="bk-group-chip">
-              <i className="fas fa-layer-group" aria-hidden="true" /> Group · {groupSize}
+          <span className="bki-card-badges">
+            <span className={`status-badge ${STATUS_CLASS[booking.status] ?? ''}`}>
+              {statusLabel[booking.status] ?? 'Unknown'}
             </span>
-          ) : null}
-          {booking.is_ac ? (
-            <span
-              className="booking-source-badge"
-              style={{
-                background: 'linear-gradient(135deg,#e0f2fe,#bae6fd)',
-                color: '#0369a1',
-                border: '1px solid #7dd3fc',
-              }}
-            >
-              ❄️ AC
-            </span>
-          ) : null}
-          {ota ? (
-            <span className={`booking-source-badge src-${src}`}>
-              <i className="fas fa-globe" aria-hidden="true" /> {otaSourceLabel(src)}
-            </span>
-          ) : null}
+            {isToday ? <span className="today-badge">Today</span> : null}
+            {isRepeat ? <span className="bk-group-chip" title="Returning guest">★ Repeat</span> : null}
+            {groupSize > 1 ? (
+              <span className="bk-group-chip">
+                <i className="fas fa-layer-group" aria-hidden="true" /> Group · {groupSize}
+              </span>
+            ) : null}
+            {ota ? (
+              <span className={`booking-source-badge src-${src}`}>
+                <i className="fas fa-globe" aria-hidden="true" /> {otaSourceLabel(src)}
+              </span>
+            ) : null}
+          </span>
         </div>
-      </div>
-      <div className="booking-guest">{booking.guest_name}</div>
-      <div className="bk-stay-line">
-        <i className="fas fa-calendar-check" aria-hidden="true" /> {formatDate(booking.check_in_date)}
-        <span className="bk-stay-sep">→</span> {formatDate(booking.check_out_date)}
-        <span className="bk-stay-sep">·</span> {n} night{n !== 1 ? 's' : ''}
-        <span className="bk-stay-time">
-          <i className="fas fa-clock" aria-hidden="true" /> {formatTime(booking.check_in_time)}
-        </span>
-      </div>
-      <div className="booking-footer">
-        <div className="booking-payment">
-          <span className={`payment-badge ${pay}`}>{PAYMENT_TEXT[pay]}</span>
-          {!ota && balance > 0 ? <span className="bk-balance-note">₹{balance} due</span> : null}
+
+        <div className="bki-card-guest">{booking.guest_name}</div>
+
+        <div className="bki-card-stay">
+          <span className="bki-card-stay-dates">
+            <i className="fas fa-calendar-check" aria-hidden="true" /> {formatDate(booking.check_in_date)}
+            <span className="bki-card-arrow">→</span> {formatDate(booking.check_out_date)}
+          </span>
+          <span className="bki-card-dot">·</span>
+          <span>{n} night{n !== 1 ? 's' : ''}</span>
+          <span className="bki-card-time">
+            <i className="fas fa-clock" aria-hidden="true" /> {formatTime(booking.check_in_time)}
+          </span>
         </div>
-        <div className="booking-amount">{ota ? 'OTA' : '₹' + booking.total_amount}</div>
+
+        <div className="bki-card-foot">
+          <span className="bki-card-pay">
+            <span className={`payment-badge ${pay}`}>{PAYMENT_TEXT[pay]}</span>
+            {!ota && balance > 0 ? <span className="bki-card-due">₹{balance} due</span> : null}
+          </span>
+          <span className="bki-card-amount">{ota ? 'OTA' : '₹' + booking.total_amount}</span>
+        </div>
       </div>
     </div>
   )

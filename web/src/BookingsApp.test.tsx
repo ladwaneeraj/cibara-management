@@ -1,11 +1,20 @@
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import * as api from './api/bookings'
+import * as webApi from './api/webConfig'
 import type { Booking } from './types/booking'
 import { BookingsApp } from './BookingsApp'
 
 vi.mock('./api/bookings')
+vi.mock('./api/webConfig')
 const mockGet = vi.mocked(api.getBookings)
+
+// The toolbar mounts OnlineBookingsToggle, which loads web_config on mount.
+// Stub it so that async state settle is deterministic (no late, un-acted fetch).
+beforeEach(() => {
+  vi.mocked(webApi.getWebConfig).mockResolvedValue({ online_bookings_enabled: false })
+  vi.mocked(webApi.setOnlineBookings).mockResolvedValue({ online_bookings_enabled: false })
+})
 
 function b(p: Partial<Booking>): Booking {
   return {

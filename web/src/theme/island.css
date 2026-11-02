@@ -4,14 +4,21 @@
    so the island inherits the ERP theme automatically; raw hex is avoided.
    Components add their own rules here as the island grows. */
 
-/* Carve-out: the React island owns the Bookings tab. Hide every legacy
-   booking.js-rendered child of #bookings-tab (toolbar, filter pills, view
-   selector, #bookings-list, #bookings-calendar-view) so only the island
-   renders. booking.js's tab rendering is already inert once the island
-   overrides window.fetchBookings; this hides the static Jinja markup. The
-   booking modals live outside #bookings-tab and are untouched. (This single
-   selector is the one rule here that intentionally reaches outside the root.) */
-#bookings-tab > :not(#bookings-react-root) {
+/* Carve-out: hide ONLY the legacy booking.js-rendered DIRECT children of
+   #bookings-tab that the island replaces — the toolbar/section title, the
+   filter pills, the view selector, the list and the calendar. The island
+   renders its OWN copies of these same classes/ids INSIDE
+   #bookings-react-root, so the direct-child (>) combinator is load-bearing:
+   it leaves the island's nested copies visible. Naming each legacy element
+   (instead of the old blunt "hide every child that is not the react root"
+   catch-all) means #day-details-modal keeps its own modal show/hide and any
+   control added to #bookings-tab later is not blindly hidden. These are the
+   one set of rules here that intentionally reach outside the root. */
+#bookings-tab > .bk-section-title,
+#bookings-tab > .bk-filter-row,
+#bookings-tab > .bk-view-selector,
+#bookings-tab > #bookings-list,
+#bookings-tab > #bookings-calendar-view {
   display: none !important;
 }
 

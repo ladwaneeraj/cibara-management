@@ -22,11 +22,13 @@ from its registration factory `(app, firestoreExp) => new Firestore(...)`. So `f
 can only ever return the project's **(default)** DB. The classic realtime file must move to the
 modular SDK. The modular SDK (SPA, guest) takes `getFirestore(app, databaseId)` and is a one-liner.
 
-## Rollback is env-only (no code edit)
-A single env var `CIBARA_FIRESTORE_DB` drives everything. Empty / `(default)` = the exact
-pre-migration code path. Rollback = unset it (+ unset `VITE_FIRESTORE_DB` for the guest build),
-redeploy. The US `(default)` DB and us-central1 bucket are never written or deleted, so they
-remain a hot rollback target for weeks.
+## Rollback is env-only for server + SPA + classic; guest needs a rebuild
+`CIBARA_FIRESTORE_DB` drives the server, and the SPA and classic UI read `firestoreDb` at
+RUNTIME from `/api/v2/config` and `/firebase-config.js` — so for those three, rollback is just
+unset the env var + redeploy, no code change. **Exception: the guest portal** bakes
+`VITE_FIRESTORE_DB` at BUILD time, so rolling the guest app back is a rebuild + redeploy (unset
+the build var and ship a new `guest/dist`), not an instant env flip. The US `(default)` DB and
+us-central1 bucket are never written or deleted, so they remain a hot rollback target for weeks.
 
 ## Prepared diffs (applied on this branch, flag defaults to OFF)
 - `config.py` — Firestore client: if `CIBARA_FIRESTORE_DB` is set, use
@@ -113,8 +115,9 @@ classic-port blocker in view. It is independent of the Firestore DB move and can
    write lands in Mumbai).
 
 ## Rollback
-- **Before unfreeze:** unset `CIBARA_FIRESTORE_DB` (+ `VITE_FIRESTORE_DB`, + bucket var),
-  redeploy. App is back on `(default)` + old bucket, which were never touched.
+- **Before unfreeze:** unset `CIBARA_FIRESTORE_DB` (+ bucket var) and redeploy — server, SPA and
+  classic are back on `(default)` + old bucket immediately (never touched). The guest portal is
+  NOT instant: unset `VITE_FIRESTORE_DB` and rebuild + redeploy `guest/dist` to roll it back.
 - **After unfreeze:** writes have landed in Mumbai; rolling back now needs a reverse
   export `cibara-mum` → `(default)` for the window's data. Keep the window short and verify
   (step 6) before unfreezing.

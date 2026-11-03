@@ -1,8 +1,14 @@
 # Firestore US → Mumbai cutover (named DB `cibara-mum`)
 
-**Status: PREPARED, NOT EXECUTED. Owner sign-off required before Phase 2 build and cutover.**
-Branch `infra/firestore-mumbai-migration`. Phase 1 dry run verified: all 43 collections
-matched exactly; reads 9.1× faster from a local laptop (US 922ms → Mumbai 102ms median).
+**Status: SAFE BUILD DONE, CUTOVER NOT RUN. One blocker needs an owner decision (see below).**
+Branch `infra/firestore-mumbai-migration` (diffs committed `354343d`). Phase 1 dry run: all 43
+collections matched; reads 9.1× faster locally (US 922ms → Mumbai 102ms median).
+Built on prod `cibara-software-61512`: `cibara-mum` DB (asia-south1) created, 5 indexes +
+rules deployed to it, staging data imported, PITR + daily/weekly backups on. Server + SPA +
+guest repoint committed (env-gated, default off). **Blocked:** the classic realtime UI
+(`static/google_sync.js`) — the compat SDK can't reach a named DB and can't share its auth with
+the modular SDK (proven below). **Held:** the full Storage object copy. US `(default)` DB +
+us-central1 bucket never touched.
 
 ## Decision
 Keep the project `cibara-software-61512` (Auth, users, Storage stay). Move Firestore data to a
@@ -34,28 +40,47 @@ remain a hot rollback target for weeks.
 - `guest/src/api.ts` — `getFirestore(app, import.meta.env.VITE_FIRESTORE_DB || undefined)`
   (Hosting serves the guest config without our field, so the id comes from the guest build env).
 
-## OUTSTANDING — `static/google_sync.js` modular port (THE risky item, NOT done)
-726 lines, 16 Firestore call-sites, the only classic Firestore consumer. It shares the
-compat app that `auth.js`/`CibaraAuth` signs in so listeners run under `firestore.rules` with
-the user's role. Required change, to be done and smoke-tested against a real `cibara-mum`:
-1. Load the modular Firestore SDK on the classic page and obtain the named DB bound to the
-   **same** app the compat auth signed in: modular `getApp()` returns the default app compat
-   initialised (shared registry), so `getFirestore(getApp(), window.FIREBASE_CONFIG.firestoreDb)`
-   shares the auth/custom-token session → rules still pass. (Keep auth on compat; only Firestore
-   moves to modular.)
-2. Rewrite each listener to the functional modular API: `db.collection(x).where(...).onSnapshot(cb)`
-   → `onSnapshot(query(collection(db,x), where(...)), cb)`; `db.doc(p).onSnapshot` →
-   `onSnapshot(doc(db,p), cb)`; `db.enablePersistence({synchronizeTabs:true})` →
-   `initializeFirestore(app,{localCache:persistentLocalCache({tabManager:persistentMultipleTabManager()})},dbId)`.
-3. Preserve every behaviour: listener-first mode, hidden-tab pause/detach, day-rollover reload,
-   `onListenerError` permission-denied notices, IST date bounds, bookings horizon.
-**Verification (needs `cibara-mum` to exist — Phase 2):** on a UAT/named-DB run, sign in as each
-role and confirm each tile updates live from a change made on another device; confirm
-permission-denied notices still fire for refused collections; confirm reload is cheap (IndexedDB
-cache warm). This cannot be exercised on the in-memory demo or until the named DB exists.
-> This port is the dominant cost/risk of the named-DB route. If the owner would rather avoid it,
-> moving Cloud Run to a US region removes the server round-trip but leaves browser→Firestore
-> reads crossing from India — a partial fix only.
+## BLOCKED — `static/google_sync.js` (classic realtime) needs an owner decision
+~800 lines, 16 Firestore call-sites, the only classic Firestore consumer; already loaded as a
+`type="module"`. It must run its listeners under the signed-in staff session so `firestore.rules`
+see the role.
+
+**Proven blocker (tested in-browser, no login needed):** on this SDK setup the gstatic **compat**
+build and the **modular** build keep **separate app registries**. After `firebase.initializeApp()`
+(compat), the modular SDK reports `getApps().length === 0` and `getApp()` throws
+`app/no-app`. So the natural port — `getFirestore(getApp(), 'cibara-mum')` to reuse the compat
+auth session — **cannot work**: the modular Firestore would have no auth and every listener
+would be `permission-denied`. (firestore-compat@10.13.0 also has no database-id param, so compat
+itself can't reach a named DB.)
+
+**Options (owner to choose):**
+- **A — full modular port of the classic page** (auth + firestore). Replace the three
+  `*-compat` scripts with modular `firebase-app/auth/firestore`, port `auth.js`/`CibaraAuth`
+  (the entire §3 session system: JWT bridge, custom-token sign-in, idle logout, multi-tab) **and**
+  `google_sync.js` to one modular app, then `getFirestore(app, dbId)`. Clean end state, but a
+  large, high-risk change to the login path.
+- **B — modular Firestore beside compat auth, shared via auth persistence.** In `google_sync.js`
+  init a modular `initializeApp(window.FIREBASE_CONFIG)` (default name, its own modular registry)
+  + `getAuth(app)`; Firebase Auth persistence is keyed by `apiKey + "[DEFAULT]"` in IndexedDB and
+  is shared across the two SDK copies, so the modular auth restores the SAME signed-in user, then
+  `getFirestore(app, dbId)` carries its token. Smaller change, but relies on shared-persistence
+  timing and **must be smoke-tested with a real login** before trust.
+- **C — move Cloud Run to a US region instead** (owner previously rejected): no client change at
+  all, but browser→Firestore reads still cross from India (partial fix).
+
+Either A or B still needs the per-listener modular rewrite (`db.collection(x).where(...).onSnapshot`
+→ `onSnapshot(query(collection(db,x), where(...)), cb)`, `db.doc(p)` → `doc(db,p)`, `snap.exists`
+→ `snap.exists()`, `enablePersistence` → `persistentLocalCache` at init) preserving listener-first,
+hidden-tab pause, day-rollover, denied-notices, IST bounds, bookings horizon.
+
+**Smoke test (owner/UAT, needs a real login — not doable from here):** sign in as each role against
+`cibara-mum`; confirm each tile updates live from a change on another device; confirm
+permission-denied notices for refused collections; confirm reload is cheap (IndexedDB warm).
+
+## HELD pending owner — full Storage object copy
+Creating the asia-south1 bucket and copying every object (thousands of private guest ID images +
+bill PDFs) is the heaviest and most sensitive step; held so the owner approves it with the
+classic-port blocker in view. It is independent of the Firestore DB move and can run once decided.
 
 ## Phase 2 build (targets, NOT cutover — run on UAT first)
 1. Create Firestore DB `cibara-mum` (asia-south1, native): `gcloud firestore databases create

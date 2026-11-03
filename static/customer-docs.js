@@ -634,7 +634,9 @@ function hideMobileSuggestions() {
 
 async function lookupAndFillCustomer(mobile) {
   try {
-    const res  = await apiFetch(`/get_customer/${mobile}`);
+    // Guest + ID images first: docs_only=1 skips the pending-settlement query,
+    // so the card and photos paint without waiting on it.
+    const res  = await apiFetch(`/get_customer/${mobile}?docs_only=1`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
 
@@ -646,9 +648,17 @@ async function lookupAndFillCustomer(mobile) {
       _applyDocViewBtn(data.customer);
       _showCheckinStoredDocs(data.customer);
       _applyFlagAlert(data.customer);
-      _applyPendingSettlementAlert(data.customer);
       _applyWantsBillNote(data.customer);
       _applyCheckinGstCard(data.customer);
+      // Then the pending-settlement warning, fetched separately so it never
+      // delays the card. Skip if the user has moved to another guest meanwhile.
+      apiFetch(`/get_customer/${mobile}`).then(r => r.json()).then(d => {
+        if (d.success && d.customer && _currentCheckinCustomer &&
+            _currentCheckinCustomer.mobile === d.customer.mobile) {
+          Object.assign(_currentCheckinCustomer, d.customer);
+          _applyPendingSettlementAlert(_currentCheckinCustomer);
+        }
+      }).catch(() => {});
     } else {
       _currentCheckinCustomer = null;
       clearNameMismatch();

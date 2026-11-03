@@ -93,7 +93,7 @@ def search_customers_route():
         return jsonify(success=False, message=f"Error: {str(e)}")
 
 
-def _id_doc_links(mobile: str) -> dict:
+def _id_doc_links(mobile: str, docs=None) -> dict:
     """In-app links to the guest's active ID photos, for users allowed to see
     them (customer_doc.view: admin, manager). The links only work with the
     signed-in session — there is no public URL any more. `id_doc_meta` says
@@ -103,7 +103,9 @@ def _id_doc_links(mobile: str) -> dict:
     if not user or not role_has_permission(user.get("role"), "customer_doc.view"):
         return {"id_doc_urls": [], "id_doc_meta": []}
     try:
-        docs = [d for d in id_docs.list_documents(mobile) if d.get("status") == "active"]
+        if docs is None:
+            docs = id_docs.list_documents(mobile)
+        docs = [d for d in docs if d.get("status") == "active"]
     except Exception as e:
         logger.warning(f"id doc links for {mobile} unavailable: {e}")
         return {"id_doc_urls": [], "id_doc_meta": []}
@@ -119,13 +121,14 @@ def _id_doc_links(mobile: str) -> dict:
             "id_doc_count": len(meta)}
 
 
-def _pending_from_settlements(mobile: str, out: dict) -> dict:
+def _pending_from_settlements(mobile: str, out: dict, rows=None) -> dict:
     """The check-in warning, from the settlements themselves rather than the
     single has_pending_settlement flag (which describes one stay at most and
     can drift). The pending_settlement_* fields point at the OLDEST open
     balance — what the Collect button takes first — and the totals cover all
     of them. If the lookup fails the stored flag is kept as before."""
-    rows = customer_service.open_settlements(mobile)
+    if rows is None:
+        rows = customer_service.open_settlements(mobile)
     if rows is None:
         return {}
     if not rows:
@@ -150,18 +153,29 @@ def _pending_from_settlements(mobile: str, out: dict) -> dict:
 def get_customer_route(mobile):
     """Get a single customer record by mobile number."""
     try:
-        customer = customer_service.get_customer(mobile)
-        if customer:
+        from concurrent.futures import ThreadPoolExecutor
+        from services.auth_service import load_current_user, role_has_permission
+        docs_only = request.args.get("docs_only") in ("1", "true", "yes")
+        _u = load_current_user()  # request context lives here, not in the threads
+        can_docs = bool(_u and role_has_permission(_u.get("role"), "customer_doc.view"))
+        # These reads are independent (keyed only by mobile). The dropdown click
+        # used to stack them (~1 DB round trip each); run them together so one
+        # click costs one round trip, not three.
+        with ThreadPoolExecutor(max_workers=3) as ex:
+            f_cust = ex.submit(customer_service.get_customer, mobile)
+            f_docs = ex.submit(id_docs.list_documents, mobile) if can_docs else None
+            f_settle = None if docs_only else ex.submit(customer_service.open_settlements, mobile)
+            customer = f_cust.result()
+            if not customer:
+                return jsonify(success=False, message="Customer not found")
             customer.pop("_id", None)
             out = _format_customer(customer)
-            out.update(_id_doc_links(customer.get("mobile") or mobile))
-            # `?docs_only=1` skips the settlements lookup (a Firestore query not
-            # needed when the caller — e.g. the ID-document viewer — only wants
-            # the guest's name and photos). Default behaviour is unchanged.
-            if request.args.get("docs_only") not in ("1", "true", "yes"):
-                out.update(_pending_from_settlements(customer.get("mobile") or mobile, out))
-            return jsonify(success=True, customer=out)
-        return jsonify(success=False, message="Customer not found")
+            out.update(_id_doc_links(customer.get("mobile") or mobile,
+                                     docs=(f_docs.result() if f_docs else [])))
+            if f_settle is not None:
+                out.update(_pending_from_settlements(customer.get("mobile") or mobile, out,
+                                                     rows=f_settle.result()))
+        return jsonify(success=True, customer=out)
     except Exception as e:
         logger.error(f"Error getting customer: {str(e)}")
         return jsonify(success=False, message=f"Error: {str(e)}")

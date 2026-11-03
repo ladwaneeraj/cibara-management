@@ -250,6 +250,27 @@ def test_old_photos_are_adopted_not_lost(client, manager):
     assert len(client.get(BASE, headers=manager).json()["documents"]) == 2
 
 
+def test_legacy_scan_runs_once_then_skips(client, manager):
+    """Perf: adopt_legacy stamps legacy_docs_adopted and short-circuits, so the
+    check-in ID card does not re-scan legacy photos on every view (the delay the
+    front desk saw). A second, genuinely adoptable photo is left untouched once
+    the flag is set — proving the skip, not just idempotence."""
+    from services import id_docs
+    _legacy(1)
+    assert id_docs.adopt_legacy(M) == 1            # first call adopts the legacy photo
+    cust = DB.collection("customers").document(M).get().to_dict()
+    assert cust.get("legacy_docs_adopted") is True
+    # add a second REAL legacy file+url directly (no set(), so the flag survives)
+    path = f"customer_docs/{M}/doc_oldX.jpg"
+    F.FAKE_BUCKET.blob(path).upload_from_string(_jpeg(mark=9), content_type="image/jpeg")
+    enc = path.replace("/", "%2F")
+    url = (f"https://firebasestorage.googleapis.com/v0/b/cibara-dev.firebasestorage.app/o/{enc}"
+           f"?alt=media&token=tokX")
+    DB.collection("customers").document(M).update({"id_doc_urls": cust["id_doc_urls"] + [url]})
+    assert id_docs.adopt_legacy(M) == 0            # flag set → skipped, not re-scanned
+    assert len([d for d in id_docs.list_documents(M) if d["status"] == "active"]) == 1
+
+
 def test_returning_guest_with_three_docs_keeps_new_scans(client, manager):
     """Bug 1: the old background 'trim to 3' deleted every new scan (and its
     file) for a guest who already had three documents on file."""

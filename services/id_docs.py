@@ -516,9 +516,12 @@ def adopt_legacy(mobile: str, customer: dict | None = None) -> int:
     clean = clean_mobile(mobile)
     if not clean:
         return 0
+    snap = None
     if customer is None:
         snap = _customer_ref(clean).get()
         customer = (snap.to_dict() or {}) if snap.exists else {}
+    if customer.get("legacy_docs_adopted"):
+        return 0  # one-time scan already done — skip the per-view customer + per-photo reads
     urls = [u for u in (customer.get("id_doc_urls") or []) if isinstance(u, str)]
     adopted = 0
     for idx, url in enumerate(urls):
@@ -562,6 +565,14 @@ def adopt_legacy(mobile: str, customer: dict | None = None) -> int:
             logger.warning("id_docs: adopt %s for %s failed: %s", path, clean, e)
     if adopted:
         _refresh_customer_summary(clean)
+    # shortcut: mark the one-time legacy scan done so future list_documents() skip it
+    # (the per-view cost that made the check-in ID card take seconds). Re-run
+    # scripts/migrate_id_docs.py --adopt if a partial failure ever needs a retry.
+    if snap is None or snap.exists:
+        try:
+            _customer_ref(clean).update({"legacy_docs_adopted": True})
+        except Exception as e:
+            logger.warning("id_docs: mark legacy adopted failed for %s: %s", clean, e)
     return adopted
 
 

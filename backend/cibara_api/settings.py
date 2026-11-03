@@ -100,6 +100,22 @@ class Settings(BaseSettings):
     PERF_TARIFFS_CACHE: bool = True
     PERF_TARIFFS_CACHE_TTL: int = 300
 
+    # Serve guest-ID-document THUMBNAILS as a short-lived signed Storage URL
+    # instead of streaming the bytes through the app. The thumbnail is the
+    # cheap, un-watermarked, un-audited derivative shown in every doc grid, and
+    # grids load several at once — proxying each one ties up the single worker
+    # (a 3 KB thumb takes seconds under load) and the browser never caches it.
+    # With this on, GET .../image?variant=thumb&link=1 returns a tiny JSON
+    # {url: <signed>} that the browser loads straight from storage (no CORS, it
+    # is an <img> src) and caches for the URL's lifetime. Only `thumb` is
+    # eligible; `display`/`view`/`original` still stream through the app so the
+    # watermark, download gating and view-audit are untouched. Any signing or
+    # storage hiccup falls back to proxying the bytes, so images never break.
+    # Set false for an instant revert. TTL is kept short because the URL is a
+    # bearer link to a (cropped) ID image.
+    PERF_SIGNED_IMAGE_URLS: bool = True
+    PERF_SIGNED_IMAGE_TTL: int = 300
+
     # Classic-UI Content-Security-Policy mode: "enforce" (default), "report-only"
     # (send Content-Security-Policy-Report-Only so violations are visible in the
     # console/Sentry without breaking the page — use this to vet the policy after

@@ -169,7 +169,10 @@ export async function connect(): Promise<void> {
   const cfg = (await res.json()) as Record<string, string>
   app = initializeApp(cfg)
   auth = getAuth(app)
-  db = getFirestore(app)
+  // Named Firestore DB (region move). Hosting serves init.json (the project's
+  // web config) without a DB id, so it comes from the guest build env instead;
+  // empty = the project's (default) DB, i.e. unchanged.
+  db = getFirestore(app, import.meta.env.VITE_FIRESTORE_DB || undefined)
 }
 
 /** Resolves with the anonymous user, signing one in if needed. */

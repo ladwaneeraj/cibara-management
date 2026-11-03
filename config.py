@@ -284,7 +284,20 @@ try:
 
     firebase_admin.initialize_app(cred, {'storageBucket': storage_bucket})
 
-    db = firestore.client()
+    # Firestore client. CIBARA_FIRESTORE_DB names a non-default database (the
+    # US→Mumbai region move: data lives in a named asia-south1 DB while Auth +
+    # Storage stay on this project). firebase_admin's firestore.client() takes
+    # no database arg, so target a named DB with the underlying google client —
+    # the SAME class firebase_admin wraps, so transactions, Increment,
+    # SERVER_TIMESTAMP, preconditions and core/metrics counting are identical.
+    # Unset / "(default)" keeps the exact old path, so rollback is env-only.
+    _fs_db = os.environ.get('CIBARA_FIRESTORE_DB', '').strip()
+    if _fs_db and _fs_db != '(default)':
+        from google.cloud import firestore as _gcf
+        db = _gcf.Client(project=_project_id, credentials=cred.get_credential(),
+                         database=_fs_db)
+    else:
+        db = firestore.client()
     bucket = storage.bucket()
     logger.info(
         f"Firebase initialised — env={CIBARA_ENV} project={_project_id!r} "

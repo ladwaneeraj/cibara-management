@@ -5,10 +5,10 @@ Branch `infra/firestore-mumbai-migration` (diffs committed `354343d`). Phase 1 d
 collections matched; reads 9.1× faster locally (US 922ms → Mumbai 102ms median).
 Built on prod `cibara-software-61512`: `cibara-mum` DB (asia-south1) created, 5 indexes +
 rules deployed to it, staging data imported, PITR + daily/weekly backups on. Server + SPA +
-guest repoint committed (env-gated, default off). **Blocked:** the classic realtime UI
-(`static/google_sync.js`) — the compat SDK can't reach a named DB and can't share its auth with
-the modular SDK (proven below). **Held:** the full Storage object copy. US `(default)` DB +
-us-central1 bucket never touched.
+guest repoint committed (env-gated, default off). Classic realtime (`static/google_sync.js`)
+ported to modular option B (owner chose B) — verified short of a staff login; the authenticated
+end-to-end test is the one open item. Storage objects being copied to the asia-south1 bucket
+`cibara-software-61512-mum` (owner-approved). US `(default)` DB + us-central1 bucket never touched.
 
 ## Decision
 Keep the project `cibara-software-61512` (Auth, users, Storage stay). Move Firestore data to a
@@ -42,47 +42,52 @@ us-central1 bucket are never written or deleted, so they remain a hot rollback t
 - `guest/src/api.ts` — `getFirestore(app, import.meta.env.VITE_FIRESTORE_DB || undefined)`
   (Hosting serves the guest config without our field, so the id comes from the guest build env).
 
-## BLOCKED — `static/google_sync.js` (classic realtime) needs an owner decision
-~800 lines, 16 Firestore call-sites, the only classic Firestore consumer; already loaded as a
-`type="module"`. It must run its listeners under the signed-in staff session so `firestore.rules`
-see the role.
+## DONE — `static/google_sync.js` ported to option B (owner chose B)
+The classic realtime file (the only classic Firestore consumer, already a `type="module"`) now
+runs Firestore on a **modular** app while auth stays on compat. `auth.js`/`CibaraAuth` are
+untouched.
 
-**Proven blocker (tested in-browser, no login needed):** on this SDK setup the gstatic **compat**
-build and the **modular** build keep **separate app registries**. After `firebase.initializeApp()`
-(compat), the modular SDK reports `getApps().length === 0` and `getApp()` throws
-`app/no-app`. So the natural port — `getFirestore(getApp(), 'cibara-mum')` to reuse the compat
-auth session — **cannot work**: the modular Firestore would have no auth and every listener
-would be `permission-denied`. (firestore-compat@10.13.0 also has no database-id param, so compat
-itself can't reach a named DB.)
+Why B over the obvious port: gstatic's **compat** and **modular** SDKs keep **separate app
+registries** — after `firebase.initializeApp()` (compat), the modular `getApps().length === 0`
+and `getApp()` throws `app/no-app` (tested in-browser). So `getFirestore(getApp(), …)` can't reuse
+the compat app. B instead does a modular `initializeApp(window.FIREBASE_CONFIG)` (same config/name,
+its own registry) + `getAuth()`; Firebase-Auth persistence (IndexedDB, keyed by `apiKey + appName`)
+is shared across the two SDK copies, so the modular app restores the SAME signed-in user and its
+`getFirestore(app, dbId)` carries the token. (firestore-compat@10.13.0 has no database-id param, so
+compat itself can't reach a named DB at all.)
 
-**Options (owner to choose):**
-- **A — full modular port of the classic page** (auth + firestore). Replace the three
-  `*-compat` scripts with modular `firebase-app/auth/firestore`, port `auth.js`/`CibaraAuth`
-  (the entire §3 session system: JWT bridge, custom-token sign-in, idle logout, multi-tab) **and**
-  `google_sync.js` to one modular app, then `getFirestore(app, dbId)`. Clean end state, but a
-  large, high-risk change to the login path.
-- **B — modular Firestore beside compat auth, shared via auth persistence.** In `google_sync.js`
-  init a modular `initializeApp(window.FIREBASE_CONFIG)` (default name, its own modular registry)
-  + `getAuth(app)`; Firebase Auth persistence is keyed by `apiKey + "[DEFAULT]"` in IndexedDB and
-  is shared across the two SDK copies, so the modular auth restores the SAME signed-in user, then
-  `getFirestore(app, dbId)` carries its token. Smaller change, but relies on shared-persistence
-  timing and **must be smoke-tested with a real login** before trust.
-- **C — move Cloud Run to a US region instead** (owner previously rejected): no client change at
-  all, but browser→Firestore reads still cross from India (partial fix).
+What changed in the file: added the modular imports; built `_mApp`/`_mAuth` + a `_modularAuthReady`
+promise; `db` is now `initializeFirestore(_mApp, {localCache: persistentLocalCache({tabManager:
+persistentMultipleTabManager()})}, _dbId)` (replacing `enablePersistence`); subscriptions gate on
+`Promise.all([CibaraAuth.ready(), _modularAuthReady])`; every listener rewritten to the functional
+API (`onSnapshot(query(collection(db,x), where(...)), cb, err)`, `onSnapshot(doc(db,a,b), …)`) and
+`snap.exists` → `snap.exists()`. Listener-first mode, hidden-tab pause, day-rollover, denied
+notices, IST bounds and the bookings horizon are all preserved.
 
-Either A or B still needs the per-listener modular rewrite (`db.collection(x).where(...).onSnapshot`
-→ `onSnapshot(query(collection(db,x), where(...)), cb)`, `db.doc(p)` → `doc(db,p)`, `snap.exists`
-→ `snap.exists()`, `enablePersistence` → `persistentLocalCache` at init) preserving listener-first,
-hidden-tab pause, day-rollover, denied-notices, IST bounds, bookings horizon.
+**Verified here (short of a real login):**
+- session inheritance — a modular app inherits the compat sign-in (anonymous test:
+  `compatUid === modularUid`), and a named-DB Firestore builds on it;
+- the ported module passes `node --check`;
+- all 10 listener query shapes execute against `cibara-mum` with no missing-index error.
 
-**Smoke test (owner/UAT, needs a real login — not doable from here):** sign in as each role against
-`cibara-mum`; confirm each tile updates live from a change on another device; confirm
-permission-denied notices for refused collections; confirm reload is cheap (IndexedDB warm).
+**Still owner/UAT — the authenticated end-to-end smoke test (CANNOT be done from here: it needs a
+real staff password, which this session is not permitted to enter):** with `CIBARA_FIRESTORE_DB=
+cibara-mum` set, sign in as each role (admin / manager / housekeeping) on a UAT/staging deploy and
+confirm — each tile updates live from a change made on another device; the housekeeping role still
+gets the permission-denied notice for refused collections; a reload is cheap (IndexedDB cache warm);
+and the day-rollover reload still fires. Do this before the production cutover.
 
-## HELD pending owner — full Storage object copy
-Creating the asia-south1 bucket and copying every object (thousands of private guest ID images +
-bill PDFs) is the heaviest and most sensitive step; held so the owner approves it with the
-classic-port blocker in view. It is independent of the Firestore DB move and can run once decided.
+> Rollback note: this port switches the classic page from compat to modular Firestore for BOTH the
+> named DB and the default DB (flag off). A full rollback of the classic realtime is therefore a
+> `git revert` of this commit, not just the env flag (the env flag still fully covers server + SPA).
+
+## Storage object copy (owner-approved, running)
+asia-south1 bucket `cibara-software-61512-mum` created; `gcloud storage rsync -r` is copying every
+object from `cibara-software-61512.firebasestorage.app` (read-only on the source) preserving paths
++ content-type. At cutover, rsync again to catch anything written since, then deploy with
+`FIREBASE_STORAGE_BUCKET=cibara-software-61512-mum`. Signed URLs sign with the SA key → work on the
+new bucket unchanged. Verify object count + a few checksums before the flip. The us-central1 source
+bucket is never modified, so it stays a rollback target.
 
 ## Phase 2 build (targets, NOT cutover — run on UAT first)
 1. Create Firestore DB `cibara-mum` (asia-south1, native): `gcloud firestore databases create

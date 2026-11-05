@@ -58,7 +58,7 @@ async function firebase() {
       localCache: fsMod.persistentLocalCache({ tabManager: fsMod.persistentMultipleTabManager() }),
     }, dbId)
   } catch {
-    db = fsMod.getFirestore(app, dbId)
+    db = dbId ? fsMod.getFirestore(app, dbId) : fsMod.getFirestore(app)
   }
   fb = { app, auth, db }
   return fb

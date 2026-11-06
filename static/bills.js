@@ -1864,12 +1864,12 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
       <button class="bl-wa-link-btn" id="bl-wa-send" style="display:none;" title="Credit notes: send a download link">
         <i class="fas fa-link"></i> Send link
       </button>
-      <button class="bl-wa-send-btn" id="bl-wa-share" title="Send the invoice PDF to the guest on WhatsApp">
-        <i class="fab fa-whatsapp"></i> Send PDF
+      <button class="bl-wa-send-btn" id="bl-wa-share" title="Send the invoice link to the guest on WhatsApp">
+        <i class="fab fa-whatsapp"></i> Send link
       </button>
     </div>
     <div class="bl-wa-hint" id="bl-wa-hint">
-      WhatsApp opens on the guest's chat with the invoice link filled in. A copy of the PDF is saved to your Downloads so you can attach it in the chat.
+      WhatsApp opens on the guest's chat with the invoice link filled in. The guest opens the invoice from that link — nothing is downloaded here.
     </div>
   </div>
 </div>`;
@@ -3507,42 +3507,19 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
     // awaited before it.
     const target = _waTargetMobile();
     if (!target) return;
-    // The chat always opens on the number provided (every device), so the message
-    // carries the invoice download link — a web page cannot attach a file to a
-    // specific WhatsApp chat. Only the generic OS share sheet can carry a file,
-    // and it cannot target a number, so it is no longer used: it opened a contact
-    // picker instead of the guest's chat. A copy of the PDF is saved to Downloads
-    // so it can be attached in the chat by hand.
+    // The chat opens on the number provided (every device) with the invoice
+    // link in the message; the guest opens the PDF from that link. No PDF is
+    // downloaded to the desk device (owner request: send the link only).
     const linkText = _buildWaFileMessage(s.guestName, s.invoiceNo, s.amount, s._isCN, s.pdfUrl);
     const waUrl = `https://wa.me/91${target}?text=${encodeURIComponent(linkText)}`;
-    const ready = s._pdfFileUrl === s.pdfUrl ? s.pdfFile : null;
 
-    // 1) Open the guest's WhatsApp chat right away, message filled in, on every
-    //    device (WhatsApp desktop app or WhatsApp Web / the phone's WhatsApp).
-    //    Runs first and synchronously — browsers only allow window.open straight
-    //    from the tap, so nothing is awaited before it.
+    // Open the guest's WhatsApp chat with the message filled in. Synchronous —
+    // browsers only allow window.open straight from the tap.
     window.open(waUrl, "_blank", "noopener,noreferrer");
     if (!s._isCN) _logBillActivity(s.billId, "whatsapp", target);
     closeWhatsAppModal();
-
-    // 2) Deliver the PDF. A web page cannot attach a file to a WhatsApp chat by
-    //    itself, so the PDF is saved to Downloads for a single attach in the chat.
-    const file = ready || await _prefetchWaPdf();
-    if (!file) {
-      if (typeof showNotification === "function")
-        showNotification("Couldn't load the PDF. Use Regenerate, then send again.", "error", 7000);
-      return;
-    }
-    const objUrl = URL.createObjectURL(file);
-    const a = document.createElement("a");
-    a.href = objUrl;
-    a.download = file.name;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setTimeout(function () { URL.revokeObjectURL(objUrl); }, 60000);
     if (typeof showNotification === "function")
-      showNotification(`The invoice link is in the WhatsApp message. A copy of the PDF is in Downloads to attach.`, "info", 9000);
+      showNotification("The invoice link is in the WhatsApp message for the guest.", "info", 7000);
   }
 
   function _updateWaPreview() {

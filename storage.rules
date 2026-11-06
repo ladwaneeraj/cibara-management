@@ -1,0 +1,11 @@
+rules_version = '2';
+// Locked: no direct client SDK access. The app reaches Storage only via the
+// server (admin SDK) and Firebase download-token / signed URLs, which bypass
+// these rules. Mirrors the default bucket's locked rules.
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

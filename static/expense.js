@@ -136,6 +136,11 @@ let expenseType = "transaction";
 let _invoicePhotoUrl = "";
 let _invoiceUploadInProgress = false;
 let _pendingInvoiceFile = null;   // File object selected by user — uploaded on submit
+// True when _pendingInvoiceFile has ALREADY been uploaded+attached server-side
+// (the "attach photo to an existing row" flow uploads first, then opens the
+// edit modal to auto-read it). Keeps OCR/Re-scan working off the same File
+// without submit re-uploading the identical image.
+let _invoiceAlreadyUploaded = false;
 
 // ─── Edit-mode state ─────────────────────────────────────────────────────────
 // When admin clicks the pencil icon on an existing expense row, the modal
@@ -963,6 +968,7 @@ async function _onInvoiceFileSelected(e) {
 
   // Just store the file — actual upload happens on form submit
   _pendingInvoiceFile = file;
+  _invoiceAlreadyUploaded = false;   // freshly picked — submit must upload it
   _invoicePhotoUrl    = "";   // will be set after upload on submit
 
   const shortName = file.name.length > 28 ? file.name.substring(0, 25) + "…" : file.name;
@@ -1289,6 +1295,7 @@ function _flashField(el) {
 function _clearInvoiceUpload() {
   _invoicePhotoUrl    = "";
   _pendingInvoiceFile = null;
+  _invoiceAlreadyUploaded = false;
   const urlInput  = document.getElementById("expense-invoice-photo-url");
   if (urlInput) urlInput.value = "";
   const fileInput = document.getElementById("expense-invoice-file");
@@ -1456,6 +1463,27 @@ function openExpenseEditModal(log) {
 }
 window.openExpenseEditModal = openExpenseEditModal;
 
+// ─── Auto-read a photo attached to an EXISTING expense ───────────────────────
+// The transaction tab attaches the photo first (upload + /update_expense_photo),
+// then opens the edit modal via openExpenseEditModal and calls this. The file
+// is already stored, so we only wire it in for OCR + Re-scan (no re-upload on
+// submit — see _invoiceAlreadyUploaded) and run the same reader the new-expense
+// form uses, which fills only the empty fields for the admin to confirm.
+window.expenseAttachOcrPrefill = function (file, photoUrl) {
+  if (photoUrl) {
+    const urlInput = document.getElementById("expense-invoice-photo-url");
+    if (urlInput) urlInput.value = photoUrl;      // keep the photo on Update
+    _invoicePhotoUrl = photoUrl;
+  }
+  _pendingInvoiceFile = file || null;
+  _invoiceAlreadyUploaded = true;                 // already stored — don't re-upload
+  if (file && _isOcrReadable(file)) _runInvoiceOcr(file);
+};
+
+// Lets other screens (the transaction tab's attach-photo flow) ask whether
+// auto-read is available before deciding to pop the edit modal.
+window.isExpenseOcrEnabled = _checkOcrEnabled;
+
 
 // ─── Show modal ───────────────────────────────────────────────────────────────
 function showExpenseModal(type, options) {
@@ -1536,6 +1564,7 @@ function showExpenseModal(type, options) {
 
   _invoicePhotoUrl    = "";
   _pendingInvoiceFile = null;
+  _invoiceAlreadyUploaded = false;
   _resetUploadStatus();
   const fileInput = document.getElementById("expense-invoice-file");
   if (fileInput) fileInput.value = "";
@@ -1801,7 +1830,9 @@ async function submitExpense(e) {
     }
 
     // ── Upload photo if one was selected ──────────────────────────────────────
-    if (_pendingInvoiceFile) {
+    // Skip when the file was already uploaded+attached before the modal opened
+    // (attach-to-existing-row flow); the hidden url below already points at it.
+    if (_pendingInvoiceFile && !_invoiceAlreadyUploaded) {
       if (submitBtn) submitBtn.innerHTML =
         '<span class="loader" style="width:20px;height:20px;"></span> Uploading photo…';
 

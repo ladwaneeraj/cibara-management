@@ -661,6 +661,80 @@ if (fullAccess) _track(onSnapshot(query(collection(db, "expenses"), where("date"
   }
 , onListenerError("expenses")));
 
+// ─── Expense range watch (lazy, PAST dates only) ───────────────────────────
+// The listener above keeps TODAY's expenses live on every device. When the
+// operator browses an OLDER date range in the Transactions tab, a remote
+// add / edit / photo-attach on one of those past days is invisible to that
+// today-only listener — which is why history felt like it didn't sync.
+//
+// This watches expenses in the range currently on screen and fires the same
+// events the today listener does, so the existing consumer in
+// transaction-tracking.js refreshes the view. It is attached ONLY while a past
+// range is shown (transaction-tracking drives it through CibaraSync.*), and it
+// replaces itself when the range changes, so cost stays bounded to what is
+// actually being viewed. Today is left to the listener above, so the watched
+// range is capped at yesterday — no double events for today's rows.
+let _expenseRangeUnsub = null;
+let _expenseRangeKey = "";          // "from|to" currently watched
+
+function _ymdAddDays(ymd, delta) {
+  const d = new Date(ymd + "T00:00:00");
+  d.setDate(d.getDate() + delta);
+  return d.getFullYear() + "-" +
+    String(d.getMonth() + 1).padStart(2, "0") + "-" +
+    String(d.getDate()).padStart(2, "0");
+}
+
+function _stopExpenseRangeWatch() {
+  if (_expenseRangeUnsub) {
+    try { _expenseRangeUnsub(); } catch (_) { /* already gone */ }
+    _expenseRangeUnsub = null;
+  }
+  _expenseRangeKey = "";
+}
+
+function _watchExpenseRange(fromDate, toDate) {
+  if (!fullAccess) return;          // non-admins never read the expenses collection
+  const yesterday = _ymdAddDays(_todayStr, -1);
+  // Cap at yesterday; today is already live via the listener above.
+  const to = toDate && toDate < _todayStr ? toDate : yesterday;
+  const from = fromDate || "";
+  if (!from || from > to) { _stopExpenseRangeWatch(); return; }  // range is only today
+
+  const key = from + "|" + to;
+  if (key === _expenseRangeKey && _expenseRangeUnsub) return;    // already watching it
+  _stopExpenseRangeWatch();
+  _expenseRangeKey = key;
+
+  let initial = true;
+  _expenseRangeUnsub = onSnapshot(
+    query(collection(db, "expenses"),
+      where("date", ">=", from), where("date", "<=", to)),
+    (snapshot) => {
+      if (initial) { initial = false; return; }   // first snapshot is already on screen
+      if (snapshot.metadata.hasPendingWrites || snapshot.metadata.fromCache) return;
+      snapshot.docChanges().forEach((change) => {
+        const exp = Object.assign({}, change.doc.data(), { _doc_id: change.doc.id });
+        if (!exp.date) return;
+        if (change.type === "added") {
+          window.dispatchEvent(new CustomEvent("cibaraExpenseAdded", { detail: exp }));
+          showSyncToast("🧾 Expense Added");
+        } else {
+          window.dispatchEvent(
+            new CustomEvent("cibaraTransactionRevised", { detail: { date: exp.date } }),
+          );
+          showSyncToast("✏️ Expense Updated");
+        }
+      });
+    },
+    onListenerError("expense-range"),
+  );
+}
+
+window.CibaraSync = window.CibaraSync || {};
+window.CibaraSync.watchExpenseRange = _watchExpenseRange;
+window.CibaraSync.stopExpenseRangeWatch = _stopExpenseRangeWatch;
+
 // ─── Daily serial counter (listener-first only) ───────────────────────────
 // Replaces the /get_transaction_metadata call that lived inside fetchData().
 // That endpoint did a single-doc read of daily_counters/<today> and returned

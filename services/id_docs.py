@@ -168,6 +168,16 @@ def normalise_image(raw: bytes) -> tuple[bytes, int, int]:
             raise IdDocError("Use a JPEG, PNG or WebP photo.")
         if img.width * img.height > MAX_PIXELS:
             raise IdDocError("Photo resolution is too high.")
+        # Fast path for big phone JPEGs: ask the JPEG decoder to emit at (about)
+        # the final size so we decode ~1/4–1/16 of the pixels instead of the
+        # full 12 MP and then shrinking. draft() only affects JPEG (no-op
+        # otherwise) and must run before load(); it is what makes a guest-photo
+        # upload return in well under a second instead of blocking the worker.
+        if (img.format or "").upper() == "JPEG":
+            try:
+                img.draft("RGB", (MAX_EDGE, MAX_EDGE))
+            except Exception:
+                pass  # any decoder quirk → fall back to the full-size decode
         img.load()
     except IdDocError:
         raise
@@ -238,6 +248,67 @@ def _cached_derivative(path: str, kind: str, make) -> bytes:
     except Exception as e:
         logger.warning("id_docs: could not cache %s derivative for %s: %s", kind, path, e)
     return out
+
+
+def ensure_derivative_blob(path: str, kind: str, make, *, cache_control: str):
+    """Return the Storage blob for the `kind` derivative, generating and caching
+    it from the original on first use. Unlike `_cached_derivative` it does NOT
+    download the derivative back — the signed-URL path only needs the blob
+    handle, and the browser fetches the bytes itself. May raise if the ORIGINAL
+    cannot be read (caller maps that to a fallback / 404)."""
+    bucket = _bucket()
+    dblob = bucket.blob(_derivative_path(path, kind))
+    try:
+        if dblob.exists():
+            return dblob
+    except Exception:
+        pass  # couldn't check — try to (re)generate below
+    out = make(bucket.blob(path).download_as_bytes())
+    dblob.metadata = {"derived_from": path, "kind": kind}
+    dblob.cache_control = cache_control
+    dblob.upload_from_string(out, content_type="image/jpeg")
+    return dblob
+
+
+def signed_image_url(mobile: str, doc_id: str, *, kind: str, ttl: int,
+                     include_removed: bool = False,
+                     user: dict | None = None) -> tuple[str, dict]:
+    """A short-lived V4 signed Storage URL for the `thumb` or `display` derivative,
+    so the browser loads it straight from storage instead of streaming it through
+    the single app worker. Both are un-watermarked — the lightbox draws the
+    watermark as a DOM overlay — so neither re-encodes on the server. The full
+    `display` copy is the one the desk actually opens; serving it as a link (not
+    proxied bytes) is the real fix for "images are slow". Because those bytes no
+    longer pass through read_image, `display` records the view (count +
+    last_viewed_by) here so the audit trail is unchanged.
+
+    Raises `IdDocError` for a removed/unknown document (a real HTTP error). Any
+    storage- or signing-level failure propagates as a plain exception so the
+    caller can fall back to proxying the bytes — images must never break."""
+    from datetime import timedelta
+    ref, rec = get_record(mobile, doc_id)
+    if rec.get("status") == "removed" and not include_removed:
+        raise IdDocError("This document was removed.", 410)
+    make = make_thumb if kind == "thumb" else make_display
+    dblob = ensure_derivative_blob(rec["path"], kind, make,
+                                   cache_control=f"private, max-age={int(ttl)}")
+    url = dblob.generate_signed_url(version="v4",
+                                    expiration=timedelta(seconds=int(ttl)),
+                                    method="GET")
+    if kind == "display":
+        try:
+            ref.update({"views": _fs().Increment(1),
+                        "last_viewed_by": _who(user), "last_viewed_at": now_iso()})
+        except Exception as e:
+            logger.warning("id_docs: view stamp failed for %s: %s", doc_id, e)
+    return url, rec
+
+
+def signed_thumb_url(mobile: str, doc_id: str, *, ttl: int,
+                     include_removed: bool = False) -> tuple[str, dict]:
+    """Back-compat wrapper: signed URL for the un-watermarked, un-audited thumb."""
+    return signed_image_url(mobile, doc_id, kind="thumb", ttl=ttl,
+                            include_removed=include_removed)
 
 
 def _font(size: int):
@@ -445,9 +516,12 @@ def adopt_legacy(mobile: str, customer: dict | None = None) -> int:
     clean = clean_mobile(mobile)
     if not clean:
         return 0
+    snap = None
     if customer is None:
         snap = _customer_ref(clean).get()
         customer = (snap.to_dict() or {}) if snap.exists else {}
+    if customer.get("legacy_docs_adopted"):
+        return 0  # one-time scan already done — skip the per-view customer + per-photo reads
     urls = [u for u in (customer.get("id_doc_urls") or []) if isinstance(u, str)]
     adopted = 0
     for idx, url in enumerate(urls):
@@ -491,6 +565,14 @@ def adopt_legacy(mobile: str, customer: dict | None = None) -> int:
             logger.warning("id_docs: adopt %s for %s failed: %s", path, clean, e)
     if adopted:
         _refresh_customer_summary(clean)
+    # shortcut: mark the one-time legacy scan done so future list_documents() skip it
+    # (the per-view cost that made the check-in ID card take seconds). Re-run
+    # scripts/migrate_id_docs.py --adopt if a partial failure ever needs a retry.
+    if snap is None or snap.exists:
+        try:
+            _customer_ref(clean).update({"legacy_docs_adopted": True})
+        except Exception as e:
+            logger.warning("id_docs: mark legacy adopted failed for %s: %s", clean, e)
     return adopted
 
 

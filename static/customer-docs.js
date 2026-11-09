@@ -71,16 +71,34 @@ window.CibaraSecureImg = (function () {
   // the expensive path.
   function src(url, variant) {
     if (!isSecure(url)) return Promise.resolve(url);
-    const key = url + '|' + (variant || 'thumb');
-    if (!cache.has(key)) {
-      const p = apiFetch(url + '?variant=' + (variant || 'thumb')).then(async (r) => {
-        if (!r.ok) throw new Error('HTTP ' + r.status);
-        return URL.createObjectURL(await r.blob());
-      });
-      p.catch(() => cache.delete(key));
-      cache.set(key, p);
-    }
-    return cache.get(key);
+    const v = variant || 'thumb';
+    const key = url + '|' + v;
+    const now = Date.now();
+    const hit = cache.get(key);
+    if (hit && (!hit.exp || hit.exp > now)) return hit.p;
+    // The thumbnail AND the full on-screen "display" copy can come back as a
+    // short-lived signed storage link (&link=1): a tiny authed JSON call, then
+    // the browser loads and caches the image itself straight from storage — no
+    // bytes through the app. Both are un-watermarked (the lightbox draws the
+    // watermark as a DOM overlay); the burned-in "view" and the "original" stay
+    // authed blob fetches. If the server isn't serving links (flag off / old
+    // build / signing hiccup) it returns the bytes as before → blob-URL fallback.
+    const wantLink = (v === 'thumb' || v === 'display');
+    const p = apiFetch(url + '?variant=' + v + (wantLink ? '&link=1' : '')).then(async (r) => {
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const ct = r.headers.get('content-type') || '';
+      if (ct.indexOf('application/json') !== -1) {
+        const j = await r.json();
+        if (!j || !j.url) throw new Error('no url');
+        return j.url;                               // signed link → set as <img src>
+      }
+      return URL.createObjectURL(await r.blob());   // proxied bytes → blob URL
+    });
+    p.catch(() => { const c = cache.get(key); if (c && c.p === p) cache.delete(key); });
+    // Refresh a signed link shortly before it lapses; blob URLs never expire.
+    const exp = wantLink ? now + 4 * 60 * 1000 : 0;
+    cache.set(key, { p: p, exp: exp });
+    return p;
   }
   function apply(img, url, variant) {
     if (!isSecure(url)) { img.src = url; return; }
@@ -597,6 +615,10 @@ function renderMobileSuggestions(customers) {
     item.addEventListener('click', () => {
       const mi = document.getElementById('guest-mobile');
       if (mi) mi.value = c.mobile;
+      // Show the name the search row already has right away — don't make the
+      // desk wait on the /get_customer round-trip just to see who they picked.
+      const ni = document.getElementById('guest-name');
+      if (ni) ni.value = _fmtName(c.name) || '';
       hideMobileSuggestions();
       lookupAndFillCustomer(c.mobile);
     });
@@ -612,7 +634,9 @@ function hideMobileSuggestions() {
 
 async function lookupAndFillCustomer(mobile) {
   try {
-    const res  = await apiFetch(`/get_customer/${mobile}`);
+    // Guest + ID images first: docs_only=1 skips the pending-settlement query,
+    // so the card and photos paint without waiting on it.
+    const res  = await apiFetch(`/get_customer/${mobile}?docs_only=1`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
 
@@ -624,9 +648,17 @@ async function lookupAndFillCustomer(mobile) {
       _applyDocViewBtn(data.customer);
       _showCheckinStoredDocs(data.customer);
       _applyFlagAlert(data.customer);
-      _applyPendingSettlementAlert(data.customer);
       _applyWantsBillNote(data.customer);
       _applyCheckinGstCard(data.customer);
+      // Then the pending-settlement warning, fetched separately so it never
+      // delays the card. Skip if the user has moved to another guest meanwhile.
+      apiFetch(`/get_customer/${mobile}`).then(r => r.json()).then(d => {
+        if (d.success && d.customer && _currentCheckinCustomer &&
+            _currentCheckinCustomer.mobile === d.customer.mobile) {
+          Object.assign(_currentCheckinCustomer, d.customer);
+          _applyPendingSettlementAlert(_currentCheckinCustomer);
+        }
+      }).catch(() => {});
     } else {
       _currentCheckinCustomer = null;
       clearNameMismatch();

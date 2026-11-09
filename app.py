@@ -309,6 +309,9 @@ def firebase_config_js():
         "messagingSenderId": pick("FIREBASE_MESSAGING_SENDER_ID", "messagingSenderId"),
         "appId":             pick("FIREBASE_APP_ID",              "appId"),
         "measurementId":     pick("FIREBASE_MEASUREMENT_ID",      "measurementId"),
+        # Named Firestore DB for browser listeners (region move). Empty = the
+        # project's (default) DB, i.e. unchanged. google_sync.js reads this.
+        "firestoreDb":       os.environ.get("CIBARA_FIRESTORE_DB", ""),
     }
     js = (
         f"// Firebase web config — CIBARA_ENV={CIBARA_ENV} "

@@ -48,15 +48,17 @@ async function firebase() {
   const cfg = await get<{ firebase: Record<string, string> }>('/api/v2/config')
   const app = initializeApp(cfg.firebase)
   const auth = authMod.getAuth(app)
+  // Named Firestore DB (region move); empty = the project's (default) DB.
+  const dbId = cfg.firebase.firestoreDb || undefined
   let db: import('firebase/firestore').Firestore
   try {
     // IndexedDB cache: re-attaching listeners after a reload only pays for
     // documents that changed (the old UI did the same).
     db = fsMod.initializeFirestore(app, {
       localCache: fsMod.persistentLocalCache({ tabManager: fsMod.persistentMultipleTabManager() }),
-    })
+    }, dbId)
   } catch {
-    db = fsMod.getFirestore(app)
+    db = dbId ? fsMod.getFirestore(app, dbId) : fsMod.getFirestore(app)
   }
   fb = { app, auth, db }
   return fb

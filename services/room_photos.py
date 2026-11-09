@@ -191,8 +191,29 @@ def store(room, kind: str, image_bytes: bytes, user: Optional[dict] = None,
     }
     stamp = datetime.now(IST).strftime("%Y%m%d-%H%M%S")
     base = f"{_PREFIX}/{int(room)}/{stamp}_{context}_{kind}"
+    # Upload the photo and its thumbnail concurrently — two independent network
+    # round trips that used to run back to back (the uploads release the GIL),
+    # so the request returns in about the time of one. Errors from either still
+    # propagate exactly as before (the thumb's after the join).
+    _thumb_out: dict = {}
+
+    def _put_thumb():
+        try:
+            _thumb_out["url"] = _put(bucket, base + _THUMB_SUFFIX + ".jpg", thumb_bytes, meta)
+        except Exception as e:  # re-raised on the main thread after join
+            _thumb_out["err"] = e
+
+    t = threading.Thread(target=_put_thumb, daemon=True) if thumb_bytes else None
+    if t:
+        t.start()
     url = _put(bucket, base + ".jpg", image_bytes, meta)
-    thumb = _put(bucket, base + _THUMB_SUFFIX + ".jpg", thumb_bytes, meta) if thumb_bytes else ""
+    if t:
+        t.join()
+        if "err" in _thumb_out:
+            raise _thumb_out["err"]
+        thumb = _thumb_out.get("url", "")
+    else:
+        thumb = ""
     logger.info(f"room_photos: stored {base}.jpg ({len(image_bytes) // 1024} KB"
                 f"{', thumb ' + str(len(thumb_bytes) // 1024) + ' KB' if thumb_bytes else ''})")
 

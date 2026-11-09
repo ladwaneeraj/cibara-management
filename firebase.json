@@ -3,6 +3,12 @@
     "rules": "firestore.rules",
     "indexes": "firestore.indexes.json"
   },
+  "storage": [
+    {
+      "bucket": "cibara-software-61512-mum",
+      "rules": "storage.rules"
+    }
+  ],
   "hosting": {
     "public": "guest/dist",
     "ignore": [

@@ -2974,6 +2974,12 @@ document.addEventListener("DOMContentLoaded", function () {
         document.querySelectorAll('#transaction-log .log-item').forEach((r) => {
           r.style.display = "";
         });
+        // Leaving the Expense filter with a search still open: if the search had
+        // widened the date range, snap it back to Today so "All" doesn't render
+        // a whole year.
+        if (typeof window._txnSearchRestoreIfWidened === "function") {
+          window._txnSearchRestoreIfWidened();
+        }
       }
       return null;
     }
@@ -2993,7 +2999,7 @@ document.addEventListener("DOMContentLoaded", function () {
         <i class="fas fa-search"
            style="position:absolute;left:0.55rem;top:50%;transform:translateY(-50%);color:#94a3b8;font-size:0.78rem;"></i>
         <input type="text" id="txn-expense-search"
-          placeholder="Search expenses (description, vendor, paid to, invoice no.)…"
+          placeholder="Search this year — shop, amount, invoice no., category…"
           style="width:100%;padding:0.42rem 0.6rem 0.42rem 1.8rem;font-size:0.85rem;
                  border:1.5px solid #e2e8f0;border-radius:8px;outline:none;
                  transition:border-color .15s;" />
@@ -3047,9 +3053,19 @@ document.addEventListener("DOMContentLoaded", function () {
       if (match) visible++;
     });
 
+    // Hide date-group headers that have no visible rows left — otherwise a
+    // search leaves bare day headings with nothing under them (the "blank
+    // dates" the owner reported). Show every group again when the box is empty.
+    document.querySelectorAll("#transaction-log .log-date-group").forEach((group) => {
+      if (!q) { group.style.display = ""; return; }
+      const anyVisible = Array.from(group.querySelectorAll(".log-item"))
+        .some((r) => r.style.display !== "none");
+      group.style.display = anyVisible ? "" : "none";
+    });
+
     if (countEl) {
       countEl.textContent = q
-        ? `${visible}/${totalExpenseRows} match`
+        ? `${visible} found`
         : "";
     }
   }
@@ -3092,10 +3108,53 @@ document.addEventListener("DOMContentLoaded", function () {
   // Initial setup (in case log was already populated before observer attached).
   setTimeout(_ensureSearchBarAndReapply, 0);
 
+  // Start of the current Indian financial year (1 April) for `ymd`.
+  function _fyStart(ymd) {
+    const d = new Date(ymd + "T00:00:00");
+    const y = d.getMonth() >= 3 ? d.getFullYear() : d.getFullYear() - 1;
+    return y + "-04-01";
+  }
+
+  // The default Transactions view shows only the last ~3 days, so the old
+  // search "found nothing" for anything older. When the operator types, widen
+  // the view to this financial year ONCE so the search actually spans their
+  // history; restore Today when the box is cleared. The row filter + empty-group
+  // hiding above then show only the matches.
+  // shortcut: FY window only — bills from a previous year need a manual wider
+  // range; upgrade to a server-side expense text query if that becomes common.
+  let _txnSearchWidened = false;
+
+  function _onExpenseSearchInput(val) {
+    const q = (val || "").trim();
+    if (q && !_txnSearchWidened) {
+      const today = _localYMD();
+      const fy = _fyStart(today);
+      const from = txnActiveDateRange && txnActiveDateRange.fromDate;
+      if ((!from || from > fy) && typeof window.goToTransactionDate === "function") {
+        _txnSearchWidened = true;
+        window.goToTransactionDate(fy);   // re-renders async; observer re-applies the filter
+      }
+    } else if (!q && _txnSearchWidened) {
+      _txnSearchWidened = false;
+      if (typeof window.goToTransactionDate === "function") {
+        window.goToTransactionDate(_localYMD());   // back to Today
+      }
+    }
+    _applyExpenseSearch();
+  }
+  // Let the filter-away reset (in _ensureExpenseSearchEl) undo a search widen.
+  window._txnSearchRestoreIfWidened = function () {
+    if (!_txnSearchWidened) return;
+    _txnSearchWidened = false;
+    if (typeof window.goToTransactionDate === "function") {
+      window.goToTransactionDate(_localYMD());
+    }
+  };
+
   // Wire the search input (created lazily — use delegation on the body)
   document.addEventListener("input", function (e) {
     if (e.target && e.target.id === "txn-expense-search") {
-      _applyExpenseSearch();
+      _onExpenseSearchInput(e.target.value);
     }
   });
   document.addEventListener("click", function (e) {
@@ -3103,7 +3162,7 @@ document.addEventListener("DOMContentLoaded", function () {
       const input = document.getElementById("txn-expense-search");
       if (input) {
         input.value = "";
-        _applyExpenseSearch();
+        _onExpenseSearchInput("");
         input.focus();
       }
     }
@@ -3153,8 +3212,32 @@ document.addEventListener("DOMContentLoaded", function () {
         if (!patchData.success) throw new Error(patchData.message || "Attach failed");
 
         if (typeof showNotification === "function") showNotification("Invoice photo attached!", "success");
-        // Refresh the transaction log so the photo icon appears
-        if (typeof debouncedFetchData === "function") debouncedFetchData();
+
+        // Auto-read the bill and pre-fill the expense, the same way a new
+        // expense does. The photo is already stored above, so this opens the
+        // edit modal and runs OCR on the cropped file to fill the empty
+        // fields (vendor, GST, invoice no., date…) for the admin to confirm.
+        // Only when OCR is available and the row is editable — otherwise the
+        // photo is simply attached and the log refreshes as before.
+        const attachedLog = _findLogByDocId(_pendingAttachDocId);
+        let ocrOn = false;
+        try {
+          ocrOn = window.isExpenseOcrEnabled ? await window.isExpenseOcrEnabled() : false;
+        } catch (_) { ocrOn = false; }
+        const canManage = window.CibaraAuth
+          && typeof window.CibaraAuth.userCan === "function"
+          && window.CibaraAuth.userCan("expense.manage");
+        const canPrefill = ocrOn && canManage && attachedLog && !attachedLog.split_group_id
+          && typeof window.openExpenseEditModal === "function"
+          && typeof window.expenseAttachOcrPrefill === "function";
+
+        if (canPrefill) {
+          window.openExpenseEditModal(attachedLog);
+          window.expenseAttachOcrPrefill(file, upData.url);
+        } else if (typeof debouncedFetchData === "function") {
+          // Refresh the transaction log so the photo icon appears.
+          debouncedFetchData();
+        }
       } catch (err) {
         console.error("Attach photo error:", err);
         if (typeof showNotification === "function") showNotification(`Error: ${err.message}`, "error");
@@ -3542,6 +3625,19 @@ function _setActiveDateRange(fromDate, toDate) {
   txnActiveDateRange = next;
   if (changed && typeof window.releaseExpenseDateLock === "function") {
     window.releaseExpenseDateLock();
+  }
+
+  // Live-sync for PAST days: the google_sync listener only watches today, so a
+  // remote change on an older day won't fire unless we watch that range. Attach
+  // the watch whenever the view reaches before today; drop it on the Today view.
+  // (watchExpenseRange is a no-op / skip when the range is already watched.)
+  if (window.CibaraSync) {
+    const today = _localYMD();
+    if (next.fromDate && next.fromDate < today) {
+      window.CibaraSync.watchExpenseRange(next.fromDate, next.toDate);
+    } else {
+      window.CibaraSync.stopExpenseRangeWatch();
+    }
   }
 }
 

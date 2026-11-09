@@ -1237,10 +1237,16 @@ def upload_expense_invoice():
         storage_path = f"expense_invoices/{unique_name}"
 
         blob = bucket.blob(storage_path)
+        # Uniform bucket-level access (the asia-south1 bucket) forbids per-object
+        # make_public(); use a Firebase download token like every other upload.
+        token = _uuid.uuid4().hex
+        blob.metadata = {"firebaseStorageDownloadTokens": token}
         blob.upload_from_file(file, content_type=file.content_type)
 
-        blob.make_public()
-        download_url = blob.public_url
+        from urllib.parse import quote as _quote
+        encoded = _quote(storage_path, safe="")
+        download_url = (f"https://firebasestorage.googleapis.com/v0/b/"
+                        f"{bucket.name}/o/{encoded}?alt=media&token={token}")
 
         logger.info(f"Expense invoice uploaded: {storage_path}")
         return jsonify(success=True, url=download_url)

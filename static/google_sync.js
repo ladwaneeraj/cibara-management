@@ -13,30 +13,62 @@
 // <script src="/firebase-config.js"> in templates/, which reads env vars on
 // the server so prod / dev can be switched without editing client code.
 
+// Modular Firestore SDK (the compat SDK cannot target a named database). We
+// keep compat for the staff sign-in (auth.js / CibaraAuth) and run Firestore on
+// a MODULAR app here. The two SDKs keep separate app registries, but a modular
+// app with the same config/name inherits the compat sign-in through the shared
+// Firebase-Auth IndexedDB persistence (verified), so listeners are still
+// evaluated by firestore.rules with the staff role.
+import { initializeApp, getApps, getApp } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-app.js";
+import { getAuth, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-auth.js";
+import {
+  initializeFirestore, persistentLocalCache, persistentMultipleTabManager,
+  getFirestore, collection, doc, query, where, onSnapshot,
+} from "https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore.js";
+
 if (!firebase.apps.length) {
   firebase.initializeApp(window.FIREBASE_CONFIG);
 }
-const db = firebase.firestore();
+
+// Modular app bound to the SAME config/name so it shares the compat auth session.
+const _mApp = getApps().length ? getApp() : initializeApp(window.FIREBASE_CONFIG);
+// Register auth on the modular app so Firestore attaches the user's token;
+// this also restores the persisted staff session.
+const _mAuth = getAuth(_mApp);
+// CIBARA_FIRESTORE_DB (served in window.FIREBASE_CONFIG.firestoreDb) names the
+// asia-south1 database for the region move; empty = the project's (default) DB.
+const _dbId = (window.FIREBASE_CONFIG && window.FIREBASE_CONFIG.firestoreDb) || undefined;
 
 // ─── Offline persistence (READ-COST CRITICAL) ──────────────────────────────
-// Without this, the Firestore SDK keeps its cache in memory only. Every page
-// load / PWA resume therefore starts cold: each listener below re-downloads
-// its ENTIRE result set and every one of those documents is a billed read.
-// With IndexedDB persistence the SDK stores the previous query results plus a
-// resume token, so a reload costs a handful of reads instead of ~175.
-// synchronizeTabs: several open tabs on the same device share ONE backend
-// connection instead of one listener set each.
-//
-// Rejections ('failed-precondition': another tab already owns a single-tab
-// lease; 'unimplemented': Safari private mode, IndexedDB disabled) are
-// non-fatal: the SDK falls back to the in-memory cache and every listener
-// still works. Must be called before any other Firestore operation.
-db.enablePersistence({ synchronizeTabs: true }).catch((err) => {
+// persistentLocalCache (set at init) replaces the old db.enablePersistence():
+// the SDK stores previous query results + a resume token in IndexedDB, so a
+// reload costs a handful of reads instead of ~175, and persistentMultipleTabManager
+// shares ONE backend connection across tabs on the same device. If it cannot be
+// enabled (another tab owns a single-tab lease; Safari private mode; IndexedDB
+// off) the SDK falls back to the in-memory cache and every listener still works.
+let db;
+try {
+  db = initializeFirestore(_mApp, {
+    localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }),
+  }, _dbId);
+} catch (err) {
   const code = (err && err.code) || "unknown";
   console.warn(
     "Cibara: Firestore offline persistence unavailable (" + code + "). " +
       "Live sync still works; read costs will be higher on this device.",
   );
+  db = getFirestore(_mApp, _dbId);
+}
+
+// Resolve once the modular app has restored the signed-in user, so listeners
+// attach WITH the token rather than as an unauthenticated client (which
+// firestore.rules would refuse). Falls through after a timeout so a signed-out
+// or Firebase-unreachable session never hangs here — the listeners then behave
+// exactly as the realtimeAvailable()/permission-denied paths below already handle.
+const _modularAuthReady = new Promise((resolve) => {
+  if (_mAuth.currentUser) { resolve(_mAuth.currentUser); return; }
+  const unsub = onAuthStateChanged(_mAuth, (u) => { if (u) { unsub(); resolve(u); } });
+  setTimeout(() => resolve(_mAuth.currentUser || null), 8000);
 });
 
 // A listener the rules refuse dies for good (the SDK does not retry), so
@@ -190,7 +222,7 @@ const _horizonStr = _localYMD(_horizonDate);
 // Housekeeping's role may read rooms, settings and its own team's guest
 // requests only; subscribing it to bills or payments would just be refused
 // by the rules and logged as an error, so those listeners are skipped.
-window.CibaraAuth.ready().then((user) => {
+Promise.all([window.CibaraAuth.ready(), _modularAuthReady]).then(([user]) => {
   if (!user || !user.role) return;
   // If the Firebase SDK sign-in failed (e.g. the fake-backend demo, or Firebase
   // unreachable), every listener below would come back permission-denied — one
@@ -226,7 +258,7 @@ function startListeners(fullAccess) {
 // `rooms` object and re-render — no full round-trip to Flask needed.
 let roomsInitialLoad = true;
 
-_track(db.collection("rooms").onSnapshot((snapshot) => {
+_track(onSnapshot(collection(db, "rooms"), (snapshot) => {
   if (roomsInitialLoad) {
     roomsInitialLoad = false;
     if (!LISTENER_FIRST) return;
@@ -287,11 +319,11 @@ _track(db.collection("rooms").onSnapshot((snapshot) => {
 // Keeps the dashboard stats bar in sync without a full fetchData() call.
 let totalsInitialLoad = true;
 
-if (fullAccess) _track(db.collection("totals").doc("current_totals").onSnapshot((snap) => {
+if (fullAccess) _track(onSnapshot(doc(db, "totals", "current_totals"), (snap) => {
   if (totalsInitialLoad) {
     totalsInitialLoad = false;
     if (!LISTENER_FIRST) return;
-    if (snap.exists) {
+    if (snap.exists()) {
       // /get_data fills in any missing keys with 0; do the same so the stats
       // bar never renders "undefined".
       const t = Object.assign(
@@ -305,7 +337,7 @@ if (fullAccess) _track(db.collection("totals").doc("current_totals").onSnapshot(
     return;
   }
 
-  if (!snap.exists || snap.metadata.fromCache) return;
+  if (!snap.exists() || snap.metadata.fromCache) return;
 
   if (typeof totals !== "undefined" && snap.data()) {
     Object.assign(totals, snap.data());
@@ -326,14 +358,14 @@ if (fullAccess) _track(db.collection("totals").doc("current_totals").onSnapshot(
 // fromCache: SDK restoring offline state — ignore.
 let uiConfigInitialLoad = true;
 
-_track(db.collection("settings").doc("ui_config").onSnapshot((snap) => {
+_track(onSnapshot(doc(db, "settings", "ui_config"), (snap) => {
   if (uiConfigInitialLoad) {
     uiConfigInitialLoad = false;
     return;
   }
   if (snap.metadata.hasPendingWrites || snap.metadata.fromCache) return;
 
-  const cfg = snap.exists ? snap.data() : {};
+  const cfg = snap.exists() ? snap.data() : {};
   console.log("⚡ Remote ui_config change", cfg);
   // Hand off to script.js — it owns DOM mutation + active-tab switching.
   window.dispatchEvent(
@@ -347,9 +379,9 @@ _track(db.collection("settings").doc("ui_config").onSnapshot((snap) => {
 // the same filter the rule checks; without it the whole listener is refused.
 // Each snapshot is the complete current set, so guest-requests.js repaints
 // from it wholesale and works out what is new by comparing ids.
-let guestRequestsQuery = db.collection("guestRequests").where("active", "==", true);
-if (!fullAccess) guestRequestsQuery = guestRequestsQuery.where("team", "==", "housekeeping");
-_track(guestRequestsQuery.onSnapshot((snapshot) => {
+let guestRequestsQuery = query(collection(db, "guestRequests"), where("active", "==", true));
+if (!fullAccess) guestRequestsQuery = query(guestRequestsQuery, where("team", "==", "housekeeping"));
+_track(onSnapshot(guestRequestsQuery, (snapshot) => {
   const items = snapshot.docs.map((d) => Object.assign({ id: d.id }, d.data()));
   window.dispatchEvent(new CustomEvent("cibaraGuestRequests", {
     detail: {
@@ -383,7 +415,7 @@ function _rebuildLogs() {
   S().paint({ txns: true });
 }
 
-if (fullAccess) _track(db.collection("payments").where("date", "==", _todayStr).onSnapshot(
+if (fullAccess) _track(onSnapshot(query(collection(db, "payments"), where("date", "==", _todayStr)),
   (snapshot) => {
     if (LISTENER_FIRST) {
       _todayPayments = snapshot.docs.map((d) => d.data());
@@ -466,10 +498,9 @@ if (fullAccess) _track(db.collection("payments").where("date", "==", _todayStr).
 // Previously listened to all historical bills — very costly.
 let billsInitialLoad = true;
 
-if (fullAccess) _track(db.collection("bills")
-  .where("checkout_time", ">=", _todayStr + " 00:00")
-  .where("checkout_time", "<=", _todayStr + " 23:59")
-  .onSnapshot(
+if (fullAccess) _track(onSnapshot(query(collection(db, "bills"),
+  where("checkout_time", ">=", _todayStr + " 00:00"),
+  where("checkout_time", "<=", _todayStr + " 23:59")),
   (snapshot) => {
     if (billsInitialLoad) {
       billsInitialLoad = false;
@@ -504,10 +535,9 @@ if (fullAccess) _track(db.collection("bills")
 // composite index, so this is a query-shape change only.
 let bookingsInitialLoad = true;
 
-if (fullAccess) _track(db.collection("bookings")
-  .where("check_in_date", ">=", _todayStr)
-  .where("check_in_date", "<=", _horizonStr)
-  .onSnapshot(
+if (fullAccess) _track(onSnapshot(query(collection(db, "bookings"),
+  where("check_in_date", ">=", _todayStr),
+  where("check_in_date", "<=", _horizonStr)),
   (snapshot) => {
     if (LISTENER_FIRST) {
       // Rebuild the arrival-indicator map from the documents this listener
@@ -575,7 +605,7 @@ if (fullAccess) _track(db.collection("bookings")
 // Listen for new expenses so the transaction tab stays current on all devices.
 let expensesInitialLoad = true;
 
-if (fullAccess) _track(db.collection("expenses").where("date", "==", _todayStr).onSnapshot(
+if (fullAccess) _track(onSnapshot(query(collection(db, "expenses"), where("date", "==", _todayStr)),
   (snapshot) => {
     if (LISTENER_FIRST) {
       // `_doc_id` is NOT optional. The server adds it in
@@ -631,6 +661,80 @@ if (fullAccess) _track(db.collection("expenses").where("date", "==", _todayStr).
   }
 , onListenerError("expenses")));
 
+// ─── Expense range watch (lazy, PAST dates only) ───────────────────────────
+// The listener above keeps TODAY's expenses live on every device. When the
+// operator browses an OLDER date range in the Transactions tab, a remote
+// add / edit / photo-attach on one of those past days is invisible to that
+// today-only listener — which is why history felt like it didn't sync.
+//
+// This watches expenses in the range currently on screen and fires the same
+// events the today listener does, so the existing consumer in
+// transaction-tracking.js refreshes the view. It is attached ONLY while a past
+// range is shown (transaction-tracking drives it through CibaraSync.*), and it
+// replaces itself when the range changes, so cost stays bounded to what is
+// actually being viewed. Today is left to the listener above, so the watched
+// range is capped at yesterday — no double events for today's rows.
+let _expenseRangeUnsub = null;
+let _expenseRangeKey = "";          // "from|to" currently watched
+
+function _ymdAddDays(ymd, delta) {
+  const d = new Date(ymd + "T00:00:00");
+  d.setDate(d.getDate() + delta);
+  return d.getFullYear() + "-" +
+    String(d.getMonth() + 1).padStart(2, "0") + "-" +
+    String(d.getDate()).padStart(2, "0");
+}
+
+function _stopExpenseRangeWatch() {
+  if (_expenseRangeUnsub) {
+    try { _expenseRangeUnsub(); } catch (_) { /* already gone */ }
+    _expenseRangeUnsub = null;
+  }
+  _expenseRangeKey = "";
+}
+
+function _watchExpenseRange(fromDate, toDate) {
+  if (!fullAccess) return;          // non-admins never read the expenses collection
+  const yesterday = _ymdAddDays(_todayStr, -1);
+  // Cap at yesterday; today is already live via the listener above.
+  const to = toDate && toDate < _todayStr ? toDate : yesterday;
+  const from = fromDate || "";
+  if (!from || from > to) { _stopExpenseRangeWatch(); return; }  // range is only today
+
+  const key = from + "|" + to;
+  if (key === _expenseRangeKey && _expenseRangeUnsub) return;    // already watching it
+  _stopExpenseRangeWatch();
+  _expenseRangeKey = key;
+
+  let initial = true;
+  _expenseRangeUnsub = onSnapshot(
+    query(collection(db, "expenses"),
+      where("date", ">=", from), where("date", "<=", to)),
+    (snapshot) => {
+      if (initial) { initial = false; return; }   // first snapshot is already on screen
+      if (snapshot.metadata.hasPendingWrites || snapshot.metadata.fromCache) return;
+      snapshot.docChanges().forEach((change) => {
+        const exp = Object.assign({}, change.doc.data(), { _doc_id: change.doc.id });
+        if (!exp.date) return;
+        if (change.type === "added") {
+          window.dispatchEvent(new CustomEvent("cibaraExpenseAdded", { detail: exp }));
+          showSyncToast("🧾 Expense Added");
+        } else {
+          window.dispatchEvent(
+            new CustomEvent("cibaraTransactionRevised", { detail: { date: exp.date } }),
+          );
+          showSyncToast("✏️ Expense Updated");
+        }
+      });
+    },
+    onListenerError("expense-range"),
+  );
+}
+
+window.CibaraSync = window.CibaraSync || {};
+window.CibaraSync.watchExpenseRange = _watchExpenseRange;
+window.CibaraSync.stopExpenseRangeWatch = _stopExpenseRangeWatch;
+
 // ─── Daily serial counter (listener-first only) ───────────────────────────
 // Replaces the /get_transaction_metadata call that lived inside fetchData().
 // That endpoint did a single-doc read of daily_counters/<today> and returned
@@ -638,8 +742,8 @@ if (fullAccess) _track(db.collection("expenses").where("date", "==", _todayStr).
 // also stays live, so the next check-in serial is correct on every device
 // without a refresh. One document: the cheapest listener in this file.
 if (LISTENER_FIRST && fullAccess) {
-  _track(db.collection("daily_counters").doc(_todayStr).onSnapshot((snap) => {
-    const count = snap.exists ? ((snap.data() || {}).count || 0) : 0;
+  _track(onSnapshot(doc(db, "daily_counters", _todayStr), (snap) => {
+    const count = snap.exists() ? ((snap.data() || {}).count || 0) : 0;
     const map = {};
     map[_todayStr] = count;
     S().setDailyCounters(map);

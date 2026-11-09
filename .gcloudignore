@@ -1,0 +1,5 @@
+# Upload ignore for `gcloud run deploy --source`.
+# Reuse .gitignore (keeps secrets/keys out of the build context)...
+#!include:.gitignore
+# ...then drop agent worktrees/data that aren't part of the app.
+.claude/

@@ -9,7 +9,7 @@ import pytest
 
 import config
 from services import availability_service as av
-from services import razorpay_service, system_alerts
+from services import blocks_service, razorpay_service, system_alerts
 from tests.fakes import fake_firebase as F
 
 DB = F.FAKE_DB
@@ -169,6 +169,25 @@ def test_expired_hold_whose_room_was_rebooked_is_not_confirmed(client, notif):
     assert _kinds(notif) == ["web_revive_conflict"]
     notif.wa.assert_not_called()
     assert "pay_1" in DB.dump("processed_webhooks")
+
+
+def test_block_created_after_hold_is_not_confirmed(client, notif):
+    """A category/room block placed AFTER the hold but before the webhook must
+    win: the booking stays unconfirmed, no ledger row, owner is alerted, and the
+    processed marker is written so Razorpay stops retrying."""
+    bid = _booking(room="224")  # a deluxe-pool room
+    blocks_service.create_block(scope="category", category="deluxe",
+                                start=datetime.now(config.IST), reason="owner use",
+                                created_by="owner")
+    assert _post(client, _event(bid)).status_code == 200
+    assert _booking_doc(bid)["status"] == "pending_payment"  # NOT confirmed
+    assert _payments() == []
+    assert _kinds(notif) == ["web_blocked_after_hold"]
+    notif.wa.assert_not_called()
+    assert "pay_1" in DB.dump("processed_webhooks")
+    # redelivery is idempotent (marker already present) -> no extra work/alerts
+    assert _post(client, _event(bid)).status_code == 200
+    assert notif.alert.call_count == 1
 
 
 def test_second_distinct_payment_on_confirmed_booking_alerts_no_second_row(client, notif):

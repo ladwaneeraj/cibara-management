@@ -17,7 +17,7 @@ from google.api_core import exceptions as gexc
 import config
 from config import get_web_config, invalidate_rooms_and_totals
 from services import availability_service as av
-from services import payment_service, razorpay_service, system_alerts
+from services import blocks_service, payment_service, razorpay_service, system_alerts
 
 logger = logging.getLogger(__name__)
 
@@ -541,15 +541,24 @@ def razorpay_webhook():
             txn.set(proc_ref, {**mark, "outcome": "mismatch"})
             return
 
-        if status == "expired":
-            # A swept hold released its room; someone may have taken it since.
-            # Do not double-book: leave it expired and let the owner refund/reassign.
-            ci = av._parse_date(b.get("check_in_date"))
-            hm = av._parse_time(b.get("check_in_time"))
-            days = av._parse_days(b.get("days"))
-            if ci is not None and hm is not None and days is not None:
-                ws = ci.replace(hour=hm[0], minute=hm[1])
-                busy = av.occupied_intervals([b.get("room")], ws, ws + timedelta(hours=24 * days),
+        # Blocks win over an in-flight hold: if the room/category was blocked
+        # after the hold was placed (same stay window), do NOT confirm -- a block
+        # that existed at hold time would already have prevented the hold. Same
+        # window the hold/sweep paths build.
+        ci = av._parse_date(b.get("check_in_date"))
+        hm = av._parse_time(b.get("check_in_time"))
+        days = av._parse_days(b.get("days"))
+        if ci is not None and hm is not None and days is not None:
+            ws = ci.replace(hour=hm[0], minute=hm[1])
+            we = ws + timedelta(hours=24 * days)
+            if str(b.get("room")) in blocks_service.active_blocked_rooms(ws, we, now=now):
+                out["outcome"] = "blocked"
+                txn.set(proc_ref, {**mark, "outcome": "blocked"})
+                return
+            if status == "expired":
+                # A swept hold released its room; someone may have taken it since.
+                # Do not double-book: leave it expired, owner refunds/reassigns.
+                busy = av.occupied_intervals([b.get("room")], ws, we,
                                              now=now, exclude_booking_id=booking_id)
                 if busy.get(str(b.get("room"))):
                     out["outcome"] = "revive_conflict"
@@ -618,6 +627,11 @@ def razorpay_webhook():
         _alert_owner("web_amount_mismatch",
                      f"Payment {payment_id} for booking {ref} paid {paid_paise} paise but "
                      f"{out.get('expected_paise')} was due; NOT confirmed. Review/refund.", ctx)
+    elif outcome == "blocked":
+        _alert_owner("web_blocked_after_hold",
+                     f"Payment {payment_id} captured for booking {ref} (room {b.get('room')}, "
+                     f"{b.get('check_in_date')}) but that room/category was blocked after the hold "
+                     f"was placed — NOT confirmed. Refund or reassign.", ctx)
     elif outcome == "revive_conflict":
         _alert_owner("web_revive_conflict",
                      f"Payment {payment_id} captured for an expired hold ({ref}) but room "

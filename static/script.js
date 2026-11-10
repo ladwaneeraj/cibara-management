@@ -8094,9 +8094,9 @@ document.addEventListener("DOMContentLoaded", function () {
 // Room blocks — take a room (or a whole category) out of sale for a time range
 // ══════════════════════════════════════════════════════════════════════════════
 // Backend: POST/GET /blocks, DELETE /blocks/<id> (routes/rooms.py). The grid
-// shows blocked rooms greyed; "Block now" on a card blocks that room from this
-// moment, open-ended; the Blocks modal (quick-actions menu) takes a date range
-// for a room or a category and lists/removes active blocks.
+// shows blocked rooms greyed with a "Blocked · Unblock" chip; blocking a room
+// or a category for a date range is done from the Bookings toolbar's Block
+// Rooms modal, which also lists and removes active blocks.
 function _blkCanManage() {
   const a = window.CibaraAuth;
   return !!(a && a.userCan && a.userCan("room.update"));
@@ -8112,10 +8112,10 @@ function roomBlockMarkup(roomNumber, blockId) {
               title="Blocked — tap to remove the block" aria-label="Unblock room ${roomNumber}">
               <i class="fas fa-ban"></i> Blocked · Unblock</button>`;
   }
-  return `<button class="room-block-btn" data-perm="room.update"
-            onclick="handleBlockNowClick(event, '${roomNumber}')"
-            title="Block this room from sale, starting now" aria-label="Block room ${roomNumber}">
-            <i class="fas fa-ban"></i></button>`;
+  // Per-card "Block now" removed — blocking a room/category now lives in the
+  // Bookings toolbar (Block Rooms → date-range modal). The grid keeps only the
+  // "Blocked · Unblock" chip above for rooms already out of sale.
+  return "";
 }
 
 async function loadBlocks() {
@@ -8130,7 +8130,7 @@ async function loadBlocks() {
     blocksList = data.blocks || [];
     if (changed && typeof renderRooms === "function") renderRooms();
     const modal = document.getElementById("blocks-modal");
-    if (modal && modal.classList.contains("show")) renderBlocksList();
+    if (modal && modal.classList.contains("show")) { renderBlocksList(); renderBlkCal(); }
   } catch (err) {
     console.warn("[blocks] load failed:", err);
   }
@@ -8201,6 +8201,81 @@ function renderBlocksList() {
   }).join("");
 }
 
+// ── Block Rooms: MMT-style colour-coded range calendar ──────────────────────
+// Replaces the two datetime inputs: tap a check-in day then a check-out day.
+// Days are coloured for the currently-selected scope — past (greyed), already
+// blocked (red), and the picked range (green). Checkout day is exclusive, so a
+// one-night block is check-in + the next day. blocksList/rooms are the globals
+// the rest of this section already maintains.
+var _blkCal = { view: null, start: null, end: null };
+var _BLK_POOLS = { premium: ["200", "201", "202", "203", "204", "205", "206"], deluxe: ["223", "224", "225", "226", "227"] };
+
+function _blkYmd(d) { return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0"); }
+function _blkToday() { return _blkYmd(new Date()); }
+
+function _blkScopeRooms() {
+  const scope = (document.getElementById("blocks-scope") || {}).value;
+  if (scope === "category") return _BLK_POOLS[(document.getElementById("blocks-category") || {}).value] || [];
+  const r = (document.getElementById("blocks-room") || {}).value;
+  return r ? [String(r)] : [];
+}
+function _blkRoomsOf(b) { return b.scope === "category" ? (_BLK_POOLS[b.category] || []) : (b.room ? [String(b.room)] : []); }
+
+function _blkDayBlocked(ymd, scopeRooms) {
+  for (let i = 0; i < blocksList.length; i++) {
+    const b = blocksList[i];
+    if (!_blkRoomsOf(b).some((r) => scopeRooms.indexOf(r) >= 0)) continue;
+    const s = String(b.start).slice(0, 10), e = b.end ? String(b.end).slice(0, 10) : null;
+    if (ymd >= s && (e === null || ymd < e)) return true;
+  }
+  return false;
+}
+function _blkInRange(ymd) {
+  if (!_blkCal.start) return false;
+  if (!_blkCal.end) return ymd === _blkCal.start;
+  return ymd >= _blkCal.start && ymd < _blkCal.end;
+}
+function _blkPickDay(ymd) {
+  if (ymd < _blkToday()) return;
+  if (!_blkCal.start || _blkCal.end) { _blkCal.start = ymd; _blkCal.end = null; }
+  else if (ymd <= _blkCal.start) { _blkCal.start = ymd; }
+  else { _blkCal.end = ymd; }
+  renderBlkCal();
+}
+function _renderBlkPicked() {
+  const el = document.getElementById("blocks-picked");
+  if (!el) return;
+  if (!_blkCal.start) el.textContent = "Pick a check-in date, then a check-out date.";
+  else if (!_blkCal.end) el.textContent = _blkCal.start + "  →  pick a check-out (or Create block for open-ended).";
+  else el.textContent = _blkCal.start + "  →  " + _blkCal.end;
+}
+function renderBlkCal() {
+  const box = document.getElementById("blocks-cal");
+  if (!box) return;
+  if (!_blkCal.view) _blkCal.view = new Date();
+  const y = _blkCal.view.getFullYear(), m = _blkCal.view.getMonth();
+  const startDow = new Date(y, m, 1).getDay(), dim = new Date(y, m + 1, 0).getDate();
+  const today = _blkToday(), scopeRooms = _blkScopeRooms();
+  const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+  const WD = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
+  let h = '<div class="blk-cal-head"><button type="button" class="blk-nav" data-blk-nav="-1" aria-label="Previous month">‹</button>'
+    + '<span class="blk-cal-title">' + MONTHS[m] + " " + y + "</span>"
+    + '<button type="button" class="blk-nav" data-blk-nav="1" aria-label="Next month">›</button></div>'
+    + '<div class="blk-legend"><span><i class="sw past"></i>Past</span><span><i class="sw blocked"></i>Blocked</span><span><i class="sw selected"></i>Your pick</span></div>'
+    + '<div class="blk-wd">' + WD.map((w) => "<span>" + w + "</span>").join("") + '</div><div class="blk-grid">';
+  for (let i = 0; i < startDow; i++) h += '<span class="blk-day other"></span>';
+  for (let d = 1; d <= dim; d++) {
+    const ymd = y + "-" + String(m + 1).padStart(2, "0") + "-" + String(d).padStart(2, "0");
+    let cls = "blk-day";
+    if (ymd < today) cls += " past";
+    else { if (_blkDayBlocked(ymd, scopeRooms)) cls += " blocked"; if (_blkInRange(ymd)) cls += " selected"; }
+    if (ymd === today) cls += " today";
+    h += '<button type="button" class="' + cls + '" data-blk-day="' + ymd + '"' + (ymd < today ? " disabled" : "") + ">" + d + "</button>";
+  }
+  box.innerHTML = h + "</div>";
+  _renderBlkPicked();
+}
+
 function openBlocksModal() {
   const modal = document.getElementById("blocks-modal");
   if (!modal) return;
@@ -8209,6 +8284,8 @@ function openBlocksModal() {
     const nums = Object.keys(rooms).sort((a, b) => parseInt(a) - parseInt(b));
     sel.innerHTML = nums.map((n) => `<option value="${escHtml(n)}">${escHtml(n)}</option>`).join("");
   }
+  _blkCal = { view: new Date(), start: null, end: null };
+  renderBlkCal();
   renderBlocksList();
   modal.classList.add("show");
   loadBlocks();
@@ -8239,22 +8316,37 @@ document.addEventListener("DOMContentLoaded", function () {
     const isRoom = !scopeSel || scopeSel.value === "room";
     document.getElementById("blocks-room-group").style.display = isRoom ? "" : "none";
     document.getElementById("blocks-category-group").style.display = isRoom ? "none" : "";
+    renderBlkCal(); // scope decides which days colour as already-blocked
   };
   if (scopeSel) { scopeSel.addEventListener("change", syncScope); syncScope(); }
+  // Changing the room / category recolours the already-blocked days.
+  const blkRoomSel = document.getElementById("blocks-room");
+  const blkCatSel = document.getElementById("blocks-category");
+  if (blkRoomSel) blkRoomSel.addEventListener("change", renderBlkCal);
+  if (blkCatSel) blkCatSel.addEventListener("change", renderBlkCal);
+  // Calendar: month nav + check-in/check-out range picking.
+  const blkCalEl = document.getElementById("blocks-cal");
+  if (blkCalEl) blkCalEl.addEventListener("click", (e) => {
+    const nav = e.target.closest("[data-blk-nav]");
+    if (nav) {
+      _blkCal.view = new Date(_blkCal.view.getFullYear(), _blkCal.view.getMonth() + Number(nav.getAttribute("data-blk-nav")), 1);
+      renderBlkCal();
+      return;
+    }
+    const day = e.target.closest("[data-blk-day]");
+    if (day && !day.disabled) _blkPickDay(day.getAttribute("data-blk-day"));
+  });
 
   const form = document.getElementById("blocks-form");
   if (form) {
     form.addEventListener("submit", async function (e) {
       e.preventDefault();
       const scope = scopeSel.value;
-      const startVal = document.getElementById("blocks-start").value;
-      const endVal = document.getElementById("blocks-end").value;
-      if (!startVal) { showNotification("Choose a start date and time.", "error"); return; }
-      if (endVal && endVal <= startVal) { showNotification("End must be after start.", "error"); return; }
+      if (!_blkCal.start) { showNotification("Pick a check-in date on the calendar.", "error"); return; }
       const body = {
         scope,
-        start: startVal,                 // datetime-local, no offset -> server treats as IST
-        end: endVal || null,
+        start: _blkCal.start + "T00:00:00",   // date only -> server treats as IST
+        end: _blkCal.end ? _blkCal.end + "T00:00:00" : null,
         reason: document.getElementById("blocks-reason").value.trim(),
       };
       if (scope === "room") body.room = document.getElementById("blocks-room").value;
@@ -8263,6 +8355,8 @@ document.addEventListener("DOMContentLoaded", function () {
         await _blkPost(body);
         showNotification("Block created.", "success");
         form.reset(); syncScope();
+        _blkCal = { view: _blkCal.view, start: null, end: null };
+        renderBlkCal();
         await loadBlocks();
       } catch (err) {
         showNotification("Could not create block: " + err.message, "error");

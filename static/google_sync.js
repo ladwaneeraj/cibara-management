@@ -535,6 +535,43 @@ if (fullAccess) _track(onSnapshot(query(collection(db, "bills"),
 // composite index, so this is a query-shape change only.
 let bookingsInitialLoad = true;
 
+// A web booking lives as a `pending_payment` hold BEFORE the guest pays, and a
+// swept hold becomes `expired`. Neither is a real booking, so they must not toast
+// staff or enter the list — the Razorpay webhook flips the hold to `confirmed`,
+// which arrives as its own change. See routes/bookings.py _HIDDEN_BOOKING_STATUSES.
+function _isHoldStatus(s) { s = (s || "").toLowerCase(); return s === "pending_payment" || s === "expired"; }
+
+// Native OS notification for a genuinely NEW confirmed booking — the same
+// Notification API the guest-requests panel already uses, so it works from the
+// installed ERP app with no extra app and nothing to pay for. It only fires
+// while the ERP is running (open or a live background tab); a fully-closed app
+// would need web push (FCM). Ids seen on first load are seeded so pre-existing
+// bookings and later edits never re-announce.
+const _notifiedBookingIds = new Set();
+try { if ("Notification" in window && Notification.permission === "default") Notification.requestPermission().catch(() => {}); } catch (_) { /* optional */ }
+
+function _desktopNotifyBooking(b) {
+  try {
+    if (!("Notification" in window) || Notification.permission !== "granted") return;
+    const bits = [];
+    if (b.room) bits.push("Room " + b.room);
+    if (b.check_in_date) bits.push("Check-in " + b.check_in_date);
+    if (b.total_amount != null) bits.push("₹" + b.total_amount);
+    if ((b.booking_source || "") === "web") bits.push("paid online");
+    const n = new Notification("🏨 New booking — " + (b.guest_name || "Guest"),
+      { body: bits.join(" · "), tag: "cibara-booking-" + (b.booking_id || b.room || Date.now()) });
+    n.onclick = function () { try { window.focus(); } catch (_) {} n.close(); };
+  } catch (_) { /* notifications are best-effort */ }
+}
+function _maybeNotifyBooking(change) {
+  if (change.type === "removed") return;
+  const b = change.doc.data();
+  if ((b.status || "").toLowerCase() !== "confirmed") return; // only real, confirmed bookings
+  if (_notifiedBookingIds.has(change.doc.id)) return;          // already announced
+  _notifiedBookingIds.add(change.doc.id);
+  _desktopNotifyBooking(b);
+}
+
 if (fullAccess) _track(onSnapshot(query(collection(db, "bookings"),
   where("check_in_date", ">=", _todayStr),
   where("check_in_date", "<=", _horizonStr)),
@@ -550,10 +587,13 @@ if (fullAccess) _track(onSnapshot(query(collection(db, "bookings"),
       S().paint({ rooms: true });
       const wasFirst = bookingsInitialLoad;
       bookingsInitialLoad = false;
+      if (wasFirst) snapshot.docs.forEach((d) => _notifiedBookingIds.add(d.id)); // pre-existing, not new
       if (wasFirst || snapshot.metadata.fromCache) return;
       // booking.js still drives its own list off these events.
       snapshot.docChanges().forEach((change) => {
         const booking = change.doc.data();
+        if (_isHoldStatus(booking.status)) return; // pre-payment web hold — not a booking yet
+        _maybeNotifyBooking(change);               // native OS notification for a new confirmed booking
         if (change.type === "added") {
           window.dispatchEvent(new CustomEvent("cibaraBookingAdded", { detail: booking }));
           showSyncToast("📋 New Booking — " + (booking.guest_name || "Guest"));
@@ -572,6 +612,7 @@ if (fullAccess) _track(onSnapshot(query(collection(db, "bookings"),
 
     if (bookingsInitialLoad) {
       bookingsInitialLoad = false;
+      snapshot.docs.forEach((d) => _notifiedBookingIds.add(d.id)); // pre-existing, not new
       return;
     }
 
@@ -581,6 +622,8 @@ if (fullAccess) _track(onSnapshot(query(collection(db, "bookings"),
 
     snapshot.docChanges().forEach((change) => {
       const booking = change.doc.data();
+      if (_isHoldStatus(booking.status)) return; // pre-payment web hold — not a booking yet
+      _maybeNotifyBooking(change);               // native OS notification for a new confirmed booking
       if (change.type === "added") {
         hasAdded = true;
         console.log("⚡ Remote booking added:", booking.room, booking.check_in_date);

@@ -4223,12 +4223,9 @@
             </select>
           </div>
           <div class="form-group">
-            <label class="form-label" for="blocks-start">From</label>
-            <input type="datetime-local" id="blocks-start" class="form-control" required />
-          </div>
-          <div class="form-group">
-            <label class="form-label" for="blocks-end">Until (leave empty for open-ended)</label>
-            <input type="datetime-local" id="blocks-end" class="form-control" />
+            <label class="form-label">Dates — tap check-in, then check-out</label>
+            <div id="blocks-cal" class="blk-cal"></div>
+            <div id="blocks-picked" class="blk-picked"></div>
           </div>
           <div class="form-group">
             <label class="form-label" for="blocks-reason">Reason</label>

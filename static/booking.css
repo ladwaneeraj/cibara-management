@@ -1572,3 +1572,38 @@
 /* Update Booking: single range picker spans both grid columns */
 .ub-span-2 { grid-column: 1 / -1; }
 #update-booking-modal .booking-date-range-wrap input[type="text"] { padding-left: 2rem; }
+
+/* ── Block Rooms calendar (MMT-style colour-coded range picker) ───────────── */
+.blk-cal { border: 1px solid var(--border, #e2e8f0); border-radius: 10px; padding: 0.6rem; background: #fff; }
+.blk-cal-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.4rem; }
+.blk-cal-title { font-weight: 600; font-size: 0.95rem; }
+.blk-nav { border: 1px solid var(--border, #e2e8f0); background: #fff; border-radius: 8px; width: 2rem; height: 2rem; cursor: pointer; font-size: 1.1rem; line-height: 1; }
+.blk-nav:hover { background: #f1f5f9; }
+.blk-legend { display: flex; gap: 0.9rem; font-size: 0.72rem; color: var(--gray, #718096); margin: 0.1rem 0 0.5rem; flex-wrap: wrap; }
+.blk-legend span { display: inline-flex; align-items: center; gap: 0.3rem; }
+.blk-legend .sw { width: 11px; height: 11px; border-radius: 3px; border: 1px solid #ddd; display: inline-block; }
+.blk-legend .sw.past { background: #eee; }
+.blk-legend .sw.blocked { background: var(--danger, #e53e3e); border-color: var(--danger, #e53e3e); }
+.blk-legend .sw.selected { background: var(--success, #38a169); border-color: var(--success, #38a169); }
+.blk-wd { display: grid; grid-template-columns: repeat(7, 1fr); gap: 3px; margin-bottom: 3px; }
+.blk-wd span { text-align: center; font-size: 0.68rem; color: var(--gray, #718096); }
+.blk-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 3px; }
+.blk-day { aspect-ratio: 1 / 1; border: 1px solid #edf1f5; border-radius: 7px; background: #f9fafb; cursor: pointer; font-size: 0.82rem; color: var(--dark, #1a202c); display: flex; align-items: center; justify-content: center; padding: 0; }
+.blk-day:hover:not(.past):not(.selected) { background: #eef2f7; }
+.blk-day.other { border: none; background: transparent; cursor: default; }
+.blk-day.past { opacity: 0.35; cursor: not-allowed; }
+.blk-day.blocked { background: color-mix(in srgb, var(--danger, #e53e3e) 16%, #fff); border-color: var(--danger, #e53e3e); color: var(--danger, #c53030); }
+.blk-day.selected { background: var(--success, #38a169); border-color: var(--success, #38a169); color: #fff; font-weight: 600; }
+.blk-day.today { outline: 2px solid var(--primary, #4c51bf); outline-offset: -2px; }
+.blk-picked { margin-top: 0.5rem; font-size: 0.8rem; color: var(--gray, #718096); }
+
+/* Free "Confirm on WhatsApp" button on each booking card (opens wa.me pre-filled). */
+.booking-actions { margin-top: 0.6rem; }
+.bk-wa-btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 0.4rem;
+  width: 100%; padding: 0.5rem 0.75rem; border: 1px solid #25D366; border-radius: 8px;
+  background: #25D366; color: #fff; font-size: 0.82rem; font-weight: 600; cursor: pointer;
+  transition: filter 0.15s ease;
+}
+.bk-wa-btn:hover { filter: brightness(0.94); }
+.bk-wa-btn i { font-size: 0.95rem; }

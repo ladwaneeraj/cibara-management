@@ -1456,6 +1456,15 @@ function renderBookings() {
         ? `<span class="bk-balance-note">₹${balance} due</span>`
         : "";
 
+    // Free WhatsApp confirmation, straight from the card — opens wa.me pre-filled;
+    // reception taps Send. Only when there's a number and the booking isn't cancelled.
+    const waBtn =
+      booking.guest_mobile && booking.status !== "cancelled"
+        ? `<button type="button" class="bk-wa-btn" title="Send a WhatsApp confirmation to the guest"
+             onclick="event.stopPropagation(); sendWaConfirmFromCard('${booking.booking_id}')">
+             <i class="fab fa-whatsapp" aria-hidden="true"></i> Confirm on WhatsApp</button>`
+        : "";
+
     html += `
       <div class="booking-item ${stateClass}" data-id="${booking.booking_id}"
            role="button" tabindex="0">
@@ -1483,6 +1492,7 @@ function renderBookings() {
           </div>
           <div class="booking-amount">${isOtaPrepaid(src) ? "OTA" : "₹" + booking.total_amount}</div>
         </div>
+        ${waBtn ? `<div class="booking-actions">${waBtn}</div>` : ""}
       </div>
     `;
   });
@@ -4459,6 +4469,16 @@ function sendWhatsAppBookingConfirmation() {
     console.error("Error sending WhatsApp confirmation:", error);
     showNotification("Error preparing message: " + error.message, "error");
   }
+}
+
+// Fire the same free wa.me confirmation straight from a booking card, without
+// opening the details modal first. Reuses sendWhatsAppBookingConfirmation's
+// single/group/recipient handling via _activeBookingForWhatsApp.
+function sendWaConfirmFromCard(bookingId) {
+  const bk = (bookings || []).find((b) => b.booking_id === bookingId);
+  if (!bk) { showNotification("Booking not found", "error"); return; }
+  _activeBookingForWhatsApp = bk;
+  sendWhatsAppBookingConfirmation();
 }
 
 // Rooms in a group can be under different names/numbers. Rather than guessing

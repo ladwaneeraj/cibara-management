@@ -1424,8 +1424,10 @@ function renderBookings() {
       sourceBadge = '<span class="booking-source-badge src-agoda"><i class="fas fa-globe"></i> Agoda</span>';
     } else if (src === "booking.com") {
       sourceBadge = '<span class="booking-source-badge src-bookingcom"><i class="fas fa-globe"></i> Booking.com</span>';
+    } else if (src === "web") {
+      sourceBadge = '<span class="booking-source-badge src-web"><i class="fas fa-globe"></i> WEB</span>';
     }
-    // Normal bookings: no badge (keeps UI clean)
+    // Normal (walk-in) bookings: no badge (keeps UI clean)
 
     // AC badge for rooms 200-206
     const acBadge = booking.is_ac
@@ -1456,10 +1458,22 @@ function renderBookings() {
         ? `<span class="bk-balance-note">₹${balance} due</span>`
         : "";
 
-    // Free WhatsApp confirmation, straight from the card — opens wa.me pre-filled;
-    // reception taps Send. Only when there's a number and the booking isn't cancelled.
+    // A web booking confirms server-side (Razorpay webhook) with no staff action,
+    // so it carries a persistent "send the guest their WhatsApp confirmation" cue
+    // that stays until staff send it (tracked per device). Walk-in cards keep the
+    // plain free wa.me confirmation button.
+    const needsWebConfirm =
+      src === "web" &&
+      booking.status === "confirmed" &&
+      !_webConfirmSentSet().has(booking.booking_id);
+    const webConfirmCue = needsWebConfirm
+      ? `<button type="button" class="bk-web-confirm-btn"
+           onclick="event.stopPropagation(); sendWebBookingWhatsApp('${booking.booking_id}')"
+           title="Send this guest their booking confirmation on WhatsApp, then mark it done">
+           <i class="fab fa-whatsapp" aria-hidden="true"></i> Send WhatsApp confirmation</button>`
+      : "";
     const waBtn =
-      booking.guest_mobile && booking.status !== "cancelled"
+      src !== "web" && booking.guest_mobile && booking.status !== "cancelled"
         ? `<button type="button" class="bk-wa-btn" title="Send a WhatsApp confirmation to the guest"
              onclick="event.stopPropagation(); sendWaConfirmFromCard('${booking.booking_id}')">
              <i class="fab fa-whatsapp" aria-hidden="true"></i> Confirm on WhatsApp</button>`
@@ -1492,12 +1506,37 @@ function renderBookings() {
           </div>
           <div class="booking-amount">${isOtaPrepaid(src) ? "OTA" : "₹" + booking.total_amount}</div>
         </div>
-        ${waBtn ? `<div class="booking-actions">${waBtn}</div>` : ""}
+        ${webConfirmCue || (waBtn ? `<div class="booking-actions">${waBtn}</div>` : "")}
       </div>
     `;
   });
 
   bookingsList.innerHTML = html;
+
+  // Notify staff about NEW web bookings so they send the WhatsApp confirmation.
+  // Seen ids are tracked per device; on the very first run we seed silently so
+  // existing web bookings don't all toast at once — only genuinely new arrivals
+  // after that raise a notification.
+  try {
+    const SEEN_KEY = "cibara_seen_web_bookings";
+    const firstRun = localStorage.getItem(SEEN_KEY) === null;
+    const seen = new Set(firstRun ? [] : JSON.parse(localStorage.getItem(SEEN_KEY) || "[]"));
+    const webConfirmed = bookings.filter((b) => b.booking_source === "web" && b.status === "confirmed");
+    const fresh = webConfirmed.filter((b) => !seen.has(b.booking_id));
+    webConfirmed.forEach((b) => seen.add(b.booking_id));
+    localStorage.setItem(SEEN_KEY, JSON.stringify([...seen]));
+    if (!firstRun && fresh.length && typeof showNotification === "function") {
+      const f = fresh[0];
+      showNotification(
+        fresh.length === 1
+          ? `🌐 New web booking: ${f.guest_name} (Room ${f.room}) — send the WhatsApp confirmation`
+          : `🌐 ${fresh.length} new web bookings — send their WhatsApp confirmations`,
+        "info",
+      );
+    }
+  } catch (e) {
+    /* localStorage unavailable — the on-card cue still prompts staff */
+  }
 
   // The whole card is the tap target (the old eye-icon button was a 32px
   // target on a 300px card). Keyboard access via role=button + Enter/Space.
@@ -1617,7 +1656,18 @@ function showBookingDetails(bookingId) {
       ? `${booking.room} <span style="font-size:0.7rem;background:#e0f2fe;color:#0369a1;border:1px solid #7dd3fc;border-radius:10px;padding:1px 6px;font-weight:600;">❄️ AC</span>`
       : booking.room;
   }
-  document.getElementById("details-guest-name").textContent = booking.guest_name;
+  const detailsGuestNameEl = document.getElementById("details-guest-name");
+  if (detailsGuestNameEl) {
+    // Guest name as a safe text node, then prepend a static "WEB" badge for
+    // online (website) bookings — mirrors the "MMT" badge used for OTA stays.
+    detailsGuestNameEl.textContent = booking.guest_name;
+    if (booking.booking_source === "web") {
+      detailsGuestNameEl.insertAdjacentHTML(
+        "afterbegin",
+        '<span style="background:#0c6fcd;color:#fff;font-size:0.65rem;font-weight:700;padding:1px 6px;border-radius:4px;margin-right:5px;vertical-align:middle;letter-spacing:0.03em;">WEB</span>',
+      );
+    }
+  }
   document.getElementById("details-guest-mobile").textContent = booking.guest_mobile;
   document.getElementById("details-guest-mobile-link").href = `tel:${booking.guest_mobile}`;
   document.getElementById("details-check-in").textContent = formattedCheckIn;
@@ -4479,6 +4529,40 @@ function sendWaConfirmFromCard(bookingId) {
   if (!bk) { showNotification("Booking not found", "error"); return; }
   _activeBookingForWhatsApp = bk;
   sendWhatsAppBookingConfirmation();
+}
+
+// ── Web-booking manual-confirmation tracking ────────────────────────────────
+// A web booking confirms server-side (Razorpay webhook) with no staff action, so
+// reception sends the guest's WhatsApp confirmation by hand. We track which have
+// been sent PER DEVICE (localStorage) so the on-card cue clears once done. A
+// shared front-desk machine is the expected case; this does not sync across
+// devices.
+const _WEB_CONFIRM_SENT_KEY = "cibara_web_confirm_sent";
+function _webConfirmSentSet() {
+  try {
+    return new Set(JSON.parse(localStorage.getItem(_WEB_CONFIRM_SENT_KEY) || "[]"));
+  } catch (e) {
+    return new Set();
+  }
+}
+function _markWebConfirmSent(bookingId) {
+  try {
+    const s = _webConfirmSentSet();
+    s.add(bookingId);
+    localStorage.setItem(_WEB_CONFIRM_SENT_KEY, JSON.stringify([...s]));
+  } catch (e) {
+    /* storage unavailable — the cue just won't persist as done */
+  }
+}
+// Card cue handler: open the guest's WhatsApp confirmation via the existing
+// wa.me flow, mark it done, and re-render so the cue clears.
+function sendWebBookingWhatsApp(bookingId) {
+  const bk = (bookings || []).find((b) => b.booking_id === bookingId);
+  if (!bk) { showNotification("Booking not found", "error"); return; }
+  _activeBookingForWhatsApp = bk;
+  sendWhatsAppBookingConfirmation();
+  _markWebConfirmSent(bookingId);
+  if (typeof renderBookings === "function") renderBookings();
 }
 
 // Rooms in a group can be under different names/numbers. Rather than guessing

@@ -8212,6 +8212,11 @@ var _BLK_POOLS = { premium: ["200", "201", "202", "203", "204", "205", "206"], d
 
 function _blkYmd(d) { return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0"); }
 function _blkToday() { return _blkYmd(new Date()); }
+function _blkAddDays(ymd, delta) { const d = new Date(ymd + "T00:00:00"); d.setDate(d.getDate() + delta); return _blkYmd(d); }
+function _blkFmtShort(ymd) {
+  const d = new Date(ymd + "T00:00:00");
+  return d.getDate() + " " + ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][d.getMonth()];
+}
 
 function _blkScopeRooms() {
   const scope = (document.getElementById("blocks-scope") || {}).value;
@@ -8245,9 +8250,25 @@ function _blkPickDay(ymd) {
 function _renderBlkPicked() {
   const el = document.getElementById("blocks-picked");
   if (!el) return;
-  if (!_blkCal.start) el.textContent = "Pick a check-in date, then a check-out date.";
-  else if (!_blkCal.end) el.textContent = _blkCal.start + "  →  pick a check-out (or Create block for open-ended).";
-  else el.textContent = _blkCal.start + "  →  " + _blkCal.end;
+  if (!_blkCal.start) {
+    el.className = "blk-picked";
+    el.textContent = "Pick a check-in date, then a check-out date.";
+    return;
+  }
+  const scope = (document.getElementById("blocks-scope") || {}).value;
+  const what =
+    scope === "category"
+      ? ((document.getElementById("blocks-category") || {}).selectedOptions || [{}])[0].text || "category"
+      : "Room " + (document.getElementById("blocks-room") || {}).value;
+  el.className = "blk-picked active";
+  if (!_blkCal.end) {
+    el.innerHTML = "<strong>" + escHtml(what) + "</strong> — from " + _blkFmtShort(_blkCal.start)
+      + "; pick a check-out, or Create block for open-ended.";
+    return;
+  }
+  const nights = Math.max(1, Math.round((new Date(_blkCal.end) - new Date(_blkCal.start)) / 86400000));
+  el.innerHTML = "<strong>" + escHtml(what) + "</strong> blocked " + _blkFmtShort(_blkCal.start)
+    + " → " + _blkFmtShort(_blkCal.end) + " · " + nights + " night" + (nights === 1 ? "" : "s");
 }
 function renderBlkCal() {
   const box = document.getElementById("blocks-cal");
@@ -8268,7 +8289,14 @@ function renderBlkCal() {
     const ymd = y + "-" + String(m + 1).padStart(2, "0") + "-" + String(d).padStart(2, "0");
     let cls = "blk-day";
     if (ymd < today) cls += " past";
-    else { if (_blkDayBlocked(ymd, scopeRooms)) cls += " blocked"; if (_blkInRange(ymd)) cls += " selected"; }
+    else {
+      if (_blkDayBlocked(ymd, scopeRooms)) cls += " blocked";
+      if (_blkInRange(ymd)) {
+        cls += " selected";
+        if (ymd === _blkCal.start) cls += " range-start";
+        if (!_blkInRange(_blkAddDays(ymd, 1))) cls += " range-end"; // last night of the range
+      }
+    }
     if (ymd === today) cls += " today";
     h += '<button type="button" class="' + cls + '" data-blk-day="' + ymd + '"' + (ymd < today ? " disabled" : "") + ">" + d + "</button>";
   }

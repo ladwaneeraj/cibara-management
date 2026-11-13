@@ -159,8 +159,11 @@ def web_availability():
     offerable = av.web_offerable_rooms(spec["pool"], checkin_dt, days, guests, now=now)
     price = av.web_quote(spec["pool"], guests, days, ac=spec["ac"])
 
-    # 5. Never include a room.
-    return jsonify(available=len(offerable) > 0, price=int(price), currency="INR")
+    # 5. Never include a room. ``remaining`` is the count the site may sell now
+    # (buffer already applied) so it can show scarcity ("Only N left"); it is a
+    # count, never a room number.
+    return jsonify(available=len(offerable) > 0, remaining=len(offerable),
+                   price=int(price), currency="INR")
 
 
 def _clean_str(value, max_len, *, required):

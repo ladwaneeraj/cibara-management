@@ -142,6 +142,8 @@ def test_sweep_endpoint_ok(client):
     _hold("fresh", "102", +5)
     r = client.post("/web/sweep", headers={"X-Sweep-Token": TOKEN})
     assert r.status_code == 200, r.text
-    assert r.json() == {"swept": 1}
+    # The sweep also runs the owner-alert poll, so the body carries a `notified`
+    # count alongside `swept`; assert on the swept value, not the whole dict.
+    assert r.json()["swept"] == 1
     assert _status("old") == "expired" and _status("fresh") == "pending_payment"
-    assert client.post("/web/sweep", headers={"X-Sweep-Token": TOKEN}).json() == {"swept": 0}
+    assert client.post("/web/sweep", headers={"X-Sweep-Token": TOKEN}).json()["swept"] == 0

@@ -314,6 +314,12 @@
 .rc-bar--stay    { background: var(--rc-occupied-bg); border-color: var(--rc-occupied); color: #8a1c26; }
 .rc-bar--cleaning { background: var(--rc-cleaning-bg); border-color: var(--rc-cleaning); color: #8a4b00; }
 .rc-bar--booking { background: var(--rc-booking-bg);  border-color: var(--rc-booking);  color: #0d47a1; }
+/* Blocked (out of sale): neutral grey hatch, clearly not a booking. */
+.rc-bar--block {
+  background: repeating-linear-gradient(45deg, #e5e7eb 0 7px, #d1d5db 7px 14px);
+  border-color: #9ca3af; color: #374151;
+}
+.rc-bar--block .rc-bar-time { display: none; }
 .rc-bar--overdue {
   background: repeating-linear-gradient(45deg, var(--rc-occupied) 0 6px, var(--rc-overdue-dark) 6px 12px);
   border-color: var(--rc-overdue-dark);

@@ -247,6 +247,11 @@
       segments.push(seg);
     });
 
+    blockSegments(now).forEach(function (seg) {
+      if (!byRoom[seg.room]) byRoom[seg.room] = { status: "vacant", segments: [] };
+      segments.push(seg);
+    });
+
     markClashes(segments);
     segments.forEach(function (s) { byRoom[s.room].segments.push(s); });
     Object.keys(byRoom).forEach(function (room) {
@@ -583,8 +588,46 @@
     }
   }
 
+  // ── Room blocks (out-of-sale) ────────────────────────────────────────────
+  // Blocks live in /blocks; script.js owns the modal and its `blocksList` is
+  // module-scoped, so the calendar keeps its own copy and draws a Blocked bar.
+  var _blocks = [];
+  const _BLK_CAT_POOLS = {
+    premium: ["200", "201", "202", "203", "204", "205", "206"],
+    deluxe: ["223", "224", "225", "226", "227"],
+  };
+  function _blockRoomsOf(b) {
+    if (b.scope === "category") return _BLK_CAT_POOLS[b.category] || [];
+    return b.room ? [String(b.room)] : [];
+  }
+  async function refreshBlocks() {
+    try {
+      const res = await apiFetch("/blocks");
+      const data = await res.json();
+      _blocks = data && data.success && Array.isArray(data.blocks) ? data.blocks : [];
+    } catch (_e) { /* keep the last copy — a block bar is non-critical */ }
+    if (state.view === "calendar") render();
+  }
+  function blockSegments(now) {
+    const far = new Date(now.getTime() + 365 * 86400000); // open-ended → fill the view
+    const segs = [];
+    (_blocks || []).forEach(function (b) {
+      const start = new Date(b.start);
+      if (isNaN(start.getTime())) return;
+      const end = b.end ? new Date(b.end) : far;
+      _blockRoomsOf(b).forEach(function (room) {
+        segs.push({
+          kind: "block", room: String(room), start: start, end: end,
+          label: "Blocked", title: "Blocked" + (b.reason ? " · " + b.reason : ""),
+        });
+      });
+    });
+    return segs;
+  }
+
   async function refreshBookings() {
     if (state.loadingBookings) return;
+    refreshBlocks();            // independent fetch; redraws block bars when done
     state.loadingBookings = true;
     render();
     try {

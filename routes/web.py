@@ -401,7 +401,129 @@ def web_sweep():
     supplied = request.headers.get("X-Sweep-Token", "")
     if not expected or not hmac.compare_digest(supplied.encode(), expected.encode()):
         return jsonify(error="Forbidden"), 403
-    return jsonify(swept=sweep_expired_holds())
+    return jsonify(swept=sweep_expired_holds(), notified=run_notification_sweep())
+
+
+# ───────────────────────── Owner push alerts (polled by /web/sweep) ──────────
+# The guest portal writes requests straight to Firestore and renewals/overstays
+# are time-based, so these four alerts can't be fired from a request handler —
+# the per-minute sweep polls for them instead. Every alert is deduped for the
+# day in a single notify_log/{date} doc, so the owner's phone never gets the same
+# alert twice. Fully fail-open: a bad read or a push error never breaks the hold
+# sweep or the booking flow.
+_NOTIFY_LOG = "notify_log"
+_OVERSTAY_GRACE = timedelta(hours=1)   # alert again this long after renewal time
+_DAILY_SUMMARY_HOUR = 8                # first sweep at/after 08:00 IST
+
+
+def _parse_ist_naive(s):
+    """Parse a stored IST timestamp ('YYYY-MM-DD HH:MM[:SS]') to a naive datetime."""
+    s = str(s or "").strip().replace("T", " ")
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"):
+        try:
+            return datetime.strptime(s, fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def _renewal_due_at(checkin_time, renewal_count):
+    """When the next day's rent is due: check-in + (renewals+1) days (IST naive).
+
+    Mirrors getRoomRenewalStatus() in static/script.js. None when unparseable.
+    """
+    ci = _parse_ist_naive(checkin_time)
+    if ci is None:
+        return None
+    try:
+        n = int(renewal_count or 0)
+    except (TypeError, ValueError):
+        n = 0
+    return ci + timedelta(days=n + 1)
+
+
+def run_notification_sweep(now=None):
+    """Fire the four owner alerts that have to be polled; deduped per day.
+
+    Returns the number of alerts sent this run. Never raises.
+    """
+    try:
+        now = now or datetime.now(config.IST).replace(tzinfo=None)
+        today = now.strftime("%Y-%m-%d")
+        ref = config.db.collection(_NOTIFY_LOG).document(today)
+        snap = ref.get()
+        fired = (snap.to_dict() or {}).get("fired", {}) if getattr(snap, "exists", False) else {}
+        new = {}
+
+        def _fire(key, title, body):
+            if fired.get(key) or new.get(key):
+                return
+            push_service.send_to_all(title, body)
+            new[key] = True
+
+        from google.cloud.firestore_v1.base_query import FieldFilter as _FF
+
+        # 1) New guest requests (open = not yet acknowledged by staff).
+        try:
+            from services.guest_portal import REQUEST_KINDS
+            for d in config.db.collection("guestRequests").where(
+                    filter=_FF("status", "==", "open")).stream():
+                r = d.to_dict() or {}
+                label = (REQUEST_KINDS.get(r.get("kind")) or {}).get("label", "Request")
+                _fire(f"greq:{d.id}", "New guest request",
+                      f"Room {r.get('room') or '?'} · {label}")
+        except Exception:  # noqa: BLE001
+            logger.exception("notify: guest-request scan failed")
+
+        # 2) Renewal due + overstay, per occupied room. Dues summed here feed (3).
+        dues_total = 0
+        try:
+            for d in config.rooms_ref.where(filter=_FF("status", "==", "occupied")).stream():
+                rm = d.to_dict() or {}
+                guest = (rm.get("guest") or {}).get("name") or "Guest"
+                try:
+                    bal = int(rm.get("balance") or 0)
+                except (TypeError, ValueError):
+                    bal = 0
+                if bal > 0:
+                    dues_total += bal
+                due = _renewal_due_at(rm.get("checkin_time"), rm.get("renewal_count"))
+                if due is None:
+                    continue
+                if now >= due:
+                    _fire(f"renewal:{d.id}", "Renewal due",
+                          f"Room {d.id} · {guest}" + (f" · ₹{bal} due" if bal > 0 else ""))
+                if now >= due + _OVERSTAY_GRACE:
+                    _fire(f"overstay:{d.id}", "Overstay",
+                          f"Room {d.id} · {guest} is past renewal time")
+        except Exception:  # noqa: BLE001
+            logger.exception("notify: room renewal/overstay scan failed")
+
+        # 3) Daily morning summary — once, at the first sweep from 08:00 IST.
+        try:
+            if now.hour >= _DAILY_SUMMARY_HOUR and not fired.get("daily") and not new.get("daily"):
+                arrivals = 0
+                try:
+                    for b in config.bookings_ref.where(
+                            filter=_FF("check_in_date", "==", today)).stream():
+                        if (b.to_dict() or {}).get("status") == "confirmed":
+                            arrivals += 1
+                except Exception:  # noqa: BLE001
+                    logger.exception("notify: arrivals count failed")
+                body = f"{arrivals} arrival{'' if arrivals == 1 else 's'} today"
+                if dues_total > 0:
+                    body += f" · ₹{dues_total} pending"
+                _fire("daily", "Good morning", body)
+        except Exception:  # noqa: BLE001
+            logger.exception("notify: daily summary failed")
+
+        if new:
+            fired.update(new)
+            ref.set({"fired": fired, "date": today}, merge=True)
+        return len(new)
+    except Exception:  # noqa: BLE001
+        logger.exception("run_notification_sweep failed")
+        return 0
 
 
 # --------------------------------------------------------------- Razorpay webhook

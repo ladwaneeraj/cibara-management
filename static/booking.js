@@ -1546,6 +1546,8 @@ function renderBookings() {
           <span class="bk-stay-sep">&rarr;</span> ${formattedCheckOut}
           <span class="bk-stay-sep">&middot;</span> ${nights} night${nights !== 1 ? "s" : ""}
           <span class="bk-stay-time"><i class="fas fa-clock"></i> ${formattedTime}</span>
+          <span class="bk-stay-sep">&middot;</span>
+          <span class="bk-stay-guests"><i class="fas fa-user"></i> ${booking.guest_count || 1} guest${(booking.guest_count || 1) !== 1 ? "s" : ""}</span>
         </div>
         <div class="booking-footer">
           <div class="booking-payment">

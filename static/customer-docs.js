@@ -2326,7 +2326,14 @@ function initBookingMobileLookup() {
 
   inp.addEventListener('input', function () {
     clearTimeout(_bookingMobileDebounce);
-    const digits = this.value.replace(/\D/g, '');
+    const raw = this.value;
+    let digits = raw.replace(/\D/g, '');
+    // A typed "+91 …" leaves a 91 country-code prefix that never matches a
+    // stored 10-digit number, so the suggestions wouldn't appear — drop it
+    // (also handle a complete 12-digit 91… or an 11-digit 0… form).
+    if (raw.includes('+') && digits.startsWith('91')) digits = digits.slice(2);
+    else if (digits.length === 12 && digits.startsWith('91')) digits = digits.slice(2);
+    else if (digits.length === 11 && digits.startsWith('0')) digits = digits.slice(1);
 
     if (digits.length === 0) {
       _bkHideSuggestions();

@@ -1548,9 +1548,9 @@ function renderBookings() {
         : "";
     const reviewBtn =
       isCompletedView && booking.guest_mobile
-        ? `<button type="button" class="bk-wa-btn" title="Open WhatsApp to ask this guest for a Google review"
+        ? `<button type="button" class="bk-review-btn" title="Open WhatsApp to ask this guest for a Google review"
              onclick="event.stopPropagation(); sendReviewRequest('${booking.booking_id}')">
-             <i class="fas fa-star" aria-hidden="true"></i> Review</button>`
+             <i class="far fa-star" aria-hidden="true"></i> Ask for review</button>`
         : "";
     // Bill number is resolved after render (one batched call per Completed view).
     const billNoSlot =
@@ -4616,9 +4616,9 @@ function sendWaConfirmFromCard(bookingId) {
   sendWhatsAppBookingConfirmation();
 }
 
-// Your Google "write a review" short link. Set this once (Google Business
-// Profile → Get more reviews → copy link) and the Review button pre-fills it.
-const GOOGLE_REVIEW_URL = "";
+// Cibara Comforts "write a review" deep link — opens Google's review form
+// directly (CID 15803625024904929019, from the business's own Maps listing).
+const GOOGLE_REVIEW_URL = "https://search.google.com/local/writereview?placeid=15803625024904929019";
 
 // Completed-tab Review button: open the guest's WhatsApp with a pre-filled
 // review request for staff to read over and send by hand.
@@ -4629,8 +4629,8 @@ function sendReviewRequest(bookingId) {
   if (!phone) { showNotification("Phone number not available", "error"); return; }
   const name = (bk.guest_name || "").split(" ")[0] || "there";
   let msg = `Hi ${name}, thank you for staying with us at Cibara Comforts! `
-    + `We hope you had a great stay. If you have a moment, a quick Google review would mean a lot to us`;
-  msg += GOOGLE_REVIEW_URL ? `: ${GOOGLE_REVIEW_URL}` : ".";
+    + `We hope you had a great stay. If you have a moment, a quick Google review would mean a lot to us 🙏`;
+  if (GOOGLE_REVIEW_URL) msg += `\n\nLeave a review here: ${GOOGLE_REVIEW_URL}`;
   _waOpen(phone, msg);
 }
 

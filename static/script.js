@@ -8285,7 +8285,6 @@ function renderBlkCal() {
   let h = '<div class="blk-cal-head"><button type="button" class="blk-nav" data-blk-nav="-1" aria-label="Previous month">‹</button>'
     + '<span class="blk-cal-title">' + MONTHS[m] + " " + y + "</span>"
     + '<button type="button" class="blk-nav" data-blk-nav="1" aria-label="Next month">›</button></div>'
-    + '<div class="blk-legend"><span><i class="sw past"></i>Past</span><span><i class="sw blocked"></i>Blocked</span><span><i class="sw selected"></i>Your pick</span></div>'
     + '<div class="blk-wd">' + WD.map((w) => "<span>" + w + "</span>").join("") + '</div><div class="blk-grid">';
   for (let i = 0; i < startDow; i++) h += '<span class="blk-day other"></span>';
   for (let d = 1; d <= dim; d++) {

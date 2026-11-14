@@ -15,7 +15,10 @@ async function initPush() {
   if (!window.PushManager) return;                 // unsupported browser
   try {
     const app = getApps().length ? getApp() : initializeApp(cfg);
-    const reg = await navigator.serviceWorker.register("/firebase-messaging-sw.js");
+    // Own scope so the app's root-scoped /sw.js never evicts this registration
+    // (two SWs at "/" collide -> the FCM worker is dropped -> pushes stop).
+    const reg = await navigator.serviceWorker.register("/firebase-messaging-sw.js",
+      { scope: "/firebase-cloud-messaging-push-scope" });
     const permission = await Notification.requestPermission();
     if (permission !== "granted") return;
     const messaging = getMessaging(app);

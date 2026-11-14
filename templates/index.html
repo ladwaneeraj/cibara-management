@@ -3088,6 +3088,17 @@
             </select>
           </h2>
           <div style="display: flex; align-items: center; gap: 0.4rem">
+            <!-- Quick-block: take this room out of sale now, with a reason (trail). -->
+            <button
+              id="checkin-block-btn"
+              type="button"
+              class="checkin-block-btn"
+              title="Block this room from sale (asks for a reason)"
+              aria-label="Block this room"
+              onclick="blockRoomFromCheckin()"
+            >
+              <i class="fas fa-ban"></i>
+            </button>
             <!-- ID camera. (The Epson WiFi-scanner button that sat beside it
                  was removed along with its /scan_document backend.) -->
             <button

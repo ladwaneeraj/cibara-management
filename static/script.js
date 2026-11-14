@@ -8153,13 +8153,38 @@ async function _blkDelete(blockId) {
   if (!res.ok || !data.success) throw new Error(data.message || `HTTP ${res.status}`);
 }
 
+// Block a room now, asking for a reason so the block carries a trail (who +
+// why). The server stamps created_by/created_at; we supply the reason.
+async function _blockRoomNow(roomNumber) {
+  const reason = prompt(`Block room ${roomNumber} from sale (stays blocked until you unblock it).\n\nReason — who/why (e.g. maintenance, owner use):`);
+  if (reason === null) return false;            // cancelled
+  const why = reason.trim();
+  if (!why) { showNotification("Add a reason so the block has a trail.", "error"); return false; }
+  await _blkPost({ scope: "room", room: String(roomNumber), start: new Date().toISOString(), end: null, reason: why });
+  showNotification(`Room ${roomNumber} blocked.`, "success");
+  await loadBlocks();
+  return true;
+}
+
 async function handleBlockNowClick(event, roomNumber) {
   event.stopPropagation();
-  if (!confirm(`Block room ${roomNumber} from sale starting now? It stays blocked until you unblock it.`)) return;
   try {
-    await _blkPost({ scope: "room", room: roomNumber, start: new Date().toISOString(), end: null, reason: "Blocked from room grid" });
-    showNotification(`Room ${roomNumber} blocked.`, "success");
-    await loadBlocks();
+    await _blockRoomNow(roomNumber);
+  } catch (err) {
+    showNotification("Could not block room: " + err.message, "error");
+  }
+}
+
+// Quick-block from the check-in modal: block the room being checked in, then
+// close the modal (it can't be checked into while blocked).
+async function blockRoomFromCheckin() {
+  const sel = document.getElementById("checkin-room-dropdown");
+  const room = sel ? sel.value : "";
+  if (!room) { showNotification("Select a room first.", "error"); return; }
+  try {
+    if (await _blockRoomNow(room)) {
+      document.getElementById("checkin-modal")?.classList.remove("show");
+    }
   } catch (err) {
     showNotification("Could not block room: " + err.message, "error");
   }
@@ -8193,9 +8218,13 @@ function renderBlocksList() {
   box.innerHTML = blocksList.map((b) => {
     const what = b.scope === "category" ? `All ${escHtml(b.category)} rooms` : `Room ${escHtml(b.room)}`;
     const span = `${_blkFmt(b.start)} → ${b.end ? _blkFmt(b.end) : "until unblocked"}`;
+    // Trail: who blocked, when, and why.
+    const who = b.created_by && b.created_by !== "system" ? " · by " + escHtml(b.created_by) : "";
+    const when = b.created_at ? " · " + escHtml(_blkFmt(b.created_at)) : "";
+    const reason = b.reason ? " · " + escHtml(b.reason) : "";
     return `<div class="blocks-row">
       <div class="blocks-row-text"><strong>${what}</strong>
-        <div class="blocks-row-meta">${escHtml(span)}${b.reason ? " · " + escHtml(b.reason) : ""}</div></div>
+        <div class="blocks-row-meta">${escHtml(span)}${reason}${who}${when}</div></div>
       <button type="button" class="btn btn-danger blocks-row-del" data-block-id="${escHtml(b.id)}">Unblock</button>
     </div>`;
   }).join("");

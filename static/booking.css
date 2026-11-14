@@ -1634,6 +1634,16 @@
 .blk-submit:active { transform: translateY(1px); }
 .blk-submit i { font-size: 0.85rem; }
 
+/* Quick-block button in the check-in modal header. */
+.checkin-block-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 34px; height: 34px; border-radius: 8px;
+  border: 1px solid #fecaca; background: #fef2f2; color: #dc2626;
+  cursor: pointer; font-size: 0.95rem;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+.checkin-block-btn:hover { background: #fee2e2; border-color: #fca5a5; }
+
 .blk-wd { display: grid; grid-template-columns: repeat(7, 1fr); margin-bottom: 4px; }
 .blk-wd span { text-align: center; font-size: 0.66rem; font-weight: 600; letter-spacing: 0.04em; color: var(--gray, #94a3b8); text-transform: uppercase; }
 /* Gap-free grid so a selected range reads as one continuous band. */

@@ -56,6 +56,35 @@ def get_bookings():
         logger.error(f"Error getting bookings: {str(e)}")
         return jsonify(success=False, message=f"Error getting bookings: {str(e)}")
 
+@bookings_bp.route("/get_booking_bill_numbers", methods=["POST"])
+def get_booking_bill_numbers():
+    """Resolve invoice numbers (CC/YYYY/MM/NNNNN) for a set of stay_ids.
+
+    The Bookings 'Completed' list shows the bill number per stay. A booking only
+    stores its stay_id (== the bill doc id); the human-facing bill_number lives on
+    the bill doc and is minted at checkout. We batch-read the bills in one get_all
+    (one round trip, only when the Completed tab is viewed) rather than enriching
+    every /get_bookings call. Missing / not-yet-minted ('-') numbers are omitted.
+    """
+    try:
+        data = request.get_json(silent=True) or {}
+        stay_ids = [str(s) for s in (data.get("stay_ids") or []) if s][:200]
+        if not stay_ids:
+            return jsonify(success=True, bill_numbers={})
+        from config import bills_ref
+        refs = [bills_ref.document(s) for s in stay_ids]
+        out = {}
+        for snap in db.get_all(refs):
+            if getattr(snap, "exists", False):
+                bn = (snap.to_dict() or {}).get("bill_number")
+                if bn and bn != "-":
+                    out[snap.id] = bn
+        return jsonify(success=True, bill_numbers=out)
+    except Exception as e:
+        logger.error(f"get_booking_bill_numbers failed: {e}")
+        return jsonify(success=True, bill_numbers={})
+
+
 @bookings_bp.route("/get_upcoming_bookings", methods=["GET"])
 def get_upcoming_bookings():
     """

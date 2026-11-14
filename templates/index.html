@@ -4174,11 +4174,8 @@
           <span>Transfer Room</span>
         </div>
 
-        <!-- Block rooms / categories out of sale (static/script.js "Room blocks") -->
-        <div class="quick-action-item" id="quick-blocks-btn" data-perm="room.update">
-          <i class="fas fa-ban"></i>
-          <span>Block Rooms</span>
-        </div>
+        <!-- Block Rooms removed from the Quick Actions bolt (owner) — reach it
+             from the Bookings-tab toolbar "Block Rooms" button (#bk-blocks-btn). -->
 
         <!-- Laundry and Staff moved to the bottom nav (Rooms/.../Bookings
              row) since they're primary sections now, not one-off actions —
@@ -5156,10 +5153,9 @@
                 type="tel"
                 class="form-control"
                 id="booking-guest-mobile"
-                placeholder="10-digit mobile"
+                placeholder="Mobile (+91 / spaces ok)"
                 required
-                pattern="[0-9]{10}"
-                title="10-digit mobile number"
+                inputmode="numeric"
                 autocomplete="off"
               />
               <!-- Suggestions dropdown -->
@@ -5470,7 +5466,7 @@
             </div>
             <div class="form-group" style="position:relative;">
               <label class="form-label">Mobile</label>
-              <input type="tel" class="form-control" id="mb-shared-guest-mobile" placeholder="10-digit mobile" pattern="[0-9]{10}" autocomplete="off" />
+              <input type="tel" class="form-control" id="mb-shared-guest-mobile" placeholder="Mobile (+91 / spaces ok)" inputmode="numeric" autocomplete="off" />
               <div id="mb-shared-mobile-suggestions" class="mb-mobile-suggestions" style="display:none;"></div>
             </div>
           </div>
@@ -6226,8 +6222,8 @@
               </div>
               <div class="ub-field">
                 <label for="update-guest-mobile">Mobile</label>
-                <input type="tel" class="form-control" id="update-guest-mobile" placeholder="10-digit number"
-                       pattern="[0-9]{10}" inputmode="numeric" title="Please enter a valid 10-digit mobile number" />
+                <input type="tel" class="form-control" id="update-guest-mobile" placeholder="Mobile (+91 / spaces ok)"
+                       inputmode="numeric" />
               </div>
             </div>
           </section>

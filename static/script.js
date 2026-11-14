@@ -8238,7 +8238,9 @@ function _blkDayBlocked(ymd, scopeRooms) {
 function _blkInRange(ymd) {
   if (!_blkCal.start) return false;
   if (!_blkCal.end) return ymd === _blkCal.start;
-  return ymd >= _blkCal.start && ymd < _blkCal.end;
+  // Inclusive: the date the user taps last IS blocked (the day-based server end
+  // is sent as end+1 on submit). Fixes "the last date I pick isn't blocked".
+  return ymd >= _blkCal.start && ymd <= _blkCal.end;
 }
 function _blkPickDay(ymd) {
   if (ymd < _blkToday()) return;
@@ -8266,7 +8268,8 @@ function _renderBlkPicked() {
       + "; pick a check-out, or Create block for open-ended.";
     return;
   }
-  const nights = Math.max(1, Math.round((new Date(_blkCal.end) - new Date(_blkCal.start)) / 86400000));
+  // End date is inclusive, so a one-day span (start === end) is 1 night.
+  const nights = Math.max(1, Math.round((new Date(_blkCal.end) - new Date(_blkCal.start)) / 86400000) + 1);
   el.innerHTML = "<strong>" + escHtml(what) + "</strong> blocked " + _blkFmtShort(_blkCal.start)
     + " → " + _blkFmtShort(_blkCal.end) + " · " + nights + " night" + (nights === 1 ? "" : "s");
 }
@@ -8374,7 +8377,9 @@ document.addEventListener("DOMContentLoaded", function () {
       const body = {
         scope,
         start: _blkCal.start + "T00:00:00",   // date only -> server treats as IST
-        end: _blkCal.end ? _blkCal.end + "T00:00:00" : null,
+        // Server end is checkout-exclusive; the UI end is the last blocked day,
+        // so send end+1 to actually block through the date the user picked.
+        end: _blkCal.end ? _blkAddDays(_blkCal.end, 1) + "T00:00:00" : null,
         reason: document.getElementById("blocks-reason").value.trim(),
       };
       if (scope === "room") body.room = document.getElementById("blocks-room").value;

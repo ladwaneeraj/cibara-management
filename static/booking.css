@@ -938,6 +938,15 @@
   font-weight: 600;
 }
 
+/* Invoice number chip on the Completed tab. */
+.bk-bill-no {
+  display: inline-block;
+  font-size: 0.72rem;
+  color: var(--text-secondary, #64748b);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
 /* Group chip — marks a room that belongs to a multi-room booking. */
 .bk-group-chip {
   display: inline-flex;

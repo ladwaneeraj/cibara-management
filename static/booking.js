@@ -389,6 +389,17 @@ function initializeBookingForm() {
   bookingForm.addEventListener("submit", createBooking);
 }
 
+// Normalise a typed/pasted Indian mobile to its 10-digit core so the desk can
+// enter "+91 98765 43210", "098765 43210" etc. and the booking still goes through.
+// Strips everything but digits, then drops a leading 91 (12 digits) or 0 (11).
+function cleanMobile(raw) {
+  let d = String(raw == null ? "" : raw).replace(/\D/g, "");
+  if (d.length === 12 && d.startsWith("91")) d = d.slice(2);
+  else if (d.length === 11 && d.startsWith("0")) d = d.slice(1);
+  return d;
+}
+window.cleanMobile = cleanMobile;
+
 // Create a new booking
 async function createBooking(event) {
   event.preventDefault();
@@ -396,7 +407,7 @@ async function createBooking(event) {
   // Get form values
   const room = document.getElementById("booking-room").value;
   const guestName = document.getElementById("booking-guest-name").value;
-  const guestMobile = document.getElementById("booking-guest-mobile").value;
+  const guestMobile = cleanMobile(document.getElementById("booking-guest-mobile").value);
   const checkInDate = document.getElementById("booking-check-in").value;
   const checkInTime = document.getElementById("booking-check-in-time").value; // Get the time
   const checkOutDate = document.getElementById("booking-check-out").value;
@@ -442,6 +453,11 @@ async function createBooking(event) {
     !totalAmount
   ) {
     showNotification("Please fill all required fields", "error");
+    return;
+  }
+
+  if (!isMmt && !/^[0-9]{10}$/.test(guestMobile)) {
+    showNotification("Enter a valid 10-digit mobile number", "error");
     return;
   }
 
@@ -809,7 +825,7 @@ function multiBookingRoomRowHtml() {
         '</div>' +
         '<div class="form-group" style="position:relative;">' +
           '<label class="form-label">Mobile</label>' +
-          '<input type="tel" class="form-control mb-guest-mobile" placeholder="10-digit mobile" required pattern="[0-9]{10}" autocomplete="off" />' +
+          '<input type="tel" class="form-control mb-guest-mobile" placeholder="Mobile (+91 / spaces ok)" required inputmode="numeric" autocomplete="off" />' +
           '<div class="mb-mobile-suggestions" style="display:none;"></div>' +
         '</div>' +
       '</div>' +
@@ -1106,7 +1122,7 @@ async function submitMultiBooking(event) {
   var sameGuestToggle = document.getElementById("mb-same-guest-toggle");
   var useSameGuest = !!(sameGuestToggle && sameGuestToggle.checked);
   var sharedGuestName = document.getElementById("mb-shared-guest-name").value.trim();
-  var sharedGuestMobile = document.getElementById("mb-shared-guest-mobile").value.trim();
+  var sharedGuestMobile = cleanMobile(document.getElementById("mb-shared-guest-mobile").value);
 
   if (useSameGuest) {
     if (!sharedGuestName || !sharedGuestMobile) {
@@ -1125,7 +1141,7 @@ async function submitMultiBooking(event) {
     var row = rows[i];
     var room = row.querySelector(".mb-room-select").value;
     var guestName = useSameGuest ? sharedGuestName : row.querySelector(".mb-guest-name").value.trim();
-    var guestMobile = useSameGuest ? sharedGuestMobile : row.querySelector(".mb-guest-mobile").value.trim();
+    var guestMobile = useSameGuest ? sharedGuestMobile : cleanMobile(row.querySelector(".mb-guest-mobile").value);
     var totalAmount = parseInt(row.querySelector(".mb-total").value || 0);
     var advance = parseInt(row.querySelector(".mb-advance").value || 0);
     var rate = parseInt(row.querySelector(".mb-rate").value || 0) || null;
@@ -1520,11 +1536,26 @@ function renderBookings() {
            title="Send this guest their booking confirmation on WhatsApp, then mark it done">
            <i class="fab fa-whatsapp" aria-hidden="true"></i> Send WhatsApp confirmation</button>`
       : "";
+    // On the Completed tab the stay is over, so the confirmation button gives
+    // way to a Review button (opens the guest's WhatsApp with a pre-filled
+    // Google-review request for staff to send) plus the invoice number.
+    const isCompletedView = currentBookingFilter === "completed";
     const waBtn =
-      src !== "web" && booking.guest_mobile && booking.status !== "cancelled"
+      !isCompletedView && src !== "web" && booking.guest_mobile && booking.status !== "cancelled"
         ? `<button type="button" class="bk-wa-btn" title="Send a WhatsApp confirmation to the guest"
              onclick="event.stopPropagation(); sendWaConfirmFromCard('${booking.booking_id}')">
              <i class="fab fa-whatsapp" aria-hidden="true"></i> Confirm on WhatsApp</button>`
+        : "";
+    const reviewBtn =
+      isCompletedView && booking.guest_mobile
+        ? `<button type="button" class="bk-wa-btn" title="Open WhatsApp to ask this guest for a Google review"
+             onclick="event.stopPropagation(); sendReviewRequest('${booking.booking_id}')">
+             <i class="fas fa-star" aria-hidden="true"></i> Review</button>`
+        : "";
+    // Bill number is resolved after render (one batched call per Completed view).
+    const billNoSlot =
+      isCompletedView && booking.stay_id
+        ? `<span class="bk-bill-no" data-stay="${escHtml(booking.stay_id)}">Bill …</span>`
         : "";
 
     html += `
@@ -1553,15 +1584,19 @@ function renderBookings() {
           <div class="booking-payment">
             ${paymentStatus}
             ${balanceNote}
+            ${billNoSlot}
           </div>
           <div class="booking-amount">${isOtaPrepaid(src) ? "OTA" : "₹" + booking.total_amount}</div>
         </div>
-        ${webConfirmCue || (waBtn ? `<div class="booking-actions">${waBtn}</div>` : "")}
+        ${webConfirmCue || ((reviewBtn || waBtn) ? `<div class="booking-actions">${reviewBtn || waBtn}</div>` : "")}
       </div>
     `;
   });
 
   bookingsList.innerHTML = html;
+
+  // Completed tab: fill in each stay's invoice number (one batched lookup).
+  if (currentBookingFilter === "completed") _fillBillNumbers(bookingsList);
 
   // Notify staff about NEW web bookings so they send the WhatsApp confirmation.
   // Seen ids are tracked per device; on the very first run we seed silently so
@@ -3111,7 +3146,7 @@ function initializeUpdateBookingForm() {
 
     const bookingId = document.getElementById("update-booking-id").value;
     const guestName = document.getElementById("update-guest-name").value;
-    const guestMobile = document.getElementById("update-guest-mobile").value;
+    const guestMobile = cleanMobile(document.getElementById("update-guest-mobile").value);
     const checkInDate = document.getElementById("update-check-in").value;
     const checkInTime = document.getElementById("update-check-in-time").value;
     const checkOutDate = document.getElementById("update-check-out").value;
@@ -4579,6 +4614,59 @@ function sendWaConfirmFromCard(bookingId) {
   if (!bk) { showNotification("Booking not found", "error"); return; }
   _activeBookingForWhatsApp = bk;
   sendWhatsAppBookingConfirmation();
+}
+
+// Your Google "write a review" short link. Set this once (Google Business
+// Profile → Get more reviews → copy link) and the Review button pre-fills it.
+const GOOGLE_REVIEW_URL = "";
+
+// Completed-tab Review button: open the guest's WhatsApp with a pre-filled
+// review request for staff to read over and send by hand.
+function sendReviewRequest(bookingId) {
+  const bk = (bookings || []).find((b) => b.booking_id === bookingId);
+  if (!bk) { showNotification("Booking not found", "error"); return; }
+  const phone = _waNormalisePhone(bk.guest_mobile || "");
+  if (!phone) { showNotification("Phone number not available", "error"); return; }
+  const name = (bk.guest_name || "").split(" ")[0] || "there";
+  let msg = `Hi ${name}, thank you for staying with us at Cibara Comforts! `
+    + `We hope you had a great stay. If you have a moment, a quick Google review would mean a lot to us`;
+  msg += GOOGLE_REVIEW_URL ? `: ${GOOGLE_REVIEW_URL}` : ".";
+  _waOpen(phone, msg);
+}
+
+// Fill the "Bill …" chips on the Completed tab from one batched server lookup.
+// Resolved numbers are cached so switching tabs doesn't refetch.
+const _billNoCache = {};
+async function _fillBillNumbers(root) {
+  const chips = [...root.querySelectorAll(".bk-bill-no[data-stay]")];
+  if (!chips.length) return;
+  const need = [];
+  chips.forEach((c) => {
+    const sid = c.getAttribute("data-stay");
+    if (sid in _billNoCache) _applyBillChip(c, _billNoCache[sid]);
+    else if (!need.includes(sid)) need.push(sid);
+  });
+  if (!need.length) return;
+  try {
+    const post = window.apiFetch
+      || ((url, opts) => fetch(url, { ...opts, credentials: "include" }));
+    const res = await post("/get_booking_bill_numbers", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ stay_ids: need }),
+    });
+    const data = await res.json();
+    const map = (data && data.bill_numbers) || {};
+    need.forEach((sid) => { _billNoCache[sid] = map[sid] || ""; });
+    root.querySelectorAll(".bk-bill-no[data-stay]").forEach((c) =>
+      _applyBillChip(c, _billNoCache[c.getAttribute("data-stay")]));
+  } catch (e) {
+    root.querySelectorAll(".bk-bill-no[data-stay]").forEach((c) => _applyBillChip(c, ""));
+  }
+}
+function _applyBillChip(chip, billNo) {
+  if (billNo) { chip.textContent = "Bill " + billNo; chip.style.display = ""; }
+  else { chip.style.display = "none"; }  // not yet checked out / no bill
 }
 
 // ── Web-booking manual-confirmation tracking ────────────────────────────────

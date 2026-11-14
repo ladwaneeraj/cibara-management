@@ -17,8 +17,55 @@ function otaSourceLabel(src) {
   return (src || "").toUpperCase();
 }
 
+// --- New-booking in-app cue: a count badge on the Bookings nav + a toast, fed
+// by the Firestore booking listener in google_sync.js via the
+// "cibara:new-booking" window event. Makes a new online booking visible in the
+// ERP at once, even if OS notifications are blocked.
+let _newBookingCount = 0;
+function _bookingsNavItem() {
+  return document.querySelector('.nav-item[data-tab="bookings"]');
+}
+function _setBookingBadge(n) {
+  const nav = _bookingsNavItem();
+  if (!nav) return;
+  let badge = nav.querySelector(".nav-badge");
+  if (!badge) {
+    if (getComputedStyle(nav).position === "static") nav.style.position = "relative";
+    badge = document.createElement("span");
+    badge.className = "nav-badge";
+    badge.style.cssText =
+      "position:absolute;top:4px;right:12px;min-width:16px;height:16px;padding:0 4px;" +
+      "border-radius:8px;background:#e11d48;color:#fff;font-size:10px;line-height:16px;" +
+      "text-align:center;font-weight:700;pointer-events:none;";
+    nav.appendChild(badge);
+  }
+  badge.textContent = n > 9 ? "9+" : String(n);
+  badge.style.display = n > 0 ? "" : "none";
+}
+function _clearBookingBadge() {
+  _newBookingCount = 0;
+  const nav = _bookingsNavItem();
+  const badge = nav && nav.querySelector(".nav-badge");
+  if (badge) badge.style.display = "none";
+}
+function _onNewBooking(e) {
+  const b = (e && e.detail && e.detail.booking) || {};
+  // guest_name is guest-controlled and showNotification writes via innerHTML.
+  const esc = window.escHtml || ((s) => s);
+  const name = esc(b.guest_name || "Guest");
+  const room = b.room ? " · Room " + esc(String(b.room)) : "";
+  showNotification("New booking — " + name + room, "success");
+  const tab = document.getElementById("bookings-tab");
+  if (tab && !tab.classList.contains("hidden")) {
+    fetchBookings(); // already on the Bookings screen -> refresh the list
+  } else {
+    _setBookingBadge(++_newBookingCount); // elsewhere -> flag it on the nav
+  }
+}
+
 // DOM Elements
 document.addEventListener("DOMContentLoaded", function () {
+  window.addEventListener("cibara:new-booking", _onNewBooking);
   // Initialize booking tab
   const bookingNavItem = document.querySelector(
     '.nav-item[data-tab="bookings"]',
@@ -40,6 +87,7 @@ document.addEventListener("DOMContentLoaded", function () {
       if (bookingsTab) {
         bookingsTab.classList.remove("hidden");
         fetchBookings(); // Refresh bookings when tab is opened
+        _clearBookingBadge(); // seen it — drop the new-booking nav badge
         // Reflect the current online-bookings setting on the toolbar toggle.
         // (loadWebConfig lives in script.js; reach it via window to satisfy
         // the per-file no-undef lint.)

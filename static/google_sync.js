@@ -570,6 +570,12 @@ function _maybeNotifyBooking(change) {
   if (_notifiedBookingIds.has(change.doc.id)) return;          // already announced
   _notifiedBookingIds.add(change.doc.id);
   _desktopNotifyBooking(b);
+  // In-app cue for the Bookings module (booking.js): badge + toast + refresh,
+  // so a new booking shows in the ERP even when OS notifications are blocked.
+  try {
+    window.dispatchEvent(new CustomEvent("cibara:new-booking",
+      { detail: { id: change.doc.id, booking: b } }));
+  } catch (_) { /* best-effort */ }
 }
 
 if (fullAccess) _track(onSnapshot(query(collection(db, "bookings"),

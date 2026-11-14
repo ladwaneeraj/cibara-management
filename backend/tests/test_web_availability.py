@@ -97,7 +97,7 @@ def test_no_room_number_leaked(client):
     r = client.post("/web/availability", json=_body())
     assert r.status_code == 200
     body = r.json()
-    assert set(body) == {"available", "price", "currency"}
+    assert set(body) == {"available", "price", "currency", "remaining"}
     text = r.text
     for room in config.CATEGORY_POOLS["premium"] + config.CATEGORY_POOLS["deluxe"]:
         assert f'"{room}"' not in text

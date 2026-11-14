@@ -4617,8 +4617,8 @@ function sendWaConfirmFromCard(bookingId) {
 }
 
 // Cibara Comforts "write a review" deep link — opens Google's review form
-// directly (CID 15803625024904929019, from the business's own Maps listing).
-const GOOGLE_REVIEW_URL = "https://search.google.com/local/writereview?placeid=15803625024904929019";
+// directly (place id ChIJvYy1i1cpujsR-57unDrBUds, from the business's Maps listing).
+const GOOGLE_REVIEW_URL = "https://search.google.com/local/writereview?placeid=ChIJvYy1i1cpujsR-57unDrBUds";
 
 // Completed-tab Review button: open the guest's WhatsApp with a pre-filled
 // review request for staff to read over and send by hand.

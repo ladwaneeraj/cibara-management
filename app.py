@@ -350,6 +350,15 @@ def firebase_messaging_sw():
         '  self.registration.showNotification(n.title || "New booking",\n'
         '    { body: n.body || "", tag: "cibara-booking", data: (payload && payload.data) || {} });\n'
         '});\n'
+        # Tapping the notification opens/focuses the ERP (works without an
+        # absolute fcm_options.link, which FCM rejects for a relative URL).
+        'self.addEventListener("notificationclick", function (e) {\n'
+        '  e.notification.close();\n'
+        '  e.waitUntil(clients.matchAll({ type: "window", includeUncontrolled: true }).then(function (wins) {\n'
+        '    for (var i = 0; i < wins.length; i++) { if ("focus" in wins[i]) return wins[i].focus(); }\n'
+        '    if (clients.openWindow) return clients.openWindow("/");\n'
+        '  }));\n'
+        '});\n'
     )
     return Response(js, mimetype="application/javascript",
                     headers={"Cache-Control": "no-store"})

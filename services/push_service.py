@@ -6,6 +6,7 @@ all of them via firebase-admin messaging. Best-effort and fail-open: a push
 failure never affects the booking. Dead tokens are pruned on send.
 """
 import logging
+import os
 from datetime import datetime
 
 import config
@@ -39,6 +40,12 @@ def _all_tokens() -> list:
     return [d.id for d in config.db.collection(_COLLECTION).stream()]
 
 
+def _app_origin() -> str:
+    """Absolute https origin used as the notification tap target, if configured."""
+    o = (os.getenv("PUBLIC_ORIGIN") or os.getenv("APP_ORIGIN") or "").rstrip("/")
+    return o if o.startswith("https://") else ""
+
+
 def send_to_all(title: str, body: str, data: dict | None = None,
                 link: str = "/") -> int:
     """Push ``title``/``body`` to every stored device. Returns #delivered.
@@ -57,15 +64,22 @@ def send_to_all(title: str, body: str, data: dict | None = None,
     # Icon/badge are served by the ERP; relative URLs resolve against the FCM
     # service-worker origin (the ERP). require_interaction keeps the alert on
     # screen until the owner taps it (like a food-delivery app).
-    webpush = messaging.WebpushConfig(
-        notification=messaging.WebpushNotification(
+    wp = {
+        "notification": messaging.WebpushNotification(
             title=title, body=body,
             icon="/static/icons/icon-192.png",
             badge="/static/icons/favicon-32.png",
             tag="cibara", require_interaction=True,
         ),
-        fcm_options=messaging.WebpushFCMOptions(link=link or "/"),
-    )
+    }
+    # fcm_options.link MUST be an absolute https URL — a relative one raises in
+    # the encoder and would drop EVERY push. Use the caller's absolute link, else
+    # PUBLIC_ORIGIN/APP_ORIGIN; omit it otherwise so the push still delivers (the
+    # service worker's notificationclick opens the app either way).
+    _link = link if isinstance(link, str) and link.startswith("https://") else _app_origin()
+    if _link:
+        wp["fcm_options"] = messaging.WebpushFCMOptions(link=_link)
+    webpush = messaging.WebpushConfig(**wp)
     msg = messaging.MulticastMessage(
         tokens=tokens,
         notification=messaging.Notification(title=title, body=body),

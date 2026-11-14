@@ -39,9 +39,12 @@ def _all_tokens() -> list:
     return [d.id for d in config.db.collection(_COLLECTION).stream()]
 
 
-def send_to_all(title: str, body: str, data: dict | None = None) -> int:
+def send_to_all(title: str, body: str, data: dict | None = None,
+                link: str = "/") -> int:
     """Push ``title``/``body`` to every stored device. Returns #delivered.
 
+    Rendered with the lodge icon and opens the ERP at ``link`` on tap (webpush
+    config), so the owner gets a branded, tappable alert instead of a bare line.
     Never raises: any failure (no messaging, no tokens, send error) returns 0.
     """
     try:
@@ -51,9 +54,22 @@ def send_to_all(title: str, body: str, data: dict | None = None) -> int:
     tokens = _all_tokens()
     if not tokens:
         return 0
+    # Icon/badge are served by the ERP; relative URLs resolve against the FCM
+    # service-worker origin (the ERP). require_interaction keeps the alert on
+    # screen until the owner taps it (like a food-delivery app).
+    webpush = messaging.WebpushConfig(
+        notification=messaging.WebpushNotification(
+            title=title, body=body,
+            icon="/static/icons/icon-192.png",
+            badge="/static/icons/favicon-32.png",
+            tag="cibara", require_interaction=True,
+        ),
+        fcm_options=messaging.WebpushFCMOptions(link=link or "/"),
+    )
     msg = messaging.MulticastMessage(
         tokens=tokens,
         notification=messaging.Notification(title=title, body=body),
+        webpush=webpush,
         data={k: str(v) for k, v in (data or {}).items()},
     )
     try:

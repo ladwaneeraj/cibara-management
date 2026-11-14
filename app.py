@@ -27,7 +27,8 @@ from routes.manual_bill import manual_bill_bp
 from routes.guest import guest_bp
 from routes.web import web_bp
 from flask_cors import CORS
-from services.auth_service import load_current_user
+from services.auth_service import load_current_user, login_required
+from services import push_service
 from flask import g
 import os
 import threading
@@ -100,7 +101,7 @@ for _var in ["API_KEY"]:
 # (kept for backwards compat with any external integrations). Per-route
 # role checks are applied via @requires_permission inside each blueprint.
 # ---------------------------------------------------------------------------
-_PUBLIC_PREFIXES = ("/static/", "/uploads/", "/firebase-config.js", "/web/")
+_PUBLIC_PREFIXES = ("/static/", "/uploads/", "/firebase-config.js", "/firebase-messaging-sw.js", "/web/")
 _PUBLIC_EXACT    = ("/", "/login", "/health", "/verify-pin", "/sw.js", "/manifest.webmanifest")
 
 @app.before_request
@@ -296,12 +297,12 @@ def health():
 # Per-field FIREBASE_* env vars still win for one-off overrides on Cloud Run.
 _FIREBASE_WEB_FALLBACK = FIREBASE_WEB_CONFIG
 
-@app.route("/firebase-config.js")
-def firebase_config_js():
+def _web_firebase_config():
+    """The public Firebase web SDK config (env vars override the baked fallback)."""
     def pick(env_key, fallback_key):
         return os.environ.get(env_key) or _FIREBASE_WEB_FALLBACK.get(fallback_key, "")
 
-    config = {
+    return {
         "apiKey":            pick("FIREBASE_WEB_API_KEY",         "apiKey"),
         "authDomain":        pick("FIREBASE_AUTH_DOMAIN",         "authDomain"),
         "projectId":         pick("FIREBASE_PROJECT_ID",          "projectId"),
@@ -309,9 +310,19 @@ def firebase_config_js():
         "messagingSenderId": pick("FIREBASE_MESSAGING_SENDER_ID", "messagingSenderId"),
         "appId":             pick("FIREBASE_APP_ID",              "appId"),
         "measurementId":     pick("FIREBASE_MEASUREMENT_ID",      "measurementId"),
+    }
+
+
+@app.route("/firebase-config.js")
+def firebase_config_js():
+    config = {
+        **_web_firebase_config(),
         # Named Firestore DB for browser listeners (region move). Empty = the
         # project's (default) DB, i.e. unchanged. google_sync.js reads this.
-        "firestoreDb":       os.environ.get("CIBARA_FIRESTORE_DB", ""),
+        "firestoreDb": os.environ.get("CIBARA_FIRESTORE_DB", ""),
+        # FCM Web Push public VAPID key (Firebase console -> Cloud Messaging ->
+        # Web Push certificates). Empty disables push. push.js reads this.
+        "vapidKey": os.environ.get("FCM_VAPID_KEY", ""),
     }
     js = (
         f"// Firebase web config — CIBARA_ENV={CIBARA_ENV} "
@@ -320,6 +331,41 @@ def firebase_config_js():
     )
     return Response(js, mimetype="application/javascript",
                     headers={"Cache-Control": "no-store"})
+
+
+@app.route("/firebase-messaging-sw.js")
+def firebase_messaging_sw():
+    """FCM background service worker, served from root so it has app-wide scope.
+
+    Config is injected from env (public web config only). Shows a notification
+    for pushes that arrive while the ERP is closed / backgrounded."""
+    cfg = json.dumps(_web_firebase_config())
+    js = (
+        'importScripts("https://www.gstatic.com/firebasejs/10.13.0/firebase-app-compat.js");\n'
+        'importScripts("https://www.gstatic.com/firebasejs/10.13.0/firebase-messaging-compat.js");\n'
+        f'firebase.initializeApp({cfg});\n'
+        'const messaging = firebase.messaging();\n'
+        'messaging.onBackgroundMessage(function (payload) {\n'
+        '  var n = (payload && payload.notification) || {};\n'
+        '  self.registration.showNotification(n.title || "New booking",\n'
+        '    { body: n.body || "", tag: "cibara-booking", data: (payload && payload.data) || {} });\n'
+        '});\n'
+    )
+    return Response(js, mimetype="application/javascript",
+                    headers={"Cache-Control": "no-store"})
+
+
+@app.route("/register_push_token", methods=["POST"])
+@login_required
+def register_push_token():
+    """Store this device's FCM token so new-booking pushes reach it."""
+    data = request.get_json(silent=True) or {}
+    user = getattr(g, "current_user", None) or {}
+    uid = user.get("userId") or user.get("uid") or user.get("id") or ""
+    role = user.get("role") or ""
+    if not push_service.register_token(data.get("token") or "", uid, role):
+        return jsonify(success=False, message="Invalid token"), 400
+    return jsonify(success=True)
 
 # ---------------------------------------------------------------------------
 # DEPRECATED: PIN verification.

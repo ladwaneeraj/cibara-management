@@ -17,7 +17,7 @@ from google.api_core import exceptions as gexc
 import config
 from config import get_web_config, invalidate_rooms_and_totals
 from services import availability_service as av
-from services import blocks_service, payment_service, razorpay_service, system_alerts
+from services import blocks_service, payment_service, push_service, razorpay_service, system_alerts
 
 logger = logging.getLogger(__name__)
 
@@ -649,6 +649,13 @@ def razorpay_webhook():
                      f"New web booking {ref}: {b.get('guest_name')}, room {b.get('room')}, "
                      f"{b.get('check_in_date')}, ₹{b.get('total_amount')} paid online.",
                      ctx, severity="warning")
+        try:  # FCM push to the owner's phone, even when the ERP is closed.
+            push_service.send_to_all(
+                "New booking",
+                f"{b.get('guest_name')} · Room {b.get('room')} · ₹{b.get('total_amount')}",
+                {"booking_id": booking_id, "room": str(b.get("room") or "")})
+        except Exception:  # noqa: BLE001 -- push must never affect a confirmed booking
+            logger.exception("web webhook: push notify failed for %s", booking_id)
         try:
             config.send_whatsapp_message(_guest_phone(b.get("guest_mobile")),
                                          _confirmation_message(booking_id, b))

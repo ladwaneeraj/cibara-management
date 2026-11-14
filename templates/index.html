@@ -6417,6 +6417,8 @@
       type="module"
       src="{{ asset_url('google_sync.js') }}"
     ></script>
+    <!-- FCM web push for owner booking alerts (no-op until FCM_VAPID_KEY is set) -->
+    <script type="module" src="{{ asset_url('push.js') }}"></script>
     <!-- <script src="/static/realtime-sync.js"></script> -->
 
     <!-- Booking modal date range picker init -->

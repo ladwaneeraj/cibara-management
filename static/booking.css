@@ -1588,6 +1588,52 @@
 .blk-cal-title { font-weight: 600; font-size: 0.92rem; color: var(--dark, #1a202c); }
 .blk-nav { display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--border, #eef1f6); background: #fff; border-radius: 9px; width: 1.9rem; height: 1.9rem; cursor: pointer; font-size: 1.05rem; line-height: 1; color: var(--gray, #64748b); transition: background 0.12s, color 0.12s; }
 .blk-nav:hover { background: #f1f5f9; color: var(--dark, #1a202c); }
+
+/* Legend — small, quiet, one line under the month header. */
+.blk-legend { display: flex; gap: 0.9rem; font-size: 0.7rem; color: #94a3b8; margin: 0 0 0.6rem; flex-wrap: wrap; }
+.blk-legend span { display: inline-flex; align-items: center; gap: 0.35rem; }
+.blk-legend .sw { width: 9px; height: 9px; border-radius: 3px; display: inline-block; }
+.blk-legend .sw.past { background: #e2e8f0; }
+.blk-legend .sw.blocked { background: var(--danger, #e53e3e); opacity: 0.6; }
+.blk-legend .sw.selected { background: var(--primary, #4c51bf); }
+
+/* ── Block Rooms modal: dropdowns, labels and the submit button ───────────── */
+#blocks-modal .form-label {
+  display: block; font-size: 0.72rem; font-weight: 600; letter-spacing: 0.02em;
+  text-transform: uppercase; color: #64748b; margin-bottom: 0.4rem;
+}
+#blocks-modal select.form-control {
+  -webkit-appearance: none; -moz-appearance: none; appearance: none;
+  width: 100%; padding: 0.65rem 2.4rem 0.65rem 0.9rem;
+  border: 1px solid #e2e8f0; border-radius: 10px; background-color: #fff;
+  font-size: 0.9rem; font-weight: 500; color: #1e293b; cursor: pointer; line-height: 1.3;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8' fill='none'><path d='M1 1l5 5 5-5' stroke='%2364748b' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/></svg>");
+  background-repeat: no-repeat; background-position: right 0.9rem center;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+#blocks-modal select.form-control:hover { border-color: #cbd5e1; }
+#blocks-modal select.form-control:focus {
+  outline: none; border-color: var(--primary, #4c51bf);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary, #4c51bf) 15%, transparent);
+}
+#blocks-modal #blocks-reason {
+  padding: 0.65rem 0.9rem; border: 1px solid #e2e8f0; border-radius: 10px; font-size: 0.9rem;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+#blocks-modal #blocks-reason:focus {
+  outline: none; border-color: var(--primary, #4c51bf);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary, #4c51bf) 15%, transparent);
+}
+.blk-submit {
+  width: 100%; margin-top: 0.4rem; padding: 0.75rem 1rem; border: 0; border-radius: 10px;
+  background: var(--primary, #4c51bf); color: #fff; font-size: 0.92rem; font-weight: 600;
+  cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 0.5rem;
+  transition: background 0.15s ease, transform 0.05s ease;
+}
+.blk-submit:hover { background: color-mix(in srgb, var(--primary, #4c51bf) 88%, #000); }
+.blk-submit:active { transform: translateY(1px); }
+.blk-submit i { font-size: 0.85rem; }
+
 .blk-wd { display: grid; grid-template-columns: repeat(7, 1fr); margin-bottom: 4px; }
 .blk-wd span { text-align: center; font-size: 0.66rem; font-weight: 600; letter-spacing: 0.04em; color: var(--gray, #94a3b8); text-transform: uppercase; }
 /* Gap-free grid so a selected range reads as one continuous band. */

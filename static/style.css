@@ -7426,6 +7426,29 @@ body.gr-panel-open { overflow: hidden; }
   z-index: 2;
 }
 button.room-unblock-btn { cursor: pointer; }
+/* Compact block badge for an OCCUPIED (held) room — top-right corner, sitting
+   on the status-bar strip above the guest-count chip so the two never overlap.
+   18px keeps its bottom (~20px) clear of the room-number row (~21px down). */
+.room-block-corner {
+  position: absolute;
+  top: 2px;
+  right: 3px;
+  z-index: 4;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1.5px solid #fff;
+  border-radius: 50%;
+  background: #64748b;
+  color: #fff;
+  font-size: 0.58rem;
+  line-height: 1;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+  cursor: pointer;
+}
 .blocks-row {
   display: flex;
   align-items: center;

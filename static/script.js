@@ -986,7 +986,7 @@ function renderRooms() {
     // gets the grey hatch, because it really is out of sale.
     const _blockedBy = blockedNowMap[roomNumber];
     if (_blockedBy && info.status !== "occupied") roomCard.classList.add("room-blocked");
-    roomContent += roomBlockMarkup(roomNumber, _blockedBy);
+    roomContent += roomBlockMarkup(roomNumber, _blockedBy, info.status === "occupied");
 
     // ── Upcoming booking indicator dot ──────────────────────────────────────
     // Shown on any room with a booking arriving within 24 hrs (not cancelled/checked_in)
@@ -8111,9 +8111,24 @@ function _blkCanManage() {
   return !!(a && a.userCan && a.userCan("room.update"));
 }
 
-function roomBlockMarkup(roomNumber, blockId) {
-  if (!_blkCanManage()) {
-    return blockId ? `<div class="room-blocked-chip" title="Blocked — not for sale">BLOCKED</div>` : "";
+function roomBlockMarkup(roomNumber, blockId, occupied) {
+  if (!blockId) return "";
+  const canManage = _blkCanManage();
+  if (occupied) {
+    // Occupied + held off-sale (a long-stay guest): a compact ban badge in the
+    // top-right corner instead of the big bottom pill, so the guest's details
+    // stay clear. It sits on the status-bar strip, above the guest-count chip,
+    // so the two never overlap (see .room-block-corner).
+    if (canManage) {
+      return `<button class="room-block-corner room-unblock-btn" data-perm="room.update"
+                onclick="handleUnblockClick(event, '${blockId}', '${roomNumber}')"
+                title="Blocked — tap to unblock" aria-label="Unblock room ${roomNumber}">
+                <i class="fas fa-ban"></i></button>`;
+    }
+    return `<div class="room-block-corner" title="Blocked — not for sale" aria-label="Room ${roomNumber} blocked"><i class="fas fa-ban"></i></div>`;
+  }
+  if (!canManage) {
+    return `<div class="room-blocked-chip" title="Blocked — not for sale">BLOCKED</div>`;
   }
   if (blockId) {
     return `<button class="room-blocked-chip room-unblock-btn" data-perm="room.update"
@@ -8362,6 +8377,17 @@ function openBlocksModal() {
 }
 
 document.addEventListener("DOMContentLoaded", function () {
+  // Load the room blocks on every page load so a blocked room shows its state
+  // on the grid. loadData also calls loadBlocks(), but that HTTP path doesn't
+  // run when the grid renders from the realtime listener (listener-first mode),
+  // so without this a blocked room paints un-blocked until the Blocks modal is
+  // opened. Gated on CibaraAuth.ready() so apiFetch has a token; independent of
+  // the Blocks-modal wiring below (runs even if the modal isn't on the page).
+  if (window.CibaraAuth && typeof CibaraAuth.ready === "function") {
+    CibaraAuth.ready().then(function () {
+      if (typeof loadBlocks === "function") loadBlocks();
+    }).catch(function () { /* not signed in — nothing to load */ });
+  }
   const modal = document.getElementById("blocks-modal");
   const openBtn = document.getElementById("quick-blocks-btn");
   if (!modal) return;

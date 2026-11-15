@@ -534,6 +534,11 @@ if (fullAccess) _track(onSnapshot(query(collection(db, "bills"),
 // a billed read on each attach. Two range filters on the SAME field need no
 // composite index, so this is a query-shape change only.
 let bookingsInitialLoad = true;
+// The first snapshot is often served from the IndexedDB cache; the first SERVER
+// snapshot then reports any booking the cache didn't have as "added". Those are
+// pre-existing, not new, so seed them silently too — otherwise opening the app
+// pops a "New Booking" toast for an old booking.
+let bookingsServerSynced = false;
 
 // A web booking lives as a `pending_payment` hold BEFORE the guest pays, and a
 // swept hold becomes `expired`. Neither is a real booking, so they must not toast
@@ -595,6 +600,13 @@ if (fullAccess) _track(onSnapshot(query(collection(db, "bookings"),
       bookingsInitialLoad = false;
       if (wasFirst) snapshot.docs.forEach((d) => _notifiedBookingIds.add(d.id)); // pre-existing, not new
       if (wasFirst || snapshot.metadata.fromCache) return;
+      // First SERVER snapshot: seed everything it holds (the cache may have
+      // missed some) and announce nothing — these existed before this session.
+      if (!bookingsServerSynced) {
+        bookingsServerSynced = true;
+        snapshot.docs.forEach((d) => _notifiedBookingIds.add(d.id));
+        return;
+      }
       // booking.js still drives its own list off these events.
       snapshot.docChanges().forEach((change) => {
         const booking = change.doc.data();

@@ -345,18 +345,34 @@ def firebase_messaging_sw():
         'importScripts("https://www.gstatic.com/firebasejs/10.13.0/firebase-messaging-compat.js");\n'
         f'firebase.initializeApp({cfg});\n'
         'const messaging = firebase.messaging();\n'
+        # Pushes are DATA-ONLY (see services/push_service.py) so ONLY this handler
+        # renders the alert — exactly one card, not the two FCM auto-display + this
+        # handler produced together. All display fields come from payload.data.
+        # A new-booking push carries a guest number (d.wa), so it gets a
+        # "Send confirmation" button; other alerts (renewal, etc.) don't.
         'messaging.onBackgroundMessage(function (payload) {\n'
-        '  var n = (payload && payload.notification) || {};\n'
-        '  self.registration.showNotification(n.title || "New booking",\n'
-        '    { body: n.body || "", tag: "cibara-booking", data: (payload && payload.data) || {} });\n'
+        '  var d = (payload && payload.data) || {};\n'
+        '  var actions = d.wa ? [{ action: "confirm", title: "Send confirmation" }] : [];\n'
+        '  self.registration.showNotification(d.title || "New booking",\n'
+        '    { body: d.body || "", icon: "/static/icons/icon-192.png",\n'
+        '      badge: "/static/icons/favicon-32.png", requireInteraction: true,\n'
+        '      tag: d.tag || undefined, actions: actions, data: d });\n'
         '});\n'
-        # Tapping the notification opens/focuses the ERP (works without an
-        # absolute fcm_options.link, which FCM rejects for a relative URL).
+        # "Send confirmation" opens WhatsApp to the guest with the message
+        # prefilled; a plain tap opens/focuses the ERP (no absolute
+        # fcm_options.link, which FCM rejects for a relative URL).
         'self.addEventListener("notificationclick", function (e) {\n'
         '  e.notification.close();\n'
+        '  var d = e.notification.data || {};\n'
+        '  if (e.action === "confirm" && d.wa) {\n'
+        '    e.waitUntil(clients.openWindow("https://wa.me/" + d.wa +\n'
+        '      (d.wa_text ? "?text=" + encodeURIComponent(d.wa_text) : "")));\n'
+        '    return;\n'
+        '  }\n'
+        '  var url = d.link || "/";\n'
         '  e.waitUntil(clients.matchAll({ type: "window", includeUncontrolled: true }).then(function (wins) {\n'
         '    for (var i = 0; i < wins.length; i++) { if ("focus" in wins[i]) return wins[i].focus(); }\n'
-        '    if (clients.openWindow) return clients.openWindow("/");\n'
+        '    if (clients.openWindow) return clients.openWindow(url);\n'
         '  }));\n'
         '});\n'
     )

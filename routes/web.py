@@ -772,10 +772,15 @@ def razorpay_webhook():
                      f"{b.get('check_in_date')}, ₹{b.get('total_amount')} paid online.",
                      ctx, severity="warning")
         try:  # FCM push to the owner's phone, even when the ERP is closed.
+            # wa / wa_text power the notification's "Send confirmation" button:
+            # the service worker opens WhatsApp to the guest with this message
+            # prefilled, so the owner can confirm from the alert in one tap.
             push_service.send_to_all(
                 "New booking",
                 f"{b.get('guest_name')} · Room {b.get('room')} · ₹{b.get('total_amount')}",
-                {"booking_id": booking_id, "room": str(b.get("room") or "")})
+                {"booking_id": booking_id, "room": str(b.get("room") or ""),
+                 "wa": _guest_phone(b.get("guest_mobile")),
+                 "wa_text": _confirmation_message(booking_id, b)})
         except Exception:  # noqa: BLE001 -- push must never affect a confirmed booking
             logger.exception("web webhook: push notify failed for %s", booking_id)
         try:

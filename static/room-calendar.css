@@ -305,6 +305,8 @@
   outline: none;
 }
 .rc-bar-label { flex: 0 1 auto; min-width: 0; font-weight: 600; overflow: hidden; text-overflow: ellipsis; }
+/* Occupied + held off-sale (long stay): a small lock on the guest's stay bar. */
+.rc-bar-held { flex-shrink: 0; margin-right: 4px; font-size: 0.72rem; opacity: 0.8; }
 .rc-bar-time  { color: rgba(0, 0, 0, 0.55); font-size: 0.66rem; flex-shrink: 0; }
 /* On a narrow bar the guest name matters more than the clock time. Browsers
    without container queries simply keep the time and let the name truncate. */

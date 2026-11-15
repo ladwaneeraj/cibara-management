@@ -37,5 +37,12 @@ def test_send_to_all_sends_and_prunes_dead_tokens():
 
     assert delivered == 1
     send.assert_called_once()
+    # Data-only on purpose: a notification/webpush payload would be auto-shown by
+    # FCM *and* re-shown by the service worker — two cards for one push. Title and
+    # body travel in data so the SW renders exactly one alert.
+    sent = send.call_args.args[0]
+    assert sent.notification is None and sent.webpush is None
+    assert sent.data["title"] == "New booking" and sent.data["body"] == "body"
+    assert sent.data["booking_id"] == "b1"
     # the dead token is removed; the good one stays
     assert [d.id for d in config.db.collection("push_tokens").stream()] == ["good"]

@@ -33,7 +33,14 @@ let dailyCounters = {}; // today's check-in serial counter, keyed by date string
 let upcomingBookings = {};
 // Blocks (see "Room blocks" section): {room: blockId} in force right now, and
 // the full list of current/upcoming blocks for the Blocks modal.
-let blockedNowMap = {};
+// Hydrate the "in force now" map from the last session so blocked rooms show
+// their state on the very first paint after a refresh — loadBlocks() runs in
+// the background (see loadData), so without this the grid flashes un-blocked
+// until /blocks returns (or stays wrong if that early fetch fails).
+let blockedNowMap = (function () {
+  try { return JSON.parse(localStorage.getItem("cibara_blocked_now") || "{}") || {}; }
+  catch (_) { return {}; }
+})();
 let blocksList = [];
 
 // Keep logs and totals variables as they're used throughout the app
@@ -973,10 +980,12 @@ function renderRooms() {
 
     roomContent += `</div>`; // close room-content
 
-    // Blocks: a blocked room is visibly greyed with an "Unblock" chip; every
-    // other card gets a small "Block now" action (room.update only).
+    // Blocks: an occupied room that's been taken off-sale (e.g. a long-stay
+    // guest held for the month) keeps its normal occupied look — only the
+    // "Blocked · Unblock" chip marks the hold. A vacant/off-sale room still
+    // gets the grey hatch, because it really is out of sale.
     const _blockedBy = blockedNowMap[roomNumber];
-    if (_blockedBy) roomCard.classList.add("room-blocked");
+    if (_blockedBy && info.status !== "occupied") roomCard.classList.add("room-blocked");
     roomContent += roomBlockMarkup(roomNumber, _blockedBy);
 
     // ── Upcoming booking indicator dot ──────────────────────────────────────
@@ -8127,6 +8136,7 @@ async function loadBlocks() {
     const nextMap = data.blocked_now || {};
     const changed = JSON.stringify(nextMap) !== JSON.stringify(blockedNowMap);
     blockedNowMap = nextMap;
+    try { localStorage.setItem("cibara_blocked_now", JSON.stringify(nextMap)); } catch (_) { /* storage blocked */ }
     blocksList = data.blocks || [];
     if (changed && typeof renderRooms === "function") renderRooms();
     const modal = document.getElementById("blocks-modal");

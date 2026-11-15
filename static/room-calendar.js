@@ -247,9 +247,26 @@
       segments.push(seg);
     });
 
+    const heldRooms = {};
+    const heldEnd = {};
     blockSegments(now).forEach(function (seg) {
+      // Occupied + held off-sale = a long stay. Don't paint a grey out-of-sale
+      // hatch over the guest; instead stretch the guest's own bar across the
+      // whole held span (like a reservation bar) so a month-long guest is
+      // actually visible on the calendar — with a small lock to show it's held.
+      if (byRoom[seg.room] && byRoom[seg.room].status === "occupied") {
+        heldRooms[seg.room] = true;
+        if (!heldEnd[seg.room] || seg.end > heldEnd[seg.room]) heldEnd[seg.room] = seg.end;
+        return;
+      }
       if (!byRoom[seg.room]) byRoom[seg.room] = { status: "vacant", segments: [] };
       segments.push(seg);
+    });
+    segments.forEach(function (s) {
+      if (s.kind === "stay" && heldRooms[s.room]) {
+        s.held = true;
+        if (heldEnd[s.room] && heldEnd[s.room] > s.end) s.end = heldEnd[s.room];
+      }
     });
 
     markClashes(segments);
@@ -308,8 +325,9 @@
     return (
       '<div class="' + cls + '" style="left:' + left.toFixed(3) +
       "%;width:" + width.toFixed(3) + '%"' + data +
-      ' title="' + esc(seg.title) + '" tabindex="0" role="button">' +
+      ' title="' + esc(seg.title + (seg.held ? "\nHeld — not for sale" : "")) + '" tabindex="0" role="button">' +
       (seg.clash ? '<i class="fas fa-exclamation-triangle rc-bar-warn"></i>' : "") +
+      (seg.held ? '<i class="fas fa-lock rc-bar-held" aria-hidden="true"></i>' : "") +
       '<span class="rc-bar-label">' + esc(seg.label) + "</span>" +
       '<span class="rc-bar-time">' + fmtTime(seg.start) + "</span>" +
       "</div>"

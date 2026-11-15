@@ -61,21 +61,39 @@ def send_to_all(title: str, body: str, data: dict | None = None,
     tokens = _all_tokens()
     if not tokens:
         return 0
-    # DATA-ONLY on purpose. A notification / webpush payload is auto-displayed by
-    # FCM AND our service worker's onBackgroundMessage would show it again — two
-    # cards for one push (the bug the owner saw). Carrying title/body/link in
-    # data lets the SW render exactly one branded, tappable alert (icon, badge,
-    # require-interaction and the tap target all live in /firebase-messaging-sw.js).
+    # ONE webpush NOTIFICATION message — no top-level notification, no data-only.
+    #   * A data-only message is throttled / not shown when the app is
+    #     backgrounded on mobile (it relies on the SW waking to render it), which
+    #     is why renewals stopped arriving. A notification message is auto-shown
+    #     by the OS, reliably, even with the app closed.
+    #   * FCM does NOT call onBackgroundMessage for a notification message, so the
+    #     SW cannot double-render it → exactly one card (the duplicate bug came
+    #     from sending TWO specs: a top-level notification AND a webpush one).
+    # Icon/badge/require-interaction, the tap target (data.link) and the optional
+    # "Send confirmation" action (when a guest number rides in data.wa) all live
+    # on this one notification; the SW's notificationclick acts on its data.
     _link = link if isinstance(link, str) and link.startswith("https://") else _app_origin()
-    msg = messaging.MulticastMessage(
-        tokens=tokens,
-        data={
-            "title": str(title),
-            "body": str(body),
-            "link": _link or "/",
-            **{k: str(v) for k, v in (data or {}).items()},
-        },
+    _data = {"link": _link or "/", **{k: str(v) for k, v in (data or {}).items()}}
+    _actions = (
+        [messaging.WebpushNotificationAction(action="confirm", title="Send confirmation")]
+        if _data.get("wa") else None
     )
+    wp = {
+        "notification": messaging.WebpushNotification(
+            title=title, body=body,
+            icon="/static/icons/icon-192.png",
+            badge="/static/icons/favicon-32.png",
+            require_interaction=True,
+            tag=_data.get("tag") or None,
+            data=_data,
+            actions=_actions,
+        ),
+    }
+    # fcm_options.link must be an absolute https URL or the encoder drops EVERY
+    # push; omit it otherwise — the SW's notificationclick opens the app anyway.
+    if _link:
+        wp["fcm_options"] = messaging.WebpushFCMOptions(link=_link)
+    msg = messaging.MulticastMessage(tokens=tokens, webpush=messaging.WebpushConfig(**wp))
     try:
         resp = messaging.send_each_for_multicast(msg)
     except Exception:  # noqa: BLE001

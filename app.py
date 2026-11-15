@@ -345,22 +345,19 @@ def firebase_messaging_sw():
         'importScripts("https://www.gstatic.com/firebasejs/10.13.0/firebase-messaging-compat.js");\n'
         f'firebase.initializeApp({cfg});\n'
         'const messaging = firebase.messaging();\n'
-        # Pushes are DATA-ONLY (see services/push_service.py) so ONLY this handler
-        # renders the alert — exactly one card, not the two FCM auto-display + this
-        # handler produced together. All display fields come from payload.data.
-        # A new-booking push carries a guest number (d.wa), so it gets a
-        # "Send confirmation" button; other alerts (renewal, etc.) don't.
-        'messaging.onBackgroundMessage(function (payload) {\n'
-        '  var d = (payload && payload.data) || {};\n'
-        '  var actions = d.wa ? [{ action: "confirm", title: "Send confirmation" }] : [];\n'
-        '  self.registration.showNotification(d.title || "New booking",\n'
-        '    { body: d.body || "", icon: "/static/icons/icon-192.png",\n'
-        '      badge: "/static/icons/favicon-32.png", requireInteraction: true,\n'
-        '      tag: d.tag || undefined, actions: actions, data: d });\n'
-        '});\n'
+        # Pushes are webpush NOTIFICATION messages (services/push_service.py), so
+        # FCM/the OS auto-displays them reliably even with the app closed — and
+        # does NOT call onBackgroundMessage for them. This handler is a required
+        # no-op (its presence stops the SDK warning); it must NOT showNotification,
+        # or a notification message would double-render.
+        'messaging.onBackgroundMessage(function () { /* FCM auto-displays it */ });\n'
+        # Take over as soon as this updated worker installs, so a push-code change
+        # reaches the phone on the next app open instead of waiting for every tab
+        # to close first.
+        'self.addEventListener("install", function () { self.skipWaiting(); });\n'
+        'self.addEventListener("activate", function (e) { e.waitUntil(self.clients.claim()); });\n'
         # "Send confirmation" opens WhatsApp to the guest with the message
-        # prefilled; a plain tap opens/focuses the ERP (no absolute
-        # fcm_options.link, which FCM rejects for a relative URL).
+        # prefilled; a plain tap opens/focuses the ERP. Reads the card\'s own data.
         'self.addEventListener("notificationclick", function (e) {\n'
         '  e.notification.close();\n'
         '  var d = e.notification.data || {};\n'

@@ -55,7 +55,8 @@ insights_bp = Blueprint("insights", __name__, url_prefix="/insights")
 # straddle midnight (checkout late night → ready next morning) still pair.
 _LOOKBACK_DAYS = 2
 # Longest allowed window. Guards Firestore reads and response size.
-_MAX_WINDOW_DAYS = 92
+# One year (admin-only, cached) — matches routes/analytics.py.
+_MAX_WINDOW_DAYS = 366
 # Multi-night stays: how far before the window we look for bills whose stay
 # overlaps it (occupancy basis).
 _BILLS_LEAD_DAYS = 60

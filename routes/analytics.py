@@ -58,7 +58,9 @@ payments_ref = db.collection("payments")
 snapshots_ref = db.collection("analytics_snapshots")
 
 # Longest allowed window (guards Firestore reads and response size).
-_MAX_WINDOW_DAYS = 92
+# One year: analytics is admin-only and cached, and a year of a single
+# lodge's bills/payments is a modest scan.
+_MAX_WINDOW_DAYS = 366
 # Bills that began before the range but still overlap it.
 _BILLS_LEAD_DAYS = 60
 # Months of history the seasonality line needs (trailing, incl. current).

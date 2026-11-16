@@ -208,6 +208,8 @@ tr.reg-row-located.reg-row-located-fade > td {
 .status-active    { background: #fff3cd; color: #856404; }
 .status-completed { background: #d4edda; color: #155724; }
 .status-cancelled { background: #fee2e2; color: #b91c1c; }
+.reg-cancel-reason { margin-top: 3px; font-size: .72rem; color: #b91c1c; max-width: 160px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 .payment-split { display: flex; flex-direction: column; gap: 0.12rem; font-size: 0.77rem; }
 .payment-item  { display: flex; justify-content: space-between; gap: 0.4rem; align-items: center; }
@@ -1157,6 +1159,50 @@ tr.rp-svc-voided .rp-actions-cell { opacity:.9; }
 }
 .reg-history-btn i { font-size: .72rem; }
 
+/* Cancel check-in icon — same footprint as the history icon, danger-tinted */
+.reg-cancel-btn {
+  display: inline-grid; place-items: center;
+  width: 26px; height: 26px;
+  border: 1px solid #fecaca; border-radius: 6px;
+  background: #fff; color: #dc2626;
+  cursor: pointer;
+  transition: background .12s, border-color .12s, color .12s;
+  vertical-align: middle;
+}
+.reg-cancel-btn:hover { background: #fee2e2; border-color: #f87171; color: #b91c1c; }
+.reg-cancel-btn i { font-size: .72rem; }
+
+/* ── Cancel check-in dialog ─────────────────────────────────────────── */
+#rcx-overlay { display: none; position: fixed; inset: 0; z-index: 10050;
+  background: rgba(15,23,42,.55); align-items: center; justify-content: center; padding: 1rem; }
+#rcx-overlay.show { display: flex; }
+.rcx-box { background: #fff; border-radius: 12px; width: 100%; max-width: 420px;
+  box-shadow: 0 20px 50px rgba(0,0,0,.3); overflow: hidden; }
+.rcx-header { display: flex; align-items: center; gap: .5rem; padding: 1rem 1.2rem;
+  background: #fef2f2; color: #b91c1c; border-bottom: 1px solid #fee2e2; }
+.rcx-header h3 { margin: 0; font-size: 1.05rem; }
+.rcx-body { padding: 1.1rem 1.2rem; }
+.rcx-meta { font-size: .85rem; color: #475569; margin-bottom: .9rem; line-height: 1.5; }
+.rcx-meta strong { color: #0f172a; }
+.rcx-field { margin-bottom: .85rem; }
+.rcx-field label { display: block; font-size: .78rem; font-weight: 600; color: #334155; margin-bottom: .3rem; }
+.rcx-field input[type=number], .rcx-field textarea, .rcx-seg { width: 100%; box-sizing: border-box; }
+.rcx-field input[type=number], .rcx-field textarea {
+  padding: .55rem .7rem; border: 1px solid #cbd5e1; border-radius: 8px; font-size: .95rem; font-family: inherit; }
+.rcx-split { display: flex; gap: .5rem; }
+.rcx-split > div { flex: 1; text-align: center; }
+.rcx-sub { display: block; font-size: .72rem; color: #64748b; margin-top: .25rem; }
+.rcx-total { margin-top: .5rem; font-size: .82rem; color: #334155; }
+.rcx-total.bad { color: #b91c1c; }
+.rcx-keep { display: flex; align-items: flex-start; gap: .5rem; font-size: .82rem; color: #475569;
+  background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: .6rem .7rem; margin-bottom: .3rem; }
+.rcx-keep input { margin-top: .15rem; }
+.rcx-keepnote { font-size: .76rem; color: #92400e; margin: .4rem 0 0; }
+.rcx-actions { display: flex; gap: .6rem; justify-content: flex-end; padding: 1rem 1.2rem; border-top: 1px solid #f1f5f9; }
+.rcx-cancel-btn { padding: .55rem 1rem; border: 1px solid #cbd5e1; background: #fff; border-radius: 8px; cursor: pointer; }
+.rcx-confirm-btn { padding: .55rem 1.1rem; border: none; background: #dc2626; color: #fff; border-radius: 8px; cursor: pointer; font-weight: 600; }
+.rcx-confirm-btn:disabled { opacity: .6; cursor: default; }
+
 /* "Checked in by" attribution chip on each register row */
 .reg-attr-badge {
   display: inline-flex; align-items: center; gap: 3px;
@@ -1960,6 +2006,40 @@ tr.rp-svc-voided .rp-actions-cell { opacity:.9; }
   </div>
 </div>
 
+<!-- ── Cancel check-in dialog ─────────────────────────────────────────── -->
+<div id="rcx-overlay" role="dialog" aria-modal="true">
+  <div class="rcx-box">
+    <div class="rcx-header">
+      <i class="fas fa-ban"></i>
+      <h3>Cancel check-in</h3>
+    </div>
+    <div class="rcx-body">
+      <div class="rcx-meta" id="rcx-meta"></div>
+      <div class="rcx-field" id="rcx-refund-wrap">
+        <label>Refund amount (₹) — split across cash / online</label>
+        <div class="rcx-split">
+          <div><input type="number" id="rcx-cash" min="0" step="1" placeholder="0"><span class="rcx-sub">Cash</span></div>
+          <div><input type="number" id="rcx-online" min="0" step="1" placeholder="0"><span class="rcx-sub">Online</span></div>
+        </div>
+        <div class="rcx-total" id="rcx-total"></div>
+      </div>
+      <label class="rcx-keep">
+        <input type="checkbox" id="rcx-keep">
+        <span>Keep the un-refunded amount as a cancellation charge (issues a Tax Invoice at 18%). Leave unticked to simply not refund it.</span>
+      </label>
+      <p class="rcx-keepnote" id="rcx-keepnote" hidden></p>
+      <div class="rcx-field" style="margin-top:.85rem;">
+        <label for="rcx-reason">Reason <span style="color:#dc2626;">*</span></label>
+        <textarea id="rcx-reason" rows="2" placeholder="Why is this check-in being cancelled? (required)"></textarea>
+      </div>
+    </div>
+    <div class="rcx-actions">
+      <button class="rcx-cancel-btn" id="rcx-close">Close</button>
+      <button class="rcx-confirm-btn" id="rcx-confirm"><i class="fas fa-ban"></i> Cancel &amp; refund</button>
+    </div>
+  </div>
+</div>
+
 <!-- ── Bill viewer modal ──────────────────────────────────────────────── -->
 <div id="reg-bill-overlay" class="bill-modal" role="dialog" aria-modal="true">
   <div class="bill-content">
@@ -2175,6 +2255,18 @@ tr.rp-svc-voided .rp-actions-cell { opacity:.9; }
             en => en.room === room && en.guest_name === guestName && en.checkin_time === checkin
           ) || { room, guest_name: guestName, checkin_time: checkin };
           _openPasswordPrompt(fullEntry);
+          return;
+        }
+
+        // Cancel check-in button — opens the refund dialog for an active stay.
+        const cxlBtn = e.target.closest(".reg-cancel-btn");
+        if (cxlBtn) {
+          e.stopPropagation();
+          const tid = cxlBtn.dataset.entryId;
+          const fullEntry =
+            (tid && state.filteredEntries.find((en) => en.id === tid)) ||
+            state.filteredEntries.find((en) => en.room === cxlBtn.dataset.room && en.status === "active");
+          if (fullEntry) _openCancelCheckin(fullEntry);
           return;
         }
 
@@ -3193,6 +3285,112 @@ tr.rp-svc-voided .rp-actions-cell { opacity:.9; }
     }
   }
 
+  // ── Cancel check-in dialog ──────────────────────────────────────────
+  let _cancelEntry = null;
+  let _cancelWired = false;
+
+  function _cancelPaid() {
+    return _cancelEntry ? (_cancelEntry.payment_cash || 0) + (_cancelEntry.payment_online || 0) : 0;
+  }
+  function _cancelRefund() {
+    return (parseInt(dom("rcx-cash").value || "0", 10) || 0)
+         + (parseInt(dom("rcx-online").value || "0", 10) || 0);
+  }
+
+  function _cancelKeepNote() {
+    const paid = _cancelPaid();
+    const refund = _cancelRefund();
+    const kept = Math.max(0, paid - refund);
+    // Running total line (turns red if the refund exceeds what was paid).
+    const tot = dom("rcx-total");
+    tot.textContent = `Refund ₹${inr(refund)} of ₹${inr(paid)} paid` + (kept > 0 ? ` · keep ₹${inr(kept)}` : "");
+    tot.classList.toggle("bad", refund > paid);
+    const note = dom("rcx-keepnote");
+    if (kept > 0 && dom("rcx-keep").checked) {
+      note.hidden = false;
+      note.textContent = `A Tax Invoice for ₹${kept} (cancellation charge, 18% GST) will be created.`;
+    } else {
+      note.hidden = true;
+    }
+  }
+
+  function _initCancelDialog() {
+    if (_cancelWired) return;
+    _cancelWired = true;
+    dom("rcx-close").addEventListener("click", () => dom("rcx-overlay").classList.remove("show"));
+    dom("rcx-overlay").addEventListener("click", (ev) => {
+      if (ev.target === dom("rcx-overlay")) dom("rcx-overlay").classList.remove("show");
+    });
+    dom("rcx-cash").addEventListener("input", _cancelKeepNote);
+    dom("rcx-online").addEventListener("input", _cancelKeepNote);
+    dom("rcx-keep").addEventListener("change", _cancelKeepNote);
+    dom("rcx-confirm").addEventListener("click", _submitCancelCheckin);
+  }
+
+  function _openCancelCheckin(e) {
+    _initCancelDialog();
+    _cancelEntry = e;
+    const paid = (e.payment_cash || 0) + (e.payment_online || 0);
+    dom("rcx-meta").innerHTML =
+      `Cancelling <strong>${escHtml(e.guest_name || "guest")}</strong> in room `
+      + `<strong>${escHtml(String(e.room || "-"))}</strong>. Paid so far: `
+      + `<strong>₹${inr(paid)}</strong>. The room is freed and no invoice is issued.`;
+    // Default: refund each method exactly what was taken in it.
+    dom("rcx-cash").value = e.payment_cash || 0;
+    dom("rcx-online").value = e.payment_online || 0;
+    dom("rcx-refund-wrap").style.display = paid > 0 ? "" : "none";
+    dom("rcx-keep").checked = false;
+    dom("rcx-reason").value = "";
+    _cancelKeepNote();
+    dom("rcx-overlay").classList.add("show");
+  }
+
+  async function _submitCancelCheckin() {
+    const e = _cancelEntry;
+    if (!e) return;
+    const paid = (e.payment_cash || 0) + (e.payment_online || 0);
+    const cash = parseInt(dom("rcx-cash").value || "0", 10) || 0;
+    const online = parseInt(dom("rcx-online").value || "0", 10) || 0;
+    const refund = cash + online;
+    if (cash < 0 || online < 0 || refund > paid) {
+      showNotification(`Refund can't exceed ₹${inr(paid)} paid`, "error");
+      return;
+    }
+    const reason = dom("rcx-reason").value.trim();
+    if (!reason) {
+      showNotification("Please enter a cancellation reason", "error");
+      dom("rcx-reason").focus();
+      return;
+    }
+    const btn = dom("rcx-confirm");
+    btn.disabled = true;
+    try {
+      const res = await apiFetch("/cancel_checkin", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          room: e.room,
+          refund_cash: cash,
+          refund_online: online,
+          retain_as_charge: dom("rcx-keep").checked,
+          reason: reason,
+        }),
+      });
+      const data = await res.json();
+      if (!data.success) {
+        showNotification(data.message || "Could not cancel check-in", "error");
+        return;
+      }
+      showNotification(data.message || "Check-in cancelled", "success");
+      dom("rcx-overlay").classList.remove("show");
+      loadData(true);
+    } catch (err) {
+      showNotification("Network error cancelling check-in", "error");
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
   function renderTable() {
     const tbody = dom("reg-table-body");
     if (!tbody) return;
@@ -3272,6 +3470,11 @@ tr.rp-svc-voided .rp-actions-cell { opacity:.9; }
       : (isCancelled ? "status-cancelled" : "status-completed");
     const stTitle = (isCancelled && window.CibaraBillCancel)
       ? ` title="${escapeAttr(window.CibaraBillCancel.describe(e))}"` : "";
+    // Cancel check-in: only a current (active) stay, only for users who may
+    // undo a stay (same permission as Revert checkout — admin).
+    const canCancelCheckin = e.status === "active" &&
+      window.CibaraAuth && typeof window.CibaraAuth.userCan === "function" &&
+      window.CibaraAuth.userCan("booking.revert");
     // Make bill number clickable for completed bills with a real Firestore doc id
     const isRealBill = billNo !== "-" && e.id && !String(e.id).startsWith("active_");
     // Eligibility to MINT a GST invoice: completed stay with a real bill doc
@@ -3324,7 +3527,10 @@ tr.rp-svc-voided .rp-actions-cell { opacity:.9; }
       <td>₹${inr(e.services_total)}</td>
       <td><strong${isCancelled ? ' style="text-decoration:line-through;color:#9ca3af;"' : ""}>₹${inr(e.total_amount)}</strong></td>
       ${paymentCellHTML(e)}
-      <td><span class="status-badge ${stCls}"${stTitle}>${e.status}</span></td>
+      <td><span class="status-badge ${stCls}"${stTitle}>${e.status}</span>${
+        isCancelled && e.cancel_reason
+          ? `<div class="reg-cancel-reason" title="${escapeAttr(e.cancel_reason)}">${escHtml(e.cancel_reason)}</div>`
+          : ""}</td>
       <td style="white-space:nowrap;">
         <div class="reg-row-actions">
           ${(e.lastCheckinBy && window.CibaraUsers)
@@ -3333,6 +3539,14 @@ tr.rp-svc-voided .rp-actions-cell { opacity:.9; }
               }"><i class="fas fa-user-shield"></i> ${
                 escapeAttr(window.CibaraUsers.nameOf(e.lastCheckinBy))
               }</span>`
+            : ''}
+          ${canCancelCheckin
+            ? `<button class="reg-cancel-btn"
+                  data-room="${e.room}"
+                  data-entry-id="${e.id || ''}"
+                  title="Cancel check-in &amp; refund">
+                <i class="fas fa-ban"></i>
+              </button>`
             : ''}
           <button class="reg-history-btn"
               data-room="${e.room}"

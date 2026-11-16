@@ -490,7 +490,7 @@ def get_register_data():
                 #     keeps its serial present, so the serial backfill below
                 #     cannot resurrect it as an ordinary "recovered" stay.
                 _is_listed_cancel = bill_status == "cancelled" and (
-                    bill_data.get("cancel_kind") == "manual"
+                    bill_data.get("cancel_kind") in ("manual", "checkin")
                     or (bill_data.get("cancelled_by_revert") and mode == "checkout")
                 )
                 if (bill_status not in ("completed", "checked_out",

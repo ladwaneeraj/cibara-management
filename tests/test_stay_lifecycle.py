@@ -798,5 +798,99 @@ class TestRateRaisingAddOn(_LifecycleCase):
         s.assert_books_balance("tomorrow after an add-on")
 
 
+class TestCancelCheckin(_LifecycleCase):
+    """POST /cancel_checkin: refund an active stay, free the room, no invoice."""
+
+    def _seed(self, *, paid_cash=1200, paid_online=0, balance=0):
+        stay_id = "stay1"
+        self.db.data("rooms")["401"] = {
+            "status": "occupied", "active_bill_id": stay_id,
+            "checkin_time": "2026-09-11 12:00", "balance": balance,
+            "stay_payment_cash": paid_cash, "stay_payment_online": paid_online,
+            "guest": {"name": "Ravi", "mobile": "9000000001", "price": 1200,
+                      "guests": 1, "payment": "cash", "isAC": False},
+        }
+        self.db.data("bills")[stay_id] = {
+            "status": "draft", "room": "401", "guest_name": "Ravi",
+            "guest_mobile": "9000000001", "guest_count": 1,
+            "checkin_time": "2026-09-11 12:00", "total_amount": 1200,
+        }
+        self.db.data("totals")["current_totals"] = {
+            "refunds": 0, "balance": balance, "cash": paid_cash}
+        # bills_service.cancel writes through its own _bills_ref.
+        self._patch(rooms_mod.bills_service, "_bills_ref", self.db.collection("bills"))
+        self.payments = []
+        self._patch(rooms_mod.payment_service, "write_payment",
+                    lambda p: self.payments.append(p))
+        return stay_id
+
+    def test_full_refund_frees_the_room_and_cancels_without_an_invoice(self):
+        stay_id = self._seed()
+        r = self.client.post("/cancel_checkin", json={
+            "room": "401", "refund_cash": 1200,
+            "reason": "Guest changed mind"})
+        body = r.get_json()
+        self.assertTrue(body.get("success"), body)
+        room = self.db.data("rooms")["401"]
+        self.assertEqual(room["status"], "vacant")
+        self.assertIsNone(room["active_bill_id"])
+        bill = self.db.data("bills")[stay_id]
+        self.assertEqual(bill["status"], "cancelled")
+        self.assertEqual(bill["cancel_kind"], "checkin")
+        self.assertEqual(bill["refunds"], 1200)
+        self.assertEqual(self.db.data("totals")["current_totals"]["refunds"], 1200)
+        # One refund row, and no CC/ invoice number came back.
+        self.assertEqual(len(self.payments), 1)
+        self.assertEqual(self.payments[0]["type"], "booking_cancel_refund")
+        self.assertEqual(self.payments[0]["amount"], 1200)
+        self.assertIsNone(body.get("charge_bill_number"))
+
+    def test_kept_amount_issues_a_cancellation_charge_invoice(self):
+        stay_id = self._seed()
+        calls = []
+        self._patch(__import__("config"), "create_cancellation_charge_bill",
+                    lambda **kw: (calls.append(kw) or
+                                  {"stay_id": "cc1", "bill_number": "CC/2026/09/00001"}))
+        r = self.client.post("/cancel_checkin", json={
+            "room": "401", "refund_cash": 800,
+            "retain_as_charge": True, "reason": "No-show"})
+        body = r.get_json()
+        self.assertTrue(body.get("success"), body)
+        self.assertEqual(self.payments[0]["amount"], 800)      # refunded
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0]["retained_amount"], 400)     # kept = 1200-800
+        self.assertEqual(body["charge_bill_number"], "CC/2026/09/00001")
+
+    def test_refund_over_paid_is_refused_and_nothing_moves(self):
+        stay_id = self._seed(paid_cash=500)
+        r = self.client.post("/cancel_checkin", json={
+            "room": "401", "refund_amount": 900, "reason": "x"})
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(self.db.data("rooms")["401"]["status"], "occupied")
+        self.assertEqual(self.db.data("bills")[stay_id]["status"], "draft")
+        self.assertEqual(self.payments, [])
+
+    def test_reason_is_mandatory(self):
+        stay_id = self._seed()
+        r = self.client.post("/cancel_checkin", json={
+            "room": "401", "refund_cash": 1200, "reason": "  "})
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("reason", r.get_json()["message"].lower())
+        self.assertEqual(self.db.data("rooms")["401"]["status"], "occupied")
+        self.assertEqual(self.db.data("bills")[stay_id]["status"], "draft")
+
+    def test_split_refund_writes_a_row_per_method(self):
+        stay_id = self._seed(paid_cash=700, paid_online=500)
+        r = self.client.post("/cancel_checkin", json={
+            "room": "401", "refund_cash": 700, "refund_online": 500,
+            "reason": "Split back"})
+        self.assertTrue(r.get_json().get("success"), r.get_json())
+        methods = {p["method"]: p["amount"] for p in self.payments}
+        self.assertEqual(methods, {"cash": 700, "online": 500})
+        self.assertEqual(self.db.data("totals")["current_totals"]["refunds"], 1200)
+        bill = self.db.data("bills")[stay_id]
+        self.assertEqual((bill["refund_cash"], bill["refund_online"]), (700, 500))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

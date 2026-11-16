@@ -3469,6 +3469,213 @@ def update_guest_mobile():
         return jsonify(success=False, message=f"Error updating guest mobile: {str(e)}"), 500
 
 
+@rooms_bp.route("/cancel_checkin", methods=["POST"])
+@guard_duplicate_submit()
+@requires_permission("booking.revert")
+def cancel_checkin():
+    """
+    Cancel a CURRENTLY CHECKED-IN (occupied, not yet checked out) stay and
+    refund the guest. Unlike /checkout this mints NO tax invoice for a stay
+    that never happened — the draft bill is flipped to status "cancelled"
+    (bills_service.cancel issues no credit note for a draft).
+
+    Body:
+      room            : str  — the occupied room to cancel (its active stay)
+      refund_cash     : int  — amount handed back in cash  (>= 0)
+      refund_online   : int  — amount handed back online   (>= 0)
+                               cash + online must be 0..paid. (A legacy
+                               refund_amount + refund_method pair is still
+                               accepted as a single-method total.)
+      reason          : str  — cancellation reason (required)
+      retain_as_charge: bool — when true the kept amount (paid - refund) is a
+                               cancellation forfeiture and a SAC 999794 / 18%
+                               Tax Invoice is minted (same rule as a cancelled
+                               booking). When false the kept amount is left on
+                               the books with no invoice (operator's call).
+
+    Auth: admin (booking.revert). Idempotent on a second click.
+    """
+    from config import create_cancellation_charge_bill
+
+    try:
+        data = request.json or {}
+        room_no = str(data.get("room") or "").strip()
+        reason  = (data.get("reason") or "").strip()
+        retain_as_charge = bool(data.get("retain_as_charge", False))
+        if not room_no:
+            return jsonify(success=False, message="room is required"), 400
+        if not reason:
+            return jsonify(success=False, message="A cancellation reason is required"), 400
+
+        # The room doc is the source of truth for which stay is active here;
+        # the register's active rows carry no stay_id (their id is synthetic).
+        room_snap = rooms_ref.document(room_no).get()
+        if not room_snap.exists:
+            return jsonify(success=False, message="Room not found"), 404
+        room = room_snap.to_dict()
+        stay_id = room.get("active_bill_id")
+        # Idempotency: a stale/second click on a room that is no longer
+        # checked in is a graceful no-op, not an error.
+        if room.get("status") != "occupied" or not stay_id:
+            return jsonify(success=True, already_cancelled=True,
+                           message=f"Room {room_no} is not currently checked in")
+
+        bill_snap = bills_ref.document(stay_id).get()
+        if not bill_snap.exists:
+            return jsonify(success=False, message="Stay not found"), 404
+        bill = bill_snap.to_dict()
+        if bill.get("status") == "cancelled":
+            return jsonify(success=True, already_cancelled=True,
+                           message="This check-in was already cancelled")
+        # A checked-in, not-yet-checked-out stay is a `draft` bill (create_draft);
+        # once checked out it becomes completed/pending_settlement.
+        if bill.get("status") not in ("draft", "active"):
+            return jsonify(
+                success=False,
+                message=("Only a current (checked-in, not checked-out) stay "
+                         f"can be cancelled — this one is '{bill.get('status')}'. "
+                         "Use Revert checkout or Cancel bill instead."),
+            ), 400
+
+        # Paid-so-far for this stay (room aggregates, kept fresh after every
+        # payment). The refund can never exceed it.
+        paid = int(room.get("stay_payment_cash", 0) or 0) + \
+               int(room.get("stay_payment_online", 0) or 0)
+        # Refund can be split across cash and online. A bare refund_amount
+        # (older client) is accepted as a single-method total for compatibility.
+        try:
+            if "refund_cash" in data or "refund_online" in data:
+                refund_cash   = int(data.get("refund_cash", 0) or 0)
+                refund_online = int(data.get("refund_online", 0) or 0)
+            else:
+                _total = int(data.get("refund_amount", paid))
+                _m = (data.get("refund_method") or "cash").strip().lower()
+                refund_cash   = _total if _m != "online" else 0
+                refund_online = _total if _m == "online" else 0
+        except (TypeError, ValueError):
+            return jsonify(success=False, message="Refund amounts must be numbers"), 400
+        if refund_cash < 0 or refund_online < 0:
+            return jsonify(success=False, message="Refund amounts cannot be negative"), 400
+        refund_amount = refund_cash + refund_online
+        if refund_amount > paid:
+            return jsonify(
+                success=False,
+                message=f"Refund (Rs.{refund_amount}) exceeds the paid amount Rs.{paid}",
+            ), 400
+        retained_amount = paid - refund_amount
+
+        now_ist  = datetime.now(IST)
+        _user    = _safe_user() or {}
+        actor    = _user.get("userId") or "system"
+        actor_name = _user.get("name") or actor
+        orig_balance = int(room.get("balance", 0) or 0)
+
+        # ── Commit the cancellation atomically ───────────────────────────────
+        batch = db.batch()
+        # 1. Flip the draft bill to cancelled (no credit note for a draft).
+        bills_service.cancel(stay_id, reason=reason, actor=actor, batch=batch)
+        batch.update(bills_ref.document(stay_id), {
+            "cancel_kind":    "checkin",
+            "checkout_time":  now_ist.strftime("%Y-%m-%d %H:%M"),
+            "refunds":        refund_amount,
+            "refund_cash":    refund_cash,
+            "refund_online":  refund_online,
+            "retained_amount": retained_amount if retain_as_charge else 0,
+            "cancelledBy":    actor,
+            # Register-row display (read by billing._cancel_fields).
+            "cancelled_by_name": actor_name,
+            "cancelled_at_ist":  now_ist.strftime("%Y-%m-%d %H:%M:%S"),
+        })
+        # 2. Vacate the room (same field reset as end-of-stay).
+        batch.update(rooms_ref.document(room_no), {
+            "status": "vacant",
+            "guest": None,
+            "checkin_time": None,
+            "balance": 0,
+            "add_ons": [],
+            "discounts": [],
+            "renewal_count": 0,
+            "last_renewal_time": None,
+            "last_renewal_date": None,
+            "active_bill_id": None,
+            "gst_profile": None,
+            "stay_payment_cash": 0,
+            "stay_payment_online": 0,
+            "lastModifiedBy": actor,
+            "lastModifiedAt": now_ist.isoformat(),
+        })
+        # 3. Totals: the refund leaves the drawer; a never-collected pay-later
+        #    balance drops out. The original advance stays booked (net kept =
+        #    retained, backed by the charge invoice when retain_as_charge).
+        totals_update = {}
+        if refund_amount > 0:
+            totals_update["refunds"] = firestore.Increment(refund_amount)
+        if orig_balance > 0:
+            totals_update["balance"] = firestore.Increment(-orig_balance)
+        if totals_update:
+            batch.update(totals_ref.document("current_totals"), totals_update)
+        batch.commit()
+        invalidate_rooms_and_totals()
+
+        # 4. Refund payment rows — one per non-zero method (cash / online).
+        #    Plain write: the room is already vacated, so stay aggregates must
+        #    NOT be re-stamped onto it.
+        for _method, _amt in (("cash", refund_cash), ("online", refund_online)):
+            if _amt > 0:
+                payment_service.write_payment({
+                    "room": room_no, "name": bill.get("guest_name", ""),
+                    "amount": _amt, "method": _method,
+                    "type": "booking_cancel_refund",
+                    "transaction_type": "booking_cancel_refund",
+                    "date": now_ist.strftime("%Y-%m-%d"),
+                    "time": now_ist.strftime("%H:%M"),
+                    "stay_id": stay_id, "mobile": bill.get("guest_mobile", ""),
+                })
+
+        # 5. Cancellation-charge Tax Invoice for the kept amount (SAC 999794).
+        charge_bill = None
+        if retain_as_charge and retained_amount > 0:
+            try:
+                charge_bill = create_cancellation_charge_bill(
+                    booking_id=stay_id,
+                    booking_data={
+                        "guest_name":   bill.get("guest_name", ""),
+                        "guest_mobile": bill.get("guest_mobile", ""),
+                        "guests":       bill.get("guest_count", 1),
+                        "room":         room_no,
+                        "check_in_date": (bill.get("checkin_time") or "")[:10],
+                    },
+                    retained_amount=retained_amount,
+                    cancel_dt=now_ist,
+                    actor=actor,
+                )
+                if charge_bill:
+                    import threading as _thr
+                    _thr.Thread(target=auto_generate_bill_pdf,
+                                args=(charge_bill.get("stay_id"), charge_bill),
+                                daemon=True).start()
+            except Exception as _ce:
+                logger.error(f"cancel_checkin: charge invoice failed: {_ce}",
+                             exc_info=True)
+
+        write_log("room.checkin.cancel", target_collection="bills", target_id=stay_id,
+                  metadata={"room": room_no, "refund": refund_amount,
+                            "retained": retained_amount if retain_as_charge else 0,
+                            "retain_as_charge": retain_as_charge,
+                            "charge_bill": (charge_bill or {}).get("bill_number"),
+                            "reason": reason})
+        logger.info(f"Check-in cancelled: stay={stay_id} room={room_no} "
+                    f"refund=Rs.{refund_amount} retained=Rs.{retained_amount} "
+                    f"retain_as_charge={retain_as_charge}")
+        return jsonify(success=True,
+                       message=f"Check-in cancelled. Refunded Rs.{refund_amount}.",
+                       refund_amount=refund_amount,
+                       charge_bill_number=(charge_bill or {}).get("bill_number"))
+    except Exception as e:
+        logger.error(f"Error cancelling check-in: {e}", exc_info=True)
+        return jsonify(success=False, message=f"Error cancelling check-in: {e}"), 500
+
+
 @rooms_bp.route("/add_room", methods=["POST"])
 def add_room():
     try:

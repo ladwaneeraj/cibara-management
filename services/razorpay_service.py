@@ -15,6 +15,16 @@ def _client():
                                  os.environ.get("RAZORPAY_KEY_SECRET", "")))
 
 
+def is_test_mode() -> bool:
+    """True when configured with Razorpay TEST keys (``rzp_test_...``).
+
+    Test-mode payments are not real customers (e.g. go-live testing), so the
+    owner should never be pinged for them. Live keys (``rzp_live_...``) or any
+    other value are treated as not-test.
+    """
+    return os.environ.get("RAZORPAY_KEY_ID", "").lower().startswith("rzp_test")
+
+
 def create_order(amount_paise: int, receipt: str) -> dict:
     """Create a Razorpay order (INR) and return the order dict (includes ``id``)."""
     return _client().order.create({

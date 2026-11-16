@@ -774,17 +774,28 @@ def razorpay_webhook():
                      f"New web booking {ref}: {b.get('guest_name')}, room {b.get('room')}, "
                      f"{b.get('check_in_date')}, ₹{b.get('total_amount')} paid online.",
                      ctx, severity="warning")
+        # Guard against false/unwanted "New booking" alerts: never ping the
+        # owner for a TEST-mode booking (go-live testing fires a real order.paid
+        # on test keys), and honour the WEB_BOOKING_PUSH kill-switch. The booking
+        # is still confirmed; only the phone alert is suppressed.
+        _push_on = os.environ.get("WEB_BOOKING_PUSH", "true").lower() not in ("0", "false", "no", "off")
+        _push_ok = _push_on and not razorpay_service.is_test_mode()
         try:  # FCM push to the owner's phone, even when the ERP is closed.
             # wa / wa_text power the notification's "Send confirmation" button:
             # the service worker opens WhatsApp to the guest with this message
             # prefilled, so the owner can confirm from the alert in one tap.
-            push_service.send_to_all(
-                "🎉 New booking",
-                f"{b.get('guest_name')} · Room {b.get('room')} · ₹{b.get('total_amount')} paid online",
-                {"booking_id": booking_id, "room": str(b.get("room") or ""),
-                 "wa": _guest_phone(b.get("guest_mobile")),
-                 "wa_text": _confirmation_message(booking_id, b)},
-                image="/static/icons/notif-booking.png")
+            if _push_ok:
+                push_service.send_to_all(
+                    "🎉 New booking",
+                    f"{b.get('guest_name')} · Room {b.get('room')} · ₹{b.get('total_amount')} paid online",
+                    {"booking_id": booking_id, "room": str(b.get("room") or ""),
+                     "wa": _guest_phone(b.get("guest_mobile")),
+                     "wa_text": _confirmation_message(booking_id, b)},
+                    image="/static/icons/notif-booking.png")
+            else:
+                logger.info("web webhook: new-booking push suppressed "
+                            "(test_mode=%s, enabled=%s) for %s",
+                            razorpay_service.is_test_mode(), _push_on, booking_id)
         except Exception:  # noqa: BLE001 -- push must never affect a confirmed booking
             logger.exception("web webhook: push notify failed for %s", booking_id)
         try:

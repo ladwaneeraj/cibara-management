@@ -47,3 +47,35 @@ def test_send_to_all_sends_and_prunes_dead_tokens():
     assert note.data["booking_id"] == "b1"
     # the dead token is removed; the good one stays
     assert [d.id for d in config.db.collection("push_tokens").stream()] == ["good"]
+
+
+def _capture_note(**kwargs):
+    """Send one push through a mocked FCM and return the notification spec."""
+    push_service.register_token("tok", "u1")
+    from firebase_admin import messaging
+    captured = {}
+
+    def fake_send(msg):
+        captured["note"] = msg.webpush.notification
+        return MagicMock(success_count=1, responses=[MagicMock(success=True, exception=None)])
+
+    with patch.object(messaging, "send_each_for_multicast", side_effect=fake_send):
+        push_service.send_to_all("t", "b", **kwargs)
+    return captured["note"]
+
+
+def test_actions_param_builds_action_buttons():
+    note = _capture_note(data={"room": "213"},
+                         actions=[{"action": "renew", "title": "Renew now"}])
+    assert [(a.action, a.title) for a in note.actions] == [("renew", "Renew now")]
+    assert note.data["room"] == "213"
+
+
+def test_wa_still_defaults_to_send_confirmation_button():
+    note = _capture_note(data={"wa": "919876500000", "wa_text": "hi"})
+    assert [(a.action, a.title) for a in note.actions] == [("confirm", "Send confirmation")]
+
+
+def test_no_actions_when_none_given():
+    note = _capture_note(data={"booking_id": "b1"})
+    assert note.actions is None

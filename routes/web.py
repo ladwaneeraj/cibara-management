@@ -455,10 +455,10 @@ def run_notification_sweep(now=None):
         fired = (snap.to_dict() or {}).get("fired", {}) if getattr(snap, "exists", False) else {}
         new = {}
 
-        def _fire(key, title, body):
+        def _fire(key, title, body, data=None, actions=None):
             if fired.get(key) or new.get(key):
                 return
-            push_service.send_to_all(title, body)
+            push_service.send_to_all(title, body, data=data, actions=actions)
             new[key] = True
 
         from google.cloud.firestore_v1.base_query import FieldFilter as _FF
@@ -490,12 +490,15 @@ def run_notification_sweep(now=None):
                 due = _renewal_due_at(rm.get("checkin_time"), rm.get("renewal_count"))
                 if due is None:
                     continue
+                _renew = [{"action": "renew", "title": "Renew now"}]
                 if now >= due:
                     _fire(f"renewal:{d.id}", "Renewal due",
-                          f"Room {d.id} · {guest}" + (f" · ₹{bal} due" if bal > 0 else ""))
+                          f"Room {d.id} · {guest}" + (f" · ₹{bal} due" if bal > 0 else ""),
+                          data={"room": str(d.id)}, actions=_renew)
                 if now >= due + _OVERSTAY_GRACE:
                     _fire(f"overstay:{d.id}", "Overstay",
-                          f"Room {d.id} · {guest} is past renewal time")
+                          f"Room {d.id} · {guest} is past renewal time",
+                          data={"room": str(d.id)}, actions=_renew)
         except Exception:  # noqa: BLE001
             logger.exception("notify: room renewal/overstay scan failed")
 

@@ -47,7 +47,7 @@ def _app_origin() -> str:
 
 
 def send_to_all(title: str, body: str, data: dict | None = None,
-                link: str = "/") -> int:
+                link: str = "/", actions: list | None = None) -> int:
     """Push ``title``/``body`` to every stored device. Returns #delivered.
 
     Rendered with the lodge icon and opens the ERP at ``link`` on tap (webpush
@@ -74,10 +74,15 @@ def send_to_all(title: str, body: str, data: dict | None = None,
     # on this one notification; the SW's notificationclick acts on its data.
     _link = link if isinstance(link, str) and link.startswith("https://") else _app_origin()
     _data = {"link": _link or "/", **{k: str(v) for k, v in (data or {}).items()}}
-    _actions = (
-        [messaging.WebpushNotificationAction(action="confirm", title="Send confirmation")]
-        if _data.get("wa") else None
-    )
+    # Per-alert action buttons (e.g. "Renew now"); fall back to the "Send
+    # confirmation" button whenever a guest number rides along.
+    if actions:
+        _actions = [messaging.WebpushNotificationAction(action=a["action"], title=a["title"])
+                    for a in actions]
+    elif _data.get("wa"):
+        _actions = [messaging.WebpushNotificationAction(action="confirm", title="Send confirmation")]
+    else:
+        _actions = None
     wp = {
         "notification": messaging.WebpushNotification(
             title=title, body=body,

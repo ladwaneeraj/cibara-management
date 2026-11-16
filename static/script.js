@@ -6359,6 +6359,31 @@ document.addEventListener("DOMContentLoaded", function () {
   }
 });
 
+// Deep link from a push notification's "Renew now" button: "/?room=213" opens
+// that room's modal (Renew / Checkout live inside it) so the alert lands in one
+// tap. Best-effort and self-retrying until the room grid is ready.
+document.addEventListener("DOMContentLoaded", function () {
+  try {
+    const room = new URLSearchParams(window.location.search).get("room");
+    if (!room) return;
+    let tries = 0;
+    const open = function () {
+      if (typeof showRoomDetailsModal !== "function" && tries++ < 20) {
+        setTimeout(open, 300);
+        return;
+      }
+      if (typeof showRoomDetailsModal === "function") showRoomDetailsModal(room);
+    };
+    if (window.CibaraAuth && typeof window.CibaraAuth.ready === "function") {
+      window.CibaraAuth.ready().then(open).catch(open);
+    } else {
+      setTimeout(open, 400);
+    }
+  } catch (e) {
+    /* deep link is best-effort; never block boot */
+  }
+});
+
 // Function to handle reports tab access (kept for legacy compatibility)
 function handleReportsTabAccess() {
   if (reportPasswordVerified) {

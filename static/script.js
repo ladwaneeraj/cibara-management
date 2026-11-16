@@ -6321,12 +6321,15 @@ function closeSettingsModal() {
 }
 
 function handleSettingsReportsClick() {
-  // Unified analytics now lives on the React page at /analytics (revenue,
-  // occupancy, channels, pace, seasonality, guests). GST filings & Excel
-  // exports are still reachable from there via "GST reports & Excel"
-  // (→ /?view=reports), which opens the classic Reports view below.
+  // Open the classic in-page Analytics & Reports (it carries the full set:
+  // revenue/expense charts, expense breakdown + trend, insights and guest
+  // demographics). We used to navigate to the React page at /analytics/, but
+  // in the classic UI build that route redirects back to "/" (bounce), so the
+  // analytics screen never opened. Staying in-page is reliable and matches
+  // the classic-UI decision.
   closeSettingsModal();
-  window.location.assign("/analytics/");
+  reportPasswordVerified = true;
+  if (typeof showReportsTab === "function") showReportsTab();
 }
 
 // No initMgrAccessModal / initSettingsModal needed — all wired via inline onclick in HTML.

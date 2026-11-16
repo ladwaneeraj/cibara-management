@@ -240,7 +240,9 @@ def get_upcoming_bookings_list():
         # non-ISO form or its status differs in case. The bookings collection
         # for a lodge is small; if it ever grows large, swap to a bounded
         # check_in_date range query.
-        EXCLUDED = {"cancelled", "checked_out", "no_show"}
+        # Hide gone bookings AND transient web holds (pending_payment / expired):
+        # a web booking must only surface in the ERP once payment is confirmed.
+        EXCLUDED = {"cancelled", "checked_out", "no_show"} | _HIDDEN_BOOKING_STATUSES
         out, status_breakdown = [], {}
         for d in bookings_ref.stream():
             b = d.to_dict() or {}

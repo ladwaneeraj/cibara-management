@@ -205,6 +205,28 @@ def test_dashboard_upcoming_bookings_passthrough(client, admin):
     assert isinstance(d["upcoming"], dict)
 
 
+def test_upcoming_dot_excludes_fulfilled_and_abandoned(client, admin):
+    # The arrival dot must only flag genuinely pending bookings. A checked-in
+    # guest (fulfilled) or a lapsed/unpaid web hold (expired/pending_payment,
+    # hidden everywhere else) must NOT leave a phantom dot on the room grid.
+    ci = datetime.now(config.IST) + timedelta(hours=2)
+    cd, ct = ci.strftime("%Y-%m-%d"), ci.strftime("%H:%M")
+
+    def mk(doc, room, status):
+        DB.collection("bookings").document(doc).set({
+            "room": room, "guest_name": "G", "check_in_date": cd, "check_in_time": ct,
+            "check_out_date": cd, "status": status, "paid_amount": 0, "total_amount": 1000})
+
+    mk("up_ok", "207", "confirmed")
+    mk("up_ci", "208", "checked_in")
+    mk("up_exp", "209", "expired")
+    mk("up_pend", "210", "pending_payment")
+
+    up = client.get("/api/v2/dashboard?fresh=true", headers=admin).json()["upcoming"]
+    assert "207" in up                                   # genuine pending arrival → dot
+    assert not ({"208", "209", "210"} & set(up))         # fulfilled / abandoned → no dot
+
+
 def test_tariffs_come_from_server_table(client, staff):
     t = client.get("/api/v2/rooms/tariffs", headers=staff).json()["tariffs"]
     assert t["201"]["prices"]["2"] == 1200 and t["201"]["prices"]["3"] == 1500 and t["201"]["ac_surcharge"] == 600

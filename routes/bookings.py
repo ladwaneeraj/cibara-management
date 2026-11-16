@@ -122,7 +122,12 @@ def get_upcoming_bookings():
         for snap in q.stream():
             b = snap.to_dict() or {}
             status = (b.get("status") or "").lower()
-            if status in ("cancelled", "checked_out"):
+            # Only genuinely pending arrivals drive the dot: skip fulfilled
+            # (checked_in), gone (checked_out / cancelled / no_show) and
+            # abandoned web holds (pending_payment / expired — hidden everywhere
+            # else), so a checked-in guest or a lapsed hold leaves no phantom dot.
+            if status in ("cancelled", "checked_out", "checked_in", "no_show",
+                          "pending_payment", "expired"):
                 continue
             room = str(b.get("room") or "")
             if not room:

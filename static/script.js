@@ -208,7 +208,12 @@ window.CibaraState = (function () {
     for (let i = 0; i < bookingDocs.length; i++) {
       const b = bookingDocs[i].data || {};
       const status = String(b.status || "").toLowerCase();
-      if (status === "cancelled" || status === "checked_out") continue;
+      // Only genuinely pending arrivals get a dot. Skip fulfilled (checked_in),
+      // gone (checked_out / cancelled / no_show) and abandoned web holds
+      // (pending_payment / expired — hidden everywhere else), so a checked-in
+      // guest or a lapsed hold can't leave a phantom arrival dot.
+      if (["cancelled", "checked_out", "checked_in", "no_show",
+           "pending_payment", "expired"].includes(status)) continue;
 
       const room = String(b.room || "");
       if (!room) continue;

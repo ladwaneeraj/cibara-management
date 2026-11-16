@@ -133,6 +133,12 @@ def _stay_shape(stay_id, room, doc, checkout_time) -> dict:
         # Hotel-side cost of the OTA booking: commission + GST on it.
         "ota_commission": _num(doc.get("ota_commission")),
         "ota_commission_gst": _num(doc.get("ota_commission_gst")),
+        # Guest identity (repeat/top-guest segmentation) + add-on spend
+        # (revenue mix). Never leaves the server as a raw field — only the
+        # aggregates below do.
+        "guest_name": (doc.get("guest_name") or "").strip(),
+        "guest_mobile": (doc.get("guest_mobile") or "").strip(),
+        "services_total": _num(doc.get("services_total")),
     }
     stay["channel"] = channel_of(stay)
     return stay
@@ -166,7 +172,9 @@ def build_stay_universe(rooms: dict, bills: list, today: date) -> list:
         active_ids.add(stay_id)
         guest = room.get("guest") or {}
         price = room.get("room_price_per_night") or guest.get("price")
-        shaped = _stay_shape(stay_id, num, {**room, "room_price_per_night": price}, None)
+        shaped = _stay_shape(stay_id, num, {**room, "room_price_per_night": price,
+                                            "guest_name": room.get("guest_name") or guest.get("name"),
+                                            "guest_mobile": room.get("guest_mobile") or guest.get("mobile")}, None)
         shaped["status"] = "draft"
         stays.append(shaped)
 
@@ -552,6 +560,193 @@ def compute_los_leadtime(stays: list, bookings: list, *, today: date | None = No
             "lead_time": [{"bucket": k, "count": v} for k, v in lead.items()]}
 
 
+# ── period-over-period comparison ───────────────────────────────────────
+
+_COMPARE_METRICS = ("occupancy_pct", "adr", "revpar", "room_revenue")
+
+
+def _shift_year(d: date) -> date:
+    """Same calendar date one year earlier (Feb-29 → Feb-28)."""
+    try:
+        return d.replace(year=d.year - 1)
+    except ValueError:
+        return d.replace(year=d.year - 1, day=28)
+
+
+def _delta(cur, prev) -> dict:
+    """Signed change and percent change; pct is None when prev is 0 (no base)."""
+    cur, prev = _num(cur), _num(prev)
+    return {"change": _r2(cur - prev),
+            "pct": round((cur - prev) / prev * 100.0, 1) if prev else None}
+
+
+def compute_period_comparison(stays: list, room_count: int, window_from: str,
+                              window_to: str, today: date) -> dict:
+    """
+    Occupancy / ADR / RevPAR / room-revenue for the window vs the immediately
+    preceding equal-length window and the same window one year earlier, with
+    up/down deltas on each.
+
+    All three periods are measured from the SAME `stays` via kpi_service, so no
+    extra Firestore read is needed (the route already fetches a trailing year of
+    bills). A comparison period with no occupancy (e.g. older than the fetched
+    range) reports `occupied_room_nights == 0`, so the UI can show "no data"
+    instead of a misleading -100%.
+    """
+    wf = _to_date(window_from) or today
+    wt = min(_to_date(window_to) or today, today)
+    if wt < wf:
+        wf = wt
+    span = (wt - wf).days + 1
+
+    def kpis_for(a: date, b: date) -> dict:
+        k = compute_kpis(stays, room_count, a, min(b, today), today=today)
+        return {m: k[m] for m in _COMPARE_METRICS} | {
+            "occupied_room_nights": k["occupied_room_nights"]}
+
+    prev_to = wf - timedelta(days=1)
+    prev_from = prev_to - timedelta(days=span - 1)
+    yoy_from, yoy_to = _shift_year(wf), _shift_year(wt)
+
+    current = kpis_for(wf, wt)
+    prior = kpis_for(prev_from, prev_to)
+    year_ago = kpis_for(yoy_from, yoy_to)
+
+    return {
+        "current": current,
+        "prior": prior,
+        "year_ago": year_ago,
+        "vs_prior": {m: _delta(current[m], prior[m]) for m in _COMPARE_METRICS},
+        "vs_year_ago": {m: _delta(current[m], year_ago[m]) for m in _COMPARE_METRICS},
+        "prior_window": {"from": prev_from.isoformat(), "to": prev_to.isoformat()},
+        "year_ago_window": {"from": yoy_from.isoformat(), "to": yoy_to.isoformat()},
+    }
+
+
+# ── guest segments: new vs returning + top guests ───────────────────────
+
+def _stay_nights(stay: dict, today: date) -> int:
+    ci = _to_date(stay.get("checkin_time"))
+    if ci is None:
+        return 0
+    co = _to_date(stay.get("checkout_time")) or today
+    return max((co - ci).days, 0)
+
+
+def compute_guest_segments(in_window_stays: list, all_stays: list, today: date) -> dict:
+    """
+    New vs returning guests, top guests by revenue, and average length of stay
+    for the stays that CHECKED IN inside the window.
+
+    "Returning" = the guest (keyed by mobile) has an earlier check-in anywhere in
+    the fetched set (a trailing ~12 months), so the label is honestly bounded by
+    how far back the data goes. Stays with no mobile on file are counted in
+    `unidentified` and left out of the new/returning split rather than guessed.
+
+    Revenue per guest = room charges + add-on services (GST-inclusive as stored).
+    Only aggregates leave here — never a mobile number or a raw stay.
+    """
+    first_seen: dict = {}
+    for s in (all_stays or []):
+        mob = s.get("guest_mobile")
+        ci = _to_date(s.get("checkin_time"))
+        if not mob or ci is None:
+            continue
+        if mob not in first_seen or ci < first_seen[mob]:
+            first_seen[mob] = ci
+
+    new = returning = unidentified = 0
+    nights_sum = stays_counted = 0
+    by_guest: dict = {}
+    for s in (in_window_stays or []):
+        nights_sum += _stay_nights(s, today)
+        stays_counted += 1
+        mob = s.get("guest_mobile")
+        ci = _to_date(s.get("checkin_time"))
+        if not mob:
+            unidentified += 1
+            continue
+        if ci is not None and first_seen.get(mob) is not None and first_seen[mob] < ci:
+            returning += 1
+        else:
+            new += 1
+        g = by_guest.setdefault(mob, {"name": "", "revenue": 0.0, "nights": 0, "visits": 0})
+        if s.get("guest_name"):
+            g["name"] = s["guest_name"]
+        g["revenue"] += _num(s.get("room_charges_total")) + _num(s.get("services_total"))
+        g["nights"] += _stay_nights(s, today)
+        g["visits"] += 1
+
+    top = sorted(by_guest.values(), key=lambda g: -g["revenue"])[:5]
+    identified = new + returning
+    return {
+        "new": new,
+        "returning": returning,
+        "unidentified": unidentified,
+        "returning_pct": round(returning / identified * 100.0, 1) if identified else 0,
+        "avg_los_nights": round(nights_sum / stays_counted, 1) if stays_counted else 0,
+        "top_guests": [{"name": g["name"] or "(no name)", "revenue": _r2(g["revenue"]),
+                        "nights": g["nights"], "visits": g["visits"]} for g in top],
+    }
+
+
+# ── revenue mix: room vs add-ons ────────────────────────────────────────
+
+def compute_revenue_mix(in_window_stays: list) -> dict:
+    """
+    Accommodation vs add-on (services) revenue for stays that checked in inside
+    the window. OTA share and room-category splits are covered by channel_mix
+    and the Revenue-by-Room-Type chart respectively; this is the room/add-on cut.
+    """
+    room = sum(_num(s.get("room_charges_total")) for s in (in_window_stays or []))
+    addon = sum(_num(s.get("services_total")) for s in (in_window_stays or []))
+    total = room + addon
+    return {"room": _r2(room), "addon": _r2(addon),
+            "addon_pct": round(addon / total * 100.0, 1) if total else 0}
+
+
+# ── cancellations ───────────────────────────────────────────────────────
+
+_CANCELLED_STATUSES = frozenset({"cancelled", "canceled"})
+
+
+def compute_cancellations(bills: list, window_from: str, window_to: str) -> dict:
+    """
+    Cancellation rate and top reasons for bills whose check-in falls in the
+    window. Computed from the RAW bills (not the stay universe, which drops
+    cancelled stays): rate = cancelled / (cancelled + non-cancelled).
+
+    `cancel_reason` free text is grouped verbatim (trimmed, capped) — the new
+    cancel-checkin flow stores it. Reverted/superseded rows are not real
+    cancellations and are ignored.
+    """
+    wf = _to_date(window_from)
+    wt = _to_date(window_to)
+    cancelled = other = 0
+    reasons: dict = {}
+    for b in (bills or []):
+        ci = _to_date((b or {}).get("checkin_time"))
+        if ci is None or (wf and ci < wf) or (wt and ci > wt):
+            continue
+        if b.get("superseded_by_revert") or b.get("cancelled_by_revert"):
+            continue
+        status = (b.get("status") or "").strip().lower()
+        if status in _CANCELLED_STATUSES:
+            cancelled += 1
+            reason = (b.get("cancel_reason") or "No reason given").strip()[:80] or "No reason given"
+            reasons[reason] = reasons.get(reason, 0) + 1
+        else:
+            other += 1
+    total = cancelled + other
+    top = sorted(reasons.items(), key=lambda kv: -kv[1])[:5]
+    return {
+        "cancelled": cancelled,
+        "total": total,
+        "rate_pct": round(cancelled / total * 100.0, 1) if total else 0,
+        "top_reasons": [{"reason": r, "count": c} for r, c in top],
+    }
+
+
 # ── nightly snapshot + pace-vs-prior ────────────────────────────────────
 
 # How far from "exactly 7 days ago" a snapshot may be and still be comparable.
@@ -657,10 +852,22 @@ def _money(x) -> str:
     return "₹{:,.0f}".format(_num(x))
 
 
-def compute_findings(overview: dict, channel_mix: dict, pace: dict) -> list:
+# Extra thresholds for the comparison / weekday / cancellation findings.
+_WEEKDAY_MIN_AVAILABLE = 5       # room-nights on a weekday before comparing
+_WEEKDAY_GAP_PCT = 20            # points below the best weekday -> flag
+_REVENUE_SWING_PCT = 15          # period-over-period room-revenue move worth noting
+_CANCEL_RATE_WARN = 15.0         # cancellation rate (%) worth a nudge
+
+
+def compute_findings(overview: dict, channel_mix: dict, pace: dict, *,
+                     seasonality: dict | None = None, comparison: dict | None = None,
+                     cancellations: dict | None = None) -> list:
     """
     A few conservative, plain-language findings — same shape as
     insights_service.generate_insights: {"level": good|warn|info, "icon", "text"}.
+    The keyword arguments are optional so older callers (3 positional args) work
+    unchanged; when supplied they add weekday-demand, period-over-period and
+    cancellation findings.
     """
     out = []
 
@@ -705,6 +912,42 @@ def compute_findings(overview: dict, channel_mix: dict, pace: dict) -> list:
         add("warn", "triangle-exclamation",
             "Occupancy is above 100% - check the room count; figures use the "
             "current number of rooms for every period.")
+
+    # 5. Underbooked weekday — the biggest gap below the best day.
+    wk = [d for d in ((seasonality or {}).get("weekday") or [])
+          if d.get("available_room_nights", 0) >= _WEEKDAY_MIN_AVAILABLE
+          or d.get("occupancy_pct", 0) > 0]
+    if len(wk) >= 2:
+        best = max(wk, key=lambda d: d.get("occupancy_pct", 0))
+        worst = min(wk, key=lambda d: d.get("occupancy_pct", 0))
+        gap = best.get("occupancy_pct", 0) - worst.get("occupancy_pct", 0)
+        if gap >= _WEEKDAY_GAP_PCT and best.get("occupancy_pct", 0) > 0:
+            add("info", "calendar-day",
+                f"{worst['weekday']}s run {worst['occupancy_pct']:.0f}% occupancy vs "
+                f"{best['occupancy_pct']:.0f}% on {best['weekday']}s — a targeted "
+                f"{worst['weekday']} offer could lift the weakest day.")
+
+    # 6. Period-over-period room-revenue swing.
+    vp = (comparison or {}).get("vs_prior", {}).get("room_revenue")
+    prior_rev = (comparison or {}).get("prior", {}).get("room_revenue")
+    if vp and vp.get("pct") is not None and _num(prior_rev) > 0:
+        if vp["pct"] <= -_REVENUE_SWING_PCT:
+            add("warn", "arrow-trend-down",
+                f"Room revenue is down {abs(vp['pct']):.0f}% vs the previous period "
+                f"({_money(vp['change'])}). Check pricing and the booking pace above.")
+        elif vp["pct"] >= _REVENUE_SWING_PCT:
+            add("good", "arrow-trend-up",
+                f"Room revenue is up {vp['pct']:.0f}% vs the previous period "
+                f"(+{_money(abs(vp['change']))}).")
+
+    # 7. High cancellation rate.
+    cx = cancellations or {}
+    if cx.get("total", 0) >= 10 and cx.get("rate_pct", 0) >= _CANCEL_RATE_WARN:
+        top = (cx.get("top_reasons") or [{}])[0].get("reason")
+        extra = f' Top reason: "{top}".' if top else ""
+        add("warn", "ban",
+            f"{cx['rate_pct']:.0f}% of stays this period were cancelled "
+            f"({cx['cancelled']} of {cx['total']}).{extra}")
     return out
 
 
@@ -753,6 +996,11 @@ def compute_analytics_overview(*, rooms: dict, bills: list, payments: list, book
                           if wf <= (_to_date(b.get("check_in_date")) or date.min) <= wt]
     los_leadtime = compute_los_leadtime(in_window_stays, in_window_bookings, today=today)
 
+    kpi_comparison = compute_period_comparison(stays, room_count, wf_s, wt_s, today)
+    guests = compute_guest_segments(in_window_stays, stays, today)
+    revenue_mix = compute_revenue_mix(in_window_stays)
+    cancellations = compute_cancellations(bills, wf_s, wt_s)
+
     return {
         "success": True,
         "window": {"from": wf_s, "to": wt_s, "days": (wt - wf).days + 1},
@@ -761,6 +1009,11 @@ def compute_analytics_overview(*, rooms: dict, bills: list, payments: list, book
         "pace": pace,
         "seasonality": seasonality,
         "los_leadtime": los_leadtime,
-        "findings": compute_findings(overview, channel_mix, pace),
+        "kpi_comparison": kpi_comparison,
+        "guests": guests,
+        "revenue_mix": revenue_mix,
+        "cancellations": cancellations,
+        "findings": compute_findings(overview, channel_mix, pace, seasonality=seasonality,
+                                     comparison=kpi_comparison, cancellations=cancellations),
         "generated_at": now.strftime("%Y-%m-%d %H:%M:%S"),
     }

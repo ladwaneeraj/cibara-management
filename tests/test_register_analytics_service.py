@@ -12,10 +12,14 @@ from services.register_analytics_service import (
     channel_of,
     compute_analytics_overview,
     compute_booking_pace,
+    compute_cancellations,
     compute_channel_mix,
     compute_findings,
+    compute_guest_segments,
     compute_los_leadtime,
     compute_overview,
+    compute_period_comparison,
+    compute_revenue_mix,
     compute_seasonality,
     pace_vs_prior,
 )
@@ -596,3 +600,102 @@ def test_pace_zero_rooms_no_divide_by_zero():
     pace = compute_booking_pace([], [], 0, date(2026, 10, 18))
     assert set(pace["horizons"]) == {7, 14, 30}
     assert pace["horizons"][30]["occupancy_pct"] == 0
+
+
+# ── period-over-period comparison ───────────────────────────────────────
+
+def test_period_comparison_vs_prior_and_year_ago():
+    stays = [
+        # In the current window (Nov 1-5): 2 nights @ ₹1000.
+        {"status": "completed", "checkin_time": "2026-11-02 12:00",
+         "checkout_time": "2026-11-04 10:00", "room_charges_total": 2000},
+        # In the prior window (Oct 27-31): 1 night @ ₹500.
+        {"status": "completed", "checkin_time": "2026-10-28 12:00",
+         "checkout_time": "2026-10-29 10:00", "room_charges_total": 500},
+    ]
+    out = compute_period_comparison(stays, room_count=1, window_from="2026-11-01",
+                                    window_to="2026-11-05", today=date(2026, 11, 10))
+    assert out["current"]["occupancy_pct"] == 40.0        # 2 / (1*5)
+    assert out["current"]["room_revenue"] == 2000
+    assert out["prior"]["room_revenue"] == 500
+    assert out["vs_prior"]["room_revenue"] == {"change": 1500, "pct": 300.0}
+    # No data a year ago -> zero base, pct is None (UI shows "no data").
+    assert out["year_ago"]["occupied_room_nights"] == 0
+    assert out["vs_year_ago"]["room_revenue"]["pct"] is None
+    assert out["prior_window"] == {"from": "2026-10-27", "to": "2026-10-31"}
+
+
+# ── guest segments ──────────────────────────────────────────────────────
+
+def test_guest_segments_new_returning_and_top():
+    s_old = {"guest_mobile": "900", "checkin_time": "2026-10-01 12:00",
+             "checkout_time": "2026-10-03 10:00", "room_charges_total": 1500}
+    s_ret = {"guest_mobile": "900", "guest_name": "Asha", "checkin_time": "2026-11-02 12:00",
+             "checkout_time": "2026-11-04 10:00", "room_charges_total": 2000, "services_total": 300}
+    s_new = {"guest_mobile": "901", "guest_name": "Ravi", "checkin_time": "2026-11-03 12:00",
+             "checkout_time": "2026-11-05 10:00", "room_charges_total": 1000}
+    s_anon = {"guest_mobile": "", "checkin_time": "2026-11-03 12:00",
+              "checkout_time": "2026-11-04 10:00", "room_charges_total": 800}
+    in_window = [s_ret, s_new, s_anon]
+    out = compute_guest_segments(in_window, [s_old] + in_window, today=date(2026, 11, 10))
+    assert (out["new"], out["returning"], out["unidentified"]) == (1, 1, 1)
+    assert out["returning_pct"] == 50.0
+    assert out["top_guests"][0]["name"] == "Asha"
+    assert out["top_guests"][0]["revenue"] == 2300      # room + add-on
+    assert out["avg_los_nights"] == 1.7                 # (2+2+1)/3
+
+
+# ── revenue mix ─────────────────────────────────────────────────────────
+
+def test_revenue_mix_room_vs_addon():
+    stays = [{"room_charges_total": 2000, "services_total": 300},
+             {"room_charges_total": 1000}]
+    out = compute_revenue_mix(stays)
+    assert out == {"room": 3000, "addon": 300, "addon_pct": 9.1}
+
+
+# ── cancellations ───────────────────────────────────────────────────────
+
+def test_cancellations_rate_reasons_and_window():
+    bills = [
+        {"status": "completed", "checkin_time": "2026-11-02 12:00"},
+        {"status": "cancelled", "checkin_time": "2026-11-03 12:00", "cancel_reason": "Duplicate stay"},
+        {"status": "cancelled", "checkin_time": "2026-11-04 12:00", "cancel_reason": "Duplicate stay"},
+        {"status": "cancelled", "checkin_time": "2026-11-04 12:00", "cancel_reason": "Guest no-show"},
+        # Reverted != cancelled (ignored), and an out-of-window cancellation.
+        {"status": "cancelled", "cancelled_by_revert": True, "checkin_time": "2026-11-03 12:00"},
+        {"status": "cancelled", "checkin_time": "2026-10-01 12:00", "cancel_reason": "old"},
+    ]
+    out = compute_cancellations(bills, "2026-11-01", "2026-11-05")
+    assert (out["cancelled"], out["total"], out["rate_pct"]) == (3, 4, 75.0)
+    assert out["top_reasons"][0] == {"reason": "Duplicate stay", "count": 2}
+
+
+def test_cancellations_empty_is_safe():
+    out = compute_cancellations([], "2026-11-01", "2026-11-05")
+    assert out == {"cancelled": 0, "total": 0, "rate_pct": 0, "top_reasons": []}
+
+
+# ── new findings + compose keys ─────────────────────────────────────────
+
+def test_findings_weekday_gap_and_high_cancellation():
+    ov = {"occupancy": {"occupancy_over_100": False}}
+    seasonality = {"weekday": [
+        {"weekday": "Monday", "occupancy_pct": 75.0, "available_room_nights": 10},
+        {"weekday": "Saturday", "occupancy_pct": 30.0, "available_room_nights": 10}]}
+    cancellations = {"total": 12, "cancelled": 3, "rate_pct": 25.0,
+                     "top_reasons": [{"reason": "Guest no-show", "count": 2}]}
+    out = compute_findings(ov, {"channels": []}, {"horizons": {}},
+                           seasonality=seasonality, cancellations=cancellations)
+    texts = " ".join(f["text"] for f in out)
+    assert "Saturday" in texts and "cancelled" in texts
+
+
+def test_compose_includes_new_analytics_sections():
+    out = _seed_compose()
+    for k in ("kpi_comparison", "guests", "revenue_mix", "cancellations"):
+        assert k in out
+    assert set(out["kpi_comparison"]["vs_prior"]) == {
+        "occupancy_pct", "adr", "revpar", "room_revenue"}
+    assert "returning_pct" in out["guests"]
+    assert out["cancellations"]["cancelled"] == 0      # seed has no cancellations

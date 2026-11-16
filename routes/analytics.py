@@ -75,7 +75,9 @@ _SNAPSHOT_LOOKBACK_DAYS = 14
 _BILL_FIELDS = ["id", "status", "room", "stay_id", "checkin_time", "checkout_time",
                 "room_charges_total", "room_price_per_night", "payment_source",
                 "booking_source", "ota_commission", "ota_commission_gst",
-                "total_amount", "cancelled_by_revert", "superseded_by_revert"]
+                "total_amount", "cancelled_by_revert", "superseded_by_revert",
+                # guest segmentation + revenue mix + cancellation reasons
+                "guest_name", "guest_mobile", "services_total", "cancel_reason"]
 _PAYMENT_FIELDS = ["date", "method", "type", "amount", "voided",
                    # fingerprint fields payment_service._dedup_payments reads
                    "room", "name", "time", "migrated"]

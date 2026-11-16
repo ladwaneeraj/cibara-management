@@ -320,6 +320,11 @@ DEFAULT_HORIZONS = (7, 14, 30)
 _NON_PACE_BOOKING_STATUSES = frozenset({
     "cancelled", "canceled", "no_show", "noshow", "checked_in", "checked_out",
     "completed",
+    # Transient web-booking holds, hidden everywhere else (routes.bookings
+    # _HIDDEN_BOOKING_STATUSES): a /web/hold writes `pending_payment` and the
+    # sweep flips an abandoned hold to `expired`. Neither is real business on
+    # the books, so they must not inflate forward occupancy/revenue.
+    "pending_payment", "expired",
 })
 
 

@@ -750,11 +750,31 @@ function updatePerformanceStrip(kpis, comparison) {
 // the browser. Guest-controlled text (names, cancel reasons) is escaped.
 function anMoney(n) { return "₹" + Math.round(n || 0).toLocaleString("en-IN"); }
 
+// Backend caps the read window at 366 days (_MAX_WINDOW_DAYS); clamp a longer
+// selection to the most recent year so the section still loads instead of the
+// request 400-ing and the panels silently staying blank.
+const BIZ_MAX_DAYS = 366;
+
+function anAddDays(iso, days) {
+  const [y, m, d] = iso.split("-").map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  dt.setUTCDate(dt.getUTCDate() + days);
+  return dt.toISOString().slice(0, 10);
+}
+
 async function loadBusinessAnalytics(startDate, endDate) {
+  let from = startDate, clamped = false;
+  const spanDays = Math.round(
+    (Date.parse(endDate + "T00:00:00Z") - Date.parse(startDate + "T00:00:00Z")) / 86400000) + 1;
+  if (spanDays > BIZ_MAX_DAYS) {
+    from = anAddDays(endDate, -(BIZ_MAX_DAYS - 1));
+    clamped = true;
+  }
+
   let data = null;
   try {
     const resp = await apiFetch(
-      `/analytics/overview?from=${encodeURIComponent(startDate)}&to=${encodeURIComponent(endDate)}`,
+      `/analytics/overview?from=${encodeURIComponent(from)}&to=${encodeURIComponent(endDate)}`,
       { method: "GET" });
     if (resp.ok) {
       const d = await resp.json();
@@ -763,14 +783,22 @@ async function loadBusinessAnalytics(startDate, endDate) {
   } catch (e) {
     console.warn("Business analytics unavailable:", e);
   }
-  if (!data) return;
+  if (!data) {
+    const biz = document.getElementById("biz-analytics");
+    if (biz) biz.style.display = "none";
+    renderFocusPanel([], "Business analytics couldn’t load for this range — try a shorter period.");
+    return;
+  }
+  const note = clamped
+    ? `Business analytics below covers the last ${BIZ_MAX_DAYS} days (${from} to ${endDate}); the report above uses your full selection.`
+    : "";
 
   // Occupancy / ADR / RevPAR with period-over-period deltas.
   if (data.overview && data.overview.occupancy) {
     updatePerformanceStrip(data.overview.occupancy, data.kpi_comparison);
   }
 
-  renderFocusPanel(data.findings);
+  renderFocusPanel(data.findings, note);
 
   const biz = document.getElementById("biz-analytics");
   if (biz) biz.style.display = "block";
@@ -785,14 +813,14 @@ async function loadBusinessAnalytics(startDate, endDate) {
 }
 
 // "Where to focus" — prioritised, plain-English recommendations (findings).
-function renderFocusPanel(findings) {
+function renderFocusPanel(findings, note) {
   const panel = document.getElementById("focus-panel");
   if (!panel) return;
   const items = Array.isArray(findings) ? findings : [];
   const tone = { good: ["#dcfce7", "#166534"], warn: ["#fef2f2", "#b91c1c"], info: ["#e0f2fe", "#075985"] };
-  let body;
+  let body = "";
   if (items.length === 0) {
-    body = `<div class="focus-empty">No urgent issues — occupancy, booking pace and channel mix look healthy for this period.</div>`;
+    body = note ? "" : `<div class="focus-empty">No urgent issues — occupancy, booking pace and channel mix look healthy for this period.</div>`;
   } else {
     body = items.map((f) => {
       const [bg, fg] = tone[f.level] || tone.info;
@@ -801,8 +829,10 @@ function renderFocusPanel(findings) {
         <span class="focus-txt">${escHtml(f.text || "")}</span></div>`;
     }).join("");
   }
+  const noteHtml = note ? `<div class="focus-note">${escHtml(note)}</div>` : "";
   panel.innerHTML =
     `<div class="focus-hdr"><i class="fas fa-bullseye"></i> Where to focus</div>
+     ${noteHtml}
      <div class="focus-items">${body}</div>`;
   panel.style.display = "block";
 }
@@ -1797,6 +1827,7 @@ function initializeAnalyticsView() {
       .focus-ic{width:26px;height:26px;border-radius:6px;display:inline-flex;align-items:center;justify-content:center;font-size:0.8rem;flex:0 0 auto}
       .focus-txt{font-size:0.86rem;color:#334155;line-height:1.35}
       .focus-empty{font-size:0.86rem;color:#64748b;padding:0.3rem 0.1rem}
+      .focus-note{font-size:0.8rem;color:#92400e;background:#fffbeb;border:1px solid #fde68a;border-radius:6px;padding:0.4rem 0.55rem;margin-bottom:0.55rem}
     </style>
     <!-- 8-card KPI grid -->
     <div class="kpi-grid" id="analytics-summary"></div>

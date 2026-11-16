@@ -214,6 +214,22 @@ def test_pace_counts_future_bookings_excludes_cancelled():
     assert pace["horizons"][7]["occupancy_pct"] == round(2 / 35 * 100, 1)
 
 
+def test_pace_excludes_transient_web_holds():
+    # pending_payment / expired are abandoned web-booking holds, hidden
+    # everywhere else; they must not count as forward business on the books.
+    future = [
+        {"check_in_date": "2026-10-19", "check_out_date": "2026-10-20",
+         "status": "confirmed", "room": "101", "total_amount": 1000},
+        {"check_in_date": "2026-10-19", "check_out_date": "2026-10-20",
+         "status": "pending_payment", "room": "102", "total_amount": 1800},
+        {"check_in_date": "2026-10-19", "check_out_date": "2026-10-20",
+         "status": "expired", "room": "103", "total_amount": 1800},
+    ]
+    pace = compute_booking_pace([], future, 5, date(2026, 10, 18), horizons=(7,))
+    assert pace["horizons"][7]["occupied_room_nights"] == 1       # confirmed only
+    assert pace["horizons"][7]["on_books_revenue"] == 1000
+
+
 def test_pace_booking_straddling_horizon_is_prorated():
     future = [{"check_in_date": "2026-10-24", "check_out_date": "2026-10-28",
                "status": "confirmed", "room": "101", "total_amount": 4000}]

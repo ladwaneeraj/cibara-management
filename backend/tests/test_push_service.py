@@ -79,3 +79,9 @@ def test_wa_still_defaults_to_send_confirmation_button():
 def test_no_actions_when_none_given():
     note = _capture_note(data={"booking_id": "b1"})
     assert note.actions is None
+
+
+def test_image_passthrough():
+    note = _capture_note(data={"booking_id": "b1"}, image="/static/icons/notif-booking.png")
+    assert note.image == "/static/icons/notif-booking.png"
+    assert _capture_note(data={"booking_id": "b1"}).image is None

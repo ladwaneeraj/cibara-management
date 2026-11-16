@@ -470,7 +470,7 @@ def run_notification_sweep(now=None):
                     filter=_FF("status", "==", "open")).stream():
                 r = d.to_dict() or {}
                 label = (REQUEST_KINDS.get(r.get("kind")) or {}).get("label", "Request")
-                _fire(f"greq:{d.id}", "New guest request",
+                _fire(f"greq:{d.id}", "🔔 New guest request",
                       f"Room {r.get('room') or '?'} · {label}")
         except Exception:  # noqa: BLE001
             logger.exception("notify: guest-request scan failed")
@@ -492,11 +492,11 @@ def run_notification_sweep(now=None):
                     continue
                 _renew = [{"action": "renew", "title": "Renew now"}]
                 if now >= due:
-                    _fire(f"renewal:{d.id}", "Renewal due",
+                    _fire(f"renewal:{d.id}", "⏰ Renewal due",
                           f"Room {d.id} · {guest}" + (f" · ₹{bal} due" if bal > 0 else ""),
                           data={"room": str(d.id)}, actions=_renew)
                 if now >= due + _OVERSTAY_GRACE:
-                    _fire(f"overstay:{d.id}", "Overstay",
+                    _fire(f"overstay:{d.id}", "🔴 Overstay",
                           f"Room {d.id} · {guest} is past renewal time",
                           data={"room": str(d.id)}, actions=_renew)
         except Exception:  # noqa: BLE001
@@ -516,7 +516,7 @@ def run_notification_sweep(now=None):
                 body = f"{arrivals} arrival{'' if arrivals == 1 else 's'} today"
                 if dues_total > 0:
                     body += f" · ₹{dues_total} pending"
-                _fire("daily", "Good morning", body)
+                _fire("daily", "☀️ Good morning", body)
         except Exception:  # noqa: BLE001
             logger.exception("notify: daily summary failed")
 
@@ -779,11 +779,12 @@ def razorpay_webhook():
             # the service worker opens WhatsApp to the guest with this message
             # prefilled, so the owner can confirm from the alert in one tap.
             push_service.send_to_all(
-                "New booking",
-                f"{b.get('guest_name')} · Room {b.get('room')} · ₹{b.get('total_amount')}",
+                "🎉 New booking",
+                f"{b.get('guest_name')} · Room {b.get('room')} · ₹{b.get('total_amount')} paid online",
                 {"booking_id": booking_id, "room": str(b.get("room") or ""),
                  "wa": _guest_phone(b.get("guest_mobile")),
-                 "wa_text": _confirmation_message(booking_id, b)})
+                 "wa_text": _confirmation_message(booking_id, b)},
+                image="/static/icons/notif-booking.png")
         except Exception:  # noqa: BLE001 -- push must never affect a confirmed booking
             logger.exception("web webhook: push notify failed for %s", booking_id)
         try:

@@ -47,7 +47,8 @@ def _app_origin() -> str:
 
 
 def send_to_all(title: str, body: str, data: dict | None = None,
-                link: str = "/", actions: list | None = None) -> int:
+                link: str = "/", actions: list | None = None,
+                image: str | None = None) -> int:
     """Push ``title``/``body`` to every stored device. Returns #delivered.
 
     Rendered with the lodge icon and opens the ERP at ``link`` on tap (webpush
@@ -88,6 +89,7 @@ def send_to_all(title: str, body: str, data: dict | None = None,
             title=title, body=body,
             icon="/static/icons/icon-192.png",
             badge="/static/icons/favicon-32.png",
+            image=image or None,          # large hero banner (celebratory alerts)
             require_interaction=True,
             tag=_data.get("tag") or None,
             data=_data,

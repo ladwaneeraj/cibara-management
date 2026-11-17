@@ -5255,8 +5255,8 @@ const roomPricing = {
         // 1, 2, 3, 4, 5, 13–20: ₹250 (single-occupancy rooms)
         return 250;
       case "double-non-attach":
-        // 23–27: ₹300 for 1 guest, ₹500 for 2+
-        return guests === 1 ? 300 : 500;
+        // 23–27: ₹350 for 1 guest, ₹500 for 2+
+        return guests === 1 ? 350 : 500;
       case "premium":
         // 200–206: ₹1200 base for 2 guests, +₹300 per extra guest.
         // AC surcharge applied later by updateRoomPrice when toggle is on.

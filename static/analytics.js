@@ -159,23 +159,13 @@ async function generateAnalytics(reportData) {
     }
   }
 
-  // Performance KPIs (Occupancy / ADR / RevPAR) — separate endpoint because
-  // these are measured by night of stay, not by checkout. Best-effort: any
-  // failure (no permission, no data) just leaves the strip hidden.
+  // Business analytics — occupancy / ADR / RevPAR with period-over-period
+  // comparison, channel mix, demand patterns, forward booking pace, guest
+  // segmentation, cancellations and the "Where to focus" recommendations.
+  // One cached, admin-only call (/analytics/overview); best-effort — any
+  // failure (no permission, no data) just leaves these sections hidden.
   if (startDate && endDate) {
-    try {
-      const kResp = await apiFetch("/performance_kpis", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ start_date: startDate, end_date: endDate }),
-      });
-      if (kResp.ok) {
-        const kd = await kResp.json();
-        if (kd.success && kd.kpis) updatePerformanceStrip(kd.kpis);
-      }
-    } catch (e) {
-      console.warn("Performance KPIs unavailable:", e);
-    }
+    await loadBusinessAnalytics(startDate, endDate);
   }
 
   // Revenue by Room Type — runs after the bills fetch so AC attribution
@@ -681,15 +671,31 @@ function generateInsightsSection(data, dayCount) {
 // ── Performance strip (populated after /performance_kpis API call) ───────────
 // Occupancy %, ADR and RevPAR are measured by NIGHT OF STAY, not by checkout,
 // so they differ from the Billing Analytics strip by design.
-function updatePerformanceStrip(kpis) {
+// A small up/down delta badge. `d` is {change, pct} from kpi_comparison; when
+// pct is null (no base period / no data) nothing is shown. `unit` is "pts" for
+// occupancy (change is percentage points) or "pct" for money metrics.
+function anDeltaBadge(d, unit) {
+  if (!d || d.pct === null || d.pct === undefined) return "";
+  const up = (unit === "pts" ? d.change : d.pct) >= 0;
+  const color = up ? "#15803d" : "#dc2626";
+  const arrow = up ? "▲" : "▼";
+  const txt = unit === "pts"
+    ? `${Math.abs(d.change)} pts`
+    : `${Math.abs(d.pct)}%`;
+  return `<div class="billing-delta" style="color:${color};font-size:0.72rem;font-weight:600;margin-top:1px">
+    ${arrow} ${txt}</div>`;
+}
+
+function updatePerformanceStrip(kpis, comparison) {
   const panel = document.getElementById("performance-panel");
   const strip = document.getElementById("performance-strip");
   if (!panel || !strip || !kpis) return;
 
   const fmtMoney = (n) => Math.round(n || 0).toLocaleString("en-IN");
   const fmtNum = (n) => (n || 0).toLocaleString("en-IN");
+  const vp = (comparison && comparison.vs_prior) || {};
 
-  function bk(iconBg, iconColor, icon, lbl, val) {
+  function bk(iconBg, iconColor, icon, lbl, val, sub) {
     return `<div class="billing-kpi">
       <div class="billing-icon" style="background:${iconBg};color:${iconColor}">
         <i class="${icon}"></i>
@@ -697,6 +703,7 @@ function updatePerformanceStrip(kpis) {
       <div>
         <div class="billing-lbl">${lbl}</div>
         <div class="billing-val">${val}</div>
+        ${sub || ""}
       </div>
     </div>`;
   }
@@ -710,16 +717,21 @@ function updatePerformanceStrip(kpis) {
       <div>
         <div class="billing-lbl">Occupancy</div>
         <div class="billing-val" style="color:${occColor}">${(kpis.occupancy_pct || 0)}%</div>
+        ${anDeltaBadge(vp.occupancy_pct, "pts")}
       </div>
     </div>`;
 
   strip.innerHTML =
     occCard +
-    bk("#dcfce7","#166534","fas fa-rupee-sign","ADR",`₹${fmtMoney(kpis.adr)}`) +
-    bk("#f3e8ff","#6b21a8","fas fa-chart-line","RevPAR",`₹${fmtMoney(kpis.revpar)}`) +
+    bk("#dcfce7","#166534","fas fa-rupee-sign","ADR",`₹${fmtMoney(kpis.adr)}`, anDeltaBadge(vp.adr, "pct")) +
+    bk("#f3e8ff","#6b21a8","fas fa-chart-line","RevPAR",`₹${fmtMoney(kpis.revpar)}`, anDeltaBadge(vp.revpar, "pct")) +
     bk("#fef9c3","#854d0e","fas fa-moon","Room Nights Sold", fmtNum(kpis.occupied_room_nights)) +
     bk("#e0f2fe","#0369a1","fas fa-door-open","Available Nights", fmtNum(kpis.available_room_nights)) +
-    bk("#fef3c7","#92400e","fas fa-hotel","Room Revenue",`₹${fmtMoney(kpis.room_revenue)}`);
+    bk("#fef3c7","#92400e","fas fa-hotel","Room Revenue",`₹${fmtMoney(kpis.room_revenue)}`, anDeltaBadge(vp.room_revenue, "pct"));
+
+  // Comparison baseline note (only when a comparison is available).
+  const hdr = panel.querySelector(".billing-hdr span");
+  if (hdr && comparison) hdr.textContent = "(by night of stay · ▲▼ vs previous period)";
 
   panel.style.display = "block";
 
@@ -729,6 +741,270 @@ function updatePerformanceStrip(kpis) {
       "than the rooms that were actually sold. Set the correct inventory."
     );
   }
+}
+
+// ── Business analytics (populated after /analytics/overview) ─────────────────
+// One admin-only, cached call drives: the performance strip's comparison, the
+// "Where to focus" panel, channel mix, demand patterns, forward pace, guest
+// segmentation and cancellations. All backend aggregation — no raw rows reach
+// the browser. Guest-controlled text (names, cancel reasons) is escaped.
+function anMoney(n) { return "₹" + Math.round(n || 0).toLocaleString("en-IN"); }
+
+// Backend caps the read window at 366 days (_MAX_WINDOW_DAYS); clamp a longer
+// selection to the most recent year so the section still loads instead of the
+// request 400-ing and the panels silently staying blank.
+const BIZ_MAX_DAYS = 366;
+
+function anAddDays(iso, days) {
+  const [y, m, d] = iso.split("-").map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  dt.setUTCDate(dt.getUTCDate() + days);
+  return dt.toISOString().slice(0, 10);
+}
+
+async function loadBusinessAnalytics(startDate, endDate) {
+  let from = startDate, clamped = false;
+  const spanDays = Math.round(
+    (Date.parse(endDate + "T00:00:00Z") - Date.parse(startDate + "T00:00:00Z")) / 86400000) + 1;
+  if (spanDays > BIZ_MAX_DAYS) {
+    from = anAddDays(endDate, -(BIZ_MAX_DAYS - 1));
+    clamped = true;
+  }
+
+  let data = null;
+  try {
+    const resp = await apiFetch(
+      `/analytics/overview?from=${encodeURIComponent(from)}&to=${encodeURIComponent(endDate)}`,
+      { method: "GET" });
+    if (resp.ok) {
+      const d = await resp.json();
+      if (d && d.success) data = d;
+    }
+  } catch (e) {
+    console.warn("Business analytics unavailable:", e);
+  }
+  if (!data) {
+    const biz = document.getElementById("biz-analytics");
+    if (biz) biz.style.display = "none";
+    renderFocusPanel([], "Business analytics couldn’t load for this range — try a shorter period.");
+    return;
+  }
+  const note = clamped
+    ? `Business analytics below covers the last ${BIZ_MAX_DAYS} days (${from} to ${endDate}); the report above uses your full selection.`
+    : "";
+
+  // Occupancy / ADR / RevPAR with period-over-period deltas.
+  if (data.overview && data.overview.occupancy) {
+    updatePerformanceStrip(data.overview.occupancy, data.kpi_comparison);
+  }
+
+  renderFocusPanel(data.findings, note);
+
+  const biz = document.getElementById("biz-analytics");
+  if (biz) biz.style.display = "block";
+  renderWeekdayDemand(data.seasonality);
+  renderSeasonality(data.seasonality);
+  renderChannelMix(data.channel_mix);
+  renderGuestMix(data.guests);
+  renderForwardPace(data.pace);
+  renderTopGuests(data.guests);
+  renderLosChart(data.los_leadtime);
+  renderCancellations(data.cancellations);
+}
+
+// "Where to focus" — prioritised, plain-English recommendations (findings).
+function renderFocusPanel(findings, note) {
+  const panel = document.getElementById("focus-panel");
+  if (!panel) return;
+  const items = Array.isArray(findings) ? findings : [];
+  const tone = { good: ["#dcfce7", "#166534"], warn: ["#fef2f2", "#b91c1c"], info: ["#e0f2fe", "#075985"] };
+  let body = "";
+  if (items.length === 0) {
+    body = note ? "" : `<div class="focus-empty">No urgent issues — occupancy, booking pace and channel mix look healthy for this period.</div>`;
+  } else {
+    body = items.map((f) => {
+      const [bg, fg] = tone[f.level] || tone.info;
+      return `<div class="focus-item" style="border-left:3px solid ${fg}">
+        <span class="focus-ic" style="background:${bg};color:${fg}"><i class="fas fa-${f.icon || "lightbulb"}"></i></span>
+        <span class="focus-txt">${escHtml(f.text || "")}</span></div>`;
+    }).join("");
+  }
+  const noteHtml = note ? `<div class="focus-note">${escHtml(note)}</div>` : "";
+  panel.innerHTML =
+    `<div class="focus-hdr"><i class="fas fa-bullseye"></i> Where to focus</div>
+     ${noteHtml}
+     <div class="focus-items">${body}</div>`;
+  panel.style.display = "block";
+}
+
+function renderWeekdayDemand(seasonality) {
+  const canvas = document.getElementById("weekday-demand-chart");
+  if (!canvas) return;
+  if (canvas.chart) { canvas.chart.destroy(); canvas.chart = null; }
+  const rows = (seasonality && seasonality.weekday) || [];
+  const vals = rows.map((r) => r.occupancy_pct || 0);
+  if (!rows.length || vals.every((v) => v === 0)) {
+    showChartEmpty(canvas, "No stay data in this period");
+    return;
+  }
+  const minPos = Math.min(...vals.filter((v) => v > 0));
+  const colors = vals.map((v) => (v > 0 && v === minPos ? "#f59e0b" : "#2563eb")); // weakest day amber
+  canvas.chart = new Chart(canvas.getContext("2d"), {
+    type: "bar",
+    data: { labels: rows.map((r) => r.weekday.slice(0, 3)),
+            datasets: [{ label: "Occupancy %", data: vals, backgroundColor: colors }] },
+    options: {
+      responsive: true, maintainAspectRatio: false, animation: false,
+      plugins: { legend: { display: false },
+        tooltip: { callbacks: { label: (c) => ` ${c.raw}% occupancy · ADR ${anMoney(rows[c.dataIndex].adr)}` } } },
+      scales: { y: { beginAtZero: true, ticks: { callback: (v) => v + "%" } } },
+    },
+  });
+}
+
+function renderSeasonality(seasonality) {
+  const canvas = document.getElementById("seasonality-chart");
+  if (!canvas) return;
+  if (canvas.chart) { canvas.chart.destroy(); canvas.chart = null; }
+  const rows = (seasonality && seasonality.months) || [];
+  if (!rows.length) { showChartEmpty(canvas, "No trend data"); return; }
+  canvas.chart = new Chart(canvas.getContext("2d"), {
+    data: { labels: rows.map((r) => r.month), datasets: [
+      { type: "line", label: "Occupancy %", data: rows.map((r) => r.occupancy_pct || 0),
+        borderColor: "#7c3aed", backgroundColor: "rgba(124,58,237,.1)", yAxisID: "y", tension: 0.3, fill: true },
+      { type: "line", label: "RevPAR", data: rows.map((r) => r.revpar || 0),
+        borderColor: "#16a34a", yAxisID: "y1", tension: 0.3 },
+    ] },
+    options: {
+      responsive: true, maintainAspectRatio: false, animation: false,
+      plugins: { legend: { display: true } },
+      scales: {
+        y: { position: "left", beginAtZero: true, ticks: { callback: (v) => v + "%" } },
+        y1: { position: "right", beginAtZero: true, grid: { drawOnChartArea: false },
+              ticks: { callback: (v) => "₹" + v } },
+      },
+    },
+  });
+}
+
+function renderChannelMix(mix) {
+  const canvas = document.getElementById("channel-mix-chart");
+  if (!canvas) return;
+  if (canvas.chart) { canvas.chart.destroy(); canvas.chart = null; }
+  const rows = (mix && mix.channels) || [];
+  if (!rows.length) { showChartEmpty(canvas, "No channel data in this period"); return; }
+  canvas.chart = new Chart(canvas.getContext("2d"), {
+    type: "bar",
+    data: { labels: rows.map((r) => r.channel), datasets: [
+      { label: "Net revenue", data: rows.map((r) => r.net || 0), backgroundColor: "#0891b2" },
+      { label: "Commission", data: rows.map((r) => r.commission || 0), backgroundColor: "#f87171" },
+    ] },
+    options: {
+      responsive: true, maintainAspectRatio: false, animation: false,
+      plugins: { legend: { display: true },
+        tooltip: { callbacks: { afterBody: (its) => {
+          const r = rows[its[0].dataIndex];
+          return `Net ADR ${anMoney(r.net_adr)} · ${r.share_pct}% of revenue · ${r.room_nights} nights`;
+        } } } },
+      scales: { x: { stacked: true }, y: { stacked: true, beginAtZero: true, ticks: { callback: (v) => "₹" + v } } },
+    },
+  });
+}
+
+function renderGuestMix(g) {
+  const canvas = document.getElementById("guest-mix-chart");
+  if (!canvas) return;
+  if (canvas.chart) { canvas.chart.destroy(); canvas.chart = null; }
+  g = g || {};
+  const data = [g.new || 0, g.returning || 0, g.unidentified || 0];
+  if (data.reduce((a, b) => a + b, 0) === 0) {
+    showChartEmpty(canvas, "No guest check-ins in this period");
+    return;
+  }
+  canvas.chart = new Chart(canvas.getContext("2d"), {
+    type: "doughnut",
+    data: { labels: ["New", "Returning", "Unidentified"],
+            datasets: [{ data, backgroundColor: ["#38bdf8", "#16a34a", "#cbd5e1"] }] },
+    options: {
+      responsive: true, maintainAspectRatio: false, animation: false, cutout: "60%",
+      plugins: {
+        legend: { position: "bottom" },
+        title: { display: true, text: `${g.returning_pct || 0}% returning · avg stay ${g.avg_los_nights || 0} nights` },
+      },
+    },
+  });
+}
+
+function renderForwardPace(pace) {
+  const body = document.getElementById("forward-pace-body");
+  if (!body) return;
+  const hz = (pace && pace.horizons) || {};
+  const row = (h) => {
+    const v = hz[h] || hz[String(h)];
+    if (!v) return "";
+    const d = v.delta;
+    const badge = (d && d.occupancy_pct != null)
+      ? ` <span style="color:${d.occupancy_pct >= 0 ? "#15803d" : "#dc2626"};font-size:.72rem">
+          ${d.occupancy_pct >= 0 ? "▲" : "▼"} ${Math.abs(d.occupancy_pct)} pts vs last wk</span>`
+      : "";
+    return `<div style="display:flex;justify-content:space-between;align-items:baseline;padding:.5rem 0;border-bottom:1px solid #f0f0f0">
+      <div><div style="font-weight:600">Next ${h} nights</div>
+        <div style="font-size:.78rem;color:#64748b">${v.occupied_room_nights}/${v.available_room_nights} room-nights booked</div></div>
+      <div style="text-align:right"><div style="font-size:1.2rem;font-weight:700">${v.occupancy_pct || 0}%</div>
+        <div style="font-size:.78rem;color:#64748b">${anMoney(v.on_books_revenue)}${badge}</div></div></div>`;
+  };
+  const html = [7, 30].map(row).join("");
+  body.innerHTML = html || `<div class="focus-empty">Nothing on the books for the days ahead.</div>`;
+}
+
+function renderTopGuests(g) {
+  const body = document.getElementById("top-guests-body");
+  if (!body) return;
+  const rows = (g && g.top_guests) || [];
+  if (!rows.length) { body.innerHTML = `<div class="focus-empty">No identified guests in this period.</div>`; return; }
+  body.innerHTML = rows.map((r, i) =>
+    `<div style="display:flex;justify-content:space-between;align-items:center;padding:.4rem .2rem;border-bottom:1px solid #f3f3f3">
+      <div style="display:flex;gap:.5rem;align-items:center;min-width:0">
+        <span style="width:20px;height:20px;border-radius:50%;background:#fde68a;color:#92400e;font-size:.72rem;font-weight:700;display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto">${i + 1}</span>
+        <span style="font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(r.name || "")}</span></div>
+      <div style="text-align:right;flex:0 0 auto"><div style="font-weight:700">${anMoney(r.revenue)}</div>
+        <div style="font-size:.72rem;color:#64748b">${r.visits} visit${r.visits === 1 ? "" : "s"} · ${r.nights} nights</div></div></div>`
+  ).join("");
+}
+
+function renderLosChart(ll) {
+  const canvas = document.getElementById("los-chart");
+  if (!canvas) return;
+  if (canvas.chart) { canvas.chart.destroy(); canvas.chart = null; }
+  const rows = (ll && ll.los) || [];
+  const total = rows.reduce((a, r) => a + (r.count || 0), 0);
+  if (total === 0) { showChartEmpty(canvas, "No stays in this period"); return; }
+  canvas.chart = new Chart(canvas.getContext("2d"), {
+    type: "bar",
+    data: { labels: rows.map((r) => r.bucket + (r.bucket === "1" ? " night" : " nights")),
+            datasets: [{ label: "Stays", data: rows.map((r) => r.count || 0), backgroundColor: "#f59e0b" }] },
+    options: { responsive: true, maintainAspectRatio: false, animation: false,
+      plugins: { legend: { display: false } },
+      scales: { y: { beginAtZero: true, ticks: { precision: 0 } } } },
+  });
+}
+
+function renderCancellations(cx) {
+  const body = document.getElementById("cancellations-body");
+  if (!body) return;
+  cx = cx || {};
+  if (!cx.total) { body.innerHTML = `<div class="focus-empty">No check-ins to measure cancellations against.</div>`; return; }
+  const reasons = (cx.top_reasons || []).map((r) =>
+    `<div style="display:flex;justify-content:space-between;font-size:.82rem;padding:.2rem 0">
+      <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(r.reason || "")}</span>
+      <span style="font-weight:600">${r.count}</span></div>`).join("");
+  const rateColor = cx.rate_pct >= 15 ? "#dc2626" : "#1e293b";
+  body.innerHTML =
+    `<div style="display:flex;gap:1rem;align-items:baseline;margin-bottom:.5rem">
+      <div style="font-size:1.6rem;font-weight:800;color:${rateColor}">${cx.rate_pct || 0}%</div>
+      <div style="font-size:.82rem;color:#64748b">${cx.cancelled} of ${cx.total} stays cancelled</div></div>
+     ${reasons ? `<div style="border-top:1px solid #f0f0f0;padding-top:.4rem">
+       <div style="font-size:.72rem;color:#8a8a8a;text-transform:uppercase;letter-spacing:.3px;margin-bottom:.2rem">Top reasons</div>${reasons}</div>` : ""}`;
 }
 
 // ── Billing strip (populated after /revenue_report API call) ─────────────────
@@ -1542,8 +1818,22 @@ function initializeAnalyticsView() {
   }
 
   view.innerHTML = `
+    <style>
+      .focus-panel{background:#fff;border:1px solid #e8e8ee;border-radius:10px;padding:0.9rem 1rem;margin:0.6rem 0 0.9rem;box-shadow:0 1px 2px rgba(16,24,40,.04)}
+      .focus-hdr{font-weight:700;font-size:0.95rem;color:#1e293b;margin-bottom:0.6rem}
+      .focus-hdr i{color:#2563eb;margin-right:0.4rem}
+      .focus-items{display:flex;flex-direction:column;gap:0.45rem}
+      .focus-item{display:flex;align-items:flex-start;gap:0.6rem;padding:0.5rem 0.6rem;background:#fafbfc;border-radius:6px}
+      .focus-ic{width:26px;height:26px;border-radius:6px;display:inline-flex;align-items:center;justify-content:center;font-size:0.8rem;flex:0 0 auto}
+      .focus-txt{font-size:0.86rem;color:#334155;line-height:1.35}
+      .focus-empty{font-size:0.86rem;color:#64748b;padding:0.3rem 0.1rem}
+      .focus-note{font-size:0.8rem;color:#92400e;background:#fffbeb;border:1px solid #fde68a;border-radius:6px;padding:0.4rem 0.55rem;margin-bottom:0.55rem}
+    </style>
     <!-- 8-card KPI grid -->
     <div class="kpi-grid" id="analytics-summary"></div>
+
+    <!-- Where to focus (prioritised recommendations from /analytics/overview) -->
+    <div class="focus-panel" id="focus-panel" style="display:none"></div>
 
     <!-- Insights panel -->
     <div class="insights-panel" id="analytics-insights">
@@ -1574,6 +1864,38 @@ function initializeAnalyticsView() {
         <span>(based on guest checkouts)</span>
       </div>
       <div class="billing-strip" id="billing-strip"></div>
+    </div>
+
+    <!-- Business analytics (hidden until /analytics/overview loads) -->
+    <div id="biz-analytics" style="display:none">
+      <div class="chart-row chart-row-2">
+        ${chartCard("weekday-demand-chart","#2563eb","fas fa-calendar-week","Occupancy by Day of Week", 280)}
+        ${chartCard("seasonality-chart","#7c3aed","fas fa-chart-line","12-Month Trend — Occupancy & RevPAR", 280)}
+      </div>
+      <div class="chart-row chart-row-2">
+        ${chartCard("channel-mix-chart","#0891b2","fas fa-share-nodes","Channel Mix — Net Revenue & ADR", 280)}
+        ${chartCard("guest-mix-chart","#16a34a","fas fa-user-check","New vs Returning Guests", 280)}
+      </div>
+      <div class="chart-row chart-row-2">
+        <div class="chart-card" style="height:auto;min-height:220px">
+          <div class="chart-hdr"><i class="chart-hdr-icon fas fa-calendar-plus" style="color:#0369a1"></i>
+            <span class="chart-hdr-title">On the Books — Forward Occupancy</span></div>
+          <div class="chart-body" id="forward-pace-body" style="padding:0.6rem 1rem"></div>
+        </div>
+        <div class="chart-card" style="height:auto;min-height:220px">
+          <div class="chart-hdr"><i class="chart-hdr-icon fas fa-crown" style="color:#b45309"></i>
+            <span class="chart-hdr-title">Top Guests by Revenue</span></div>
+          <div class="chart-body" id="top-guests-body" style="padding:0.4rem 0.6rem"></div>
+        </div>
+      </div>
+      <div class="chart-row chart-row-2">
+        ${chartCard("los-chart","#f59e0b","fas fa-moon","Length of Stay", 260)}
+        <div class="chart-card" style="height:auto;min-height:220px">
+          <div class="chart-hdr"><i class="chart-hdr-icon fas fa-ban" style="color:#dc2626"></i>
+            <span class="chart-hdr-title">Cancellations</span></div>
+          <div class="chart-body" id="cancellations-body" style="padding:0.6rem 1rem"></div>
+        </div>
+      </div>
     </div>
 
     <!-- Row 1: Revenue vs Expenses + Daily Revenue -->

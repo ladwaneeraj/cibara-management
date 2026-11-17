@@ -120,6 +120,68 @@ def _parse_stay(data):
     return category, spec, days, guests, checkin_dt, now
 
 
+# ---------------------------------------------------------------- analytics ingest
+# Event names the website emits (lib/analytics.ts + the page_view stream). An
+# allowlist, so the public collection can never be spammed with junk event types.
+_EVENT_TYPES = frozenset({
+    "page_view", "whatsapp_click", "call_click", "directions_click",
+    "enquiry_submit", "book_online_click", "room_view", "gallery_open",
+    "faq_open", "scroll_depth",
+})
+_EVENT_LIMIT_PER_MIN = 120  # a page is several events; generous but bounded
+_MAX_EVENT_FIELD = 120
+
+
+@web_bp.route("/web/event", methods=["POST"])
+def web_event():
+    """Record one first-party analytics event from the website (public).
+
+    Fire-and-forget from the browser: where the guest is, which page or room
+    they looked at, and what they clicked, so the owner's own dashboard
+    (/analytics/web) does not depend on Google Analytics. One Firestore doc per
+    event, tagged with the IST ``day`` for range queries.
+
+    Permissive-but-bounded, Phase-0 like the rest of /web/*:
+      * ``type`` must be one we emit (allowlist) — unknown strings are dropped.
+      * Every stored string is length-capped.
+      * Per-IP rate limited (best effort, per process). A determined attacker
+        across many IPs could still write docs — the same accepted Phase-0
+        tradeoff as /web/availability. No secret or state is exposed, and
+        nothing here can touch a booking.
+    Always answers 204, so the browser never waits on or retries analytics.
+    """
+    if _rate_limited("web_event", _EVENT_LIMIT_PER_MIN):
+        return "", 204  # silently drop; never surface rate limiting to the guest
+
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict) or data.get("type") not in _EVENT_TYPES:
+        return "", 204
+
+    def _s(key):
+        v = data.get(key)
+        return v.strip()[:_MAX_EVENT_FIELD] if isinstance(v, str) and v.strip() else None
+
+    device = data.get("device")
+    now = datetime.now(config.IST)
+    doc = {
+        "type": data["type"],
+        "page": _s("page"),
+        "room": _s("room"),
+        "sid": _s("sid"),
+        "device": device if device in ("mobile", "desktop") else None,
+        "country": _s("country"),
+        "city": _s("city"),
+        "ref": _s("ref"),
+        "day": now.strftime("%Y-%m-%d"),
+        "ts": now.isoformat(),
+    }
+    try:
+        config.db.collection("web_events").add({k: v for k, v in doc.items() if v is not None})
+    except Exception:  # noqa: BLE001 -- analytics must never break the site
+        logger.exception("web_event: store failed")
+    return "", 204
+
+
 @web_bp.route("/web/config", methods=["GET"])
 def web_config():
     """Public flags the website needs to decide whether to show booking."""
@@ -455,10 +517,10 @@ def run_notification_sweep(now=None):
         fired = (snap.to_dict() or {}).get("fired", {}) if getattr(snap, "exists", False) else {}
         new = {}
 
-        def _fire(key, title, body):
+        def _fire(key, title, body, data=None, actions=None):
             if fired.get(key) or new.get(key):
                 return
-            push_service.send_to_all(title, body)
+            push_service.send_to_all(title, body, data=data, actions=actions)
             new[key] = True
 
         from google.cloud.firestore_v1.base_query import FieldFilter as _FF
@@ -470,7 +532,7 @@ def run_notification_sweep(now=None):
                     filter=_FF("status", "==", "open")).stream():
                 r = d.to_dict() or {}
                 label = (REQUEST_KINDS.get(r.get("kind")) or {}).get("label", "Request")
-                _fire(f"greq:{d.id}", "New guest request",
+                _fire(f"greq:{d.id}", "🔔 New guest request",
                       f"Room {r.get('room') or '?'} · {label}")
         except Exception:  # noqa: BLE001
             logger.exception("notify: guest-request scan failed")
@@ -490,12 +552,15 @@ def run_notification_sweep(now=None):
                 due = _renewal_due_at(rm.get("checkin_time"), rm.get("renewal_count"))
                 if due is None:
                     continue
+                _renew = [{"action": "renew", "title": "Renew now"}]
                 if now >= due:
-                    _fire(f"renewal:{d.id}", "Renewal due",
-                          f"Room {d.id} · {guest}" + (f" · ₹{bal} due" if bal > 0 else ""))
+                    _fire(f"renewal:{d.id}", "⏰ Renewal due",
+                          f"Room {d.id} · {guest}" + (f" · ₹{bal} due" if bal > 0 else ""),
+                          data={"room": str(d.id)}, actions=_renew)
                 if now >= due + _OVERSTAY_GRACE:
-                    _fire(f"overstay:{d.id}", "Overstay",
-                          f"Room {d.id} · {guest} is past renewal time")
+                    _fire(f"overstay:{d.id}", "🔴 Overstay",
+                          f"Room {d.id} · {guest} is past renewal time",
+                          data={"room": str(d.id)}, actions=_renew)
         except Exception:  # noqa: BLE001
             logger.exception("notify: room renewal/overstay scan failed")
 
@@ -513,7 +578,7 @@ def run_notification_sweep(now=None):
                 body = f"{arrivals} arrival{'' if arrivals == 1 else 's'} today"
                 if dues_total > 0:
                     body += f" · ₹{dues_total} pending"
-                _fire("daily", "Good morning", body)
+                _fire("daily", "☀️ Good morning", body)
         except Exception:  # noqa: BLE001
             logger.exception("notify: daily summary failed")
 
@@ -771,16 +836,28 @@ def razorpay_webhook():
                      f"New web booking {ref}: {b.get('guest_name')}, room {b.get('room')}, "
                      f"{b.get('check_in_date')}, ₹{b.get('total_amount')} paid online.",
                      ctx, severity="warning")
+        # Guard against false/unwanted "New booking" alerts: never ping the
+        # owner for a TEST-mode booking (go-live testing fires a real order.paid
+        # on test keys), and honour the WEB_BOOKING_PUSH kill-switch. The booking
+        # is still confirmed; only the phone alert is suppressed.
+        _push_on = os.environ.get("WEB_BOOKING_PUSH", "true").lower() not in ("0", "false", "no", "off")
+        _push_ok = _push_on and not razorpay_service.is_test_mode()
         try:  # FCM push to the owner's phone, even when the ERP is closed.
             # wa / wa_text power the notification's "Send confirmation" button:
             # the service worker opens WhatsApp to the guest with this message
             # prefilled, so the owner can confirm from the alert in one tap.
-            push_service.send_to_all(
-                "New booking",
-                f"{b.get('guest_name')} · Room {b.get('room')} · ₹{b.get('total_amount')}",
-                {"booking_id": booking_id, "room": str(b.get("room") or ""),
-                 "wa": _guest_phone(b.get("guest_mobile")),
-                 "wa_text": _confirmation_message(booking_id, b)})
+            if _push_ok:
+                push_service.send_to_all(
+                    "🎉 New booking",
+                    f"{b.get('guest_name')} · Room {b.get('room')} · ₹{b.get('total_amount')} paid online",
+                    {"booking_id": booking_id, "room": str(b.get("room") or ""),
+                     "wa": _guest_phone(b.get("guest_mobile")),
+                     "wa_text": _confirmation_message(booking_id, b)},
+                    image="/static/icons/notif-booking.png")
+            else:
+                logger.info("web webhook: new-booking push suppressed "
+                            "(test_mode=%s, enabled=%s) for %s",
+                            razorpay_service.is_test_mode(), _push_on, booking_id)
         except Exception:  # noqa: BLE001 -- push must never affect a confirmed booking
             logger.exception("web webhook: push notify failed for %s", booking_id)
         try:

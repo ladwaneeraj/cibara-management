@@ -208,7 +208,12 @@ window.CibaraState = (function () {
     for (let i = 0; i < bookingDocs.length; i++) {
       const b = bookingDocs[i].data || {};
       const status = String(b.status || "").toLowerCase();
-      if (status === "cancelled" || status === "checked_out") continue;
+      // Only genuinely pending arrivals get a dot. Skip fulfilled (checked_in),
+      // gone (checked_out / cancelled / no_show) and abandoned web holds
+      // (pending_payment / expired — hidden everywhere else), so a checked-in
+      // guest or a lapsed hold can't leave a phantom arrival dot.
+      if (["cancelled", "checked_out", "checked_in", "no_show",
+           "pending_payment", "expired"].includes(status)) continue;
 
       const room = String(b.room || "");
       if (!room) continue;
@@ -5250,8 +5255,8 @@ const roomPricing = {
         // 1, 2, 3, 4, 5, 13–20: ₹250 (single-occupancy rooms)
         return 250;
       case "double-non-attach":
-        // 23–27: ₹300 for 1 guest, ₹500 for 2+
-        return guests === 1 ? 300 : 500;
+        // 23–27: ₹350 for 1 guest, ₹500 for 2+
+        return guests === 1 ? 350 : 500;
       case "premium":
         // 200–206: ₹1200 base for 2 guests, +₹300 per extra guest.
         // AC surcharge applied later by updateRoomPrice when toggle is on.
@@ -6353,6 +6358,31 @@ document.addEventListener("DOMContentLoaded", function () {
       window.CibaraAuth.ready().then(open).catch(open);
     } else {
       setTimeout(open, 250);
+    }
+  } catch (e) {
+    /* deep link is best-effort; never block boot */
+  }
+});
+
+// Deep link from a push notification's "Renew now" button: "/?room=213" opens
+// that room's modal (Renew / Checkout live inside it) so the alert lands in one
+// tap. Best-effort and self-retrying until the room grid is ready.
+document.addEventListener("DOMContentLoaded", function () {
+  try {
+    const room = new URLSearchParams(window.location.search).get("room");
+    if (!room) return;
+    let tries = 0;
+    const open = function () {
+      if (typeof showRoomDetailsModal !== "function" && tries++ < 20) {
+        setTimeout(open, 300);
+        return;
+      }
+      if (typeof showRoomDetailsModal === "function") showRoomDetailsModal(room);
+    };
+    if (window.CibaraAuth && typeof window.CibaraAuth.ready === "function") {
+      window.CibaraAuth.ready().then(open).catch(open);
+    } else {
+      setTimeout(open, 400);
     }
   } catch (e) {
     /* deep link is best-effort; never block boot */

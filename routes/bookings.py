@@ -122,7 +122,12 @@ def get_upcoming_bookings():
         for snap in q.stream():
             b = snap.to_dict() or {}
             status = (b.get("status") or "").lower()
-            if status in ("cancelled", "checked_out"):
+            # Only genuinely pending arrivals drive the dot: skip fulfilled
+            # (checked_in), gone (checked_out / cancelled / no_show) and
+            # abandoned web holds (pending_payment / expired — hidden everywhere
+            # else), so a checked-in guest or a lapsed hold leaves no phantom dot.
+            if status in ("cancelled", "checked_out", "checked_in", "no_show",
+                          "pending_payment", "expired"):
                 continue
             room = str(b.get("room") or "")
             if not room:
@@ -235,7 +240,9 @@ def get_upcoming_bookings_list():
         # non-ISO form or its status differs in case. The bookings collection
         # for a lodge is small; if it ever grows large, swap to a bounded
         # check_in_date range query.
-        EXCLUDED = {"cancelled", "checked_out", "no_show"}
+        # Hide gone bookings AND transient web holds (pending_payment / expired):
+        # a web booking must only surface in the ERP once payment is confirmed.
+        EXCLUDED = {"cancelled", "checked_out", "no_show"} | _HIDDEN_BOOKING_STATUSES
         out, status_breakdown = [], {}
         for d in bookings_ref.stream():
             b = d.to_dict() or {}

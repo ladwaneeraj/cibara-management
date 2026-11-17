@@ -115,7 +115,7 @@ def room_base_price(room_number, guest_count=1):
     if cat == "single-non-attach":
         return 250
     if cat == "double-non-attach":
-        return 300 if guests == 1 else 500
+        return 350 if guests == 1 else 500
     if cat == "premium":
         return 1200 + max(0, guests - 2) * 300
     if cat == "regular":

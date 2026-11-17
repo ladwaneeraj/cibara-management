@@ -356,20 +356,24 @@ def firebase_messaging_sw():
         # to close first.
         'self.addEventListener("install", function () { self.skipWaiting(); });\n'
         'self.addEventListener("activate", function (e) { e.waitUntil(self.clients.claim()); });\n'
-        # "Send confirmation" opens WhatsApp to the guest with the message
-        # prefilled; a plain tap opens/focuses the ERP. Reads the card\'s own data.
+        # Action buttons land in one tap:
+        #   confirm -> WhatsApp to the guest with the message prefilled
+        #   renew   -> the ERP focused on that room (data.room) — its Renew
+        #              button is in the room modal; money is never moved here.
+        # A plain tap focuses/opens the ERP (data.link). Reads the card\'s own data.
         'self.addEventListener("notificationclick", function (e) {\n'
-        '  e.notification.close();\n'
         '  var d = e.notification.data || {};\n'
+        '  e.notification.close();\n'
         '  if (e.action === "confirm" && d.wa) {\n'
         '    e.waitUntil(clients.openWindow("https://wa.me/" + d.wa +\n'
         '      (d.wa_text ? "?text=" + encodeURIComponent(d.wa_text) : "")));\n'
         '    return;\n'
         '  }\n'
-        '  var url = d.link || "/";\n'
+        '  var navTo = (e.action === "renew" && d.room) ? ("/?room=" + encodeURIComponent(d.room)) : "";\n'
         '  e.waitUntil(clients.matchAll({ type: "window", includeUncontrolled: true }).then(function (wins) {\n'
-        '    for (var i = 0; i < wins.length; i++) { if ("focus" in wins[i]) return wins[i].focus(); }\n'
-        '    if (clients.openWindow) return clients.openWindow(url);\n'
+        '    for (var i = 0; i < wins.length; i++) { var w = wins[i];\n'
+        '      if ("focus" in w) { if (navTo && w.navigate) { try { w.navigate(navTo); } catch (_) {} } return w.focus(); } }\n'
+        '    if (clients.openWindow) return clients.openWindow(navTo || d.link || "/");\n'
         '  }));\n'
         '});\n'
     )

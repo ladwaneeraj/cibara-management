@@ -32,3 +32,14 @@ async def analytics_overview(request: Request, start: str = DateQ(), end: str = 
         raise HTTPException(400, "start must be on or before end")
     return await forward(p, request, "GET", "/analytics/overview",
                          query={"from": start, "to": end, "fresh": "1" if fresh else None})
+
+
+@router.get("/analytics/web")
+async def analytics_web(request: Request, start: str = DateQ(), end: str = DateQ(),
+                        fresh: bool = False,
+                        p: Principal = Depends(require_permission("analytics.view"))):
+    """First-party website analytics (visitors, pages, rooms, locations, clicks)."""
+    if start > end:
+        raise HTTPException(400, "start must be on or before end")
+    return await forward(p, request, "GET", "/analytics/web",
+                         query={"from": start, "to": end, "fresh": "1" if fresh else None})

@@ -1616,11 +1616,22 @@
             <button class="view-btn" data-view="reports">
               <i class="fas fa-list-alt"></i> Reports
             </button>
+            <button class="view-btn" data-view="website">
+              <i class="fas fa-globe"></i> Website
+            </button>
           </div>
 
           <!-- Analytics View -->
           <div id="analytics-view" class="view-content">
             <!-- Will be filled dynamically -->
+          </div>
+
+          <!-- Website Analytics View — first-party visitor analytics from the
+               website's /web/event ingest; filled by static/web-analytics.js. -->
+          <div id="website-view" class="view-content hidden">
+            <div style="padding:2rem;text-align:center;color:#8a8a8a">
+              Choose a date range above and this fills with your website visitors, pages and clicks.
+            </div>
           </div>
 
           <!-- Reports View — revamped: unified transaction-style report -->
@@ -6368,6 +6379,7 @@
     <script defer src="{{ asset_url('script.js') }}"></script>
     <script defer src="{{ asset_url('shift.js') }}"></script>
     <script defer src="/static/analytics.js"></script>
+    <script defer src="/static/web-analytics.js"></script>
     <!-- Android back button closes the open modal instead of exiting the
          installed PWA. Self-contained and dependency-free; finds overlays by
          shape rather than by a class list, so it also covers modals added

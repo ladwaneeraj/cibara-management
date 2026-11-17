@@ -43,6 +43,9 @@
   const STATUS_LABEL = { vacant: "Vacant", occupied: "Occupied", cleaning: "Cleaning", unknown: "No room" };
   const BOOKING_SKIP_STATUSES = new Set([
     "cancelled", "checked_in", "checked_out", "no_show",
+    // Transient web holds — a booking is ERP-visible only once payment is
+    // confirmed (defence-in-depth; /get_bookings already drops these).
+    "pending_payment", "expired",
   ]);
 
   // ── State ────────────────────────────────────────────────────────────────

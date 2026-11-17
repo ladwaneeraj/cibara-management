@@ -48,6 +48,7 @@ from google.cloud.firestore_v1.base_query import FieldFilter
 from config import db, bills_ref, bookings_ref, expenses_ref, IST, logger, get_all_rooms
 from services import payment_service
 from services import register_analytics_service as svc
+from services import web_analytics_service as web_svc
 from services import auth_service
 from services.auth_service import requires_permission
 from services.permissions import role_has_permission
@@ -56,6 +57,16 @@ analytics_bp = Blueprint("analytics", __name__, url_prefix="/analytics")
 
 payments_ref = db.collection("payments")
 snapshots_ref = db.collection("analytics_snapshots")
+web_events_ref = db.collection("web_events")
+
+# Website (first-party) analytics: fields the aggregator reads, and a tighter
+# window than the register — event rows are one-per-hit, so a year is a lot.
+_WEB_EVENT_FIELDS = ["type", "page", "room", "sid", "device", "country", "city", "ref", "day"]
+# Paid web bookings in the window, to show how the traffic converted. Filtered
+# by source/status in Python (equality + a date range would need a composite
+# index; CLAUDE.md §4 adds none).
+_WEB_BOOKING_FIELDS = ["booking_source", "status", "total_amount", "booking_date"]
+_WEB_MAX_WINDOW_DAYS = 92
 
 # Longest allowed window (guards Firestore reads and response size).
 # One year: analytics is admin-only and cached, and a year of a single
@@ -243,6 +254,56 @@ def analytics_overview():
     except Exception as e:
         logger.error(f"analytics_overview failed: {e}", exc_info=True)
         return jsonify(success=False, message="Failed to compute analytics"), 500
+
+
+# ── GET /analytics/web — first-party website analytics ──────────────────
+#
+# Visitors, page views, clicks, locations and top pages/rooms from the
+# `web_events` collection the website POSTs to /web/event. Same gate, cache and
+# single-field range read as the register overview above; aggregation is the
+# pure web_analytics_service. The cache key is prefixed so it never collides
+# with the register overview's (same (from, to) window).
+
+@analytics_bp.route("/web", methods=["GET"])
+@requires_permission("analytics.view")
+def analytics_web():
+    from_date = _parse_date(request.args.get("from"))
+    to_date = _parse_date(request.args.get("to"))
+    if from_date is None or to_date is None:
+        return jsonify(success=False,
+                       message="from and to (YYYY-MM-DD) are required"), 400
+    if to_date < from_date:
+        return jsonify(success=False, message="to must be >= from"), 400
+    if (to_date - from_date).days + 1 > _WEB_MAX_WINDOW_DAYS:
+        return jsonify(success=False,
+                       message=f"Window too large (max {_WEB_MAX_WINDOW_DAYS} days)"), 400
+
+    today = datetime.now(IST).date()
+    if to_date > today:
+        to_date = today  # never report the future
+        if to_date < from_date:
+            from_date = to_date
+
+    cache_key = ("web", from_date.isoformat(), to_date.isoformat())
+    fresh = request.args.get("fresh") in ("1", "true", "yes")
+    if not fresh:
+        cached = _cache_get(cache_key)
+        if cached is not None:
+            return jsonify(cached)
+
+    try:
+        hi = _iso(to_date + timedelta(days=1))
+        events = _range(web_events_ref, "day", _iso(from_date), hi, _WEB_EVENT_FIELDS)
+        booking_rows = _range(bookings_ref, "booking_date", _iso(from_date), hi, _WEB_BOOKING_FIELDS)
+        paid = [b for b in booking_rows
+                if b.get("booking_source") == "web" and b.get("status") == "confirmed"]
+        payload = web_svc.compute_web_analytics(
+            events, window_from=cache_key[1], window_to=cache_key[2], bookings=paid)
+        _cache_put(cache_key, payload)
+        return jsonify(payload)
+    except Exception as e:
+        logger.error(f"analytics_web failed: {e}", exc_info=True)
+        return jsonify(success=False, message="Failed to compute website analytics"), 500
 
 
 # ── POST /analytics/snapshot — nightly on-the-books snapshot ────────────

@@ -442,6 +442,8 @@ def get_register_data():
                 "lastCheckinAt":          room_data_item.get("lastCheckinAt"),
                 "lastCheckinTimeEditBy":  room_data_item.get("lastCheckinTimeEditBy"),
                 "lastCheckinTimeEditAt":  room_data_item.get("lastCheckinTimeEditAt"),
+                # Who last corrected the guest name / members from the register.
+                "last_guest_edit":        room_data_item.get("last_guest_edit"),
                 # Shift attribution (set by /transfer_room) — drives the
                 # "Shifted A → B by" row in the room-history popover.
                 "lastShiftedBy":          room_data_item.get("lastShiftedBy"),
@@ -1338,6 +1340,24 @@ def debug_bills():
         return jsonify(success=False, message=str(e))
 
 
+def _sync_booking_from_bill(bill_id: str, new_balance) -> None:
+    """Mirror a bill's balance back onto its linked booking card.
+
+    Payments and bill edits land on the bill doc, but the dashboard room card
+    reads the booking doc's own paid_amount / balance (static/booking.js). The
+    booking is tied to its bill by stay_id == bill_id, so without this a settled
+    bill still shows "Partially Paid" on the card. No-op for walk-ins (no
+    booking doc) and never raises.
+    """
+    try:
+        bal = max(0, int(new_balance or 0))
+        for snap in bookings_ref.where("stay_id", "==", bill_id).limit(1).stream():
+            total = int((snap.to_dict() or {}).get("total_amount", 0) or 0)
+            snap.reference.update({"balance": bal, "paid_amount": max(0, total - bal)})
+    except Exception as e:
+        logger.warning(f"booking sync for bill {bill_id} failed: {e}")
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # ADD BILL PAYMENT — collect outstanding balance directly from the Bills tab
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1501,6 +1521,7 @@ def add_bill_payment():
         bills_ref.document(bill_id).update(bill_update)
         logger.info(f"Bill {bill_id} payment ₹{amount} ({payment_mode}), "
                     f"balance now ₹{new_balance}")
+        _sync_booking_from_bill(bill_id, new_balance)
 
         # ── Update totals ─────────────────────────────────────────────────────
         batch = db.batch()
@@ -1737,6 +1758,7 @@ def recalculate_bill():
             "lastEditedAt":   _rb_attr.get("lastModifiedAt"),
             **_rb_attr,
         })
+        _sync_booking_from_bill(bill_id, new_balance)
 
         # Background PDF regeneration
         updated_bill = dict(bill_data)
@@ -1873,6 +1895,7 @@ def update_bill_service():
             "lastEditedAt":   _ub_attr.get("lastModifiedAt"),
             **_ub_attr,
         })
+        _sync_booking_from_bill(bill_id, new_balance)
 
         updated_bill = dict(bill_data)
         updated_bill.update({
@@ -4222,6 +4245,100 @@ def update_bill_guest():
         )
     except Exception as e:
         logger.error(f"update_bill_guest error: {e}", exc_info=True)
+        return jsonify(success=False, message=f"Error: {str(e)}"), 500
+
+
+@billing_bp.route("/update_register_guest", methods=["POST"])
+@requires_permission("bill.guest.edit")
+def update_register_guest():
+    """
+    Correct the guest NAME and number of members (guest_count) on a register
+    entry — tapping the guest name in the Register. Non-financial only.
+
+    Resolves the entry by its bill/stay doc (`bill_id`) and, for a stay that is
+    still checked in, also writes the live room doc so the register and the room
+    card update at once (same stay-sync pattern as a bill payment). Admin and
+    manager (bill.guest.edit). Every change is audit-logged with a before/after
+    snapshot and stamped with who/when (`last_guest_edit`).
+    """
+    try:
+        data     = request.get_json(silent=True) or {}
+        bill_id  = (data.get("bill_id") or "").strip()
+        room     = (data.get("room") or "").strip()
+        new_name = (data.get("guest_name") or "").strip()
+        if not new_name:
+            return jsonify(success=False, message="Guest name is required"), 400
+        if len(new_name) > 120:
+            return jsonify(success=False, message="Guest name is too long"), 400
+        try:
+            new_guests = int(data.get("guests"))
+        except (TypeError, ValueError):
+            return jsonify(success=False, message="Members must be a number"), 400
+        if not 1 <= new_guests <= 30:
+            return jsonify(success=False, message="Members must be between 1 and 30"), 400
+        if not bill_id and not room:
+            return jsonify(success=False, message="bill_id or room is required"), 400
+
+        user = _safe_user() or {}
+        now  = datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S")
+        edit = {
+            "by":    user.get("name") or user.get("userId") or "system",
+            "by_id": user.get("userId") or "system",
+            "at":    now,
+        }
+        attr   = attribution_update()
+        before = {}
+        touched = False
+
+        # ── Bill / stay doc (draft bill for an active stay, final bill for a
+        #    completed one). guest_count is non-financial — no tax impact. ──
+        if bill_id:
+            snap = bills_ref.document(bill_id).get()
+            if snap.exists:
+                bd = snap.to_dict() or {}
+                before["bill"] = {"guest_name": bd.get("guest_name"),
+                                  "guest_count": bd.get("guest_count")}
+                bills_ref.document(bill_id).update({
+                    "guest_name": new_name, "guest_count": new_guests,
+                    "last_guest_edit": edit, **attr,
+                })
+                touched = True
+
+        # ── Live room still holding this stay → keep the register row and the
+        #    room card in step immediately. ──
+        room_ref = None
+        if bill_id:
+            for s in rooms_ref.where("active_bill_id", "==", bill_id).limit(1).stream():
+                room_ref = s.reference
+        if room_ref is None and room:
+            rsnap = rooms_ref.document(room).get()
+            if rsnap.exists and (rsnap.to_dict() or {}).get("status") == "occupied":
+                room_ref = rsnap.reference
+        if room_ref is not None:
+            rdoc  = room_ref.get().to_dict() or {}
+            guest = dict(rdoc.get("guest") or {})
+            before["room"] = {"name": guest.get("name"), "guests": guest.get("guests")}
+            guest["name"]  = new_name
+            guest["guests"] = new_guests
+            room_ref.update({"guest": guest, "last_guest_edit": edit, **attr})
+            touched = True
+
+        if not touched:
+            return jsonify(success=False, message="Nothing to update for this entry"), 404
+
+        invalidate_rooms_and_totals()
+        write_log(
+            "register.guest.edit",
+            target_collection="bills" if bill_id else "rooms",
+            target_id=str(bill_id or room),
+            before=before,
+            after={"guest_name": new_name, "guest_count": new_guests},
+            metadata={"room": room},
+        )
+        return jsonify(success=True, message="Guest details updated",
+                       guest_name=new_name, guests=new_guests, last_guest_edit=edit)
+    except Exception as e:
+        logger.error(f"update_register_guest error: {e}", exc_info=True)
         return jsonify(success=False, message=f"Error: {str(e)}"), 500
 
 

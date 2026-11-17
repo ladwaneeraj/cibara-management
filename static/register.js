@@ -2308,6 +2308,24 @@ tr.rp-svc-voided .rp-actions-cell { opacity:.9; }
           return;
         }
 
+        // Guest name tap (admin / manager) → edit name + members.
+        const geBtn = e.target.closest(".reg-guest-edit");
+        if (geBtn) {
+          const can = window.CibaraAuth &&
+            typeof window.CibaraAuth.userCan === "function" &&
+            window.CibaraAuth.userCan("bill.guest.edit");
+          if (!can) return;
+          e.stopPropagation();
+          const tid = geBtn.dataset.entryId;
+          const fullEntry =
+            state.filteredEntries.find((en) => en.id && en.id === tid) ||
+            state.allEntries.find((en) => en.id && en.id === tid) ||
+            { id: tid, room: geBtn.dataset.room, stay_id: geBtn.dataset.billId,
+              guest_name: "", guest_count: 1 };
+          _openGuestEditModal(fullEntry);
+          return;
+        }
+
         const docBtn = e.target.closest(".reg-doc-btn");
         if (docBtn) {
           e.stopPropagation();
@@ -3514,7 +3532,7 @@ tr.rp-svc-voided .rp-actions-cell { opacity:.9; }
     return `<tr class="date-group-row" data-date-group="${dk}" data-entry-id="${e.id || ''}">
       <td>${serial}</td>
       <td>${billNoCell}</td>
-      <td><strong>${escHtml(e.guest_name || "-")}</strong></td>
+      ${guestNameCellHTML(e)}
       <td class="reg-td-persons">${personsCell}</td>
       <td style="font-size:.78rem;">${e.guest_mobile || "-"}</td>
       <td><strong>${e.room || "-"}</strong></td>
@@ -3593,6 +3611,92 @@ tr.rp-svc-voided .rp-actions-cell { opacity:.9; }
     if (b > 0 && e.status !== "cancelled")
       h += `<div class="payment-item"><span class="pm-bal">Due</span><span>₹${inr(b)}</span></div>`;
     return h + "</div>";
+  }
+
+  // Guest Name cell. Tapping the name opens an editor (name + members) for
+  // admin / manager (bill.guest.edit); everyone else sees plain text. A small
+  // badge shows who last corrected it and when.
+  function guestNameCellHTML(e) {
+    const name = escHtml(e.guest_name || "-");
+    const ge = e.last_guest_edit;
+    const badge = (ge && ge.by)
+      ? `<div class="reg-attr-badge" title="Name / members last edited by ${escapeAttr(ge.by)}${ge.at ? " on " + escapeAttr(ge.at) : ""}"><i class="fas fa-user-pen"></i> ${escapeAttr(ge.by)}</div>`
+      : "";
+    const can = window.CibaraAuth && typeof window.CibaraAuth.userCan === "function" &&
+      window.CibaraAuth.userCan("bill.guest.edit");
+    if (!can) return `<td><strong>${name}</strong>${badge}</td>`;
+    return `<td><button class="reg-guest-edit" type="button" data-entry-id="${e.id || ""}"
+        data-bill-id="${escapeAttr(e.stay_id || e.id || "")}" data-room="${escapeAttr(e.room || "")}"
+        title="Edit guest name & members"
+        style="background:none;border:none;padding:0;font:inherit;color:inherit;cursor:pointer;text-align:left;">
+        <strong>${name}</strong>
+      </button>${badge}</td>`;
+  }
+
+  // ── Guest editor modal (name + members) ─────────────────────────────────
+  let _guestEditEntry = null;
+  function _openGuestEditModal(entry) {
+    _guestEditEntry = entry;
+    let ov = document.getElementById("reg-guest-ov");
+    if (!ov) {
+      ov = document.createElement("div");
+      ov.id = "reg-guest-ov";
+      ov.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,.45);display:none;align-items:center;justify-content:center;z-index:9999;";
+      ov.innerHTML =
+        '<div style="background:#fff;border-radius:14px;padding:20px;width:min(92vw,360px);box-shadow:0 20px 50px rgba(0,0,0,.25);">' +
+        '<div style="font-weight:700;font-size:1.05rem;">Edit guest</div>' +
+        '<div id="reg-guest-sub" style="font-size:.8rem;color:#64748b;margin:2px 0 14px;"></div>' +
+        '<label style="display:block;font-size:.72rem;font-weight:600;color:#475569;margin-bottom:4px;">GUEST NAME</label>' +
+        '<input id="reg-guest-name" type="text" maxlength="120" style="width:100%;padding:10px 12px;border:1px solid #cbd5e1;border-radius:8px;font-size:.95rem;margin-bottom:12px;box-sizing:border-box;">' +
+        '<label style="display:block;font-size:.72rem;font-weight:600;color:#475569;margin-bottom:4px;">MEMBERS</label>' +
+        '<input id="reg-guest-count" type="number" min="1" max="30" style="width:100%;padding:10px 12px;border:1px solid #cbd5e1;border-radius:8px;font-size:.95rem;margin-bottom:18px;box-sizing:border-box;">' +
+        '<div style="display:flex;gap:10px;justify-content:flex-end;">' +
+        '<button id="reg-guest-cancel" type="button" style="padding:9px 16px;border:1px solid #cbd5e1;background:#fff;border-radius:8px;cursor:pointer;">Cancel</button>' +
+        '<button id="reg-guest-save" type="button" style="padding:9px 18px;border:none;background:#3f51b5;color:#fff;border-radius:8px;cursor:pointer;font-weight:600;">Save</button>' +
+        '</div></div>';
+      document.body.appendChild(ov);
+      ov.addEventListener("click", (ev) => { if (ev.target === ov) ov.style.display = "none"; });
+      ov.querySelector("#reg-guest-cancel").addEventListener("click", () => { ov.style.display = "none"; });
+      ov.querySelector("#reg-guest-save").addEventListener("click", _saveGuestEdit);
+      ov.querySelector("#reg-guest-name").addEventListener("keydown", (ev) => {
+        if (ev.key === "Enter") ov.querySelector("#reg-guest-count").focus();
+      });
+    }
+    ov.querySelector("#reg-guest-sub").textContent =
+      `Room ${entry.room || "-"}` +
+      (entry.status === "active" ? " · active stay"
+        : (entry.bill_number && entry.bill_number !== "-" ? ` · Bill ${entry.bill_number}` : ""));
+    ov.querySelector("#reg-guest-name").value = entry.guest_name || "";
+    ov.querySelector("#reg-guest-count").value =
+      entry.guest_count || (entry.guest && entry.guest.guests) || 1;
+    ov.style.display = "flex";
+    setTimeout(() => ov.querySelector("#reg-guest-name").focus(), 30);
+  }
+
+  async function _saveGuestEdit() {
+    const e = _guestEditEntry; if (!e) return;
+    const ov = document.getElementById("reg-guest-ov");
+    const name = (ov.querySelector("#reg-guest-name").value || "").trim();
+    const guests = parseInt(ov.querySelector("#reg-guest-count").value, 10);
+    if (!name) { showNotification("Guest name is required", "error"); return; }
+    if (!(guests >= 1 && guests <= 30)) { showNotification("Members must be 1–30", "error"); return; }
+    const btn = ov.querySelector("#reg-guest-save");
+    btn.disabled = true; btn.textContent = "Saving…";
+    try {
+      const res = await apiFetch("/update_register_guest", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ bill_id: e.stay_id || e.id, room: e.room, guest_name: name, guests }),
+      });
+      const data = await res.json();
+      if (!data.success) { showNotification(data.message || "Could not update guest", "error"); return; }
+      showNotification("Guest details updated", "success");
+      ov.style.display = "none";
+      loadData(true);
+    } catch (err) {
+      showNotification("Network error updating guest", "error");
+    } finally {
+      btn.disabled = false; btn.textContent = "Save";
+    }
   }
 
   function toggleGroup(hdr) {

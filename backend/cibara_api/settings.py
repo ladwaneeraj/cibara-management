@@ -78,13 +78,9 @@ class Settings(BaseSettings):
     LEGACY_WSGI_WORKERS: int = 16
 
     # ── Frontend ──────────────────────────────────────────────────────────
-    # "classic": the original Flask/Jinja screens are the UI ("/" and
-    #            "/login"), signed in through /api/v2/auth. Default.
-    # "spa":     the React app at /app is the UI ("/" and "/login" redirect
-    #            there). Kept so the switch is an env var, not a code change.
-    UI_MODE: str = "classic"
-    FRONTEND_DIST: str = str(REPO_ROOT / "frontend" / "dist")
-    # Dev only: allow the Vite dev server origin. Empty in production
+    # The classic Flask/Jinja screens are the UI ("/" and "/login"), signed in
+    # through /api/v2/auth. (The React SPA was removed.)
+    # Dev only: allow a cross-origin dev tool. Empty in production
     # (same-origin, no CORS needed).
     CORS_ORIGINS: str = ""
 
@@ -119,8 +115,7 @@ class Settings(BaseSettings):
     # Classic-UI Content-Security-Policy mode: "enforce" (default), "report-only"
     # (send Content-Security-Policy-Report-Only so violations are visible in the
     # console/Sentry without breaking the page — use this to vet the policy after
-    # a template change), or "off". The SPA CSP on /app is always enforced and is
-    # unaffected by this. The classic policy keeps 'unsafe-inline' for scripts
+    # a template change), or "off". The policy keeps 'unsafe-inline' for scripts
     # because the Jinja pages carry inline <script> blocks and handlers.
     CLASSIC_CSP: str = "enforce"
 

@@ -90,31 +90,24 @@ def test_security_headers_and_error_envelope(client):
 
 
 def test_classic_mode_serves_flask_root_and_login(client):
-    from cibara_api.settings import get_settings
-    assert get_settings().UI_MODE == "classic"
     r = client.get("/", follow_redirects=False)
     assert r.status_code == 200 and "<html" in r.text.lower()
     r = client.get("/login", follow_redirects=False)
     assert r.status_code == 200 and "<html" in r.text.lower()
+
+
+def test_removed_spa_and_react_analytics_urls_redirect(client):
+    # The React SPA and React /analytics bundle are gone; their entry URLs
+    # redirect so bookmarks don't 404. The Flask analytics API still owns
+    # /analytics/overview (it must NOT be swallowed by the redirect).
     r = client.get("/app/bills", follow_redirects=False)
     assert r.status_code == 302 and r.headers["location"] == "/"
-
-
-def test_spa_mode_redirects_to_react(monkeypatch):
-    from fastapi.testclient import TestClient
-    from cibara_api import main
-    from cibara_api.settings import get_settings
-    monkeypatch.setattr(get_settings(), "UI_MODE", "spa")
-    c = TestClient(main.create_app())
-    r = c.get("/", follow_redirects=False)
-    assert r.status_code == 302 and r.headers["location"] == "/app/"
-    r = c.get("/login", follow_redirects=False)
-    assert r.headers["location"] == "/app/login?signout=1"
-    r = c.get("/app/bills")
-    assert r.status_code in (200, 503)
-    if r.status_code == 200:
-        assert "content-security-policy" in r.headers
-        assert r.headers["cache-control"] == "no-cache"
+    r = client.get("/analytics", follow_redirects=False)
+    assert r.status_code == 302 and r.headers["location"] == "/?view=reports"
+    r = client.get("/analytics/", follow_redirects=False)
+    assert r.status_code == 302 and r.headers["location"] == "/?view=reports"
+    r = client.get("/analytics/overview", follow_redirects=False)
+    assert r.status_code != 302 or r.headers["location"] != "/?view=reports"
 
 
 def test_legacy_ui_is_served_under_legacy(client):

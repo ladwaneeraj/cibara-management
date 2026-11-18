@@ -6339,8 +6339,8 @@ function handleSettingsReportsClick() {
 
 // No initMgrAccessModal / initSettingsModal needed — all wired via inline onclick in HTML.
 
-// Deep link from the React /analytics page: "/?view=reports" opens the classic
-// GST Reports & Excel view (the report exports stay in the classic screen).
+// Deep link "/?view=reports" opens the classic GST Reports & Excel view. The
+// old /analytics URL (the removed React page) now redirects here too.
 document.addEventListener("DOMContentLoaded", function () {
   try {
     const params = new URLSearchParams(window.location.search);

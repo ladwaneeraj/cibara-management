@@ -20,21 +20,9 @@ from .ratelimit import limiter
 
 log = logging.getLogger("cibara_api.request")
 
-_SKIP_RATE = ("/app/assets/", "/static/", "/api/v2/health")
+_SKIP_RATE = ("/static/", "/api/v2/health")
 
-_CSP = (
-    "default-src 'self'; "
-    "script-src 'self'; "
-    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
-    "font-src 'self' https://fonts.gstatic.com data:; "
-    "img-src 'self' data: blob: https://firebasestorage.googleapis.com https://storage.googleapis.com; "
-    "connect-src 'self' https://*.googleapis.com https://*.firebaseio.com wss://*.firebaseio.com "
-    "https://firebasestorage.googleapis.com; "
-    "frame-src 'self' blob: https://firebasestorage.googleapis.com; "
-    "worker-src 'self' blob:; object-src 'none'; base-uri 'self'; frame-ancestors 'self'"
-)
-
-# Classic Jinja UI CSP. Looser than the SPA's: the pages carry inline <script>
+# Classic Jinja UI CSP. The pages carry inline <script>
 # blocks (SW registration, window.__initialUIConfig) and inline handlers, so
 # 'unsafe-inline' is unavoidable without rewriting 40 legacy files. It still
 # locks down object/base/frame-ancestors, pins every external origin the classic
@@ -139,10 +127,7 @@ class RequestContextMiddleware:
                                     b"max-age=31536000; includeSubDomains"))
                 has_csp = (b"content-security-policy" in names
                            or b"content-security-policy-report-only" in names)
-                if path.startswith("/app"):
-                    if not has_csp:
-                        headers.append((b"content-security-policy", _CSP.encode()))
-                elif not has_csp and not path.startswith(("/api/", "/static/")):
+                if not has_csp and not path.startswith(("/api/", "/static/")):
                     # Classic Jinja pages: apply to HTML documents only.
                     mode = s.CLASSIC_CSP.lower()
                     if mode != "off":

@@ -1,7 +1,7 @@
 name: CI
 
-# PR gate: every pull request must pass the backend + legacy test suites, the
-# SPA lint/typecheck/tests, and the classic-UI lint before it can be merged.
+# PR gate: every pull request must pass the backend + legacy test suites and
+# the classic-UI lint before it can be merged.
 # (Enable these as *required status checks* in the branch protection rules so
 # a red run actually blocks merge — see CLAUDE.md §6.)
 on:
@@ -40,29 +40,6 @@ jobs:
       - name: FastAPI layer (backend/tests)
         working-directory: backend
         run: python -m pytest tests -q
-
-  frontend:
-    name: SPA lint + typecheck + tests
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
-      - name: Install dependencies
-        working-directory: frontend
-        run: npm ci
-      - name: ESLint
-        working-directory: frontend
-        run: npm run lint
-      - name: Typecheck
-        working-directory: frontend
-        run: npm run typecheck
-      - name: Unit tests (Vitest)
-        working-directory: frontend
-        run: npm test
 
   classic-lint:
     name: Classic UI lint (no-undef)

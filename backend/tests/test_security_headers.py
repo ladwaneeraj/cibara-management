@@ -1,6 +1,5 @@
 """Security response headers: classic-UI CSP, HSTS gating, and the always-on
-hardening headers. The SPA CSP (/app) is covered implicitly by middleware; here
-we focus on the classic path and the API."""
+hardening headers, across the classic path and the API."""
 
 
 def test_common_hardening_headers_present(client):

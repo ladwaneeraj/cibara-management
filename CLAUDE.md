@@ -8,9 +8,8 @@ Read **Preserved logic** before touching anything that moves money or tax.
 ## 1. Architecture in one picture
 
 ```
-Browser ─┬─ /, /login, …  classic Flask/Jinja screens (THE UI, UI_MODE=classic, default)
+Browser ─┬─ /, /login, …  classic Flask/Jinja screens (THE UI)
          ├─ /api/v2/*     FastAPI (backend/cibara_api) ── typed facades ─┐
-         ├─ /app/*        React SPA — parked; only served with UI_MODE=spa │
          └─ everything    legacy Flask app (app.py, routes/, services/)  │
             else  ◄──────────── mounted as WSGI inside FastAPI ◄─────────┘
                                          │
@@ -20,9 +19,10 @@ Browser ─┬─ /, /login, …  classic Flask/Jinja screens (THE UI, UI_MODE=c
 ```
 
 * **One process, one container** (Cloud Run, `uvicorn cibara_api.main:app`, 1 worker).
-* **UI decision (owner, Oct 2026): keep the classic screens.** `UI_MODE=classic` (default)
-  serves the Flask pages at `/` and `/login`; `/app/*` redirects to `/`. The React app in
-  `frontend/` is kept and still builds; `UI_MODE=spa` switches back to it without code changes.
+* **UI decision (owner): the classic screens are the only UI.** The Flask pages serve `/`
+  and `/login`. The parked React SPA and its `/analytics` bundle were **removed** (the
+  `frontend/` tree is gone); old `/app/*` and `/analytics` URLs 302-redirect to the classic
+  UI. The `/api/v2` endpoints the SPA used remain available and tested.
 * The Flask app is **imported unchanged** and mounted at `/` (a2wsgi). Every one of
   its ~235 routes still works at its old path: the classic UI (`/legacy`), `/static`,
   OTA ingest endpoints with their `X-Ingest-Secret`, scripts using `X-API-Key`.
@@ -122,8 +122,6 @@ The legacy suite (`tests/`, 557 tests) still passes unchanged.
   * `auth.js`/`login.js` are referenced through `asset_url()` and the service-worker cache
     version was bumped, so no browser keeps running the old Firebase-only sign-in.
   * First deploy: everyone signs in once (there is no refresh cookie yet).
-* (UI_MODE=spa only) `/login` redirects to `/app/login?signout=1` so a classic sign-out also
-  ends the SPA session.
 * **Legacy routes accept the new JWT**: `legacy.py` wraps `services.auth_service.verify_token`;
   HS256 tokens are ours, anything else (the classic UI's Firebase ID tokens) goes to the
   original Firebase verification. Every legacy decorator funnels through that function.
@@ -544,8 +542,9 @@ Needs a BQ dataset + IAM for the export service account — owner infra (billing
 
 ## 7. Migration status
 
-The classic screens are the UI (§1). The table below describes the parked React app
-(`UI_MODE=spa`); its `/api/v2` endpoints remain available and tested either way.
+The classic screens are the UI (§1). The React SPA was removed; the table below is kept as
+a map of which `/api/v2` endpoints back each area (all still available and tested) — the
+"New UI (/app)" column is historical.
 
 | Area | New UI (/app) | API |
 |---|---|---|

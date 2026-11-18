@@ -6,23 +6,20 @@ Cibara ERP — FastAPI entry point.
 Routing order (first match wins):
   1. /api/v2/*          new typed API (auth, dashboard, rooms, bills, reports,
                         admin, guest) — OpenAPI docs at /api/v2/docs
-  2. /app, /app/*       React SPA (frontend/dist), index.html fallback
-  3. /, /login          redirect to the SPA
-  4. everything else    the legacy Flask app, unchanged (all 235 routes,
-                        /legacy = the old UI, /static, /uploads, OTA ingest
-                        endpoints with their shared-secret headers, …)
+  2. everything else    the legacy Flask app — the classic UI (/, /login,
+                        /legacy), /static, /uploads, OTA ingest endpoints with
+                        their shared-secret headers, … (all 235 routes)
 """
 from __future__ import annotations
 
 import logging
 import os
-from pathlib import Path
 
 from a2wsgi import WSGIMiddleware
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.gzip import GZipMiddleware
 
@@ -106,68 +103,20 @@ def create_app() -> FastAPI:
     async def _api_404(rest: str):
         return JSONResponse(_error_body("Route not found"), status_code=404)
 
-    # ── UI: classic screens (default) or the React SPA ────────────────────
-    dist = Path(s.FRONTEND_DIST)
-    index = dist / "index.html"
-    spa = s.UI_MODE.lower() == "spa"
-
-    if spa:
-        @app.get("/", include_in_schema=False)
-        async def _root():
-            return RedirectResponse("/app/", status_code=302)
-
-        @app.get("/login", include_in_schema=False)
-        async def _login_redirect():
-            # Only the classic UI sends people to /login, and only after it has
-            # signed out. signout=1 makes the SPA end its own session too
-            # instead of resuming it from the refresh cookie.
-            return RedirectResponse("/app/login?signout=1", status_code=302)
-
-        @app.get("/app", include_in_schema=False)
-        @app.get("/app/{path:path}", include_in_schema=False)
-        async def _spa(path: str = ""):
-            target = (dist / path).resolve() if path else index
-            if path and dist.resolve() in target.parents and target.is_file():
-                cache = "public, max-age=31536000, immutable" if path.startswith("assets/") else "no-cache"
-                return FileResponse(target, headers={"Cache-Control": cache})
-            if path.startswith("assets/"):
-                return JSONResponse(_error_body("Not found"), status_code=404)
-            if not index.is_file():
-                return JSONResponse(_error_body("Frontend not built. Run `npm run build` in frontend/."), status_code=503)
-            return FileResponse(index, headers={"Cache-Control": "no-cache"})
-    else:
-        # Classic mode: "/" and "/login" fall through to the Flask app below.
-        @app.get("/app", include_in_schema=False)
-        @app.get("/app/{path:path}", include_in_schema=False)
-        async def _spa_off(path: str = ""):
-            return RedirectResponse("/", status_code=302)
-
-    # ── /analytics: the lean register-analytics React bundle ──────────────
-    # Built by `vite build --mode analytics` into <FRONTEND_DIST>/analytics and
-    # always served (classic or SPA mode). Deliberately narrow: only the page
-    # itself and /analytics/assets/*. Every other /analytics/<x> path — notably
-    # the Flask blueprint's /analytics/overview and POST /analytics/snapshot —
-    # falls through to the legacy app below.
-    analytics_dist = dist / "analytics"
+    # ── UI: the classic Flask screens are the only UI ─────────────────────
+    # "/" and "/login" fall through to the Flask app below. The old React SPA
+    # and the React /analytics bundle are gone; redirect their entry URLs so
+    # bookmarks don't 404. The Flask blueprint still owns /analytics/overview,
+    # /analytics/web and POST /analytics/snapshot (those sub-paths fall through).
+    @app.get("/app", include_in_schema=False)
+    @app.get("/app/{path:path}", include_in_schema=False)
+    async def _app_removed(path: str = ""):
+        return RedirectResponse("/", status_code=302)
 
     @app.get("/analytics", include_in_schema=False)
-    async def _analytics_slash():
-        return RedirectResponse("/analytics/", status_code=302)
-
     @app.get("/analytics/", include_in_schema=False)
-    async def _analytics_index():
-        page = analytics_dist / "index.html"
-        if not page.is_file():
-            return JSONResponse(_error_body("Analytics not built. Run `npm run build` in frontend/."), status_code=503)
-        return FileResponse(page, headers={"Cache-Control": "no-cache"})
-
-    @app.get("/analytics/assets/{path:path}", include_in_schema=False)
-    async def _analytics_asset(path: str):
-        base = (analytics_dist / "assets").resolve()
-        target = (base / path).resolve()
-        if base in target.parents and target.is_file():
-            return FileResponse(target, headers={"Cache-Control": "public, max-age=31536000, immutable"})
-        return JSONResponse(_error_body("Not found"), status_code=404)
+    async def _analytics_removed():
+        return RedirectResponse("/?view=reports", status_code=302)
 
     # ── legacy catch-all (must be last) ───────────────────────────────────
     app.mount("/", WSGIMiddleware(legacy.legacy_wsgi, workers=s.LEGACY_WSGI_WORKERS))

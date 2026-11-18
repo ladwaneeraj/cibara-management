@@ -3970,7 +3970,7 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
     const cancelPill = e.is_cancellation_charge
       ? '<span class="bl-cancel-pill" title="Cancellation forfeiture invoice — SAC 999794 / 18%">CANCEL CHG</span>' : '';
 
-    // GST-edit icon — admin-only via data-perm gating in the rendered DOM.
+    // GST-edit icon — admin + manager via data-perm gating in the rendered DOM.
     const linkedCn = e.linked_credit_note_id ? true : false;
     const isB2B    = e.invoice_type === "B2B";
     const gstBtnCls = linkedCn ? "bl-gst-locked" : (isB2B ? "bl-gst-set" : "");

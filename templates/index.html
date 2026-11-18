@@ -1458,8 +1458,9 @@
               style="padding:4px 13px;border:1px solid #c7d2fe;border-radius:6px;font-size:0.78rem;font-weight:600;cursor:pointer;background:#fff;color:#475569;">GST</button>
           </div>
 
-          <!-- Analytics Cards -->
-          <div class="txn-analytics-cards" id="txn-analytics-cards">
+          <!-- Analytics Cards — range totals (revenue). Hidden from managers,
+               who have register.view but not revenue.view. -->
+          <div class="txn-analytics-cards" id="txn-analytics-cards" data-perm="revenue.view">
             <div class="txn-card txn-card-cash" title="Cash taken in over the selected range">
               <div class="txn-card-icon">
                 <i class="fas fa-money-bill-wave"></i>
@@ -1796,7 +1797,7 @@
                    Loaded on tab open via loadWebConfig(). -->
               <span
                 class="bk-webbook"
-                data-perm="settings.update"
+                data-perm="booking.online.toggle"
                 title="Accept bookings from the guest website"
               >
                 <span class="bk-webbook-txt">

@@ -68,6 +68,11 @@ PERMISSIONS = frozenset(
         "booking.update",
         "booking.cancel",
         "booking.revert",
+        # Flip the public website's online-booking store on/off
+        # (settings/web_config.online_bookings_enabled). A narrow carve-out so
+        # the manager on duty can open/close online bookings without the full
+        # settings.update admin grant. Granted to manager + admin.
+        "booking.online.toggle",
         # Rooms — general
         "room.view",
         "room.checkin",
@@ -203,9 +208,16 @@ ROLE_PERMISSIONS: dict[str, FrozenSet[str]] = {
             "room.cleaning.complete",
             "room.inspection.approve",
             "register.view",
-            # Correct guest name / mobile on a bill (non-financial). Amounts,
-            # taxes and GST recipient details remain admin-only.
+            # Correct guest name / mobile on a bill (non-financial). Amounts
+            # and taxes remain admin-only.
             "bill.guest.edit",
+            # B2B GST recipient details (GSTIN / legal name) on a bill — owner
+            # decision: the manager on duty invoices company guests at the desk.
+            # Credit notes and bill cancellation stay admin-only.
+            "bill.gst.edit",
+            # Open/close online bookings on the public website (the Bookings
+            # toolbar toggle). Full settings access stays admin-only.
+            "booking.online.toggle",
             # Deep-check maintenance — manager inspects rooms and marks
             # issues fixed; verification, checklist editing and deletion
             # stay admin-only.

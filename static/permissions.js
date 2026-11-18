@@ -38,9 +38,15 @@
       "room.cleaning.complete",
       "room.inspection.approve",
       "register.view",
-      // Correct guest name / mobile on a bill (non-financial only). Amounts,
-      // taxes and GST recipient details stay admin-only.
+      // Correct guest name / mobile on a bill (non-financial only). Amounts
+      // and taxes stay admin-only.
       "bill.guest.edit",
+      // B2B GST recipient details (GSTIN / legal name) on a bill — managers
+      // invoice company guests at the desk. Credit notes / cancel stay admin.
+      "bill.gst.edit",
+      // Open/close online bookings on the website (Bookings toolbar toggle).
+      // Full settings access stays admin-only.
+      "booking.online.toggle",
       // Deep-check maintenance — manager inspects and marks fixed;
       // verify / checklist edit / delete stay admin-only.
       "maintenance.view",

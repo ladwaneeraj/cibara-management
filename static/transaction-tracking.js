@@ -531,7 +531,12 @@ class TransactionLogManager {
           else if (isContinue) contCount += 1;
         });
         const _inr = (n) => n.toLocaleString("en-IN");
-        const _meta =
+        // Per-day Cash/UPI totals are revenue figures — hidden from managers
+        // (register.view but not revenue.view), like the analytics cards above.
+        const _canTotals = !!(window.CibaraAuth &&
+          typeof window.CibaraAuth.userCan === "function" &&
+          window.CibaraAuth.userCan("revenue.view"));
+        const _meta = !_canTotals ? '' :
           '<span class="log-date-meta" style="display:inline-flex;gap:.5rem;' +
           'flex-wrap:wrap;margin-left:.5rem;font-size:.64rem;font-weight:600;">' +
             '<span style="color:#16a34a;">Cash ₹' + _inr(dayCash) + '</span>' +

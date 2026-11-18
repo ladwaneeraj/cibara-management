@@ -1286,7 +1286,7 @@ def get_web_config_endpoint():
 
 
 @billing_bp.route("/settings/web_config", methods=["POST"])
-@requires_permission("settings.update")
+@requires_permission("booking.online.toggle")
 def update_web_config_endpoint():
     try:
         data = request.get_json(silent=True) or {}

@@ -161,6 +161,11 @@ DEFAULT_CIBARA_ENV = "UAT"  # ← change this to flip local default
 ENVIRONMENTS = {
     "PROD": {
         "key_file": "cibara-software-Prod.json",
+        # Live data moved to the named asia-south1 database on 2026-11-05
+        # (US→Mumbai region move). This is now the canonical PROD database; the
+        # old unnamed "(default)" DB is a frozen rollback copy. CIBARA_FIRESTORE_DB
+        # still overrides (set it to "(default)" to roll back).
+        "firestore_db": "cibara-mum",
         "web_config": {
             "apiKey":            "AIzaSyAj_K8Bq8IA0mYH94pu03s3DeDxc2pyCF4",
             "authDomain":        "cibara-software-61512.firebaseapp.com",
@@ -291,7 +296,11 @@ try:
     # the SAME class firebase_admin wraps, so transactions, Increment,
     # SERVER_TIMESTAMP, preconditions and core/metrics counting are identical.
     # Unset / "(default)" keeps the exact old path, so rollback is env-only.
-    _fs_db = os.environ.get('CIBARA_FIRESTORE_DB', '').strip()
+    # Env var wins (incl. "(default)" to roll back); otherwise the env's own
+    # canonical database (PROD → cibara-mum). Keeps prod on the live DB even if
+    # the Cloud Run env var is ever dropped.
+    _fs_db = (os.environ.get('CIBARA_FIRESTORE_DB', '').strip()
+              or ACTIVE_ENV.get('firestore_db', ''))
     if _fs_db and _fs_db != '(default)':
         from google.cloud import firestore as _gcf
         db = _gcf.Client(project=_project_id, credentials=cred.get_credential(),

@@ -8,9 +8,13 @@ steps:
       - "--region=asia-south1"
       - "--platform=managed"
       - "--allow-unauthenticated"
-      # Keep one instance warm so checkout/checkin never pay a cold-start
-      # penalty (the old 5-7s spikes). Steady-state checkout is ~0.5s.
-      - "--min-instances=1"
+      # Scale to zero when idle: a warm 24/7 instance was ~70% of the Nov cost
+      # spike. Trade-off: the first desk action after an idle gap pays a ~2-4s
+      # cold start (cpu-boost below shortens it; steady-state checkout ~0.5s).
+      # COUPLED with the /web/sweep Cloud Scheduler job — it must run no more
+      # often than ~every 15 min, else a per-minute ping keeps this instance
+      # alive at night and scale-to-zero saves nothing.
+      - "--min-instances=0"
       # Startup CPU boost shortens any cold start that does occur.
       - "--cpu-boost"
       # FastAPI image keeps rate limits, session revocation and the legacy

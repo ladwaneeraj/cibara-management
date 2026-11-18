@@ -134,44 +134,17 @@ async function generateAnalytics(reportData) {
     });
   }
 
-  // Bills payload — used by BOTH the Billing Analytics strip and the
-  // Revenue-by-Room-Type chart (the chart needs `is_ac` per bill to split
-  // Premium / Premium AC accurately). Single network call, both consumers.
+  // Register-basis analytics — the single source of truth for money and
+  // footfall: occupancy / ADR / RevPAR, outstanding, collected-revenue mix
+  // (incl. room revenue by category, replacing the old bills-based chart),
+  // channel mix, pace, guest segmentation and the "Where to focus" panel.
+  // One cached, admin-only call (/analytics/overview); best-effort — any
+  // failure (no permission, no data) leaves the register sections hidden.
   const startDate = document.getElementById("report-start-date")?.value;
   const endDate   = document.getElementById("report-end-date")?.value;
-  let billsPayload = null;
-  if (startDate && endDate) {
-    try {
-      const resp = await apiFetch("/revenue_report", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ start_date: startDate, end_date: endDate }),
-      });
-      if (resp.ok) {
-        const bd = await resp.json();
-        if (bd.success) {
-          billsPayload = bd;
-          updateBillingStrip(bd.summary);
-        }
-      }
-    } catch (e) {
-      console.warn("Billing data unavailable:", e);
-    }
-  }
-
-  // Business analytics — occupancy / ADR / RevPAR with period-over-period
-  // comparison, channel mix, demand patterns, forward booking pace, guest
-  // segmentation, cancellations and the "Where to focus" recommendations.
-  // One cached, admin-only call (/analytics/overview); best-effort — any
-  // failure (no permission, no data) just leaves these sections hidden.
   if (startDate && endDate) {
     await loadBusinessAnalytics(startDate, endDate);
   }
-
-  // Revenue by Room Type — runs after the bills fetch so AC attribution
-  // is accurate. If the fetch failed (billsPayload === null) the chart
-  // renders an empty state.
-  generateRoomTypeRevenueChart(billsPayload);
 
   // Guest demographics (pincode footfall + age) — all-time, independent of
   // the date filter, sourced from ID-document OCR. Best-effort: any failure
@@ -497,22 +470,35 @@ function _openAgeBucketPopover(label, guests, nativeEvent) {
   setTimeout(() => document.addEventListener("mousedown", _ageBucketPopoverOutsideClick, true), 0);
 }
 
-// ── 8-card KPI grid ──────────────────────────────────────────────────────────
+// ── Hero KPI grid ────────────────────────────────────────────────────────────
+// Money tiles render now from the payment report (collected cash+UPI, never
+// bills). The register tiles (Outstanding / Occupancy / ADR / RevPAR / Footfall)
+// are placeholders with stable value ids, filled by patchRegisterTiles() once
+// /analytics/overview lands.
+function heroTile(accent, icon, label, valueHtml, metaHtml, valueId) {
+  return `
+    <div class="hero-tile" style="--accent:${accent}">
+      <div class="hero-ic"><i class="${icon}"></i></div>
+      <div class="hero-lbl">${label}</div>
+      <div class="hero-val"${valueId ? ` id="${valueId}"` : ""}>${valueHtml}</div>
+      <div class="hero-meta"${valueId ? ` id="${valueId}-meta"` : ""}>${metaHtml || ""}</div>
+    </div>`;
+}
+
 function updateSummaryCards(data) {
   const grid = document.getElementById("analytics-summary");
   if (!grid) return;
 
-  const fmt  = (n) => Math.round(n || 0).toLocaleString("en-IN");
+  const fmt  = (n) => "₹" + Math.round(n || 0).toLocaleString("en-IN");
   const cash = data.cash_total   || 0;
   const upi  = data.online_total || 0;
-  const rev  = cash + upi;
+  const ref  = data.refund_total || 0;
+  const collected = cash + upi;          // all receipts, not just billed
   const exp  = data.expense_total || 0;
-  const net  = rev - exp;
-  const ref  = data.refund_total  || 0;
-  const adon = data.addon_total   || 0;
-  const ci   = data.checkins  || 0;
-  const rn   = data.renewals  || 0;
-  const stays= ci + rn;
+  const net  = collected - ref - exp;    // money actually left after refunds+expenses
+  const netPos = net >= 0;
+  const txnExp = data.transaction_expense_total || 0;
+  const repExp = data.report_expense_total      || 0;
 
   const startDate = document.getElementById("report-start-date")?.value;
   const endDate   = document.getElementById("report-end-date")?.value;
@@ -520,61 +506,52 @@ function updateSummaryCards(data) {
   if (startDate && endDate)
     days = Math.max(1, Math.round((new Date(endDate) - new Date(startDate)) / 86400000) + 1);
 
-  const margin     = rev > 0 ? ((net / rev) * 100).toFixed(1) : "0.0";
-  const netPos     = net >= 0;
-  const avgDaily   = Math.round(rev / days);
-  const avgStay    = stays > 0 ? Math.round(rev / stays) : 0;
-  const refRate    = stays > 0 ? ((data.refund_logs?.length || 0) / stays * 100).toFixed(0) : 0;
-  const txnExp     = data.transaction_expense_total || 0;
-  const repExp     = data.report_expense_total      || 0;
-
-  function card(accent, iconBg, icon, label, value, badges) {
-    return `
-    <div class="kpi-card" style="--kpi-accent:${accent};--kpi-icon-bg:${iconBg}">
-      <div class="kpi-top">
-        <div class="kpi-icon"><i class="${icon}"></i></div>
-        <div class="kpi-label">${label}</div>
-      </div>
-      <div class="kpi-value">${value}</div>
-      <div class="kpi-meta">${badges}</div>
-    </div>`;
-  }
-  function badge(bg, color, text) {
-    return `<span class="kpi-badge" style="background:${bg};color:${color}">${text}</span>`;
-  }
-
   grid.innerHTML =
-    card("#2563eb","#eff6ff","fas fa-rupee-sign","Total Revenue",`₹${fmt(rev)}`,
-      badge("#f0fdf4","#16a34a",`₹${fmt(cash)} Cash`) +
-      badge("#eff6ff","#2563eb",`₹${fmt(upi)} UPI`)) +
+    heroTile("#16a34a","fas fa-indian-rupee-sign","Collected Revenue", fmt(collected),
+      `<span><b>${fmt(cash)}</b> cash</span><span><b>${fmt(upi)}</b> UPI</span>`) +
 
-    card(netPos?"#16a34a":"#dc2626", netPos?"#f0fdf4":"#fef2f2","fas fa-chart-line","Net Profit",
-      `<span style="color:${netPos?"#16a34a":"#dc2626"}">₹${fmt(net)}</span>`,
-      badge(netPos?"#f0fdf4":"#fef2f2", netPos?"#16a34a":"#dc2626", `${margin}% margin`)) +
+    heroTile("#f59e0b","fas fa-hourglass-half","Outstanding", "…", "register — loading", "hero-outstanding") +
 
-    card("#ef4444","#fef2f2","fas fa-receipt","Total Expenses",`₹${fmt(exp)}`,
-      badge("#fef9c3","#854d0e",`₹${fmt(txnExp)} Daily`) +
-      badge("#f3e8ff","#6b21a8",`₹${fmt(repExp)} Report`)) +
+    heroTile("#ef4444","fas fa-receipt","Expenses", fmt(exp),
+      `<span><b>${fmt(txnExp)}</b> daily</span><span><b>${fmt(repExp)}</b> report</span>`) +
 
-    card("#7c3aed","#f5f3ff","fas fa-calendar-day","Avg Daily Revenue",`₹${fmt(avgDaily)}`,
-      badge("#f5f3ff","#7c3aed",`${days} day${days!==1?"s":""}`)) +
+    heroTile(netPos ? "#2563eb" : "#dc2626","fas fa-chart-line","Net (after refunds)",
+      `<span style="color:${netPos ? "#15803d" : "#dc2626"}">${fmt(net)}</span>`,
+      `<span>−${fmt(ref)} refunds</span>`) +
 
-    card("#f59e0b","#fffbeb","fas fa-sign-in-alt","Check-ins & Renewals",`${ci}`,
-      badge("#fffbeb","#b45309",`${rn} Renewals`) +
-      badge("#fffbeb","#b45309",`${stays} Total Stays`)) +
+    heroTile("#2563eb","fas fa-bed","Occupancy", "…", "register — loading", "hero-occ") +
+    heroTile("#166534","fas fa-rupee-sign","ADR", "…", "per occupied night", "hero-adr") +
+    heroTile("#6b21a8","fas fa-gauge-high","RevPAR", "…", "per available night", "hero-revpar") +
+    heroTile("#b45309","fas fa-right-to-bracket","Check-ins (footfall)", "…", "register — loading", "hero-footfall");
 
-    card("#0891b2","#ecfeff","fas fa-concierge-bell","Add-on Revenue",`₹${fmt(adon)}`,
-      badge("#ecfeff","#0e7490",`${(data.addon_logs||[]).length} items`)) +
-
-    card("#ea580c","#fff7ed","fas fa-undo","Refunds",`₹${fmt(ref)}`,
-      badge("#fff7ed","#9a3412",`${(data.refund_logs||[]).length} txns`) +
-      badge("#fff7ed","#9a3412",`${refRate}% rate`)) +
-
-    card("#16a34a","#f0fdf4","fas fa-hand-holding-usd","Avg per Stay",`₹${fmt(avgStay)}`,
-      badge("#f0fdf4","#166534",`${stays} stays`));
-
-  // Trigger insights update
+  // Insights panel (payment basis)
   generateInsightsSection(data, days);
+}
+
+// Fill the register hero tiles once /analytics/overview is available.
+function patchRegisterTiles(data) {
+  const fmt = (n) => "₹" + Math.round(n || 0).toLocaleString("en-IN");
+  const set = (id, val, meta) => {
+    const v = document.getElementById(id);
+    const m = document.getElementById(id + "-meta");
+    if (v) v.innerHTML = val;
+    if (m && meta != null) m.innerHTML = meta;
+  };
+  const occ  = (data.overview && data.overview.occupancy) || {};
+  const out  = data.outstanding || {};
+  const g    = data.guests || {};
+  const vp   = (data.kpi_comparison && data.kpi_comparison.vs_prior) || {};
+  const footfall = (g.new || 0) + (g.returning || 0) + (g.unidentified || 0);
+
+  const occColor = occ.occupancy_over_100 ? "#dc2626" : "";
+  set("hero-occ", `<span style="color:${occColor}">${occ.occupancy_pct || 0}%</span>`,
+      `${(occ.occupied_room_nights || 0).toLocaleString("en-IN")} of ${(occ.available_room_nights || 0).toLocaleString("en-IN")} nights ${anDeltaBadge(vp.occupancy_pct, "pts")}`);
+  set("hero-adr", fmt(occ.adr), `per occupied night ${anDeltaBadge(vp.adr, "pct")}`);
+  set("hero-revpar", fmt(occ.revpar), `per available night ${anDeltaBadge(vp.revpar, "pct")}`);
+  set("hero-outstanding", fmt(out.total),
+      `<span><b>${fmt(out.in_house)}</b> in-house</span><span><b>${fmt(out.settle_later)}</b> settle-later</span>`);
+  set("hero-footfall", `${footfall.toLocaleString("en-IN")}`,
+      `${g.new || 0} new · ${g.returning || 0} returning · avg stay ${g.avg_los_nights || 0}n`);
 }
 
 // ── Key Insights panel (6 cells) ─────────────────────────────────────────────
@@ -668,79 +645,16 @@ function generateInsightsSection(data, dayCount) {
     </div>`;
 }
 
-// ── Performance strip (populated after /performance_kpis API call) ───────────
-// Occupancy %, ADR and RevPAR are measured by NIGHT OF STAY, not by checkout,
-// so they differ from the Billing Analytics strip by design.
-// A small up/down delta badge. `d` is {change, pct} from kpi_comparison; when
-// pct is null (no base period / no data) nothing is shown. `unit` is "pts" for
-// occupancy (change is percentage points) or "pct" for money metrics.
+// A small up/down delta badge for the hero tiles. `d` is {change, pct} from
+// kpi_comparison; when pct is null (no base period / no data) nothing is shown.
+// `unit` is "pts" for occupancy (change is percentage points) or "pct" for money.
 function anDeltaBadge(d, unit) {
   if (!d || d.pct === null || d.pct === undefined) return "";
   const up = (unit === "pts" ? d.change : d.pct) >= 0;
   const color = up ? "#15803d" : "#dc2626";
   const arrow = up ? "▲" : "▼";
-  const txt = unit === "pts"
-    ? `${Math.abs(d.change)} pts`
-    : `${Math.abs(d.pct)}%`;
-  return `<div class="billing-delta" style="color:${color};font-size:0.72rem;font-weight:600;margin-top:1px">
-    ${arrow} ${txt}</div>`;
-}
-
-function updatePerformanceStrip(kpis, comparison) {
-  const panel = document.getElementById("performance-panel");
-  const strip = document.getElementById("performance-strip");
-  if (!panel || !strip || !kpis) return;
-
-  const fmtMoney = (n) => Math.round(n || 0).toLocaleString("en-IN");
-  const fmtNum = (n) => (n || 0).toLocaleString("en-IN");
-  const vp = (comparison && comparison.vs_prior) || {};
-
-  function bk(iconBg, iconColor, icon, lbl, val, sub) {
-    return `<div class="billing-kpi">
-      <div class="billing-icon" style="background:${iconBg};color:${iconColor}">
-        <i class="${icon}"></i>
-      </div>
-      <div>
-        <div class="billing-lbl">${lbl}</div>
-        <div class="billing-val">${val}</div>
-        ${sub || ""}
-      </div>
-    </div>`;
-  }
-
-  // Warn (not block) when occupancy > 100% — almost always a wrong room count.
-  const occColor = kpis.occupancy_over_100 ? "#dc2626" : "#1e293b";
-  const occCard = `<div class="billing-kpi">
-      <div class="billing-icon" style="background:#dbeafe;color:#1d4ed8">
-        <i class="fas fa-bed"></i>
-      </div>
-      <div>
-        <div class="billing-lbl">Occupancy</div>
-        <div class="billing-val" style="color:${occColor}">${(kpis.occupancy_pct || 0)}%</div>
-        ${anDeltaBadge(vp.occupancy_pct, "pts")}
-      </div>
-    </div>`;
-
-  strip.innerHTML =
-    occCard +
-    bk("#dcfce7","#166534","fas fa-rupee-sign","ADR",`₹${fmtMoney(kpis.adr)}`, anDeltaBadge(vp.adr, "pct")) +
-    bk("#f3e8ff","#6b21a8","fas fa-chart-line","RevPAR",`₹${fmtMoney(kpis.revpar)}`, anDeltaBadge(vp.revpar, "pct")) +
-    bk("#fef9c3","#854d0e","fas fa-moon","Room Nights Sold", fmtNum(kpis.occupied_room_nights)) +
-    bk("#e0f2fe","#0369a1","fas fa-door-open","Available Nights", fmtNum(kpis.available_room_nights)) +
-    bk("#fef3c7","#92400e","fas fa-hotel","Room Revenue",`₹${fmtMoney(kpis.room_revenue)}`, anDeltaBadge(vp.room_revenue, "pct"));
-
-  // Comparison baseline note (only when a comparison is available).
-  const hdr = panel.querySelector(".billing-hdr span");
-  if (hdr && comparison) hdr.textContent = "(by night of stay · ▲▼ vs previous period)";
-
-  panel.style.display = "block";
-
-  if (kpis.occupancy_over_100) {
-    console.warn(
-      "Occupancy > 100% — room_count (" + kpis.room_count + ") is likely lower " +
-      "than the rooms that were actually sold. Set the correct inventory."
-    );
-  }
+  const txt = unit === "pts" ? `${Math.abs(d.change)} pts` : `${Math.abs(d.pct)}%`;
+  return `<span class="hero-delta" style="color:${color}">${arrow} ${txt} vs prev</span>`;
 }
 
 // ── Business analytics (populated after /analytics/overview) ─────────────────
@@ -793,10 +707,9 @@ async function loadBusinessAnalytics(startDate, endDate) {
     ? `Business analytics below covers the last ${BIZ_MAX_DAYS} days (${from} to ${endDate}); the report above uses your full selection.`
     : "";
 
-  // Occupancy / ADR / RevPAR with period-over-period deltas.
-  if (data.overview && data.overview.occupancy) {
-    updatePerformanceStrip(data.overview.occupancy, data.kpi_comparison);
-  }
+  // Fill the register hero tiles (Outstanding / Occupancy / ADR / RevPAR /
+  // Footfall) with period-over-period deltas.
+  patchRegisterTiles(data);
 
   renderFocusPanel(data.findings, note);
 
@@ -804,6 +717,7 @@ async function loadBusinessAnalytics(startDate, endDate) {
   if (biz) biz.style.display = "block";
   renderWeekdayDemand(data.seasonality);
   renderSeasonality(data.seasonality);
+  renderRoomCategoryRevenue(data.room_category_revenue);
   renderChannelMix(data.channel_mix);
   renderGuestMix(data.guests);
   renderForwardPace(data.pace);
@@ -1005,37 +919,6 @@ function renderCancellations(cx) {
       <div style="font-size:.82rem;color:#64748b">${cx.cancelled} of ${cx.total} stays cancelled</div></div>
      ${reasons ? `<div style="border-top:1px solid #f0f0f0;padding-top:.4rem">
        <div style="font-size:.72rem;color:#8a8a8a;text-transform:uppercase;letter-spacing:.3px;margin-bottom:.2rem">Top reasons</div>${reasons}</div>` : ""}`;
-}
-
-// ── Billing strip (populated after /revenue_report API call) ─────────────────
-function updateBillingStrip(summary) {
-  const panel = document.getElementById("billing-panel");
-  const strip = document.getElementById("billing-strip");
-  if (!panel || !strip || !summary) return;
-
-  const fmt = (n) => Math.round(n || 0).toLocaleString("en-IN");
-
-  function bk(iconBg, iconColor, icon, lbl, val) {
-    return `<div class="billing-kpi">
-      <div class="billing-icon" style="background:${iconBg};color:${iconColor}">
-        <i class="${icon}"></i>
-      </div>
-      <div>
-        <div class="billing-lbl">${lbl}</div>
-        <div class="billing-val">${val}</div>
-      </div>
-    </div>`;
-  }
-
-  strip.innerHTML =
-    bk("#dbeafe","#1d4ed8","fas fa-file-invoice","Checkouts", summary.total_bills||0) +
-    bk("#dcfce7","#166534","fas fa-hotel","Direct Revenue",`₹${fmt(summary.hotel_revenue)}`) +
-    bk("#fef9c3","#854d0e","fas fa-globe","OTA Revenue",`₹${fmt(summary.ota_revenue)}`) +
-    bk("#f3e8ff","#6b21a8","fas fa-concierge-bell","Services",`₹${fmt(summary.total_services)}`) +
-    bk("#fef3c7","#92400e","fas fa-tag","Discounts Given",`₹${fmt(summary.total_discounts)}`) +
-    bk("#fef2f2","#dc2626","fas fa-hourglass-half","Balance Due",`₹${fmt(summary.total_balance_due)}`);
-
-  panel.style.display = "block";
 }
 
 // Revenue & Expense Chart (Line Chart)
@@ -1586,92 +1469,30 @@ function generateTopServicesChart(data) {
   });
 }
 
-// ── Revenue by Room Type Chart ────────────────────────────────────────────────
-// Bar chart showing total billed revenue per room category for the selected
-// date range. Uses bills (checkout-basis revenue) — not raw payments — so a
-// bill's full total_amount is attributed to the category once at checkout.
-//
-// Categories (in roomPricing.CATEGORY_DISPLAY_ORDER):
-//   Premium Room, Premium AC Room, Regular Room, Deluxe Room,
-//   Single Attach, Single Non-Attach, Double Non-Attach, Party Hall
-//
-// AC attribution: bill.is_ac (snapshotted from guest.isAC at checkout) drives
-// the Premium / Premium AC split. Active stays without a bill yet are not
-// included — they'll appear once the guest checks out (consistent with the
-// "Billing Analytics" strip below this chart).
-//
-// `billsPayload` is the full /revenue_report response. May be null if the
-// fetch failed or the date range is empty — we render an empty state.
-function generateRoomTypeRevenueChart(billsPayload) {
+// ── Room Revenue by Category (register basis) ─────────────────────────────────
+// Bar chart of room (accommodation) charges grouped by rate category for the
+// selected window, from /analytics/overview (data.room_category_revenue).
+// Register basis — in-house stays count too, not just finalised bills — so it
+// replaces the old bills/checkout "Revenue by Room Type" chart. The register
+// map has no Premium-AC split (AC is a price toggle within Premium).
+function renderRoomCategoryRevenue(rows) {
   const canvas = document.getElementById("room-type-revenue-chart");
   if (!canvas) return;
+  if (canvas.chart) { canvas.chart.destroy(); canvas.chart = null; }
 
-  if (canvas.chart) {
-    canvas.chart.destroy();
-    canvas.chart = null;
-  }
-
-  const bills = (billsPayload && Array.isArray(billsPayload.bills))
-    ? billsPayload.bills
-    : null;
-
-  if (!bills || bills.length === 0) {
-    showChartEmpty(canvas, "No checkouts in this period");
-    return;
-  }
-
-  // roomPricing lives in script.js. Defensive guard in case load order
-  // changes — analytics.js is loaded with `defer`, same as script.js,
-  // but file order is not guaranteed across browsers.
-  if (typeof roomPricing === "undefined" ||
-      typeof roomPricing.getRoomCategoryWithAC !== "function") {
-    showChartEmpty(canvas, "Room category helper not loaded");
-    return;
-  }
-
-  // Aggregate total_amount per category. Skip OTA bills — those are
-  // already excluded from "hotel revenue" elsewhere and including them
-  // would double-count revenue MMT bills.
-  // (mirrors the OTA exclusion implicit in revenue_report's hotel_revenue
-  // summary: payment_source == 'ota' is OTA-billed.)
-  const revenueByCategory = {};
-  bills.forEach((b) => {
-    if (b.payment_source === "ota") return;
-    const room   = String(b.room || "");
-    const isAC   = !!b.is_ac;
-    const amount = Number(b.total_amount) || 0;
-    if (!room || amount <= 0) return;
-
-    const cat = roomPricing.getRoomCategoryWithAC(room, isAC);
-    const key = cat.category;
-    if (!revenueByCategory[key]) {
-      revenueByCategory[key] = { label: cat.label, amount: 0, count: 0 };
-    }
-    revenueByCategory[key].amount += amount;
-    revenueByCategory[key].count  += 1;
-  });
-
-  // Hide zero-revenue categories (less clutter on the chart). Sort by
-  // amount descending so the highest-earning category is leftmost.
-  const entries = Object.entries(revenueByCategory)
-    .filter(([_, v]) => v.amount > 0)
-    .sort((a, b) => b[1].amount - a[1].amount);
-
-  if (entries.length === 0) {
+  rows = (rows || []).filter((r) => (r.revenue || 0) > 0);
+  if (rows.length === 0) {
     showChartEmpty(canvas, "No room revenue in this period");
     return;
   }
 
-  const labels = entries.map(([_, v]) => v.label);
-  const data   = entries.map(([_, v]) => Math.round(v.amount));
-  const counts = entries.map(([_, v]) => v.count);
-
-  // Distinct accent colour per category — matches the room-type semantics
-  // loosely (premium = blue, ac = teal, deluxe = gold, etc.). Falls back
-  // to neutral grey for any unknown key.
+  const LABEL = {
+    "premium": "Premium", "regular": "Regular", "deluxe": "Deluxe",
+    "single-attach": "Single Attach", "single-non-attach": "Single Non-Attach",
+    "double-non-attach": "Double Non-Attach", "party-hall": "Party Hall", "other": "Other",
+  };
   const COLOR = {
     "premium":           "rgba(37, 99, 235, 0.75)",   // blue
-    "premium-ac":        "rgba(8, 145, 178, 0.75)",    // teal
     "regular":           "rgba(124, 58, 237, 0.75)",   // purple
     "deluxe":            "rgba(245, 158, 11, 0.75)",   // amber
     "single-attach":     "rgba(22, 163, 74, 0.75)",    // green
@@ -1680,7 +1501,9 @@ function generateRoomTypeRevenueChart(billsPayload) {
     "party-hall":        "rgba(219, 39, 119, 0.75)",   // pink
     "other":             "rgba(107, 114, 128, 0.75)",  // grey
   };
-  const bg = entries.map(([k, _]) => COLOR[k] || COLOR["other"]);
+  const labels = rows.map((r) => LABEL[r.category] || r.category);
+  const data   = rows.map((r) => Math.round(r.revenue || 0));
+  const bg     = rows.map((r) => COLOR[r.category] || COLOR["other"]);
 
   const ctx = canvas.getContext("2d");
   canvas.chart = new Chart(ctx, {
@@ -1703,14 +1526,7 @@ function generateRoomTypeRevenueChart(billsPayload) {
         legend: { display: false },
         tooltip: {
           callbacks: {
-            label: function (ctx) {
-              const amt = (ctx.raw || 0).toLocaleString("en-IN");
-              const n   = counts[ctx.dataIndex];
-              return [
-                `Revenue: ₹${amt}`,
-                `Bills: ${n}`,
-              ];
-            },
+            label: (ctx) => `Room charges: ₹${(ctx.raw || 0).toLocaleString("en-IN")}`,
           },
         },
       },
@@ -1817,9 +1633,35 @@ function initializeAnalyticsView() {
     </div>`;
   }
 
+  // Section header: uppercase label + thin rule + muted sublabel.
+  function section(icon, title, sub) {
+    return `<div class="an-section"><i class="${icon}"></i><span class="an-section-t">${title}</span>${
+      sub ? `<span class="an-section-s">${sub}</span>` : ""}<span class="an-section-rule"></span></div>`;
+  }
+
   view.innerHTML = `
     <style>
-      .focus-panel{background:#fff;border:1px solid #e8e8ee;border-radius:10px;padding:0.9rem 1rem;margin:0.6rem 0 0.9rem;box-shadow:0 1px 2px rgba(16,24,40,.04)}
+      /* Analytics v2 — register-basis dashboard. Money = collected cash+UPI,
+         never bills. Tokens kept local so the rest of the classic UI is untouched. */
+      .an-wrap{--an-line:#e6e8ef;--an-muted:#6b7280;--an-ink:#0f1d36}
+      .an-section{display:flex;align-items:center;gap:.55rem;margin:1.5rem 0 .7rem}
+      .an-section>i{color:var(--an-ink);font-size:.9rem}
+      .an-section-t{font-size:.8rem;font-weight:800;letter-spacing:.8px;text-transform:uppercase;color:var(--an-ink)}
+      .an-section-s{font-size:.76rem;color:var(--an-muted)}
+      .an-section-rule{flex:1;height:1px;background:var(--an-line)}
+      .hero-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:.7rem}
+      @media(max-width:1100px){.hero-grid{grid-template-columns:repeat(2,1fr)}}
+      @media(max-width:560px){.hero-grid{grid-template-columns:1fr}}
+      .hero-tile{position:relative;background:#fff;border:1px solid var(--an-line);border-radius:12px;
+        padding:.85rem .95rem .8rem;box-shadow:0 1px 2px rgba(16,24,40,.04);overflow:hidden}
+      .hero-tile::before{content:"";position:absolute;left:0;top:0;bottom:0;width:4px;background:var(--accent)}
+      .hero-ic{position:absolute;top:.8rem;right:.85rem;color:var(--accent);opacity:.9;font-size:1rem}
+      .hero-lbl{font-size:.72rem;font-weight:600;letter-spacing:.3px;color:var(--an-muted);text-transform:uppercase}
+      .hero-val{font-size:1.5rem;font-weight:800;color:var(--an-ink);line-height:1.15;margin-top:.2rem}
+      .hero-meta{margin-top:.3rem;font-size:.74rem;color:var(--an-muted);display:flex;flex-wrap:wrap;gap:.35rem}
+      .hero-meta b{font-weight:700;color:#334155}
+      .hero-delta{font-size:.72rem;font-weight:700}
+      .focus-panel{background:#fff;border:1px solid var(--an-line);border-radius:12px;padding:0.9rem 1rem;margin:1rem 0 0;box-shadow:0 1px 2px rgba(16,24,40,.04)}
       .focus-hdr{font-weight:700;font-size:0.95rem;color:#1e293b;margin-bottom:0.6rem}
       .focus-hdr i{color:#2563eb;margin-right:0.4rem}
       .focus-items{display:flex;flex-direction:column;gap:0.45rem}
@@ -1829,14 +1671,16 @@ function initializeAnalyticsView() {
       .focus-empty{font-size:0.86rem;color:#64748b;padding:0.3rem 0.1rem}
       .focus-note{font-size:0.8rem;color:#92400e;background:#fffbeb;border:1px solid #fde68a;border-radius:6px;padding:0.4rem 0.55rem;margin-bottom:0.55rem}
     </style>
-    <!-- 8-card KPI grid -->
-    <div class="kpi-grid" id="analytics-summary"></div>
+    <div class="an-wrap">
+
+    <!-- Hero KPIs: money = collected cash+UPI; register occupancy + outstanding -->
+    <div class="hero-grid" id="analytics-summary"></div>
 
     <!-- Where to focus (prioritised recommendations from /analytics/overview) -->
     <div class="focus-panel" id="focus-panel" style="display:none"></div>
 
-    <!-- Insights panel -->
-    <div class="insights-panel" id="analytics-insights">
+    <!-- Insights panel (payment basis) -->
+    <div class="insights-panel" id="analytics-insights" style="margin-top:1rem">
       <div class="insights-hdr"><i class="fas fa-lightbulb"></i> Key Insights <span class="hdr-sub">Tap Apply to load</span></div>
       <div class="insights-cells">
         <div class="insight-cell"><div class="insight-icon-wrap" style="background:#fef9c3;color:#b45309"><i class="fas fa-trophy"></i></div><div><div class="insight-lbl">Best Day</div><div class="insight-val">—</div></div></div>
@@ -1848,81 +1692,26 @@ function initializeAnalyticsView() {
       </div>
     </div>
 
-    <!-- Performance strip (hidden until /performance_kpis loads) -->
-    <div class="billing-panel" id="performance-panel" style="display:none">
-      <div class="billing-hdr">
-        <i class="fas fa-gauge-high"></i> Performance
-        <span>(occupancy / ADR / RevPAR, by night of stay)</span>
-      </div>
-      <div class="billing-strip" id="performance-strip"></div>
-    </div>
-
-    <!-- Billing analytics strip (hidden until /revenue_report loads) -->
-    <div class="billing-panel" id="billing-panel" style="display:none">
-      <div class="billing-hdr">
-        <i class="fas fa-file-invoice-dollar"></i> Billing Analytics
-        <span>(based on guest checkouts)</span>
-      </div>
-      <div class="billing-strip" id="billing-strip"></div>
-    </div>
-
-    <!-- Business analytics (hidden until /analytics/overview loads) -->
-    <div id="biz-analytics" style="display:none">
-      <div class="chart-row chart-row-2">
-        ${chartCard("weekday-demand-chart","#2563eb","fas fa-calendar-week","Occupancy by Day of Week", 280)}
-        ${chartCard("seasonality-chart","#7c3aed","fas fa-chart-line","12-Month Trend — Occupancy & RevPAR", 280)}
-      </div>
-      <div class="chart-row chart-row-2">
-        ${chartCard("channel-mix-chart","#0891b2","fas fa-share-nodes","Channel Mix — Net Revenue & ADR", 280)}
-        ${chartCard("guest-mix-chart","#16a34a","fas fa-user-check","New vs Returning Guests", 280)}
-      </div>
-      <div class="chart-row chart-row-2">
-        <div class="chart-card" style="height:auto;min-height:220px">
-          <div class="chart-hdr"><i class="chart-hdr-icon fas fa-calendar-plus" style="color:#0369a1"></i>
-            <span class="chart-hdr-title">On the Books — Forward Occupancy</span></div>
-          <div class="chart-body" id="forward-pace-body" style="padding:0.6rem 1rem"></div>
-        </div>
-        <div class="chart-card" style="height:auto;min-height:220px">
-          <div class="chart-hdr"><i class="chart-hdr-icon fas fa-crown" style="color:#b45309"></i>
-            <span class="chart-hdr-title">Top Guests by Revenue</span></div>
-          <div class="chart-body" id="top-guests-body" style="padding:0.4rem 0.6rem"></div>
-        </div>
-      </div>
-      <div class="chart-row chart-row-2">
-        ${chartCard("los-chart","#f59e0b","fas fa-moon","Length of Stay", 260)}
-        <div class="chart-card" style="height:auto;min-height:220px">
-          <div class="chart-hdr"><i class="chart-hdr-icon fas fa-ban" style="color:#dc2626"></i>
-            <span class="chart-hdr-title">Cancellations</span></div>
-          <div class="chart-body" id="cancellations-body" style="padding:0.6rem 1rem"></div>
-        </div>
-      </div>
-    </div>
-
-    <!-- Row 1: Revenue vs Expenses + Daily Revenue -->
+    <!-- SECTION: Money (collected cash & UPI, expenses — never bills) -->
+    ${section("fas fa-indian-rupee-sign", "Money", "collected cash &amp; UPI · expenses")}
     <div class="chart-row chart-row-2">
-      ${chartCard("revenue-expense-chart","#4361ee","fas fa-chart-area","Revenue vs Expenses", 280)}
-      ${chartCard("daily-revenue-chart","#27ae60","fas fa-chart-bar","Daily Revenue — Cash vs UPI", 280)}
+      ${chartCard("revenue-expense-chart","#4361ee","fas fa-chart-area","Collected vs Expenses", 280)}
+      ${chartCard("daily-revenue-chart","#27ae60","fas fa-chart-bar","Daily Collected — Cash vs UPI", 280)}
     </div>
-
-    <!-- Row 2: Payment Split + Top Rooms -->
     <div class="chart-row chart-row-2">
       ${chartCard("payment-methods-chart","#0891b2","fas fa-wallet","Payment Split", 280)}
-      ${chartCard("top-rooms-chart","#4361ee","fas fa-bed","Top Rooms by Revenue", 280)}
+      ${chartCard("top-rooms-chart","#4361ee","fas fa-bed","Top Rooms by Collection", 280)}
     </div>
-
-    <!-- Row 3: Expense Categories + Expense Trend -->
-    <!-- Filter scopes both expense charts in this row. Daily =
-         transaction-type (drawer expenses). Report = from-account
-         (off-deposit). All = both combined (legacy default). -->
+    <!-- Expense filter scopes both expense charts. Daily = drawer expenses;
+         Report = off-deposit; All = both. -->
     <div style="display:flex; justify-content:flex-end; align-items:center;
-                gap:0.5rem; margin: 0.4rem 0 0.4rem; padding: 0 0.2rem;
+                gap:0.5rem; margin: 0.5rem 0 0.4rem; padding: 0 0.2rem;
                 font-size:0.82rem; color:#444;">
       <i class="fas fa-filter" style="font-size:0.75rem; color:#888;"></i>
       <label for="analytics-expense-filter" style="font-weight:600;">Expense type:</label>
       <select id="analytics-expense-filter"
               style="padding:0.25rem 0.5rem; border:1px solid #d8d8d8;
-                     border-radius:6px; font-size:0.82rem; height:30px;
-                     background:#fff;">
+                     border-radius:6px; font-size:0.82rem; height:30px; background:#fff;">
         <option value="all">All</option>
         <option value="transaction" selected>Daily only</option>
         <option value="report">Report only</option>
@@ -1933,29 +1722,63 @@ function initializeAnalyticsView() {
       ${chartCard("expense-trend-chart","#ef4444","fas fa-receipt","Daily Expense Trend", 280)}
     </div>
 
-    <!-- Row 4: Top Add-ons + Revenue by Room Type -->
-    <div class="chart-row chart-row-2">
-      ${chartCard("top-services-chart","#f59e0b","fas fa-concierge-bell","Top Add-on Services", 280)}
-      ${chartCard("room-type-revenue-chart","#8b5cf6","fas fa-th-large","Revenue by Room Type", 280)}
+    <!-- Everything below is register basis (/analytics/overview); hidden until it loads -->
+    <div id="biz-analytics" style="display:none">
+      ${section("fas fa-bed", "Occupancy &amp; footfall", "register basis — actual stays")}
+      <div class="chart-row chart-row-2">
+        ${chartCard("weekday-demand-chart","#2563eb","fas fa-calendar-week","Occupancy by Day of Week", 280)}
+        ${chartCard("seasonality-chart","#7c3aed","fas fa-chart-line","12-Month Trend — Occupancy & RevPAR", 280)}
+      </div>
+      <div class="chart-row chart-row-2">
+        <div class="chart-card" style="height:auto;min-height:220px">
+          <div class="chart-hdr"><i class="chart-hdr-icon fas fa-calendar-plus" style="color:#0369a1"></i>
+            <span class="chart-hdr-title">On the Books — Forward Occupancy</span></div>
+          <div class="chart-body" id="forward-pace-body" style="padding:0.6rem 1rem"></div>
+        </div>
+        ${chartCard("los-chart","#f59e0b","fas fa-moon","Length of Stay", 260)}
+      </div>
+
+      ${section("fas fa-layer-group", "Revenue mix", "room charges by category · channels · add-ons")}
+      <div class="chart-row chart-row-2">
+        ${chartCard("room-type-revenue-chart","#8b5cf6","fas fa-th-large","Room Revenue by Category", 280)}
+        ${chartCard("channel-mix-chart","#0891b2","fas fa-share-nodes","Channel Mix — Net Revenue & ADR", 280)}
+      </div>
+      <div class="chart-row chart-row-2">
+        ${chartCard("top-services-chart","#f59e0b","fas fa-concierge-bell","Top Add-on Services", 280)}
+        ${chartCard("guest-mix-chart","#16a34a","fas fa-user-check","New vs Returning Guests", 280)}
+      </div>
+
+      ${section("fas fa-user-group", "Guests", "top spenders · cancellations")}
+      <div class="chart-row chart-row-2">
+        <div class="chart-card" style="height:auto;min-height:220px">
+          <div class="chart-hdr"><i class="chart-hdr-icon fas fa-crown" style="color:#b45309"></i>
+            <span class="chart-hdr-title">Top Guests by Revenue</span></div>
+          <div class="chart-body" id="top-guests-body" style="padding:0.4rem 0.6rem"></div>
+        </div>
+        <div class="chart-card" style="height:auto;min-height:220px">
+          <div class="chart-hdr"><i class="chart-hdr-icon fas fa-ban" style="color:#dc2626"></i>
+            <span class="chart-hdr-title">Cancellations</span></div>
+          <div class="chart-body" id="cancellations-body" style="padding:0.6rem 1rem"></div>
+        </div>
+      </div>
     </div>
 
-    <!-- Row 5a: Guest footfall heatmap (geographic, all-time). -->
+    <!-- SECTION: Where guests come from (ID-document origin, all-time) -->
+    ${section("fas fa-map-location-dot", "Where guests come from", "guest home PIN codes · all-time")}
     <div class="chart-card" style="height:440px">
       <div class="chart-hdr">
         <i class="chart-hdr-icon fas fa-map-marked-alt" style="color:#0ea5e9"></i>
-        <span class="chart-hdr-title">Guest Footfall Heatmap</span>
+        <span class="chart-hdr-title">Guest Origin Map</span>
       </div>
       <div class="chart-body" style="position:relative;padding:0">
         <div id="pincode-heatmap" style="position:absolute;inset:0;border-radius:8px;overflow:hidden"></div>
       </div>
     </div>
-
-    <!-- Row 5b: Guest demographics (from ID documents — all-time, not
-         date-filtered). Footfall by area + age profile for marketing /
-         pricing decisions. -->
     <div class="chart-row chart-row-2">
       ${chartCard("pincode-footfall-chart","#0ea5e9","fas fa-map-marker-alt","Footfall by Area (PIN code)", 320)}
       ${chartCard("guest-age-chart","#16a34a","fas fa-users","Guest Age Distribution", 320)}
+    </div>
+
     </div>
   `;
 }

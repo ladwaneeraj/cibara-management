@@ -710,6 +710,64 @@ def compute_revenue_mix(in_window_stays: list) -> dict:
             "addon_pct": round(addon / total * 100.0, 1) if total else 0}
 
 
+# ── room-category revenue (register basis, replaces bills "room type") ────
+
+def compute_room_category_revenue(in_window_stays: list, category_map: dict | None) -> list:
+    """
+    Room (accommodation) charges grouped by rate category, for stays that
+    checked in inside the window. Register basis — in-house stays count too,
+    not just finalised bills. `category_map` is {room_number(str): slug}; an
+    unmapped room falls under "other". Returned sorted by revenue desc.
+    """
+    cats: dict = {}
+    for s in (in_window_stays or []):
+        slug = (category_map or {}).get(str(s.get("room"))) or "other"
+        cats[slug] = cats.get(slug, 0.0) + _num(s.get("room_charges_total"))
+    rows = [{"category": c, "revenue": _r2(v)} for c, v in cats.items() if v]
+    rows.sort(key=lambda r: -r["revenue"])
+    return rows
+
+
+# ── outstanding (money still owed — NOT revenue) ─────────────────────────
+
+def compute_outstanding(rooms: dict, bills: list, window_from: str,
+                        window_to: str) -> dict:
+    """
+    Money owed right now, kept separate from collected revenue:
+      * in_house    — running balance on currently-occupied rooms (room.balance);
+      * settle_later — unpaid balance on CHECKED-OUT bills whose check-in falls
+                       in the window (drafts/in-house bills are skipped so their
+                       balance is never double-counted with the room above).
+    Cancelled / reverted bills are ignored.
+    """
+    wf = _to_date(window_from)
+    wt = _to_date(window_to)
+
+    in_house = 0.0
+    for room in (rooms or {}).values():
+        room = room or {}
+        if (room.get("status") or "").strip().lower() != "occupied":
+            continue
+        bal = _num(room.get("balance"))
+        if bal > 0:
+            in_house += bal
+
+    settle_later = 0.0
+    for b in (bills or []):
+        b = b or {}
+        if _is_excluded_stay(b) or not b.get("checkout_time"):
+            continue
+        ci = _to_date(b.get("checkin_time"))
+        if ci is None or (wf and ci < wf) or (wt and ci > wt):
+            continue
+        bal = _num(b.get("balance"))
+        if bal > 0:
+            settle_later += bal
+
+    return {"in_house": _r2(in_house), "settle_later": _r2(settle_later),
+            "total": _r2(in_house + settle_later)}
+
+
 # ── cancellations ───────────────────────────────────────────────────────
 
 _CANCELLED_STATUSES = frozenset({"cancelled", "canceled"})
@@ -958,7 +1016,8 @@ def compute_findings(overview: dict, channel_mix: dict, pace: dict, *,
 
 def compute_analytics_overview(*, rooms: dict, bills: list, payments: list, bookings: list,
                                commission_expenses: list, snapshots: list, room_count: int,
-                               window_from: str, window_to: str, now: datetime) -> dict:
+                               window_from: str, window_to: str, now: datetime,
+                               category_map: dict | None = None) -> dict:
     """
     The whole /analytics/overview payload from already-fetched, projected rows.
     Returns aggregates and chart series only — never the raw rows.
@@ -1004,6 +1063,8 @@ def compute_analytics_overview(*, rooms: dict, bills: list, payments: list, book
     kpi_comparison = compute_period_comparison(stays, room_count, wf_s, wt_s, today)
     guests = compute_guest_segments(in_window_stays, stays, today)
     revenue_mix = compute_revenue_mix(in_window_stays)
+    room_category_revenue = compute_room_category_revenue(in_window_stays, category_map)
+    outstanding = compute_outstanding(rooms, bills, wf_s, wt_s)
     cancellations = compute_cancellations(bills, wf_s, wt_s)
 
     return {
@@ -1017,6 +1078,8 @@ def compute_analytics_overview(*, rooms: dict, bills: list, payments: list, book
         "kpi_comparison": kpi_comparison,
         "guests": guests,
         "revenue_mix": revenue_mix,
+        "room_category_revenue": room_category_revenue,
+        "outstanding": outstanding,
         "cancellations": cancellations,
         "findings": compute_findings(overview, channel_mix, pace, seasonality=seasonality,
                                      comparison=kpi_comparison, cancellations=cancellations),

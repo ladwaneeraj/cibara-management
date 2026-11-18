@@ -45,7 +45,7 @@ from threading import Lock
 from flask import Blueprint, request, jsonify
 from google.cloud.firestore_v1.base_query import FieldFilter
 
-from config import db, bills_ref, bookings_ref, expenses_ref, IST, logger, get_all_rooms
+from config import db, bills_ref, bookings_ref, expenses_ref, IST, logger, get_all_rooms, room_category
 from services import payment_service
 from services import register_analytics_service as svc
 from services import web_analytics_service as web_svc
@@ -88,7 +88,9 @@ _BILL_FIELDS = ["id", "status", "room", "stay_id", "checkin_time", "checkout_tim
                 "booking_source", "ota_commission", "ota_commission_gst",
                 "total_amount", "cancelled_by_revert", "superseded_by_revert",
                 # guest segmentation + revenue mix + cancellation reasons
-                "guest_name", "guest_mobile", "services_total", "cancel_reason"]
+                "guest_name", "guest_mobile", "services_total", "cancel_reason",
+                # settle-later outstanding (unpaid balance on a checked-out bill)
+                "balance"]
 _PAYMENT_FIELDS = ["date", "method", "type", "amount", "voided",
                    # fingerprint fields payment_service._dedup_payments reads
                    "room", "name", "time", "migrated"]
@@ -246,6 +248,7 @@ def analytics_overview():
             window_from=cache_key[0],
             window_to=cache_key[1],
             now=now,
+            category_map={str(num): room_category(num) for num in rooms},
         )
         logger.info(f"analytics: window={cache_key} built in "
                     f"{(_time.time() - t0) * 1000:.0f}ms")

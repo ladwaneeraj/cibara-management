@@ -17,9 +17,11 @@ from services.register_analytics_service import (
     compute_findings,
     compute_guest_segments,
     compute_los_leadtime,
+    compute_outstanding,
     compute_overview,
     compute_period_comparison,
     compute_revenue_mix,
+    compute_room_category_revenue,
     compute_seasonality,
     pace_vs_prior,
 )
@@ -86,6 +88,46 @@ def test_in_house_stay_deduped_against_its_draft_bill():
               "checkout_time": None, "room_price_per_night": 1000}]
     stays = build_stay_universe(rooms, bills, date(2026, 10, 18))
     assert len(stays) == 1
+
+
+def test_outstanding_in_house_plus_settle_later_no_double_count():
+    rooms = {
+        "101": {"status": "occupied", "balance": 500},
+        "102": {"status": "occupied", "balance": 0},       # fully paid in-house
+        "103": {"status": "vacant", "balance": 999},        # not occupied → ignored
+    }
+    bills = [
+        # settle-later: checked out, unpaid, in window
+        {"id": "b1", "status": "completed", "checkin_time": "2026-10-16 12:00",
+         "checkout_time": "2026-10-17 10:00", "balance": 300},
+        # in-house draft (no checkout) — balance must NOT be counted here
+        {"id": "b2", "status": "draft", "checkin_time": "2026-10-17 12:00",
+         "checkout_time": None, "balance": 800},
+        # cancelled — ignored
+        {"id": "b3", "status": "cancelled", "checkin_time": "2026-10-16 12:00",
+         "checkout_time": "2026-10-17 10:00", "balance": 700},
+        # out of window — ignored
+        {"id": "b4", "status": "completed", "checkin_time": "2026-09-01 12:00",
+         "checkout_time": "2026-09-02 10:00", "balance": 400},
+    ]
+    out = compute_outstanding(rooms, bills, "2026-10-16", "2026-10-18")
+    assert out == {"in_house": 500.0, "settle_later": 300.0, "total": 800.0}
+
+
+def test_room_category_revenue_grouped_and_sorted():
+    stays = [
+        {"room": "200", "room_charges_total": 1200},   # premium
+        {"room": "201", "room_charges_total": 800},     # premium
+        {"room": "207", "room_charges_total": 450},      # regular
+        {"room": "999", "room_charges_total": 100},      # unmapped → other
+    ]
+    cmap = {"200": "premium", "201": "premium", "207": "regular"}
+    rows = compute_room_category_revenue(stays, cmap)
+    assert rows == [
+        {"category": "premium", "revenue": 2000.0},
+        {"category": "regular", "revenue": 450.0},
+        {"category": "other", "revenue": 100.0},
+    ]
 
 
 def test_completed_bills_and_in_house_are_unioned_with_channel():

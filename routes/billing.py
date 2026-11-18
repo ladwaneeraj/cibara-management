@@ -4143,7 +4143,8 @@ def update_bill_gst():
 @requires_permission("bill.guest.edit")
 def update_bill_guest():
     """
-    Correct the guest NAME and/or MOBILE on an existing bill.
+    Correct the guest NAME, MOBILE and/or number of MEMBERS (guest_count) on an
+    existing bill.
 
     Non-financial only — this endpoint never touches amounts, tax heads, or
     GST recipient (B2B) details. Every change is written to the append-only
@@ -4160,10 +4161,11 @@ def update_bill_guest():
 
         has_name   = "guest_name" in data
         has_mobile = "guest_mobile" in data
-        if not has_name and not has_mobile:
+        has_count  = "guest_count" in data
+        if not has_name and not has_mobile and not has_count:
             return jsonify(
                 success=False,
-                message="Nothing to update (guest_name / guest_mobile)",
+                message="Nothing to update (guest_name / guest_mobile / guest_count)",
             ), 400
 
         bill_snap = bills_ref.document(bill_id).get()
@@ -4199,6 +4201,18 @@ def update_bill_guest():
                 before["guest_mobile"] = bill.get("guest_mobile")
                 after["guest_mobile"]  = digits
                 update["guest_mobile"] = digits
+
+        if has_count:
+            try:
+                new_guests = int(data.get("guest_count"))
+            except (TypeError, ValueError):
+                return jsonify(success=False, message="Members must be a number"), 400
+            if not 1 <= new_guests <= 30:
+                return jsonify(success=False, message="Members must be between 1 and 30"), 400
+            if new_guests != (bill.get("guest_count") or 1):
+                before["guest_count"] = bill.get("guest_count")
+                after["guest_count"]  = new_guests
+                update["guest_count"] = new_guests
 
         if not update:
             # Submitted values matched what is already stored — no-op.
@@ -4241,6 +4255,7 @@ def update_bill_guest():
             bill_id=bill_id,
             guest_name=update.get("guest_name", bill.get("guest_name")),
             guest_mobile=update.get("guest_mobile", bill.get("guest_mobile")),
+            guest_count=update.get("guest_count", bill.get("guest_count", 1)),
             last_guest_edit=update["last_guest_edit"],
         )
     except Exception as e:

@@ -6698,6 +6698,9 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
         <label class="bl-edit-label">Mobile number
           <input type="tel" id="bl-edit-mobile" inputmode="numeric" maxlength="10" autocomplete="off" placeholder="10-digit (or leave blank)" />
         </label>
+        <label class="bl-edit-label">Members (guests)
+          <input type="number" id="bl-edit-guests" inputmode="numeric" min="1" max="30" step="1" autocomplete="off" />
+        </label>
         <div class="bl-edit-err" id="bl-edit-err"></div>
         <div class="bl-edit-actions">
           <button type="button" class="bl-edit-cancel">Cancel</button>
@@ -6722,6 +6725,7 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
       "Bill " + (entry.bill_number || "—") + " · Room " + (entry.room || "—");
     dom("bl-edit-name").value   = entry.guest_name || "";
     dom("bl-edit-mobile").value = entry.guest_mobile || "";
+    dom("bl-edit-guests").value = entry.guest_count || 1;
     dom("bl-edit-err").textContent = "";
     dom("bl-edit-backdrop").classList.add("show");
     setTimeout(() => { const n = dom("bl-edit-name"); if (n) n.focus(); }, 30);
@@ -6732,6 +6736,7 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
     if (!billId) return;
     const name    = (dom("bl-edit-name").value || "").trim();
     const mobile  = (dom("bl-edit-mobile").value || "").replace(/\D/g, "");
+    const guests  = parseInt(dom("bl-edit-guests").value, 10);
     const err     = dom("bl-edit-err");
     const saveBtn = document.querySelector("#bl-edit-backdrop .bl-edit-save");
     err.textContent = "";
@@ -6740,12 +6745,16 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
       err.textContent = "Mobile must be a 10-digit number (or blank).";
       return;
     }
+    if (!Number.isInteger(guests) || guests < 1 || guests > 30) {
+      err.textContent = "Members must be a whole number between 1 and 30.";
+      return;
+    }
     if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = "Saving…"; }
     try {
       const res = await apiFetch("/update_bill_guest", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ bill_id: billId, guest_name: name, guest_mobile: mobile }),
+        body: JSON.stringify({ bill_id: billId, guest_name: name, guest_mobile: mobile, guest_count: guests }),
       });
       const data = await res.json();
       if (!res.ok || !data.success) throw new Error(data.message || ("HTTP " + res.status));
@@ -6753,6 +6762,7 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
       if (entry) {
         entry.guest_name   = data.guest_name   != null ? data.guest_name   : name;
         entry.guest_mobile = data.guest_mobile != null ? data.guest_mobile : mobile;
+        if (data.guest_count != null) entry.guest_count = data.guest_count;
         if (data.last_guest_edit) entry.last_guest_edit = data.last_guest_edit;
         applyFilters();
       }

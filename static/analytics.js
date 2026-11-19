@@ -718,6 +718,8 @@ async function loadBusinessAnalytics(startDate, endDate) {
   renderWeekdayDemand(data.seasonality);
   renderSeasonality(data.seasonality);
   renderRoomCategoryRevenue(data.room_category_revenue);
+  renderRoomPopularity(data.room_category_revenue);
+  renderBusyHours(data.busy_hours);
   renderChannelMix(data.channel_mix);
   renderGuestMix(data.guests);
   renderForwardPace(data.pace);
@@ -1475,6 +1477,23 @@ function generateTopServicesChart(data) {
 // Register basis — in-house stays count too, not just finalised bills — so it
 // replaces the old bills/checkout "Revenue by Room Type" chart. The register
 // map has no Premium-AC split (AC is a price toggle within Premium).
+// Shared room-category display labels + colours (register slug → UI).
+const CAT_LABEL = {
+  "premium": "Premium", "regular": "Regular", "deluxe": "Deluxe",
+  "single-attach": "Single Attach", "single-non-attach": "Single Non-Attach",
+  "double-non-attach": "Double Non-Attach", "party-hall": "Party Hall", "other": "Other",
+};
+const CAT_COLOR = {
+  "premium":           "rgba(37, 99, 235, 0.75)",   // blue
+  "regular":           "rgba(124, 58, 237, 0.75)",   // purple
+  "deluxe":            "rgba(245, 158, 11, 0.75)",   // amber
+  "single-attach":     "rgba(22, 163, 74, 0.75)",    // green
+  "single-non-attach": "rgba(132, 204, 22, 0.75)",   // lime
+  "double-non-attach": "rgba(234, 88, 12, 0.75)",    // orange
+  "party-hall":        "rgba(219, 39, 119, 0.75)",   // pink
+  "other":             "rgba(107, 114, 128, 0.75)",  // grey
+};
+
 function renderRoomCategoryRevenue(rows) {
   const canvas = document.getElementById("room-type-revenue-chart");
   if (!canvas) return;
@@ -1486,24 +1505,9 @@ function renderRoomCategoryRevenue(rows) {
     return;
   }
 
-  const LABEL = {
-    "premium": "Premium", "regular": "Regular", "deluxe": "Deluxe",
-    "single-attach": "Single Attach", "single-non-attach": "Single Non-Attach",
-    "double-non-attach": "Double Non-Attach", "party-hall": "Party Hall", "other": "Other",
-  };
-  const COLOR = {
-    "premium":           "rgba(37, 99, 235, 0.75)",   // blue
-    "regular":           "rgba(124, 58, 237, 0.75)",   // purple
-    "deluxe":            "rgba(245, 158, 11, 0.75)",   // amber
-    "single-attach":     "rgba(22, 163, 74, 0.75)",    // green
-    "single-non-attach": "rgba(132, 204, 22, 0.75)",   // lime
-    "double-non-attach": "rgba(234, 88, 12, 0.75)",    // orange
-    "party-hall":        "rgba(219, 39, 119, 0.75)",   // pink
-    "other":             "rgba(107, 114, 128, 0.75)",  // grey
-  };
-  const labels = rows.map((r) => LABEL[r.category] || r.category);
+  const labels = rows.map((r) => CAT_LABEL[r.category] || r.category);
   const data   = rows.map((r) => Math.round(r.revenue || 0));
-  const bg     = rows.map((r) => COLOR[r.category] || COLOR["other"]);
+  const bg     = rows.map((r) => CAT_COLOR[r.category] || CAT_COLOR["other"]);
 
   const ctx = canvas.getContext("2d");
   canvas.chart = new Chart(ctx, {
@@ -1547,6 +1551,79 @@ function renderRoomCategoryRevenue(rows) {
           },
         },
       },
+    },
+  });
+}
+
+// ── Room Popularity — stays by category (register basis) ──────────────────────
+// Which room types the lodge actually sells most (count of stays), the
+// companion to the revenue-by-category chart. Same /analytics/overview rows.
+function renderRoomPopularity(rows) {
+  const canvas = document.getElementById("room-popularity-chart");
+  if (!canvas) return;
+  if (canvas.chart) { canvas.chart.destroy(); canvas.chart = null; }
+
+  rows = (rows || []).filter((r) => (r.stays || 0) > 0)
+                     .slice().sort((a, b) => (b.stays || 0) - (a.stays || 0));
+  if (rows.length === 0) { showChartEmpty(canvas, "No stays in this period"); return; }
+
+  const labels = rows.map((r) => CAT_LABEL[r.category] || r.category);
+  const data   = rows.map((r) => r.stays || 0);
+  const bg     = rows.map((r) => CAT_COLOR[r.category] || CAT_COLOR["other"]);
+  const total  = data.reduce((a, b) => a + b, 0) || 1;
+
+  canvas.chart = new Chart(canvas.getContext("2d"), {
+    type: "bar",
+    data: { labels, datasets: [{ label: "Stays", data, backgroundColor: bg, borderWidth: 0, borderRadius: 4 }] },
+    options: {
+      responsive: true, maintainAspectRatio: false, animation: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: { callbacks: {
+          label: (c) => ` ${c.raw} stay${c.raw === 1 ? "" : "s"} (${Math.round((c.raw / total) * 100)}%)`,
+        } },
+      },
+      scales: {
+        x: { ticks: { autoSkip: false, maxRotation: 30, minRotation: 0 } },
+        y: { beginAtZero: true, ticks: { precision: 0 } },
+      },
+    },
+  });
+}
+
+// ── Busy Check-in Times — check-ins by hour of day (peak desk times) ──────────
+function renderBusyHours(hours) {
+  const canvas = document.getElementById("busy-hours-chart");
+  if (!canvas) return;
+  if (canvas.chart) { canvas.chart.destroy(); canvas.chart = null; }
+
+  const rows = hours || [];
+  const total = rows.reduce((a, r) => a + (r.checkins || 0), 0);
+  if (total === 0) { showChartEmpty(canvas, "No check-ins in this period"); return; }
+
+  const peak = Math.max(...rows.map((r) => r.checkins || 0));
+  const labels = rows.map((r) => {
+    const h = r.hour;
+    const ap = h < 12 ? "am" : "pm";
+    const h12 = h % 12 === 0 ? 12 : h % 12;
+    return `${h12}${ap}`;
+  });
+  // Peak hour(s) highlighted in cobalt, the rest muted sky.
+  const bg = rows.map((r) => (r.checkins === peak ? "#2563eb" : "rgba(14,165,233,0.55)"));
+
+  canvas.chart = new Chart(canvas.getContext("2d"), {
+    type: "bar",
+    data: { labels, datasets: [{ label: "Check-ins", data: rows.map((r) => r.checkins || 0), backgroundColor: bg }] },
+    options: {
+      responsive: true, maintainAspectRatio: false, animation: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: { callbacks: {
+          title: (its) => `${labels[its[0].dataIndex]} – ${labels[(its[0].dataIndex + 1) % 24]}`,
+          label: (c) => ` ${c.raw} check-in${c.raw === 1 ? "" : "s"}`,
+        } },
+      },
+      scales: { y: { beginAtZero: true, ticks: { precision: 0 } } },
     },
   });
 }
@@ -1737,14 +1814,18 @@ function initializeAnalyticsView() {
         </div>
         ${chartCard("los-chart","#f59e0b","fas fa-moon","Length of Stay", 260)}
       </div>
+      ${chartCard("busy-hours-chart","#0ea5e9","fas fa-clock","Busy Check-in Times — by hour of day", 280)}
 
-      ${section("fas fa-layer-group", "Revenue mix", "room charges by category · channels · add-ons")}
+      ${section("fas fa-layer-group", "Revenue mix", "room revenue & popularity by category · channels · add-ons")}
       <div class="chart-row chart-row-2">
         ${chartCard("room-type-revenue-chart","#8b5cf6","fas fa-th-large","Room Revenue by Category", 280)}
-        ${chartCard("channel-mix-chart","#0891b2","fas fa-share-nodes","Channel Mix — Net Revenue & ADR", 280)}
+        ${chartCard("room-popularity-chart","#0891b2","fas fa-fire","Room Popularity — stays by category", 280)}
       </div>
       <div class="chart-row chart-row-2">
+        ${chartCard("channel-mix-chart","#0891b2","fas fa-share-nodes","Channel Mix — Net Revenue & ADR", 280)}
         ${chartCard("top-services-chart","#f59e0b","fas fa-concierge-bell","Top Add-on Services", 280)}
+      </div>
+      <div class="chart-row chart-row-2">
         ${chartCard("guest-mix-chart","#16a34a","fas fa-user-check","New vs Returning Guests", 280)}
       </div>
 

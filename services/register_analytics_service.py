@@ -714,18 +714,49 @@ def compute_revenue_mix(in_window_stays: list) -> dict:
 
 def compute_room_category_revenue(in_window_stays: list, category_map: dict | None) -> list:
     """
-    Room (accommodation) charges grouped by rate category, for stays that
-    checked in inside the window. Register basis — in-house stays count too,
-    not just finalised bills. `category_map` is {room_number(str): slug}; an
-    unmapped room falls under "other". Returned sorted by revenue desc.
+    Room (accommodation) charges AND stay count grouped by rate category, for
+    stays that checked in inside the window. Register basis — in-house stays
+    count too, not just finalised bills. `category_map` is {room_number(str):
+    slug}; an unmapped room falls under "other". Sorted by revenue desc.
+
+    `stays` (per category) answers "which room types does the lodge sell most"
+    — the room-popularity / preference cut — alongside `revenue`.
     """
     cats: dict = {}
     for s in (in_window_stays or []):
         slug = (category_map or {}).get(str(s.get("room"))) or "other"
-        cats[slug] = cats.get(slug, 0.0) + _num(s.get("room_charges_total"))
-    rows = [{"category": c, "revenue": _r2(v)} for c, v in cats.items() if v]
+        c = cats.setdefault(slug, {"revenue": 0.0, "stays": 0})
+        c["revenue"] += _num(s.get("room_charges_total"))
+        c["stays"] += 1
+    rows = [{"category": k, "revenue": _r2(v["revenue"]), "stays": v["stays"]}
+            for k, v in cats.items() if v["revenue"] or v["stays"]]
     rows.sort(key=lambda r: -r["revenue"])
     return rows
+
+
+# ── busy check-in hours (peak desk times) ────────────────────────────────
+
+def compute_busy_hours(in_window_stays: list) -> list:
+    """
+    Check-ins by hour of day (0–23) for stays that checked in inside the window
+    — the "busiest time of day" at the desk. A fixed 24-bucket list so the chart
+    always has every hour; an unparseable check-in time is skipped.
+    """
+    buckets = [0] * 24
+    for s in (in_window_stays or []):
+        raw = str(s.get("checkin_time") or "")
+        # "YYYY-MM-DD HH:MM[:SS]" (or a 'T' separator) → the hour field.
+        part = raw.replace("T", " ").split(" ")
+        if len(part) < 2:
+            continue
+        hm = part[1].split(":")
+        try:
+            hour = int(hm[0])
+        except (ValueError, IndexError):
+            continue
+        if 0 <= hour <= 23:
+            buckets[hour] += 1
+    return [{"hour": h, "checkins": buckets[h]} for h in range(24)]
 
 
 # ── outstanding (money still owed — NOT revenue) ─────────────────────────
@@ -1064,6 +1095,7 @@ def compute_analytics_overview(*, rooms: dict, bills: list, payments: list, book
     guests = compute_guest_segments(in_window_stays, stays, today)
     revenue_mix = compute_revenue_mix(in_window_stays)
     room_category_revenue = compute_room_category_revenue(in_window_stays, category_map)
+    busy_hours = compute_busy_hours(in_window_stays)
     outstanding = compute_outstanding(rooms, bills, wf_s, wt_s)
     cancellations = compute_cancellations(bills, wf_s, wt_s)
 
@@ -1079,6 +1111,7 @@ def compute_analytics_overview(*, rooms: dict, bills: list, payments: list, book
         "guests": guests,
         "revenue_mix": revenue_mix,
         "room_category_revenue": room_category_revenue,
+        "busy_hours": busy_hours,
         "outstanding": outstanding,
         "cancellations": cancellations,
         "findings": compute_findings(overview, channel_mix, pace, seasonality=seasonality,

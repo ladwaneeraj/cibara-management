@@ -17,6 +17,7 @@ from services.register_analytics_service import (
     compute_findings,
     compute_guest_segments,
     compute_los_leadtime,
+    compute_busy_hours,
     compute_outstanding,
     compute_overview,
     compute_period_comparison,
@@ -124,10 +125,26 @@ def test_room_category_revenue_grouped_and_sorted():
     cmap = {"200": "premium", "201": "premium", "207": "regular"}
     rows = compute_room_category_revenue(stays, cmap)
     assert rows == [
-        {"category": "premium", "revenue": 2000.0},
-        {"category": "regular", "revenue": 450.0},
-        {"category": "other", "revenue": 100.0},
+        {"category": "premium", "revenue": 2000.0, "stays": 2},
+        {"category": "regular", "revenue": 450.0, "stays": 1},
+        {"category": "other", "revenue": 100.0, "stays": 1},
     ]
+
+
+def test_busy_hours_counts_checkins_by_hour():
+    stays = [
+        {"checkin_time": "2026-10-16 14:30"},
+        {"checkin_time": "2026-10-17 14:05"},
+        {"checkin_time": "2026-10-17T09:00:00"},  # T separator + seconds
+        {"checkin_time": "2026-10-18 23:59"},
+        {"checkin_time": "bad"},                    # skipped
+        {"checkin_time": None},                     # skipped
+    ]
+    rows = compute_busy_hours(stays)
+    assert len(rows) == 24 and rows[0] == {"hour": 0, "checkins": 0}
+    by_hour = {r["hour"]: r["checkins"] for r in rows}
+    assert by_hour[14] == 2 and by_hour[9] == 1 and by_hour[23] == 1
+    assert sum(r["checkins"] for r in rows) == 4
 
 
 def test_completed_bills_and_in_house_are_unioned_with_channel():

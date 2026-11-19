@@ -215,6 +215,17 @@ if CIBARA_ENV not in ENVIRONMENTS:
         f"{sorted(ENVIRONMENTS.keys())}"
     )
 ACTIVE_ENV = ENVIRONMENTS[CIBARA_ENV]
+
+# Effective Firestore database id for this env: the CIBARA_FIRESTORE_DB env var
+# wins, else the env's own canonical DB (PROD → cibara-mum). Exported so the
+# SERVER client AND the browser config (/firebase-config.js, /api/v2/config)
+# target the SAME database — otherwise the classic UI's direct browser reads
+# (google_sync.js live tiles) silently hit the old unnamed (default) DB.
+FIRESTORE_DB = (os.environ.get('CIBARA_FIRESTORE_DB', '').strip()
+                or ACTIVE_ENV.get('firestore_db', '')).strip()
+# What the browser should use: a named DB, or "" for the unnamed (default) DB
+# (a browser client can't address a literal "(default)").
+FIRESTORE_DB_WEB = '' if FIRESTORE_DB == '(default)' else FIRESTORE_DB
 FIREBASE_WEB_CONFIG = dict(ACTIVE_ENV["web_config"])  # exported for app.py
 
 
@@ -296,11 +307,10 @@ try:
     # the SAME class firebase_admin wraps, so transactions, Increment,
     # SERVER_TIMESTAMP, preconditions and core/metrics counting are identical.
     # Unset / "(default)" keeps the exact old path, so rollback is env-only.
-    # Env var wins (incl. "(default)" to roll back); otherwise the env's own
-    # canonical database (PROD → cibara-mum). Keeps prod on the live DB even if
-    # the Cloud Run env var is ever dropped.
-    _fs_db = (os.environ.get('CIBARA_FIRESTORE_DB', '').strip()
-              or ACTIVE_ENV.get('firestore_db', ''))
+    # Resolved above (FIRESTORE_DB): env var wins (incl. "(default)" to roll
+    # back); otherwise the env's own canonical DB (PROD → cibara-mum). Keeps
+    # prod on the live DB even if the Cloud Run env var is ever dropped.
+    _fs_db = FIRESTORE_DB
     if _fs_db and _fs_db != '(default)':
         from google.cloud import firestore as _gcf
         db = _gcf.Client(project=_project_id, credentials=cred.get_credential(),

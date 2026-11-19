@@ -88,9 +88,10 @@ def create_app() -> FastAPI:
                            ("FIREBASE_APP_ID", "appId")):
             if os.environ.get(env_key):
                 cfg[k] = os.environ[env_key]
-        # Named Firestore DB for the SPA's realtime listeners (region move).
-        # Empty = the project's (default) DB, i.e. unchanged.
-        cfg["firestoreDb"] = os.environ.get("CIBARA_FIRESTORE_DB", "")
+        # Named Firestore DB for realtime listeners (region move). Resolved in
+        # config (env var, else the env's canonical DB — PROD → cibara-mum);
+        # empty = the project's (default) DB.
+        cfg["firestoreDb"] = legacy.legacy_config.FIRESTORE_DB_WEB
         return {"success": True, "env": legacy.legacy_config.CIBARA_ENV, "version": VERSION, "firebase": cfg}
 
     for r in (auth.router, dashboard.router, rooms.router, bills.router, reports.router,

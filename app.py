@@ -3,7 +3,7 @@ from flask_compress import Compress
 import mimetypes
 from config import (
     initialize_data, logger, db, UPLOAD_FOLDER,
-    CIBARA_ENV, FIREBASE_WEB_CONFIG,
+    CIBARA_ENV, FIREBASE_WEB_CONFIG, FIRESTORE_DB_WEB,
 )
 from routes.rooms import rooms_bp
 from routes.bookings import bookings_bp
@@ -317,9 +317,10 @@ def _web_firebase_config():
 def firebase_config_js():
     config = {
         **_web_firebase_config(),
-        # Named Firestore DB for browser listeners (region move). Empty = the
-        # project's (default) DB, i.e. unchanged. google_sync.js reads this.
-        "firestoreDb": os.environ.get("CIBARA_FIRESTORE_DB", ""),
+        # Named Firestore DB for browser listeners (region move). Resolved in
+        # config (env var, else the env's canonical DB — PROD → cibara-mum);
+        # empty = the project's (default) DB. google_sync.js reads this.
+        "firestoreDb": FIRESTORE_DB_WEB,
         # FCM Web Push public VAPID key (Firebase console -> Cloud Messaging ->
         # Web Push certificates). Empty disables push. push.js reads this.
         "vapidKey": os.environ.get("FCM_VAPID_KEY", ""),

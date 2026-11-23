@@ -3,3 +3,8 @@
 #!include:.gitignore
 # ...then drop agent worktrees/data that aren't part of the app.
 .claude/
+# Leftover React SPA working dirs (the SPA was removed); not part of the
+# deployed image, and web/ isn't gitignored so --source=. would upload its
+# node_modules. Keep them out of the Cloud build context.
+frontend/
+web/

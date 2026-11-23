@@ -95,6 +95,16 @@ def test_date_only_booking_conservative_whole_span():
     assert "200" in _free(checkin=_dt(2026, 10, 19, 22, 0), days=1)
 
 
+def test_manual_evening_checkin_blocks_next_morning():
+    # Overbooking bug: a manual booking checks in 25th 19:00 under the 24h clock,
+    # so it holds the room until 26th 19:00 (+gap) -- the next morning must NOT be
+    # offered online. Date-only would have wrongly freed it at the 26th 00:00.
+    _booking("b1", "200", "2026-11-25", "2026-11-26", source="normal", time="19:00")
+    assert "200" not in _free(checkin=_dt(2026, 11, 26, 8, 0))    # guest still in at 08:00
+    assert "200" not in _free(checkin=_dt(2026, 11, 26, 18, 0))   # still in at 18:00
+    assert "200" in _free(checkin=_dt(2026, 11, 26, 21, 30))      # free after 19:00 + 2h gap
+
+
 def test_web_booking_without_days_falls_back_to_whole_span():
     _booking("b1", "200", "2026-10-21", "2026-10-23", source="web", time="10:00")  # no days
     assert "200" not in _free(checkin=_dt(2026, 10, 22, 20, 0))

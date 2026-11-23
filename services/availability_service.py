@@ -5,10 +5,11 @@ Pure functions (no endpoints). A room is free for a window iff no occupant
 interval overlaps it; occupants are:
 
   1. Bookings (status confirmed / pending_payment) on a pool room.
-       - web + parseable check-in time + valid days -> PRECISE:
-             [check_in_date + check_in_time, + 24h * days]
-       - everything else (OTA, manual, or web with unusable time/days)
-         -> DATE-ONLY / CONSERVATIVE:
+       - parseable check-in time -> PRECISE (any source; the lodge runs a 24h
+         clock keyed to the check-in time, not calendar dates):
+             [check_in_date + check_in_time, + 24h * periods]
+         periods = stored ``days`` (web) else check_out_date - check_in_date (>= 1).
+       - no usable check-in time -> DATE-ONLY / CONSERVATIVE:
              [check_in_date 00:00, check_out_date 00:00]
   2. Live walk-ins: ``rooms`` docs with status == "occupied":
              [checkin_time, + 24h * (renewal_count + 1)]
@@ -89,12 +90,16 @@ def _booking_interval(b: dict) -> Optional[tuple]:
     ci = _parse_date(b.get("check_in_date"))
     if ci is None:
         return None
-    if b.get("booking_source") == "web":
-        hm = _parse_time(b.get("check_in_time"))
+    hm = _parse_time(b.get("check_in_time"))
+    if hm is not None:
         days = _parse_days(b.get("days"))
-        if hm is not None and days is not None:
-            start = ci.replace(hour=hm[0], minute=hm[1])
-            return (start, start + timedelta(hours=24 * days), "web")
+        if days is None:
+            # Manual/OTA bookings store no `days`; derive 24h periods from dates.
+            co = _parse_date(b.get("check_out_date"))
+            days = (co - ci).days if co is not None and co > ci else 1
+        start = ci.replace(hour=hm[0], minute=hm[1])
+        kind = "web" if b.get("booking_source") == "web" else "timed"
+        return (start, start + timedelta(hours=24 * days), kind)
     co = _parse_date(b.get("check_out_date"))
     if co is None or co <= ci:
         # No usable check-out: assume at least a one-night span rather than

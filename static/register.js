@@ -4,6 +4,50 @@
 //      excel GST columns, serial dedup, missing bills
 // ==========================================
 
+// ── Sticky list headers (shared: Register + Bills) ──────────────────────────
+// The wide table container has overflow-x:auto, which makes it a scroll context
+// — so a thead pinned to the viewport never actually sticks. Instead we cap the
+// container's height so the LIST scrolls inside it (page itself stays put): the
+// column header pins at the container top and each date-group header pins right
+// under it, the next date pushing it up. The cap (viewport minus everything
+// above the table minus the bottom nav) is measured and published as a CSS var,
+// so it follows the layout instead of guessing pixels.
+(function () {
+  if (window.ccPinStack) return;
+  const pinned = new Set();
+  function recompute(tabEl) {
+    if (!tabEl || !tabEl.offsetParent) return; // skip hidden tabs (height = 0)
+    const header = document.querySelector(".app-container > .header")
+                || document.querySelector(".header");
+    const nav = document.querySelector(".bottom-nav");
+    const thead = tabEl.querySelector(".register-table thead, .bills-table thead");
+    const container = tabEl.querySelector(".register-table-container, .bills-table-container");
+    if (!thead || !container) return;
+    const hH = header ? Math.round(header.getBoundingClientRect().height) : 0;
+    const tH = Math.round(thead.getBoundingClientRect().height);
+    const navH = nav ? Math.round(nav.getBoundingClientRect().height) : 0;
+    // Distance from the document top = the container's resting viewport offset
+    // (scroll-position independent, so this is stable whether the page is at
+    // rest or nudged).
+    const top = Math.round(container.getBoundingClientRect().top + window.scrollY);
+    const maxH = Math.max(240, window.innerHeight - top - navH - 8);
+    tabEl.style.setProperty("--cc-pin-filter", hH + "px"); // filter bar sticky top
+    tabEl.style.setProperty("--cc-grouptop", tH + "px");   // date header sits under the column header
+    tabEl.style.setProperty("--cc-list-maxh", maxH + "px");
+  }
+  window.ccPinStack = function (tabEl) {
+    if (!tabEl) return;
+    pinned.add(tabEl);
+    recompute(tabEl);
+    requestAnimationFrame(() => recompute(tabEl)); // re-measure after layout settles
+  };
+  let t;
+  window.addEventListener("resize", () => {
+    clearTimeout(t);
+    t = setTimeout(() => pinned.forEach(recompute), 150);
+  });
+})();
+
 (function () {
   // ── CSS ─────────────────────────────────────────────────────────────────────
   const REGISTER_CSS = `
@@ -37,6 +81,8 @@
   background: #f4f6fb; border-radius: 10px;
   padding: 0.5rem 0.7rem;
   border: 1px solid #e8eaf0;
+  /* Pin under the app header while the list scrolls (var set by ccPinStack). */
+  position: sticky; top: var(--cc-pin-filter, 66px); z-index: 30;
 }
 .reg-filter-row {
   display: flex; flex-wrap: wrap;
@@ -145,13 +191,17 @@ tr.reg-row-located.reg-row-located-fade > td {
 .register-table-container {
   background: #fff; border-radius: 8px;
   box-shadow: 0 1px 4px rgba(0,0,0,.07);
-  overflow-x: auto; margin-bottom: 5rem;
+  /* Scroll the list inside the card (height capped by ccPinStack) so the
+     column header and date-group headers can pin. overflow:auto keeps the
+     wide table horizontally scrollable too. */
+  overflow: auto; max-height: var(--cc-list-maxh, 70vh); margin-bottom: 1rem;
 }
 .register-table {
   width: 100%; border-collapse: collapse; font-size: 0.81rem;
 }
 .register-table thead {
   background: var(--primary, #3f51b5); color: #fff;
+  /* Pins to the top of the (now height-capped) scrolling container. */
   position: sticky; top: 0; z-index: 10;
 }
 .register-table th {
@@ -196,6 +246,10 @@ tr.reg-row-located.reg-row-located-fade > td {
   font-size: 0.76rem; color: var(--primary, #3f51b5);
   letter-spacing: .03em;
   border-bottom: 2px solid var(--primary, #3f51b5);
+  /* Pin the current date header right under the column header; the next date's
+     header pushes it up as you scroll (var = column-header height). */
+  position: sticky; top: var(--cc-grouptop, 35px); z-index: 6;
+  background: #eef2f7;
 }
 .date-group-header i { margin-right: 0.35rem; transition: transform 0.2s; }
 .date-group-header.collapsed i { transform: rotate(-90deg); }
@@ -2183,8 +2237,13 @@ tr.rp-svc-voided .rp-actions-cell { opacity:.9; }
       sr = dom("reg-search");
     if (sf)
       sf.addEventListener("change", () => {
+        const wasActive = state.filters.status === "active";
         state.filters.status = sf.value;
-        applyFilters();
+        // Entering/leaving "Active" changes which rows the server returns
+        // (all occupied rooms vs the date-scoped set), so re-fetch; other
+        // status switches just re-filter the data already loaded.
+        if (wasActive !== (sf.value === "active")) loadData(true);
+        else applyFilters();
       });
     if (pf)
       pf.addEventListener("change", () => {
@@ -2692,8 +2751,11 @@ tr.rp-svc-voided .rp-actions-cell { opacity:.9; }
     const { start, end } = state.dateRange;
     if (!start || !end) return;
 
-    // Non-forced calls: skip if same range already loaded or a load is in flight
-    const rangeKey = `${start}_${end}`;
+    // Non-forced calls: skip if same range already loaded or a load is in flight.
+    // The "Active" filter fetches all occupied rooms regardless of date, so it
+    // is a distinct dataset — fold it into the cache key.
+    const activeAll = state.filters.status === "active";
+    const rangeKey = `${start}_${end}_${activeAll ? "A" : ""}`;
     if (!force) {
       if (state.loading) return;
       if (state.lastLoadedRange === rangeKey) {
@@ -2711,7 +2773,7 @@ tr.rp-svc-voided .rp-actions-cell { opacity:.9; }
       const res = await apiFetch("/get_register_data", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ start_date: start, end_date: end }),
+        body: JSON.stringify({ start_date: start, end_date: end, active_all: activeAll }),
       });
       if (myReqId !== state._reqId) return; // a newer request superseded this one
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -2743,7 +2805,7 @@ tr.rp-svc-voided .rp-actions-cell { opacity:.9; }
       const res = await apiFetch("/get_register_data", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ start_date: start, end_date: end }),
+        body: JSON.stringify({ start_date: start, end_date: end, active_all: state.filters.status === "active" }),
       });
       if (!res.ok) return;
       const data = await res.json();
@@ -3459,6 +3521,7 @@ tr.rp-svc-voided .rp-actions-cell { opacity:.9; }
     // and "Show more", which previously re-rendered without one and left
     // its rows permanently unmarked.
     _checkAndShowDocButtons();
+    if (window.ccPinStack) window.ccPinStack(dom("register-tab"));
   }
 
   function loadMoreRowHTML(remaining) {

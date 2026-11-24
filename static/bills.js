@@ -65,6 +65,8 @@
   background: #f4f6fb; border-radius: 10px;
   padding: 0.5rem 0.7rem;
   border: 1px solid #e8eaf0;
+  /* Pin under the app header while the list scrolls (var set by ccPinStack). */
+  position: sticky; top: var(--cc-pin-filter, 66px); z-index: 30;
 }
 .bl-date-range-wrap {
   display: flex; align-items: center; gap: 0.3rem;
@@ -106,13 +108,17 @@
 .bills-table-container {
   background: #fff; border-radius: 8px;
   box-shadow: 0 1px 4px rgba(0,0,0,.07);
-  overflow-x: auto; margin-bottom: 5rem;
+  /* Scroll the list inside the card (height capped by ccPinStack) so the
+     column header and date-group headers can pin. overflow:auto keeps the
+     wide table horizontally scrollable too. */
+  overflow: auto; max-height: var(--cc-list-maxh, 70vh); margin-bottom: 1rem;
 }
 .bills-table {
   width: 100%; border-collapse: collapse; font-size: 0.81rem;
 }
 .bills-table thead {
   background: var(--primary, #3f51b5); color: #fff;
+  /* Pins to the top of the (now height-capped) scrolling container. */
   position: sticky; top: 0; z-index: 10;
 }
 .bills-table th {
@@ -131,6 +137,10 @@
   font-size: 0.76rem; color: var(--primary, #3f51b5);
   letter-spacing: .03em;
   border-bottom: 2px solid var(--primary, #3f51b5);
+  /* Pin the current date header right under the column header; the next date's
+     header pushes it up as you scroll (var = column-header height). */
+  position: sticky; top: var(--cc-grouptop, 35px); z-index: 6;
+  background: #eef2f7;
 }
 .bl-date-header i { margin-right: 0.35rem; transition: transform 0.2s; }
 .bl-date-header.collapsed i { transform: rotate(-90deg); }
@@ -3808,6 +3818,7 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
       });
       html += loadMoreRowHTML(sorted.length - Math.min(cap, sorted.length));
       tbody.innerHTML = html;
+      if (window.ccPinStack) window.ccPinStack(dom("bills-tab"));
       return;
     }
 
@@ -3842,6 +3853,7 @@ body[data-role="admin"] .bl-pay-clickable:hover { background: #eef2ff; }
     }
     html += loadMoreRowHTML(state.filteredEntries.length - rowNum);
     tbody.innerHTML = html;
+    if (window.ccPinStack) window.ccPinStack(dom("bills-tab"));
   }
 
   function loadMoreRowHTML(remaining) {

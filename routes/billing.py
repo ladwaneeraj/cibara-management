@@ -146,6 +146,12 @@ def get_register_data():
         if mode not in ("checkin", "checkout"):
             mode = "checkin"
 
+        # `active_all` (Register "Active" filter): include EVERY still-occupied
+        # room regardless of its check-in date, so long-staying guests whose
+        # check-in falls before the selected range stay visible. Only meaningful
+        # in checkin mode — checkout mode excludes active rooms entirely.
+        active_all = bool(data_json.get("active_all")) and mode == "checkin"
+
         if not start_date or not end_date:
             return jsonify(success=False, message="Start and end dates are required")
 
@@ -297,7 +303,7 @@ def get_register_data():
             except ValueError:
                 continue
 
-            if not (start_dt <= checkin_dt < end_dt):
+            if not active_all and not (start_dt <= checkin_dt < end_dt):
                 continue
 
             dedup_key = (str(room_number), checkin_time)

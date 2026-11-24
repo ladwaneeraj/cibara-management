@@ -1626,6 +1626,20 @@ function _drawGuide(progress) {
 // 8.  Capture + scanned look + multi-photo handling
 // ─────────────────────────────────────────────────────────────────────────────
 
+// Cap a headless document scan. doc-scan.js lazy-loads OpenCV (~8 MB) from an
+// external CDN; on a slow/flaky phone connection that load can stall for many
+// seconds, leaving a capture frozen and the photo apparently "stuck". Racing it
+// against this timeout guarantees the capture always lands within a few seconds
+// — with the raw framed photo when detection isn't ready in time. Errors fall
+// through to null so the caller keeps the original frame too.
+const DOC_SCAN_TIMEOUT_MS = 6000;
+function _scanWithTimeout(scanPromise) {
+  return Promise.race([
+    Promise.resolve(scanPromise).catch(() => null),
+    new Promise((res) => setTimeout(() => res(null), DOC_SCAN_TIMEOUT_MS)),
+  ]);
+}
+
 function captureDocPhoto() {
   stopAutoScan();
   const feed = document.getElementById('doc-camera-feed');
@@ -1667,11 +1681,11 @@ function captureDocPhoto() {
     const captured = new File([blob], `id_${Date.now()}.jpg`, { type: 'image/jpeg' });
     let scanned = captured;
     if (window.CibaraDocScan && typeof window.CibaraDocScan.autoScan === 'function') {
-      try {
-        scanned = await window.CibaraDocScan.autoScan(captured, {
-          autoDetect: true, enhance: 'magic', fallbackCrop,
-        }) || captured;
-      } catch (e) { console.warn('[customer-docs] autoScan failed, keeping frame:', e); scanned = captured; }
+      // Time-boxed so a slow OpenCV load can never leave the capture hanging —
+      // keep the raw framed photo if detection isn't ready in time.
+      scanned = await _scanWithTimeout(window.CibaraDocScan.autoScan(captured, {
+        autoDetect: true, enhance: 'magic', fallbackCrop,
+      })) || captured;
     }
 
     const url = URL.createObjectURL(scanned);
@@ -1793,7 +1807,7 @@ async function _autoScanIdDoc(file) {
   if (!file) return file;
   try {
     if (window.CibaraDocScan && typeof window.CibaraDocScan.autoScan === 'function') {
-      return await window.CibaraDocScan.autoScan(file, { autoDetect: true, enhance: 'magic' }) || file;
+      return await _scanWithTimeout(window.CibaraDocScan.autoScan(file, { autoDetect: true, enhance: 'magic' })) || file;
     }
     if (typeof _compressImage === 'function') {
       return await _compressImage(file);
@@ -1907,12 +1921,21 @@ function resetDocCaptureUI() {
 // Mobile number associated with the photos currently in the viewer
 // (set when opening from a customer context so the delete button can call the API)
 let _viewerMobile = '';
+// Guest name from the check-in form (customers/{mobile}.name), loaded with the details.
+let _viewerGuestName = '';
 
 // Bumped on every photo switch. An image fetch that finishes after the user
 // has already moved on (or opened a different guest) checks its token against
 // this and bails, so a slow previous request can never paint over the photo
 // now on screen.
 let _viewerLoadToken = 0;
+
+// Per-document ID details (name/type/number/dob/year + edit history), keyed by
+// doc_id, loaded from GET /id-docs when the viewer opens with a mobile. Drives
+// the combined "Guest details" pane and its edit marks / hover history.
+let _viewerDocs = {};          // doc_id -> record
+let _viewerCanEdit = false;    // customer_doc.capture for this user
+let _viewerDetailsToken = 0;   // guards an async details load like the image one
 
 // Warm the session image cache (window.CibaraSecureImg keeps a Map of blob
 // URLs) so navigating between a guest's photos — and re-opening the same
@@ -1937,19 +1960,30 @@ function _prefetchViewerImages(urls, idx) {
 // opening a document fast on the single, low-CPU instance. The burned-in copy
 // (variant "view") is still used for the open-in-new-tab path, which can't carry
 // an overlay.
-function _viewerWatermarkText() {
-  let name = '';
+function _viewerName() {
   try {
     const u = window.CibaraAuth && typeof window.CibaraAuth.currentUser === 'function'
       && window.CibaraAuth.currentUser();
-    name = (u && u.name) || '';
-  } catch (_) { /* ignore */ }
+    return (u && u.name) || '';
+  } catch (_) { return ''; }
+}
+
+function _viewerWatermarkText() {
+  const name = _viewerName();
   let when = '';
   try {
     when = new Date().toLocaleString('en-IN',
       { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
   } catch (_) { /* ignore */ }
   return `Cibara · ID verification only · ${name || '—'}${when ? ' · ' + when : ''}`;
+}
+
+// Short text repeated across the image tiles: the viewer's name leads so a
+// cropped/leaked screenshot of the image alone still shows who opened it (the
+// full name + timestamp stay in the footer line).
+function _viewerWatermarkTile() {
+  const name = _viewerName();
+  return `${name ? name + ' · ' : ''}Cibara ID verification only`;
 }
 
 function _applyViewerWatermark(show) {
@@ -1966,16 +2000,15 @@ function _applyViewerWatermark(show) {
     wm.appendChild(footer);
     stage.appendChild(wm);
   }
-  const text = _viewerWatermarkText();
-  const esc = (window.escHtml ? window.escHtml(text) : text);
+  const tileEsc = (window.escHtml ? window.escHtml(_viewerWatermarkTile()) : _viewerWatermarkTile());
   const svg =
     "<svg xmlns='http://www.w3.org/2000/svg' width='360' height='130'>" +
     "<text x='-10' y='95' transform='rotate(-28 0 95)' " +
-    "font-family='Arial, sans-serif' font-size='17' fill='rgba(150,150,150,0.30)'>" +
-    esc + "</text></svg>";
+    "font-family='Arial, sans-serif' font-size='16' fill='rgba(150,150,150,0.30)'>" +
+    tileEsc + "</text></svg>";
   wm.style.backgroundImage = "url(\"data:image/svg+xml," + encodeURIComponent(svg) + "\")";
   const footerEl = wm.querySelector('.doc-viewer-wm-footer');
-  if (footerEl) footerEl.textContent = text;   // textContent — never innerHTML
+  if (footerEl) footerEl.textContent = _viewerWatermarkText();   // textContent — never innerHTML
   wm.style.display = 'block';
 }
 
@@ -1986,7 +2019,7 @@ function openPhotoViewer(urls, startIdx, mobile) {
   _viewerMobile     = (mobile || '').replace(/\D/g, '');
   _prefetchViewerImages(urls, _viewerCurrentIdx);
 
-  _setText('doc-viewer-count', `${urls.length} photo${urls.length !== 1 ? 's' : ''} on file`);
+  _setViewerHeader();
 
   const thumbsEl = document.getElementById('doc-viewer-thumbs');
   if (thumbsEl) {
@@ -2020,9 +2053,270 @@ function openPhotoViewer(urls, startIdx, mobile) {
     addBtn.style.display = canAdd ? 'inline-flex' : 'none';
   }
 
+  // Open the modal FIRST — the image viewer must never be blocked by the
+  // details pane (a nicety). Everything below is wrapped so a details bug can
+  // never stop the lightbox from opening.
   const viewer = document.getElementById('doc-photo-viewer');
   if (viewer) viewer.style.display = 'flex';
+
+  // Combined "Guest details" pane — reset, render, then load the per-document
+  // fields (name/type/number/dob/year + edit history) for this guest.
+  try {
+    _viewerDocs = {};
+    _viewerCanEdit = false;
+    _viewerGuestName = '';
+    _renderDocDetails();
+    _loadDocDetails(_viewerMobile);
+  } catch (e) {
+    console.warn('[customer-docs] guest-details pane failed (viewer still open):', e);
+  }
 }
+
+// ── Combined guest-details pane ──────────────────────────────────────────────
+
+function _docIdFromUrl(url) {
+  const m = /\/id-docs\/([^/?#]+)/.exec(url || '');
+  return m ? m[1] : '';
+}
+
+// Header subtitle under "ID documents": the guest's name · mobile (no labels).
+// Captured-by lives in the Guest details footer, so it is not repeated here.
+// Falls back to the photo count until the name/mobile are known.
+function _setViewerHeader() {
+  const parts = [_viewerGuestName, _viewerMobile].filter(Boolean);
+  const n = _viewerUrls.length;
+  _setText('doc-viewer-count',
+    parts.length ? parts.join(' · ') : `${n} photo${n !== 1 ? 's' : ''} on file`);
+}
+
+// Fetch every document's editable fields + history once per open. Guarded by a
+// token so a slow load for a previous guest never paints over the current one.
+function _loadDocDetails(mobile) {
+  if (!mobile) return;
+  const token = ++_viewerDetailsToken;
+  apiFetch(`/api/v2/customers/${mobile}/id-docs`)
+    .then(r => r.json())
+    .then(d => {
+      if (token !== _viewerDetailsToken || !d || d.success === false) return;
+      _viewerGuestName = d.guest_name || '';
+      _viewerCanEdit = !!(d.can && d.can.capture);
+      (d.documents || []).forEach(rec => { if (rec && rec.id) _viewerDocs[rec.id] = rec; });
+      _renderDocDetails();
+    })
+    .catch(() => { /* details are a nicety — never block the image viewer */ });
+}
+
+// Age from a YYYY-MM-DD dob (precise) or a birth year (approximate).
+function _ageFrom(dob, year) {
+  try {
+    if (dob && /^\d{4}-\d{2}-\d{2}$/.test(dob)) {
+      const b = new Date(dob + 'T00:00:00'), n = new Date();
+      let a = n.getFullYear() - b.getFullYear();
+      if (n.getMonth() < b.getMonth() || (n.getMonth() === b.getMonth() && n.getDate() < b.getDate())) a--;
+      if (a >= 0 && a <= 120) return a;
+    }
+  } catch (_) { /* ignore */ }
+  if (year) { const a = new Date().getFullYear() - Number(year); if (a >= 0 && a <= 120) return a; }
+  return null;
+}
+
+function _fmtDob(dob) {
+  if (!dob || !/^\d{4}-\d{2}-\d{2}$/.test(dob)) return '';
+  try {
+    return new Date(dob + 'T00:00:00').toLocaleDateString('en-IN',
+      { day: '2-digit', month: 'short', year: 'numeric' });
+  } catch (_) { return dob; }
+}
+
+// The latest edit of `field`, if any, from a record's append-only history.
+function _lastEdit(rec, field) {
+  const hist = (rec && rec.history) || [];
+  for (let i = hist.length - 1; i >= 0; i--) {
+    if (hist[i] && hist[i].action === 'field_edited' && hist[i].field === field) return hist[i];
+  }
+  return null;
+}
+
+// Renamed from _esc to avoid colliding with transaction-tracking.js's global
+// `function _esc` — these classic scripts share one global lexical scope, so a
+// duplicate top-level declaration makes the WHOLE file fail to load.
+const _dpEsc = (s) => (window.escHtml ? window.escHtml(String(s == null ? '' : s))
+                                      : String(s == null ? '' : s));
+
+// One read-mode row: label + value, with a pencil + hover tooltip when the field
+// was edited (who, when, previous value — straight from the document history).
+function _detailRow(label, value, rec, field) {
+  const edit = rec ? _lastEdit(rec, field) : null;
+  let mark = '', tip = '', cls = 'doc-dp-row';
+  if (edit) {
+    cls += ' edited';
+    mark = ' <span class="doc-edited-mark" aria-hidden="true"></span>';
+    const who = _dpEsc(edit.by_name || 'someone');
+    const when = _dpEsc((edit.at || '').replace('T', ' ').slice(0, 16));
+    tip = `<span class="doc-dp-tip">Edited by ${who}${when ? ' · ' + when : ''}<br>${_dpEsc(edit.note || '')}</span>`;
+  }
+  return `<div class="${cls}"><span class="k">${_dpEsc(label)}</span>`
+       + `<span class="v">${_dpEsc(value || '—')}${mark}${tip}</span></div>`;
+}
+
+// Colour class for the ID-type pill, by type.
+function _idTypeClass(t) {
+  const s = (t || '').toLowerCase();
+  if (s.includes('aadhaar') || s.includes('aadhar')) return 'doc-dp-chip--aadhaar';
+  if (s.includes('voter') || s.includes('epic') || s.includes('election')) return 'doc-dp-chip--voter';
+  if (s.includes('licen') || s.includes('driv') || s === 'dl') return 'doc-dp-chip--dl';
+  if (s.includes('pan')) return 'doc-dp-chip--pan';
+  if (s.includes('passport')) return 'doc-dp-chip--passport';
+  return 'doc-dp-chip--other';
+}
+
+// Wrap one inline "fact" so an edited field still shows the amber dot + hover
+// history (who/when/old→new), the same as the old rows did.
+function _fact(innerHtml, rec, field) {
+  const edit = rec ? _lastEdit(rec, field) : null;
+  let dot = '', tip = '';
+  if (edit) {
+    dot = ' <span class="doc-edited-mark" aria-hidden="true"></span>';
+    const who = _dpEsc(edit.by_name || 'someone');
+    const when = _dpEsc((edit.at || '').replace('T', ' ').slice(0, 16));
+    tip = `<span class="doc-dp-tip">Edited by ${who}${when ? ' · ' + when : ''}<br>${_dpEsc(edit.note || '')}</span>`;
+  }
+  return `<span class="doc-dp-fact">${innerHtml}${dot}${tip}</span>`;
+}
+
+// All photos under one mobile belong to ONE guest (front/back, or extra pages of
+// the same person's IDs), so consolidate their fields into a single identity:
+// first non-empty value wins, remembering which record it came from so the edit
+// mark + hover history still point at the right document.
+function _mergeGuest(recs) {
+  const g = { guest_name: '', id_type: '', id_number: '', dob: '', birth_year: '', _src: {} };
+  ['guest_name', 'id_type', 'id_number', 'dob', 'birth_year'].forEach((f) => {
+    for (const r of recs) {
+      if (r[f] != null && r[f] !== '') { g[f] = r[f]; g._src[f] = r; break; }
+    }
+  });
+  return g;
+}
+
+function _renderDocDetails() {
+  _setViewerHeader();   // name may have just loaded — refresh the header line
+  const host = document.getElementById('doc-viewer-details');
+  if (!host) return;
+
+  const recs = _viewerUrls.map(u => _viewerDocs[_docIdFromUrl(u)]).filter(Boolean);
+  const canEditNow = _viewerCanEdit && recs.length;
+
+  let body = '';
+  if (!recs.length) {
+    body = `<div class="doc-dp-empty">No ID details saved yet.</div>`;
+  } else {
+    const g = _mergeGuest(recs);
+    const age = _ageFrom(g.dob, g.birth_year);
+    const dobStr = _fmtDob(g.dob) || (g.birth_year ? String(g.birth_year) : '');
+    const facts = [];
+    if (g.id_type) {
+      facts.push(_fact(`<span class="doc-dp-chip ${_idTypeClass(g.id_type)}">${_dpEsc(g.id_type)}</span>`,
+                       g._src.id_type, 'id_type'));
+    }
+    if (g.id_number) {
+      facts.push(_fact(`<span class="doc-dp-num">${_dpEsc(g.id_number)}</span>`,
+                       g._src.id_number, 'id_number'));
+    }
+    if (dobStr) {
+      const ageBadge = age != null ? ` <span class="doc-dp-age">${age}y</span>` : '';
+      facts.push(_fact(`<span class="doc-dp-dob">${_dpEsc(dobStr)}</span>${ageBadge}`,
+                       g._src.dob, 'dob'));
+    }
+    body = facts.length
+      ? `<div class="doc-dp-facts">${facts.join('')}</div>`
+      : `<div class="doc-dp-empty">${canEditNow ? 'No ID details yet — click to add.' : 'No ID details saved yet.'}</div>`;
+  }
+
+  // Footer: how many photos + who captured them.
+  let foot = '';
+  const cap = recs.find(r => r.captured_by && r.captured_by.name);
+  const n = recs.length;
+  if (cap) {
+    const when = _dpEsc((cap.captured_at || '').replace('T', ' ').slice(0, 16));
+    foot = `<div class="doc-dp-foot"><i class="fas fa-camera"></i> ${n} photo${n !== 1 ? 's' : ''} · captured by `
+         + `${_dpEsc(cap.captured_by.name)}${when ? ' · ' + when : ''}</div>`;
+  }
+
+  const inner = canEditNow
+    ? `<div class="doc-dp-editable" onclick="_docDetailsEdit()" role="button" tabindex="0" title="Click to edit ID details">${body}</div>`
+    : body;
+  host.innerHTML = `<div class="doc-dp-card">${inner}${foot}</div>`;
+}
+
+// Edit mode: one consolidated identity. Saves to the front photo's record (or
+// the first on file) — all photos under one mobile are the same guest.
+function _docDetailsEdit() {
+  const host = document.getElementById('doc-viewer-details');
+  if (!host) return;
+  const recs = _viewerUrls.map(u => _viewerDocs[_docIdFromUrl(u)]).filter(Boolean);
+  if (!recs.length) return;
+  const g = _mergeGuest(recs);
+  const target = recs.find(r => r.side === 'front') || recs[0];
+  const types = ['Aadhaar', 'Voter ID', 'Driving Licence', 'PAN', 'Passport', 'Other'];
+  const opts = types.map(t => `<option${t === g.id_type ? ' selected' : ''}>${t}</option>`).join('');
+
+  host.innerHTML =
+    `<div class="doc-dp-card">`
+    + `<div class="doc-dp-head"><span class="doc-dp-label">Edit guest details</span></div>`
+    + `<div class="doc-dp-guest first" data-doc="${_dpEsc(target.id)}">`
+    + `<div class="doc-dp-field"><label>Name</label><input class="doc-dp-input" data-f="guest_name" value="${_dpEsc(g.guest_name)}"></div>`
+    + `<div class="doc-dp-field"><label>ID type</label><select class="doc-dp-input" data-f="id_type"><option value=""${g.id_type ? '' : ' selected'}>—</option>${opts}</select></div>`
+    + `<div class="doc-dp-field"><label>ID number</label><input class="doc-dp-input" data-f="id_number" value="${_dpEsc(g.id_number)}"></div>`
+    + `<div class="doc-dp-field"><label>Date of birth</label><input class="doc-dp-input" type="date" data-f="dob" value="${_dpEsc(g.dob)}"></div>`
+    + `<div class="doc-dp-field"><label>Birth year</label><input class="doc-dp-input" type="number" data-f="birth_year" value="${_dpEsc(g.birth_year || '')}" min="1900" max="2100"></div>`
+    + `</div>`
+    + `<div class="doc-dp-editactions"><button type="button" class="doc-dp-save" onclick="_docDetailsSave(this)">Save</button>`
+    + `<button type="button" class="doc-dp-cancel" onclick="_renderDocDetails()">Cancel</button></div>`
+    + `</div>`;
+}
+
+async function _docDetailsSave(btn) {
+  const host = document.getElementById('doc-viewer-details');
+  if (!host || !_viewerMobile) return;
+  if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+
+  const jobs = [];
+  host.querySelectorAll('.doc-dp-guest[data-doc]').forEach(block => {
+    const docId = block.getAttribute('data-doc');
+    const rec = _viewerDocs[docId] || {};
+    const payload = {};
+    block.querySelectorAll('[data-f]').forEach(inp => {
+      const f = inp.getAttribute('data-f');
+      let v = inp.value.trim();
+      const cur = rec[f] == null ? '' : String(rec[f]);
+      if (f === 'birth_year') { if (v === String(rec.birth_year || '')) return; payload[f] = v === '' ? null : Number(v); return; }
+      if (v !== cur) payload[f] = v;
+    });
+    if (Object.keys(payload).length) {
+      jobs.push(apiFetch(`/api/v2/customers/${_viewerMobile}/id-docs/${docId}/fields`,
+        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
+        .then(r => r.json())
+        .then(d => { if (d && d.document) _viewerDocs[docId] = d.document; else throw new Error((d && d.message) || 'Save failed'); }));
+    }
+  });
+
+  try {
+    if (!jobs.length) { _renderDocDetails(); return; }
+    await Promise.all(jobs);
+    _notify('ID details saved', 'success');
+  } catch (e) {
+    _notify((e && e.message) || 'Could not save ID details', 'warning');
+  } finally {
+    _renderDocDetails();
+  }
+}
+
+// The details pane renders inline onclick handlers; expose them on window so
+// they resolve whether or not this bundle is wrapped per-file.
+window._docDetailsEdit = _docDetailsEdit;
+window._docDetailsSave = _docDetailsSave;
+window._renderDocDetails = _renderDocDetails;
+window.openPhotoViewer = openPhotoViewer;
 
 function _showViewerSpinner(show) {
   const el = document.getElementById('doc-viewer-loading');
@@ -2089,10 +2383,7 @@ function setViewerPhoto(idx) {
     openLink.onclick = window.CibaraSecureImg.isSecure(url)
       ? (e) => { e.preventDefault(); window.CibaraSecureImg.open(url); } : null;
   }
-  // Who captured this photo and when (shown under "N photos on file").
-  const n = _viewerUrls.length;
-  const cap = window.CibaraSecureImg.caption(url);
-  _setText('doc-viewer-count', `${n} photo${n !== 1 ? 's' : ''} on file` + (cap ? ` · ${cap}` : ''));
+  _setViewerHeader();
   document.querySelectorAll('.doc-thumb').forEach((el, i) => el.classList.toggle('active', i === idx));
 }
 

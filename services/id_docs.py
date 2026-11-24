@@ -118,6 +118,18 @@ def _customer_ref(mobile: str):
     return _db().collection("customers").document(mobile)
 
 
+def customer_name(mobile: str) -> str:
+    """The guest's name as captured at check-in (customers/{mobile}.name)."""
+    clean = clean_mobile(mobile)
+    if not clean:
+        return ""
+    try:
+        snap = _customer_ref(clean).get()
+        return (snap.to_dict() or {}).get("name", "") if snap.exists else ""
+    except Exception:
+        return ""
+
+
 def _docs_ref(mobile: str):
     return _customer_ref(mobile).collection(SUBCOLLECTION)
 
@@ -373,7 +385,9 @@ def _public(rec: dict, *, include_removed_detail: bool = True) -> dict:
             "captured_by", "captured_at", "context", "views", "last_viewed_by",
             "last_viewed_at", "removed_by", "removed_at", "remove_reason",
             "restored_by", "restored_at", "archived_at", "legacy", "history",
-            "scan")
+            "scan",
+            # Editable human ID fields (OCR-prefilled, staff-editable).
+            "guest_name", "id_type", "id_number", "dob", "birth_year")
     out = {k: rec.get(k) for k in keep if k in rec}
     out["history"] = list(rec.get("history") or [])[-MAX_HISTORY:]
     if not include_removed_detail:
@@ -693,6 +707,109 @@ def set_side(mobile: str, doc_id: str, *, side: str, user: dict | None) -> dict:
         _append_history(ref, _history("relabelled", user, f"{rec.get('side')} → {side}"),
                         {"side": side})
     return _public(ref.get().to_dict() or {})
+
+
+ID_TYPES = ("Aadhaar", "Voter ID", "Driving Licence", "PAN", "Passport", "Other")
+EDITABLE_FIELDS = ("guest_name", "id_type", "id_number", "dob", "birth_year")
+_OCR_KIND_LABEL = {"aadhaar": "Aadhaar", "voter": "Voter ID", "dl": "Driving Licence",
+                   "pan": "PAN", "passport": "Passport", "other": "Other"}
+_FIELD_LABELS = {"guest_name": "Name", "id_type": "ID type", "id_number": "ID number",
+                 "dob": "Date of birth", "birth_year": "Birth year"}
+
+
+def _clean_field(key: str, value: Any) -> Any:
+    """Validate/normalise one editable ID field; '' clears it. Raises IdDocError."""
+    if value is None:
+        return ""
+    s = str(value).strip()
+    if key == "guest_name":
+        return s[:80]
+    if key == "id_type":
+        if not s:
+            return ""
+        for t in ID_TYPES:
+            if s.lower() == t.lower():
+                return t
+        raise IdDocError("ID type must be one of: " + ", ".join(ID_TYPES) + ".")
+    if key == "id_number":
+        s = " ".join(s.split()).upper()
+        if s and not (4 <= len(s) <= 25 and any(c.isalnum() for c in s)):
+            raise IdDocError("That ID number doesn't look right.")
+        return s
+    if key == "dob":
+        if not s:
+            return ""
+        try:
+            datetime.strptime(s, "%Y-%m-%d")
+        except ValueError:
+            raise IdDocError("Date of birth must be YYYY-MM-DD.")
+        return s
+    if key == "birth_year":
+        try:
+            y = int(s)
+        except ValueError as e:
+            raise IdDocError("Birth year must be a number.") from e
+        if not (1900 <= y <= datetime.now(IST).year):
+            raise IdDocError("Birth year is out of range.")
+        return y
+    raise IdDocError("Unknown field.")
+
+
+def set_fields(mobile: str, doc_id: str, *, fields: dict, user: dict | None) -> dict:
+    """Edit the human ID fields (name/type/number/dob/year) on one document.
+
+    One append-only `history` entry per CHANGED field ({action:"field_edited",
+    field, note:"old → new"}), so the viewer can flag edited fields and show who
+    changed what, when, and the previous value on hover. No money/tax data here.
+    """
+    ref, rec = get_record(mobile, doc_id)
+    updates: dict = {}
+    entries: list = []
+    for key in EDITABLE_FIELDS:
+        if key not in fields:
+            continue
+        new = _clean_field(key, fields[key])
+        old = rec.get(key)
+        old_norm = "" if old is None else old
+        if new == old_norm:
+            continue
+        updates[key] = new
+        entry = _history("field_edited", user,
+                         f"{_FIELD_LABELS[key]}: {old_norm or '—'} → {new or '—'}")
+        entry["field"] = key
+        entries.append(entry)
+    if not updates:
+        return _public(rec)
+    updates["history"] = _fs().ArrayUnion(entries)
+    ref.update(updates)
+    logger.info("id_docs: fields edited on %s (%s) by %s",
+                doc_id, ", ".join(updates.keys()), _who(user)["userId"])
+    return _public(ref.get().to_dict() or {})
+
+
+def set_ocr_fields(mobile: str, doc_id: str, fields: dict) -> None:
+    """Pre-fill BLANK ID fields from an OCR extraction. Never overwrites a value
+    a human (or an earlier OCR run) already set, and writes no history — the
+    document's capture entry already records provenance. Best-effort."""
+    try:
+        ref, rec = get_record(mobile, doc_id)
+    except IdDocError:
+        return
+    incoming = {
+        "guest_name": (fields.get("name") or "").strip()[:80],
+        "id_type": _OCR_KIND_LABEL.get((fields.get("doc_kind") or "").lower(), ""),
+        "id_number": " ".join(str(fields.get("id_number") or "").split()).upper(),
+        "dob": (fields.get("dob") or ""),
+        "birth_year": fields.get("birth_year"),
+    }
+    updates = {k: v for k, v in incoming.items()
+               if v not in ("", None) and not rec.get(k)}
+    if not updates:
+        return
+    try:
+        ref.update(updates)
+    except Exception as e:  # pragma: no cover - best effort
+        logger.warning("id_docs: ocr field fill failed for %s: %s", doc_id, e)
 
 
 def resolve_legacy_url(mobile: str, url: str) -> str:

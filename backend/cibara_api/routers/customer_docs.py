@@ -68,6 +68,7 @@ async def list_id_docs(mobile: str = Mobile,
         raise _fail(e) from e
     return {
         "success": True, "mobile": mobile, "documents": docs,
+        "guest_name": await run_in_threadpool(svc.customer_name, mobile),
         "active": sum(1 for d in docs if d.get("status") == "active"),
         "can": {"capture": p.can("customer_doc.capture"),
                 "download": p.can("customer_doc.download"),
@@ -222,6 +223,33 @@ async def relabel_id_doc(body: SideIn, mobile: str = Mobile, doc_id: str = DocId
     def _do():
         rec = svc.set_side(mobile, doc_id, side=body.side, user=p.user.as_legacy_user())
         _audit(p, "customer_doc.relabel", mobile, doc_id=doc_id, side=body.side)
+        return rec
+    try:
+        return {"success": True, "document": await run_in_threadpool(_do)}
+    except svc.IdDocError as e:
+        raise _fail(e) from e
+
+
+class FieldsIn(BaseModel):
+    # All optional — only the keys present are changed. Empty string clears a field.
+    guest_name: str | None = Field(None, max_length=80)
+    id_type: str | None = Field(None, max_length=40)
+    id_number: str | None = Field(None, max_length=40)
+    dob: str | None = Field(None, max_length=10)
+    birth_year: int | None = Field(None, ge=1900, le=2100)
+
+
+@router.post("/{mobile}/id-docs/{doc_id}/fields")
+async def edit_id_doc_fields(body: FieldsIn, mobile: str = Mobile, doc_id: str = DocId,
+                             p: Principal = Depends(require_permission("customer_doc.capture"))):
+    svc = _svc()
+    fields = body.model_dump(exclude_unset=True)
+    if not fields:
+        raise HTTPException(400, "No fields to update.")
+
+    def _do():
+        rec = svc.set_fields(mobile, doc_id, fields=fields, user=p.user.as_legacy_user())
+        _audit(p, "customer_doc.relabel", mobile, doc_id=doc_id, fields=list(fields.keys()))
         return rec
     try:
         return {"success": True, "document": await run_in_threadpool(_do)}

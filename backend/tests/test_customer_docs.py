@@ -423,3 +423,54 @@ def test_thumb_without_link_still_streams_bytes(client, manager):
     assert r.status_code == 200
     assert r.headers["content-type"] == "image/jpeg"
     assert max(Image.open(io.BytesIO(r.content)).size) <= 360
+
+
+# ─── editable ID fields + edit history ───────────────────────────────────────
+
+def test_edit_fields_records_per_field_history(client, manager):
+    doc_id = _upload(client, manager).json()["document"]["id"]
+    r = client.post(f"{BASE}/{doc_id}/fields", headers=manager,
+                    json={"guest_name": "Chaitra K C", "id_type": "aadhaar",
+                          "id_number": "2668 1216 2288", "birth_year": 1997})
+    assert r.status_code == 200, r.text
+    doc = r.json()["document"]
+    assert doc["id_type"] == "Aadhaar"                 # normalised to the label
+    assert doc["id_number"] == "2668 1216 2288"
+    assert doc["birth_year"] == 1997
+    edits = [h for h in doc["history"] if h.get("action") == "field_edited"]
+    assert {h["field"] for h in edits} == {"guest_name", "id_type", "id_number", "birth_year"}
+    assert any("2668 1216 2288" in h["note"] for h in edits)   # old → new recorded
+    assert _audits("customer_doc.relabel")
+
+
+def test_edit_fields_noop_when_unchanged(client, manager):
+    doc_id = _upload(client, manager).json()["document"]["id"]
+    client.post(f"{BASE}/{doc_id}/fields", headers=manager, json={"id_number": "ABC1234"})
+    before = len(client.get(f"{BASE}", headers=manager).json()["documents"][0]["history"])
+    client.post(f"{BASE}/{doc_id}/fields", headers=manager, json={"id_number": "ABC1234"})
+    after = len(client.get(f"{BASE}", headers=manager).json()["documents"][0]["history"])
+    assert after == before                             # same value → no new history
+
+
+def test_edit_fields_validates_and_blocks_housekeeping(client, manager, staff):
+    doc_id = _upload(client, manager).json()["document"]["id"]
+    assert client.post(f"{BASE}/{doc_id}/fields", headers=staff,
+                       json={"id_number": "X1234"}).status_code == 403
+    # Service-level validation (passes Pydantic, rejected by set_fields):
+    assert client.post(f"{BASE}/{doc_id}/fields", headers=manager,
+                       json={"id_type": "NotAType"}).status_code == 400
+    # Out-of-range year is rejected too (Pydantic 422 or service 400 — either is fine).
+    assert client.post(f"{BASE}/{doc_id}/fields", headers=manager,
+                       json={"birth_year": 1850}).status_code in (400, 422)
+
+
+def test_ocr_prefill_fills_blanks_only(client, manager):
+    from services import id_docs
+    doc_id = _upload(client, manager).json()["document"]["id"]
+    client.post(f"{BASE}/{doc_id}/fields", headers=manager, json={"id_number": "MANUAL99"})
+    id_docs.set_ocr_fields(M, doc_id, {"name": "Scanned Name", "doc_kind": "aadhaar",
+                                       "id_number": "OCR000", "birth_year": 1990})
+    doc = client.get(f"{BASE}", headers=manager).json()["documents"][0]
+    assert doc["id_number"] == "MANUAL99"              # manual value NOT overwritten
+    assert doc["guest_name"] == "Scanned Name"         # blank field filled
+    assert doc["birth_year"] == 1990

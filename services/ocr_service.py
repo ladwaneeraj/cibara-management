@@ -353,12 +353,14 @@ def _normalise(d: dict) -> dict:
 # are completely different. We only pull the two demographic fields the lodge
 # owner asked for (area pincode + age via DOB) plus the name for sanity.
 #
-# Privacy note: this sends the guest's ID image to Google's Gemini API. The
-# guest's full ID NUMBER is intentionally NOT requested here — it is already
-# captured at check-in and stored as id_number. We extract only pincode +
-# DOB, which are far less sensitive than the ID number itself. The feature is
-# gated behind the same OCR-enabled flag and can be turned off entirely with
-# the ID_OCR_ENABLED env var.
+# Privacy note: this sends the guest's ID image to Google's Gemini API. We
+# extract the document number (Aadhaar / licence / etc.) plus pincode + DOB
+# for demographics. The number auto-fills the SAME id_number field the desk
+# already types by hand at check-in (set only when blank — a manual value is
+# never overwritten). The feature is gated behind the OCR-enabled flag and can
+# be turned off entirely with the ID_OCR_ENABLED env var.
+# NOTE (owner/legal): Aadhaar numbers are subject to UIDAI masking norms — if
+# you must mask (store only the last 4), do it here before persisting.
 
 # Independent kill-switch. Defaults to "on when OCR is on". Set to "0"/"false"
 # to keep invoice OCR working while disabling ID-document OCR specifically.
@@ -396,16 +398,21 @@ Return ONLY a single JSON object with exactly these keys:
                                 // use the permanent/main address. Null if no
                                 // 6-digit PIN is clearly visible.
 
+  "id_number":  string|null,   // The document's OWN identification number as
+                                // printed: Aadhaar (12 digits), Voter EPIC,
+                                // Driving Licence, PAN (10 chars) or Passport
+                                // number. Copy it EXACTLY as printed, preserving
+                                // spaces and letters. Null if not clearly legible.
+
   "doc_kind":   string|null    // One of: "aadhaar", "voter", "dl", "pan",
                                 // "passport", "other". Your best guess.
 }
 
 Rules:
 1. Return ONLY the JSON object. No prose, no markdown fences.
-2. Never invent digits. A wrong PIN or DOB pollutes the owner's analytics.
+2. Never invent digits. A wrong PIN, DOB or ID number pollutes the record.
    When a field is not clearly legible, return null for that field.
-3. Do NOT return the document/ID number. It is not needed.
-4. PAN cards have no PIN code and usually no DOB address — return nulls for
+3. PAN cards have no PIN code and usually no DOB address — return nulls for
    those fields rather than guessing.
 """
 
@@ -477,7 +484,7 @@ def _normalise_id(d: dict) -> dict:
     from datetime import datetime as _dt
 
     out = {"name": None, "dob": None, "birth_year": None,
-           "pincode": None, "doc_kind": None}
+           "pincode": None, "id_number": None, "doc_kind": None}
     if not isinstance(d, dict):
         return out
 
@@ -518,6 +525,13 @@ def _normalise_id(d: dict) -> dict:
         digits = "".join(c for c in str(d["pincode"]) if c.isdigit())
         if len(digits) == 6:
             out["pincode"] = digits
+
+    # id_number — collapse whitespace, keep as printed; sanity length only.
+    # Operator verifies every field before save, so no per-format regex here.
+    if not _blankish(d.get("id_number")):
+        s = " ".join(str(d["id_number"]).split()).upper()
+        if 4 <= len(s) <= 25 and any(c.isalnum() for c in s):
+            out["id_number"] = s
 
     # doc_kind
     if not _blankish(d.get("doc_kind")):

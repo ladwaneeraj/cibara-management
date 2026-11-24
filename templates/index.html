@@ -479,42 +479,85 @@
         text-decoration: underline;
       }
       /* ── Photo viewer overlay ── */
+      /* ── ID document viewer (light, fixed-size) ───────────────────── */
       #doc-photo-viewer {
         position: fixed;
         inset: 0;
-        background: rgba(0, 0, 0, 0.88);
+        background: rgba(15, 23, 42, 0.55);
         z-index: 99999;
         display: none; /* toggled to flex by JS */
-        flex-direction: column;
         align-items: center;
         justify-content: center;
         padding: 1rem;
       }
-      /* Click-to-zoom in the lightbox: fitted by default, natural 1:1 when
-         zoomed so a small ID number becomes readable; the stage scrolls. */
-      #doc-viewer-stage {
+      .doc-modal-card {
+        width: 100%;
+        max-width: 920px;
+        height: 600px;
+        max-height: 92vh;
+        display: flex;
+        flex-direction: column;
+        background: #ffffff;
+        border-radius: 16px;
+        overflow: hidden;
+        box-shadow: 0 24px 60px rgba(20, 30, 55, 0.28);
+      }
+      .doc-modal-body {
+        flex: 1 1 auto;
+        min-height: 0;
+        display: grid;
+        grid-template-columns: 1fr 250px;   /* image : details (wide enough for a one-line ID fact row) */
+        grid-template-rows: minmax(0, 1fr);  /* clamp row to the card, else a tall
+                                                ID blows the stage past 600px */
+      }
+      .doc-modal-left {
+        background: #f4f6f9;
+        border-right: 1px solid #e6eaef;
+        padding: 14px;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        min-width: 0;
+        min-height: 0;
+      }
+      .doc-modal-right {
+        min-width: 0;
+        min-height: 0;
         overflow: auto;
-        scrollbar-width: thin;
+        padding: 14px;
+      }
+      /* Fixed image box: a card-shaped ID and a full-page ID both fit the SAME
+         box (object-fit: contain), so the modal never resizes per image. */
+      #doc-viewer-stage {
+        position: relative;
+        flex: 1 1 auto;
+        min-height: 0;
+        background: #11151d;
+        border-radius: 10px;
+        overflow: hidden;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      #doc-viewer-main-img {
+        width: 100%;
+        height: 100%;
+        object-fit: contain;   /* whole photo fits the fixed box, letterboxed */
+        display: block;
+        cursor: zoom-in;
+        transition: filter 0.2s ease;
       }
       #doc-viewer-main-img.doc-zoomed {
-        max-height: none !important;
-        max-width: none !important;
         width: auto !important;
         height: auto !important;
-      }
-      /* Progressive load: the small thumbnail shows first (blurred), then the
-         sharp watermarked image replaces it — so the viewer feels instant and
-         never flashes the previous guest's document. */
-      #doc-viewer-main-img {
-        transition: filter 0.2s ease;
+        max-width: none !important;
+        max-height: none !important;
+        object-fit: none !important;
+        cursor: zoom-out;
       }
       #doc-viewer-main-img.doc-lowres {
         filter: blur(7px);
       }
-      /* Browser-drawn watermark: the viewer's name + time over the document,
-         so viewing costs the server no image CPU (the old burned-in watermark
-         was the slowest thing in the app). pointer-events:none keeps click-to-
-         zoom working through it. */
       #doc-viewer-watermark {
         position: absolute;
         inset: 0;
@@ -535,28 +578,328 @@
         overflow: hidden;
         text-overflow: ellipsis;
       }
-      /* Thumbnail in viewer */
+      #doc-viewer-thumbs {
+        display: flex;
+        gap: 8px;
+        justify-content: center;
+        flex-wrap: wrap;
+      }
       .doc-thumb {
-        width: 54px;
-        height: 54px;
+        width: 50px;
+        height: 50px;
         border-radius: 8px;
         object-fit: cover;
         cursor: pointer;
-        border: 2px solid rgba(255, 255, 255, 0.1);
+        border: 2px solid #d4dae1;
         flex-shrink: 0;
-        transition:
-          border-color 0.15s,
-          opacity 0.15s,
-          transform 0.15s;
-        opacity: 0.55;
+        transition: border-color 0.15s, opacity 0.15s, transform 0.15s;
+        opacity: 0.6;
       }
       .doc-thumb:hover {
-        opacity: 0.85;
+        opacity: 0.9;
         transform: scale(1.05);
       }
       .doc-thumb.active {
-        border-color: #42a5f5;
+        border-color: #1976d2;
         opacity: 1;
+      }
+      /* Combined "Guest details" pane */
+      .doc-dp-card {
+        border: 1px solid #e9edf2;
+        border-radius: 12px;
+        background: #ffffff;
+        padding: 4px 13px 10px;
+        box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04);
+      }
+      .doc-dp-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 9px 0 8px;
+        margin-bottom: 2px;
+        border-bottom: 1px solid #f0f2f5;
+      }
+      .doc-dp-label {
+        font-size: 10.5px;
+        letter-spacing: 0.6px;
+        text-transform: uppercase;
+        color: #9aa3b0;
+        font-weight: 600;
+      }
+      .doc-dp-editbtn {
+        height: 24px;
+        padding: 0 10px;
+        font-size: 11.5px;
+        font-weight: 500;
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        background: #ffffff;
+        border: 1px solid #d7dde5;
+        color: #35506f;
+        border-radius: 7px;
+        cursor: pointer;
+        transition: background 0.15s, border-color 0.15s;
+      }
+      .doc-dp-editbtn:hover {
+        background: #f4f7fb;
+        border-color: #bcd0e8;
+      }
+      /* Stacked label-over-value: a long ID number gets the full column width,
+         so it never breaks mid-number the way a right-aligned value would. */
+      .doc-dp-row {
+        display: block;
+        padding: 9px 0;
+        position: relative;
+        border-bottom: 1px solid #f4f6f8;
+      }
+      .doc-dp-row:last-of-type {
+        border-bottom: 0;
+      }
+      .doc-dp-row > .k {
+        display: block;
+        color: #9aa3b0;
+        font-size: 10.5px;
+        letter-spacing: 0.4px;
+        text-transform: uppercase;
+        margin-bottom: 3px;
+      }
+      .doc-dp-row > .v {
+        display: block;
+        text-align: left;
+        color: #1f2733;
+        font-size: 14px;
+        font-weight: 600;
+        overflow-wrap: anywhere;
+      }
+      .doc-dp-guest {
+        padding: 9px 0;
+        border-top: 1px solid #eef1f4;
+      }
+      .doc-dp-guest.first {
+        border-top: 0;
+        padding-top: 4px;
+      }
+      .doc-dp-guesthead {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        margin-bottom: 4px;
+      }
+      .doc-dp-badge {
+        width: 18px;
+        height: 18px;
+        border-radius: 50%;
+        background: #e6f0fb;
+        color: #1565c0;
+        font-size: 10px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+      }
+      .doc-dp-gname {
+        font-size: 13px;
+        font-weight: 600;
+        color: #1f2733;
+      }
+      /* Subtle "this field was edited" dot — hover the row for who/when/old→new.
+         Replaces a per-row pencil, which read as an edit button on every line. */
+      .doc-edited-mark {
+        display: inline-block;
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: #e0a63c;
+        margin-left: 7px;
+        vertical-align: middle;
+        cursor: help;
+      }
+      .doc-dp-tip {
+        display: none;
+        position: absolute;
+        right: 0;
+        bottom: 120%;
+        z-index: 9;
+        background: #1f2733;
+        color: #fff;
+        border-radius: 8px;
+        padding: 6px 9px;
+        font-size: 11px;
+        line-height: 1.45;
+        max-width: 230px;
+        white-space: normal;
+        text-align: left;
+        box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+      }
+      .doc-dp-row:hover .doc-dp-tip,
+      .doc-dp-fact:hover .doc-dp-tip {
+        display: block;
+      }
+      /* Compact, colour-coded ID facts (no labels): a type pill, the number, and
+         DOB + age badge, flowing on one line where they fit (desktop & mobile). */
+      .doc-dp-facts {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 6px;
+        padding: 11px 0 5px;
+      }
+      .doc-dp-fact {
+        position: relative;
+        display: inline-flex;
+        align-items: center;
+      }
+      .doc-dp-chip {
+        font-size: 12px;
+        font-weight: 600;
+        padding: 3px 10px;
+        border-radius: 999px;
+        line-height: 1.5;
+        white-space: nowrap;
+      }
+      .doc-dp-chip--aadhaar  { background: #e6f0fb; color: #1565c0; }
+      .doc-dp-chip--voter    { background: #fcefd9; color: #b26a00; }
+      .doc-dp-chip--dl       { background: #e3f6ea; color: #1f8a46; }
+      .doc-dp-chip--pan      { background: #efe8fb; color: #6a3fb5; }
+      .doc-dp-chip--passport { background: #e0f4f1; color: #0f857a; }
+      .doc-dp-chip--other    { background: #eef1f4; color: #5b6472; }
+      .doc-dp-num {
+        font-size: 14px;
+        font-weight: 700;
+        color: #1f2733;
+        letter-spacing: 0.4px;
+        white-space: nowrap;
+      }
+      .doc-dp-dob {
+        font-size: 12.5px;
+        color: #6b7380;
+        white-space: nowrap;
+      }
+      .doc-dp-dob > i {
+        color: #aeb6c0;
+        margin-right: 2px;
+      }
+      .doc-dp-age {
+        font-size: 11px;
+        font-weight: 700;
+        color: #1f8a46;
+        background: #e3f6ea;
+        padding: 2px 7px;
+        border-radius: 999px;
+        margin-left: 5px;
+      }
+      .doc-dp-empty {
+        font-size: 12.5px;
+        color: #9aa3b0;
+        padding: 11px 0 5px;
+      }
+      /* The whole fact row is the edit affordance now (no separate button). */
+      .doc-dp-editable {
+        cursor: pointer;
+        border-radius: 9px;
+        margin: 0 -8px;
+        padding: 0 8px;
+        transition: background 0.12s;
+      }
+      .doc-dp-editable:hover {
+        background: #f5f8fc;
+      }
+      .doc-dp-foot {
+        margin-top: 10px;
+        padding-top: 9px;
+        border-top: 1px solid #f0f2f5;
+        font-size: 10.5px;
+        line-height: 1.4;
+        color: #9aa3b0;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .doc-dp-input {
+        width: 100%;
+        box-sizing: border-box;
+        font-size: 13px;
+        padding: 5px 7px;
+        border: 1px solid #cfd6df;
+        border-radius: 6px;
+        margin-top: 2px;
+        background: #fff;
+        color: #1f2733;
+      }
+      .doc-dp-field {
+        margin: 5px 0;
+      }
+      .doc-dp-field > label {
+        font-size: 11px;
+        color: #6b7380;
+      }
+      .doc-dp-editactions {
+        display: flex;
+        gap: 8px;
+        margin-top: 10px;
+      }
+      .doc-dp-save {
+        background: #1565c0;
+        color: #fff;
+        border: 1px solid #1565c0;
+        border-radius: 7px;
+        padding: 6px 14px;
+        font-size: 12px;
+        cursor: pointer;
+      }
+      .doc-dp-cancel {
+        background: #f1f3f6;
+        color: #35506f;
+        border: 1px solid #e3e7ec;
+        border-radius: 7px;
+        padding: 6px 12px;
+        font-size: 12px;
+        cursor: pointer;
+      }
+      @media (max-width: 620px) {
+        .doc-modal-card {
+          height: auto;
+          max-height: 94vh;
+        }
+        .doc-modal-body {
+          grid-template-columns: 1fr;
+        }
+        .doc-modal-left {
+          border-right: 0;
+          border-bottom: 1px solid #e6eaef;
+        }
+        .doc-modal-right {
+          max-height: 46vh;
+          padding: 10px 12px;
+        }
+        /* Compact on mobile: full width fits label + value on one line, so the
+           stacked desktop rows become side-by-side and the panel is half as tall. */
+        .doc-dp-card {
+          padding: 2px 12px 8px;
+        }
+        .doc-dp-head {
+          padding: 8px 0 7px;
+        }
+        .doc-dp-row {
+          display: flex;
+          align-items: baseline;
+          justify-content: space-between;
+          gap: 12px;
+          padding: 6px 0;
+        }
+        .doc-dp-row > .k {
+          margin-bottom: 0;
+          font-size: 11px;
+        }
+        .doc-dp-row > .v {
+          text-align: right;
+          font-size: 13px;
+        }
+        .doc-dp-foot {
+          margin-top: 7px;
+          padding-top: 7px;
+        }
       }
       @keyframes pulse-dot {
         0%,
@@ -6507,313 +6850,69 @@
       });
     </script>
     <!-- ── Document photo viewer overlay ─────────────────────────────── -->
+    <!-- ── ID document viewer (light, fixed-size, combined details) ──── -->
     <div id="doc-photo-viewer">
-      <div
-        style="
-          width: 100%;
-          max-width: 560px;
-          max-height: 94vh;
-          display: flex;
-          flex-direction: column;
-          background: linear-gradient(160deg, #1c2133 0%, #141824 100%);
-          border-radius: 20px;
-          overflow: hidden;
-          box-shadow:
-            0 32px 80px rgba(0, 0, 0, 0.75),
-            0 0 0 1px rgba(255, 255, 255, 0.06);
-        "
-      >
+      <div class="doc-modal-card">
         <!-- Header -->
-        <div
-          style="
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 0.9rem 1.1rem;
-            background: rgba(255, 255, 255, 0.04);
-            border-bottom: 1px solid rgba(255, 255, 255, 0.07);
-          "
-        >
-          <div style="display: flex; align-items: center; gap: 0.65rem">
-            <div
-              style="
-                width: 34px;
-                height: 34px;
-                border-radius: 10px;
-                background: linear-gradient(135deg, #1565c0, #1976d2);
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                box-shadow: 0 4px 12px rgba(25, 118, 210, 0.4);
-              "
-            >
-              <i
-                class="fas fa-id-card"
-                style="color: #fff; font-size: 0.85rem"
-              ></i>
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid #e6eaef;">
+          <div style="display:flex;align-items:center;gap:10px;">
+            <div style="width:34px;height:34px;border-radius:10px;background:#e6f0fb;display:flex;align-items:center;justify-content:center;">
+              <i class="fas fa-id-card" style="color:#1565c0;font-size:0.95rem;"></i>
             </div>
             <div>
-              <div
-                style="
-                  color: #f0f4ff;
-                  font-weight: 700;
-                  font-size: 0.92rem;
-                  letter-spacing: 0.01em;
-                "
-              >
-                ID Documents
-              </div>
-              <div
-                id="doc-viewer-count"
-                style="
-                  color: rgba(255, 255, 255, 0.42);
-                  font-size: 0.7rem;
-                  margin-top: 1px;
-                "
-              ></div>
+              <div style="color:#1f2733;font-weight:700;font-size:0.95rem;">ID documents</div>
+              <div id="doc-viewer-count" style="color:#8a93a0;font-size:0.72rem;margin-top:1px;"></div>
             </div>
           </div>
-          <button
-            id="doc-viewer-close"
-            style="
-              background: rgba(255, 255, 255, 0.07);
-              border: 1px solid rgba(255, 255, 255, 0.1);
-              color: rgba(255, 255, 255, 0.7);
-              width: 32px;
-              height: 32px;
-              border-radius: 50%;
-              cursor: pointer;
-              font-size: 1rem;
-              display: flex;
-              align-items: center;
-              justify-content: center;
-              transition: all 0.15s;
-            "
-            onmouseover="
-              this.style.background = 'rgba(255,255,255,0.15)';
-              this.style.color = '#fff';
-            "
-            onmouseout="
-              this.style.background = 'rgba(255,255,255,0.07)';
-              this.style.color = 'rgba(255,255,255,0.7)';
-            "
-            aria-label="Close"
-          >
-            &times;
-          </button>
+          <button id="doc-viewer-close" aria-label="Close"
+            style="background:#f1f3f6;border:1px solid #e3e7ec;color:#5b6472;width:32px;height:32px;border-radius:50%;cursor:pointer;font-size:1.05rem;display:flex;align-items:center;justify-content:center;transition:background 0.15s;"
+            onmouseover="this.style.background='#e6eaef';" onmouseout="this.style.background='#f1f3f6';">&times;</button>
         </div>
 
-        <!-- Image area -->
-        <div
-          id="doc-viewer-stage"
-          style="
-            position: relative;
-            background: #0a0c12;
-            min-height: 340px;
-            flex: 1 1 auto;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-          "
-        >
-          <img
-            id="doc-viewer-main-img"
-            style="
-              width: 100%;
-              max-height: 72vh;
-              object-fit: contain;
-              display: block;
-            "
-            alt="ID Document"
-          />
-
-          <!-- Loading spinner — shown while a photo is being fetched so the
-               previous guest's image is never left on screen. -->
-          <div
-            id="doc-viewer-loading"
-            style="
-              position: absolute;
-              inset: 0;
-              display: none;
-              align-items: center;
-              justify-content: center;
-              pointer-events: none;
-            "
-          >
-            <i
-              class="fas fa-spinner fa-spin"
-              style="color: rgba(255, 255, 255, 0.75); font-size: 1.7rem"
-            ></i>
+        <!-- Body: photo (left) + combined guest details (right) -->
+        <div class="doc-modal-body">
+          <div class="doc-modal-left">
+            <div id="doc-viewer-stage">
+              <img id="doc-viewer-main-img" alt="ID document" />
+              <div id="doc-viewer-loading" style="position:absolute;inset:0;display:none;align-items:center;justify-content:center;pointer-events:none;">
+                <i class="fas fa-spinner fa-spin" style="color:rgba(255,255,255,0.8);font-size:1.6rem;"></i>
+              </div>
+              <button id="doc-viewer-prev" aria-label="Previous photo"
+                style="position:absolute;left:8px;top:50%;transform:translateY(-50%);background:rgba(255,255,255,0.92);border:1px solid #d4dae1;color:#1f2733;width:34px;height:34px;border-radius:50%;cursor:pointer;display:none;align-items:center;justify-content:center;">
+                <i class="fas fa-chevron-left"></i>
+              </button>
+              <button id="doc-viewer-next" aria-label="Next photo"
+                style="position:absolute;right:8px;top:50%;transform:translateY(-50%);background:rgba(255,255,255,0.92);border:1px solid #d4dae1;color:#1f2733;width:34px;height:34px;border-radius:50%;cursor:pointer;display:none;align-items:center;justify-content:center;">
+                <i class="fas fa-chevron-right"></i>
+              </button>
+            </div>
+            <div id="doc-viewer-thumbs"></div>
           </div>
-
-          <!-- Gradient fade edges -->
-          <div
-            style="
-              position: absolute;
-              inset: 0;
-              pointer-events: none;
-              background: linear-gradient(
-                to right,
-                rgba(10, 12, 18, 0.35) 0%,
-                transparent 18%,
-                transparent 82%,
-                rgba(10, 12, 18, 0.35) 100%
-              );
-            "
-          ></div>
-
-          <!-- Prev -->
-          <button
-            id="doc-viewer-prev"
-            style="
-              position: absolute;
-              left: 0.65rem;
-              top: 50%;
-              transform: translateY(-50%);
-              background: rgba(255, 255, 255, 0.1);
-              border: 1px solid rgba(255, 255, 255, 0.15);
-              backdrop-filter: blur(4px);
-              color: white;
-              width: 36px;
-              height: 36px;
-              border-radius: 50%;
-              cursor: pointer;
-              font-size: 0.85rem;
-              display: none;
-              align-items: center;
-              justify-content: center;
-              transition: all 0.15s;
-            "
-            onmouseover="this.style.background = 'rgba(255,255,255,0.22)'"
-            onmouseout="this.style.background = 'rgba(255,255,255,0.1)'"
-          >
-            <i class="fas fa-chevron-left"></i>
-          </button>
-          <!-- Next -->
-          <button
-            id="doc-viewer-next"
-            style="
-              position: absolute;
-              right: 0.65rem;
-              top: 50%;
-              transform: translateY(-50%);
-              background: rgba(255, 255, 255, 0.1);
-              border: 1px solid rgba(255, 255, 255, 0.15);
-              backdrop-filter: blur(4px);
-              color: white;
-              width: 36px;
-              height: 36px;
-              border-radius: 50%;
-              cursor: pointer;
-              font-size: 0.85rem;
-              display: none;
-              align-items: center;
-              justify-content: center;
-              transition: all 0.15s;
-            "
-            onmouseover="this.style.background = 'rgba(255,255,255,0.22)'"
-            onmouseout="this.style.background = 'rgba(255,255,255,0.1)'"
-          >
-            <i class="fas fa-chevron-right"></i>
-          </button>
+          <div class="doc-modal-right">
+            <!-- Filled by openPhotoViewer(): one combined "Guest details" block -->
+            <div id="doc-viewer-details"></div>
+          </div>
         </div>
-
-        <!-- Thumbnail strip -->
-        <div
-          id="doc-viewer-thumbs"
-          style="
-            display: flex;
-            gap: 0.55rem;
-            padding: 0.7rem 1rem;
-            background: rgba(0, 0, 0, 0.25);
-            overflow-x: auto;
-            scrollbar-width: none;
-          "
-        ></div>
 
         <!-- Footer -->
-        <div
-          style="
-            padding: 0.65rem 1rem;
-            border-top: 1px solid rgba(255, 255, 255, 0.06);
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            gap: 0.5rem;
-          "
-        >
-          <button
-            id="doc-viewer-delete-btn"
-            type="button"
-            style="
-              background: rgba(198, 40, 40, 0.12);
-              border: 1px solid rgba(198, 40, 40, 0.35);
-              color: #ef9a9a;
-              border-radius: 8px;
-              padding: 0.38rem 0.85rem;
-              font-size: 0.78rem;
-              cursor: pointer;
-              display: flex;
-              align-items: center;
-              gap: 0.4rem;
-              transition: all 0.15s;
-              font-weight: 500;
-            "
-            onmouseover="
-              this.style.background = 'rgba(198,40,40,0.25)';
-              this.style.color = '#ffcdd2';
-            "
-            onmouseout="
-              this.style.background = 'rgba(198,40,40,0.12)';
-              this.style.color = '#ef9a9a';
-            "
-            title="Delete this document"
-          >
+        <div style="padding:10px 16px;border-top:1px solid #e6eaef;display:flex;justify-content:space-between;align-items:center;gap:0.5rem;">
+          <button id="doc-viewer-delete-btn" type="button" title="Delete this document"
+            style="background:#fdecec;border:1px solid #f3c6c6;color:#c62828;border-radius:8px;padding:0.4rem 0.85rem;font-size:0.8rem;cursor:pointer;display:flex;align-items:center;gap:0.4rem;font-weight:500;transition:background 0.15s;"
+            onmouseover="this.style.background='#f9dada';" onmouseout="this.style.background='#fdecec';">
             <i class="fas fa-trash-alt"></i> Remove
           </button>
-          <button
-            id="doc-viewer-add-btn"
-            type="button"
-            style="
-              display: none;
-              background: rgba(21, 101, 192, 0.18);
-              border: 1px solid rgba(21, 101, 192, 0.45);
-              color: #90caf9;
-              border-radius: 8px;
-              padding: 0.38rem 0.85rem;
-              font-size: 0.78rem;
-              cursor: pointer;
-              align-items: center;
-              gap: 0.4rem;
-              font-weight: 500;
-              transition: all 0.15s;
-            "
-            onmouseover="this.style.background='rgba(21,101,192,0.3)';this.style.color='#bbdefb';"
-            onmouseout="this.style.background='rgba(21,101,192,0.18)';this.style.color='#90caf9';"
-            title="Add another ID photo for this guest"
-          >
-            <i class="fas fa-plus"></i> Add photo
-          </button>
-          <a
-            id="doc-viewer-open-link"
-            href="#"
-            target="_blank"
-            rel="noopener noreferrer"
-            style="
-              color: rgba(255, 255, 255, 0.45);
-              font-size: 0.78rem;
-              text-decoration: none;
-              display: flex;
-              align-items: center;
-              gap: 0.35rem;
-              transition: color 0.15s;
-              white-space: nowrap;
-            "
-            onmouseover="this.style.color = '#90caf9'"
-            onmouseout="this.style.color = 'rgba(255,255,255,0.45)'"
-          >
-            <i class="fas fa-external-link-alt"></i> Open full size
-          </a>
+          <div style="display:flex;align-items:center;gap:0.65rem;">
+            <button id="doc-viewer-add-btn" type="button" title="Add another ID photo for this guest"
+              style="display:none;background:#e6f0fb;border:1px solid #bcd9f5;color:#1565c0;border-radius:8px;padding:0.4rem 0.85rem;font-size:0.8rem;cursor:pointer;align-items:center;gap:0.4rem;font-weight:500;transition:background 0.15s;"
+              onmouseover="this.style.background='#d4e6f9';" onmouseout="this.style.background='#e6f0fb';">
+              <i class="fas fa-plus"></i> Add photo
+            </button>
+            <a id="doc-viewer-open-link" href="#" target="_blank" rel="noopener noreferrer"
+              style="color:#6b7380;font-size:0.8rem;text-decoration:none;display:flex;align-items:center;gap:0.35rem;white-space:nowrap;transition:color 0.15s;"
+              onmouseover="this.style.color='#1565c0';" onmouseout="this.style.color='#6b7380';">
+              <i class="fas fa-external-link-alt"></i> Open full size
+            </a>
+          </div>
         </div>
       </div>
     </div>

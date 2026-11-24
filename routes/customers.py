@@ -571,6 +571,10 @@ def _maybe_extract_demographics(mobile: str, image_bytes: bytes,
                 customer_service.apply_id_extraction(
                     mobile, res["fields"], source_url=source_url, sync=True
                 )
+                # Pre-fill the viewer's editable ID fields on the document record
+                # (name/type/number/dob/year) — blanks only, never a manual edit.
+                if source_url.startswith("iddoc:"):
+                    id_docs.set_ocr_fields(mobile, source_url.split(":", 1)[1], res["fields"])
         except Exception as e:
             logger.warning(f"demographics extraction skipped for {mobile}: {e}")
 

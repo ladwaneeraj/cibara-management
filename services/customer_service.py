@@ -1185,9 +1185,9 @@ def open_settlements(mobile: str, limit: int = 50):
 #
 # Storage model (per customer doc):
 #   guest_demographics : [ {source_url, name, dob, birth_year, pincode,
-#                           extracted_at}, ... ]   one entry per ID document
-#   pincode, dob       : convenience top-level copies of the FIRST known value,
-#                        set only when blank so manual edits are never clobbered.
+#                           id_number, extracted_at}, ... ] one entry per document
+#   pincode, dob,      : convenience top-level copies of the FIRST known value,
+#   id_number            set only when blank so manual edits are never clobbered.
 #
 # Age is deliberately NEVER stored — it is computed from dob / birth_year at
 # read time so it can't go stale.
@@ -1198,7 +1198,7 @@ def apply_id_extraction(mobile: str, extraction: dict, source_url: str = "",
     Merge an ID-OCR extraction into a customer's demographics.
 
     `extraction` is the dict returned by ocr_service.extract_id_fields()['fields']:
-        {name, dob, birth_year, pincode, doc_kind}
+        {name, dob, birth_year, pincode, id_number, doc_kind}
 
     Idempotent: re-extracting the same source_url replaces that entry instead
     of appending a duplicate (so the backfill script can be re-run safely).
@@ -1215,7 +1215,7 @@ def apply_id_extraction(mobile: str, extraction: dict, source_url: str = "",
         return
     # Nothing useful extracted → skip the write entirely.
     if not (extraction.get("dob") or extraction.get("birth_year")
-            or extraction.get("pincode")):
+            or extraction.get("pincode") or extraction.get("id_number")):
         return
 
     if sync:
@@ -1236,6 +1236,7 @@ def _apply_id_extraction(mobile: str, extraction: dict, source_url: str):
             "dob":          extraction.get("dob"),          # "YYYY-MM-DD" | None
             "birth_year":   extraction.get("birth_year"),   # int | None
             "pincode":      extraction.get("pincode"),      # "6-digit" | None
+            "id_number":    extraction.get("id_number"),    # "AS PRINTED" | None
             "doc_kind":     extraction.get("doc_kind") or "",
             "extracted_at": datetime.now(timezone.utc).isoformat(),
         }
@@ -1266,6 +1267,8 @@ def _apply_id_extraction(mobile: str, extraction: dict, source_url: str):
                 updates["pincode"] = entry["pincode"]
             if entry["dob"] and not data.get("dob"):
                 updates["dob"] = entry["dob"]
+            if entry["id_number"] and not data.get("id_number"):
+                updates["id_number"] = entry["id_number"]
 
             if snap.exists:
                 transaction.update(d_ref, updates)
@@ -1284,7 +1287,8 @@ def _apply_id_extraction(mobile: str, extraction: dict, source_url: str):
         _txn(_db.transaction(), doc_ref)
         logger.info(f"CustomerService: demographics applied for {mobile} "
                     f"(pincode={entry['pincode']}, dob={entry['dob']}, "
-                    f"birth_year={entry['birth_year']})")
+                    f"birth_year={entry['birth_year']}, "
+                    f"id_number={'set' if entry['id_number'] else None})")
     except Exception as e:
         logger.error(f"CustomerService apply_id_extraction failed for {mobile}: {e}")
 

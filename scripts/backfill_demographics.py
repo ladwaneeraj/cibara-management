@@ -191,7 +191,7 @@ def main() -> int:
 
             fields = res.get("fields") or {}
             has_data = bool(fields.get("dob") or fields.get("birth_year")
-                            or fields.get("pincode"))
+                            or fields.get("pincode") or fields.get("id_number"))
             if not has_data:
                 stats["ocr_empty"] += 1
                 print(f"  [{mobile}] nothing extractable from {url[-24:]}")

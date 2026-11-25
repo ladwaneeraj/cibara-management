@@ -252,17 +252,25 @@ async def collect_id_upload(token: str, request: Request,
             continue
         b = await uf.read(id_docs.MAX_UPLOAD_BYTES + 1)
         if b:
-            raws.append((b, side))
+            raws.append((b, side, (uf.content_type or "image/jpeg").lower()))
     guest = (name or data.get("n") or "Guest").strip()[:80]
     client_ip = request.client.host if request.client else "unknown"
     user = {"userId": "guest", "name": f"{guest} (self-upload)", "role": "guest"}
 
     def _do():
+        # Same ID-field OCR the staff upload runs (name / DOB / ID number), so a
+        # guest's self-uploaded ID auto-fills its details too. Threaded and
+        # best-effort inside the helper — never affects the upload.
+        from routes.customers import _maybe_extract_demographics
         stored = []
-        for raw, side in raws:
+        for raw, side, mime in raws:
             rec = id_docs.add_document(mobile, raw, user=user, side=side, source="upload",
                                        context={"kind": "checkin", "room": room})
             stored.append(rec["id"])
+            try:
+                _maybe_extract_demographics(mobile, raw, mime, f"iddoc:{rec['id']}")
+            except Exception as e:  # pragma: no cover - best effort
+                log.info("collect_id: id OCR not started: %s", e)
         if not stored:
             raise id_docs.IdDocError("No photo received.")
         db = _db()

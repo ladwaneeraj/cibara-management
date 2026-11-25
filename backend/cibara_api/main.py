@@ -26,8 +26,8 @@ from starlette.middleware.gzip import GZipMiddleware
 from . import legacy
 from .core import observability
 from .core.middleware import RequestContextMiddleware
-from .routers import (admin, analytics, auth, bills, client_errors, customer_docs, dashboard,
-                      guest, reports, rooms, invoice_settings, step_up)
+from .routers import (admin, analytics, auth, bills, client_errors, collect_id, customer_docs,
+                      dashboard, guest, reports, rooms, invoice_settings, step_up)
 from .settings import get_settings
 
 log = logging.getLogger("cibara_api")
@@ -96,7 +96,7 @@ def create_app() -> FastAPI:
 
     for r in (auth.router, dashboard.router, rooms.router, bills.router, reports.router,
               admin.router, guest.router, invoice_settings.router, customer_docs.router,
-              client_errors.router, step_up.router, analytics.router):
+              client_errors.router, step_up.router, analytics.router, collect_id.router):
         app.include_router(r)
 
     @app.api_route("/api/v2/{rest:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"],

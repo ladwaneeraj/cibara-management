@@ -191,18 +191,16 @@ tr.reg-row-located.reg-row-located-fade > td {
 .register-table-container {
   background: #fff; border-radius: 8px;
   box-shadow: 0 1px 4px rgba(0,0,0,.07);
-  /* Scroll the list inside the card (height capped by ccPinStack) so the
-     column header and date-group headers can pin. overflow:auto keeps the
-     wide table horizontally scrollable too. */
-  overflow: auto; max-height: var(--cc-list-maxh, 70vh); margin-bottom: 1rem;
+  /* Page-scroll model: the list grows and the PAGE scrolls, so the register
+     header scrolls away while only the filter bar (sticky) stays. overflow-x
+     keeps the wide table horizontally scrollable. */
+  overflow-x: auto; max-height: none; margin-bottom: 1rem;
 }
 .register-table {
   width: 100%; border-collapse: collapse; font-size: 0.81rem;
 }
 .register-table thead {
   background: var(--primary, #3f51b5); color: #fff;
-  /* Pins to the top of the (now height-capped) scrolling container. */
-  position: sticky; top: 0; z-index: 10;
 }
 .register-table th {
   padding: 0.55rem 0.45rem; text-align: left;
@@ -246,9 +244,6 @@ tr.reg-row-located.reg-row-located-fade > td {
   font-size: 0.76rem; color: var(--primary, #3f51b5);
   letter-spacing: .03em;
   border-bottom: 2px solid var(--primary, #3f51b5);
-  /* Pin the current date header right under the column header; the next date's
-     header pushes it up as you scroll (var = column-header height). */
-  position: sticky; top: var(--cc-grouptop, 35px); z-index: 6;
   background: #eef2f7;
 }
 .date-group-header i { margin-right: 0.35rem; transition: transform 0.2s; }

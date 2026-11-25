@@ -546,3 +546,85 @@ def _normalise_id(d: dict) -> dict:
 def id_ocr_enabled() -> bool:
     """True only when OCR is configured AND the ID-OCR kill-switch is on."""
     return bool(is_enabled() and _ID_OCR_ENABLED)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# GUEST-LIST EXTRACTION  —  a group organiser's "room / name / mobile" list
+# ═══════════════════════════════════════════════════════════════════════════
+# The organiser often sends a photo (or screenshot) of a handwritten / typed
+# list of who stays in which room. We OCR it into rows the desk reviews and
+# edits before saving — never applied blindly (a wrong digit = wrong guest).
+
+_GUEST_LIST_PROMPT = """\
+You are reading a hotel group-booking guest list (a photo, screenshot or scan).
+Each line names a guest, with a room number and a 10-digit Indian mobile number.
+Fields may be in any order and labels may be missing.
+
+Return ONLY a single JSON object: {"guests": [ {"room": string|null,
+"name": string|null, "mobile": string|null}, ... ]}
+
+Rules:
+1. One object per guest/room line. Preserve the order they appear.
+2. room: the room number only (digits), e.g. "201". Null if none on that line.
+3. name: the guest's name as written. Null if blank.
+4. mobile: exactly the 10 digits of the Indian mobile (drop +91, spaces, dashes).
+   Null if not a clear 10-digit number — NEVER invent or complete digits.
+5. Skip header rows ("Room", "Name", "Mobile") and totals.
+6. Return ONLY the JSON object, no prose or markdown fences.
+"""
+
+
+def extract_guest_list(image_bytes: bytes, mime_type: str) -> dict:
+    """OCR a group guest-list photo into rows.
+
+    Return shape (never raises):
+        {"success": True,  "guests": [{room, name, mobile}, ...]}
+        {"success": False, "reason": "ocr_disabled"}
+        {"success": False, "reason": "ocr_error", "message": "..."}
+    """
+    if not is_enabled():
+        return {"success": False, "reason": "ocr_disabled"}
+    if not image_bytes:
+        return {"success": False, "reason": "ocr_error", "message": "Empty image"}
+    try:
+        resp = _model.generate_content(
+            [{"mime_type": mime_type or "image/jpeg", "data": image_bytes}, _GUEST_LIST_PROMPT],
+            generation_config={"response_mime_type": "application/json",
+                               "temperature": 0.1, "max_output_tokens": 2048},
+        )
+    except Exception as e:
+        logger.error("guest-list OCR call failed: %s", e)
+        return {"success": False, "reason": "ocr_error", "message": str(e)}
+
+    raw = ""
+    try:
+        raw = (resp.text or "").strip()
+    except Exception:
+        try:
+            cand = resp.candidates[0]
+            raw = "".join(p.text for p in cand.content.parts if hasattr(p, "text"))
+        except Exception:
+            raw = ""
+    if not raw:
+        return {"success": False, "reason": "ocr_error", "message": "Empty response"}
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as e:
+        logger.warning("guest-list OCR JSON parse failed: %s | raw=%s", e, raw[:300])
+        return {"success": False, "reason": "ocr_error", "message": "Model returned non-JSON output"}
+
+    rows = parsed.get("guests") if isinstance(parsed, dict) else parsed
+    out = []
+    for r in rows or []:
+        if not isinstance(r, dict):
+            continue
+        room = "".join(c for c in str(r.get("room") or "") if c.isdigit())[:12]
+        name = str(r.get("name") or "").strip()[:80]
+        mobile = "".join(c for c in str(r.get("mobile") or "") if c.isdigit())
+        if mobile.startswith("91") and len(mobile) == 12:
+            mobile = mobile[2:]
+        if len(mobile) != 10:
+            mobile = ""
+        if room or name or mobile:
+            out.append({"room": room, "name": name, "mobile": mobile})
+    return {"success": True, "guests": out}

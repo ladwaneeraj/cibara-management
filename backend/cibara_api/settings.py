@@ -53,6 +53,12 @@ class Settings(BaseSettings):
     # Sent as Referer on the server-side sign-in call. Only matters if the
     # web API key has HTTP-referrer restrictions in the GCP console.
     PUBLIC_ORIGIN: str = ""
+    # Host used to BUILD the guest ID-upload links (routers/collect_id.py). Kept
+    # separate from PUBLIC_ORIGIN so the short Firebase Hosting domain
+    # (https://<project>.web.app, which rewrites /d/** and /api/v2/collect-id/**
+    # to this Cloud Run service) can be used for the guest-facing link without
+    # changing the sign-in Referer. Empty → PUBLIC_ORIGIN → the request host.
+    COLLECT_ID_ORIGIN: str = ""
 
     # ── Rate limits (in-memory, per Cloud Run instance) ───────────────────
     RATE_LIMIT_GLOBAL_PER_MIN: int = 600

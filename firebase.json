@@ -18,6 +18,18 @@
     ],
     "rewrites": [
       {
+        "source": "/d/**",
+        "run": { "serviceId": "lodge-management", "region": "asia-south1" }
+      },
+      {
+        "source": "/collect-id/**",
+        "run": { "serviceId": "lodge-management", "region": "asia-south1" }
+      },
+      {
+        "source": "/api/v2/collect-id/**",
+        "run": { "serviceId": "lodge-management", "region": "asia-south1" }
+      },
+      {
         "source": "**",
         "destination": "/index.html"
       }

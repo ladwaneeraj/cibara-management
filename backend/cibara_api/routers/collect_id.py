@@ -104,7 +104,9 @@ def _already_uploaded(mobile: str) -> bool:
 
 def _base_url(request: Request) -> str:
     s = get_settings()
-    return (s.PUBLIC_ORIGIN or str(request.base_url)).rstrip("/")
+    # Prefer the short Firebase Hosting domain (COLLECT_ID_ORIGIN) for the
+    # guest-facing link, then PUBLIC_ORIGIN, then the request host.
+    return (s.COLLECT_ID_ORIGIN or s.PUBLIC_ORIGIN or str(request.base_url)).rstrip("/")
 
 
 # ── short code <-> token (so the WhatsApp link is tidy, e.g. /d/Ab3xK9pq) ──

@@ -274,11 +274,13 @@ function initializeBookingForm() {
     });
   }
 
-  // Guest count change → recalc price
+  // Guest count change → recalc price. Mark it "touched" so picking a room
+  // later doesn't overwrite a number the operator set on purpose.
   const guestCountEl = document.getElementById("booking-guest-count");
   if (guestCountEl) {
-    guestCountEl.addEventListener("input", updateBookingPriceCalc);
-    guestCountEl.addEventListener("change", updateBookingPriceCalc);
+    const onGuestEdit = () => { guestCountEl.dataset.touched = "1"; updateBookingPriceCalc(); };
+    guestCountEl.addEventListener("input", onGuestEdit);
+    guestCountEl.addEventListener("change", onGuestEdit);
   }
 
   // AC toggle change → recalc price
@@ -287,10 +289,16 @@ function initializeBookingForm() {
     acToggle.addEventListener("change", updateBookingPriceCalc);
   }
 
-  // Room selection change → show/hide AC toggle + recalc price
+  // Room selection change → default the guest count to 2 (standard occupancy)
+  // unless the operator already set it, show/hide AC toggle, recalc price.
   const roomSelect = document.getElementById("booking-room");
   if (roomSelect) {
-    roomSelect.addEventListener("change", updateBookingPriceCalc);
+    roomSelect.addEventListener("change", function () {
+      if (roomSelect.value && guestCountEl && guestCountEl.dataset.touched !== "1") {
+        guestCountEl.value = 2;
+      }
+      updateBookingPriceCalc();
+    });
   }
 
   // Booking Source toggle
@@ -361,18 +369,9 @@ function initializeBookingForm() {
     const calculateRemaining = () => {
       const total = parseInt(totalAmount.value) || 0;
       const partial = parseInt(partialPayment.value) || 0;
-      const remaining = total - partial;
-
-      remainingAmount.textContent = "₹" + remaining;
-
-      // Validate partial payment is not greater than total
-      if (partial > total) {
-        partialPayment.setCustomValidity(
-          "Partial payment cannot exceed total amount",
-        );
-      } else {
-        partialPayment.setCustomValidity("");
-      }
+      remainingAmount.textContent = "₹" + (total - partial);
+      partialPayment.setCustomValidity(
+        partial > total ? "Partial payment cannot exceed total amount" : "");
     };
 
     totalAmount.addEventListener("input", calculateRemaining);
@@ -742,6 +741,7 @@ function initMultiBookingModal() {
         updateMultiBookingRowTotal(e.target.closest(".mb-room-row"));
       }
       if (e.target.classList.contains("mb-guest-count")) {
+        e.target.dataset.touched = "1"; // operator set it — don't auto-override
         updateMultiBookingRowRate(e.target.closest(".mb-room-row"));
       }
       updateMultiBookingSummary();
@@ -749,6 +749,10 @@ function initMultiBookingModal() {
     container.addEventListener("change", function (e) {
       if (e.target.classList.contains("mb-room-select")) {
         refreshMultiBookingRoomOptions();
+        // Default this row's guest count to 2 (standard occupancy) on room
+        // pick, unless the operator already typed one.
+        var gc = e.target.closest(".mb-room-row").querySelector(".mb-guest-count");
+        if (e.target.value && gc && gc.dataset.touched !== "1") gc.value = 2;
         updateMultiBookingRowRate(e.target.closest(".mb-room-row"));
       }
       if (e.target.classList.contains("mb-room-ac-toggle")) {
@@ -1003,6 +1007,17 @@ function updateMultiBookingSummary() {
 // Re-fetch availability for the shared dates and repopulate every room
 // row's dropdown, excluding rooms already picked in OTHER rows so the
 // same room can't be selected twice in one submission.
+// Wrap a native room <select> in the app's styled, searchable dropdown
+// (nice-select.js). Safe to call repeatedly — it re-renders if already wrapped.
+function _enhanceRoomSelect(sel) {
+  if (sel && window.CibaraSelect) {
+    window.CibaraSelect.enhance(sel, {
+      search: true, searchPlaceholder: "Search room…",
+      noMatchText: "No matching rooms", maxHeight: 300,
+    });
+  }
+}
+
 async function refreshMultiBookingRoomOptions() {
   var ci = document.getElementById("mb-check-in").value;
   var co = document.getElementById("mb-check-out").value;
@@ -1042,6 +1057,7 @@ async function refreshMultiBookingRoomOptions() {
             );
           })
           .join("");
+      _enhanceRoomSelect(select);
     });
   } catch (error) {
     console.error("Error checking availability for multi-room booking:", error);
@@ -1818,6 +1834,12 @@ function showBookingDetails(bookingId) {
   // the listed rooms before pressing WA.
   const groupMembers = getBookingGroupMembers(booking);
   const isGroup = groupMembers.length > 1;
+  // Warm the ID-upload links so the WhatsApp message can include them without
+  // an await between the tap and window.open (pop-up blockers).
+  prefetchIdLinks(isGroup ? groupMembers.map((m) => m.booking_id) : [bookingId]);
+  // Show any ID the guest has already uploaded (via the link or captured at the
+  // desk), so the desk can verify it right here.
+  renderBookingIdDocs(booking);
   const groupBanner = document.getElementById("details-group-banner");
   if (groupBanner) {
     if (isGroup) {
@@ -1826,20 +1848,40 @@ function showBookingDetails(bookingId) {
           "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
         })[c]);
       const groupTotal = groupMembers.reduce((s, m) => s + (m.total_amount || 0), 0);
+      const groupPending = groupMembers.reduce(
+        (s, m) => s + (m.balance != null ? m.balance : (m.total_amount || 0) - (m.paid_amount || 0)),
+        0,
+      );
+      const pendingBadge =
+        groupPending > 0
+          ? `<span style="background:#fef2f2;color:#dc2626;font-size:0.72rem;font-weight:700;padding:3px 10px;border-radius:999px;border:1px solid #fecaca;white-space:nowrap;">₹${groupPending} pending</span>`
+          : `<span style="background:#ecfdf5;color:#059669;font-size:0.72rem;font-weight:700;padding:3px 10px;border-radius:999px;border:1px solid #a7f3d0;white-space:nowrap;">Fully paid</span>`;
+      const chips = groupMembers
+        .map((m) => {
+          const cur = m.booking_id === bookingId;
+          return `<span style="background:${cur ? "#1d4ed8" : "#fff"};color:${cur ? "#fff" : "#475569"};` +
+            `border:1px solid ${cur ? "#1d4ed8" : "#e2e8f0"};border-radius:999px;padding:4px 11px;` +
+            `font-size:0.76rem;font-weight:600;">Room ${escRoom(m.room)}</span>`;
+        })
+        .join("");
+      // Reset the container's own class styling; the wrapper below owns the look.
+      groupBanner.style.cssText = "display:block;padding:0;background:none;border:0;margin-bottom:0.75rem;";
       groupBanner.innerHTML =
-        `<div><i class="fas fa-layer-group"></i> Part of a <strong>${groupMembers.length}-room booking</strong>` +
-        ` · ₹${groupTotal} total</div>` +
-        `<div class="bk-group-rooms">` +
-        groupMembers
-          .map(
-            (m) =>
-              `<span class="bk-group-room${m.booking_id === bookingId ? " bk-group-room-current" : ""}">` +
-              `Room ${escRoom(m.room)}</span>`,
-          )
-          .join("") +
-        `</div>` +
-        `<div style="margin-top:0.35rem;font-size:0.74rem;opacity:0.85;">` +
-        `WhatsApp sends one combined confirmation for all ${groupMembers.length} rooms.</div>`;
+        `<div style="background:linear-gradient(135deg,#eff4ff,#f3f0ff);border:1px solid #e2e8f0;border-radius:14px;padding:15px 16px;">` +
+          `<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:11px;">` +
+            `<div style="font-size:0.92rem;font-weight:700;color:#1e293b;"><i class="fas fa-layer-group" style="color:#1d4ed8;"></i> ${groupMembers.length}-room booking</div>` +
+            `<div style="display:flex;align-items:center;gap:8px;">` +
+              `<span style="font-size:0.78rem;color:#64748b;font-weight:600;">₹${groupTotal}</span>${pendingBadge}` +
+            `</div>` +
+          `</div>` +
+          `<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:13px;">${chips}</div>` +
+          `<button type="button" onclick="openGuestListEditor('${escRoom(booking.group_booking_id)}')" ` +
+            `style="width:100%;background:linear-gradient(135deg,#1d4ed8,#1e3a8a);color:#fff;border:0;border-radius:11px;` +
+            `padding:11px;font-size:0.84rem;font-weight:700;cursor:pointer;box-shadow:0 5px 14px rgba(29,78,216,.28);">` +
+            `<i class="fas fa-users"></i> Edit guests &amp; send IDs</button>` +
+          `<div style="margin-top:9px;font-size:0.72rem;color:#94a3b8;text-align:center;">` +
+            `Each guest gets their own confirmation + ID-upload link.</div>` +
+        `</div>`;
       groupBanner.style.display = "";
     } else {
       groupBanner.style.display = "none";
@@ -2041,7 +2083,8 @@ async function checkAvailability() {
           roomSelect.appendChild(secondFloorGroup);
         }
 
-        // Auto-calculate price once rooms are populated
+        // Styled, searchable dropdown + auto-calculate price once populated
+        _enhanceRoomSelect(roomSelect);
         updateBookingPriceCalc();
 
         console.log(
@@ -4186,7 +4229,25 @@ function _debouncedFetchBookings(delayMs = 800) {
       // Flag stale — fetchBookings() is already called on every tab open (line 29)
       console.log("⚡ Booking change received — will refresh on next tab open");
     }
+    _refreshOpenIdViews();
   }, delayMs);
+}
+
+// When a booking changes (e.g. a guest uploads their ID on their phone, which
+// sets id_collected on the booking → a Firestore "modified" event), live-update
+// the ID status in whatever is open, so the desk sees "ID ✓" without a reload.
+function _refreshOpenIdViews() {
+  if (_glState) { // group editor open
+    _glState.rooms.forEach((r) => delete _idLinks[r.booking_id]);
+    prefetchIdLinks(_glState.rooms.map((r) => r.booking_id)).then(() => {
+      if (_glState) _glRenderTable();
+    });
+  }
+  const dm = document.getElementById("booking-details-modal");
+  if (dm && dm.offsetParent !== null && _activeBookingForWhatsApp) { // details modal open
+    delete _idLinks[_activeBookingForWhatsApp.booking_id];
+    renderBookingIdDocs(_activeBookingForWhatsApp);
+  }
 }
 
 window.addEventListener("cibaraBookingAdded",    () => _debouncedFetchBookings());
@@ -4418,9 +4479,87 @@ function _waOpen(phone, message) {
   showNotification("✅ Opening WhatsApp...", "success");
 }
 
+// ── Guest ID-upload links ───────────────────────────────────────────────────
+// Signed, expiring links the guest taps to upload their own ID before arrival
+// (backend: /api/v2/collect-id). Generated server-side (the token is signed
+// with the server secret), cached per booking_id, and woven into the WhatsApp
+// confirmation. A guest who already has an ID on file is skipped ("ignore").
+const _idLinks = {}; // booking_id -> { url, already_uploaded }
+
+async function prefetchIdLinks(bookingIds) {
+  const ids = (bookingIds || []).filter((id) => id && _idLinks[id] === undefined);
+  if (!ids.length) return;
+  try {
+    const r = await apiFetch("/api/v2/collect-id/links", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ booking_ids: ids }),
+    });
+    const data = await r.json();
+    if (data && data.success) {
+      (data.links || []).forEach((l) => {
+        _idLinks[l.booking_id] = { url: l.url || "", already_uploaded: !!l.already_uploaded };
+      });
+    }
+  } catch (e) {
+    console.warn("ID link prefetch failed", e);
+  }
+}
+
+// WhatsApp block for one booking's ID link. "" when already uploaded, no link
+// yet (not prefetched / no mobile), or disabled.
+function _waIdLinkLine(bookingId) {
+  const info = _idLinks[bookingId];
+  if (!info || info.already_uploaded || !info.url) return "";
+  return `\n\n🪪 *Upload your ID for a faster check-in:*\n${info.url}`;
+}
+
+// Show the guest's uploaded/captured ID right in the Booking Details modal so
+// the desk can verify it without hunting through the customer manager. Reuses
+// the app's secure image loader + lightbox (customer-docs.js); /get_customer
+// returns id_doc_urls as in-app links only for customer_doc.view (admin/mgr).
+function renderBookingIdDocs(booking) {
+  const host = document.getElementById("details-id-docs");
+  if (!host) return;
+  host.style.display = "none";
+  host.innerHTML = "";
+  const mobile = String(booking.guest_mobile || "").replace(/\D/g, "");
+  if (!mobile || !window.CibaraSecureImg || typeof openPhotoViewer !== "function") return;
+  apiFetch(`/get_customer/${mobile}`)
+    .then((r) => r.json())
+    .then((d) => {
+      const urls = (d && d.customer && d.customer.id_doc_urls) || [];
+      host.style.display = "block";
+      if (!urls.length) {
+        host.innerHTML =
+          '<div style="font-size:0.78rem;color:var(--gray);display:flex;align-items:center;gap:6px;">' +
+          '<i class="fas fa-id-card"></i> No ID uploaded yet</div>';
+        return;
+      }
+      const thumbs = urls
+        .map((u, i) => `<img data-idx="${i}" alt="ID ${i + 1}" ` +
+          'style="width:58px;height:40px;object-fit:cover;border-radius:5px;border:1px solid #cbd5e1;cursor:pointer;">')
+        .join("");
+      host.innerHTML =
+        '<div style="font-size:0.8rem;font-weight:700;color:#059669;margin-bottom:6px;display:flex;align-items:center;gap:6px;">' +
+        `<i class="fas fa-id-card"></i> Guest ID on file (${urls.length}) — tap to verify</div>` +
+        `<div id="details-id-thumbs" style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;">${thumbs}` +
+        '<button type="button" id="details-id-viewall" ' +
+        'style="background:#1d4ed8;color:#fff;border:0;border-radius:6px;padding:5px 11px;font-size:0.76rem;font-weight:600;cursor:pointer;">View all</button></div>';
+      host.querySelectorAll("#details-id-thumbs img").forEach((img, i) => {
+        window.CibaraSecureImg.apply(img, urls[i], "thumb");
+        img.addEventListener("click", () => openPhotoViewer(urls, i, mobile));
+      });
+      const viewAll = document.getElementById("details-id-viewall");
+      if (viewAll) viewAll.addEventListener("click", () => openPhotoViewer(urls, 0, mobile));
+    })
+    .catch(() => { /* ID preview is a nicety — never block the modal */ });
+}
+
 // ── Message builders ────────────────────────────────────────────────────────
 
-function _waSingleBookingMessage(bk) {
+function _waSingleBookingMessage(bk, opts) {
+  opts = opts || {};
   const bookingId =
     bk.booking_id ||
     document.getElementById("details-booking-id")?.textContent ||
@@ -4445,7 +4584,10 @@ function _waSingleBookingMessage(bk) {
 
   const isOta = isOtaPrepaid(src);
   let paymentSection;
-  if (isOta) {
+  if (opts.hidePrice) {
+    // "Booked by one, stayed by another": the occupant shouldn't see the tariff.
+    paymentSection = "";
+  } else if (isOta) {
     paymentSection = `
 
 🏷️ *Booking Source:* ${otaSourceLabel(src)} (Prepaid)
@@ -4475,7 +4617,7 @@ We're delighted to confirm your reservation. Here are your booking details:
 • Check-in: 📅 ${_waFmtDate(bk.check_in_date)}
 • ⏰ Approx. Arrival Time: ${_waFmtTime(bk.check_in_time || "14:00")}
 • Check-out: 📅 ${_waFmtDate(bk.check_out_date)}
-• Duration: 🌙 ${nightsText}${paymentSection}
+• Duration: 🌙 ${nightsText}${paymentSection}${_waIdLinkLine(bookingId)}
 
 📍 *Find Us Here:*
 ${WA_MAPS_LINK}
@@ -4559,12 +4701,12 @@ For any queries, reply to this message.
 
 // ── Entry point (wired to the WA button in the booking details modal) ───────
 
-function sendWhatsAppBookingConfirmation() {
+async function sendWhatsAppBookingConfirmation() {
   try {
     const bk = _activeBookingForWhatsApp || {};
     const members = getBookingGroupMembers(bk);
 
-    // Single room — unchanged behaviour.
+    // Single room.
     if (members.length <= 1) {
       const mobile =
         bk.guest_mobile ||
@@ -4574,7 +4716,21 @@ function sendWhatsAppBookingConfirmation() {
         showNotification("Phone number not available", "error");
         return;
       }
-      _waOpen(_waNormalisePhone(mobile), _waSingleBookingMessage(bk));
+      const bookingId =
+        bk.booking_id ||
+        document.getElementById("details-booking-id")?.textContent ||
+        "";
+      // Open the tab synchronously (keeps the user gesture so the pop-up isn't
+      // blocked), THEN load the ID-upload link and navigate — so the link is
+      // always present no matter which button fired this (card / web / modal).
+      const win = window.open("", "_blank");
+      await prefetchIdLinks([bookingId]);
+      const url =
+        `https://wa.me/${_waNormalisePhone(mobile)}?text=` +
+        encodeURIComponent(_waSingleBookingMessage(bk));
+      if (win) win.location = url;
+      else window.open(url, "_blank");
+      showNotification("✅ Opening WhatsApp...", "success");
       return;
     }
 
@@ -5381,3 +5537,287 @@ function initArrivalsSheet() {
 }
 
 document.addEventListener("DOMContentLoaded", initArrivalsSheet);
+
+
+// ── Group guest-list editor (modern table: every room on screen at once) ────
+// An organiser books every room under their own name; later they send the real
+// occupant list. Fill each room's guest name + mobile (by hand, by pasting the
+// WhatsApp text, or by scanning a photo via OCR), save, then send each occupant
+// their OWN confirmation (price hidden) + ID link. Reuses /update_booking.
+// State lives in _glState; the table binds to it live.
+let _glState = null;
+
+function _glEsc(s) {
+  return window.escHtml
+    ? window.escHtml(String(s == null ? "" : s))
+    : String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({
+        "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+      })[c]);
+}
+
+function _glCleanMobile(raw) {
+  let d = String(raw || "").replace(/\D/g, "");
+  if (d.length === 12 && d.startsWith("91")) d = d.slice(2);
+  return d.length === 10 ? d : "";
+}
+
+// Parse a pasted list into [{room, name, mobile}]. One guest per line.
+function _glParseText(text) {
+  const rows = [];
+  String(text || "").split(/[\n\r]+/).forEach((line) => {
+    const raw = line.trim();
+    if (!raw) return;
+    if (/^(room|name|mobile|phone|sr|s\.?no|#)\b/i.test(raw) && !/\d{10}/.test(raw)) return;
+    let mobile = "";
+    const mMatch = raw.match(/(?:\+?91[\s-]?)?(\d[\d\s-]{8,}\d)/);
+    if (mMatch) {
+      let d = mMatch[1].replace(/\D/g, "");
+      if (d.length === 12 && d.startsWith("91")) d = d.slice(2);
+      if (d.length === 10) mobile = d;
+    }
+    let rest = mobile ? raw.replace(mMatch[0], " ") : raw;
+    let room = "";
+    const rMatch = rest.match(/\broom\s*\.?\s*(\d{1,4})\b/i) || rest.match(/^\s*(\d{1,4})[\s.)\-]/);
+    if (rMatch) { room = rMatch[1]; rest = rest.replace(rMatch[0], " "); }
+    const name = rest.replace(/[|,;:]+/g, " ").replace(/\s+/g, " ").trim();
+    if (room || name || mobile) rows.push({ room, name, mobile });
+  });
+  return rows;
+}
+
+function _glIdStatus(bid) {
+  const info = _idLinks[bid];
+  if (info && info.already_uploaded) return "done";
+  if (info && info.url) return "ready";
+  return "none";
+}
+
+function openGuestListEditor(groupId) {
+  const members = (buildBookingGroupIndex().get(groupId) || [])
+    .slice()
+    .sort((a, b) => String(a.room).localeCompare(String(b.room), undefined, { numeric: true }));
+  if (!members.length) { showNotification("No rooms in this group", "error"); return; }
+
+  _glState = {
+    groupId,
+    rooms: members.map((m) => ({
+      room: String(m.room), booking_id: m.booking_id,
+      name: m.guest_name || "", mobile: m.guest_mobile || "", touched: false,
+    })),
+  };
+
+  const existing = document.getElementById("gl-editor-modal");
+  if (existing) existing.remove();
+  const overlay = document.createElement("div");
+  overlay.id = "gl-editor-modal";
+  overlay.style.cssText = "position:fixed;inset:0;background:rgba(15,23,42,.55);z-index:4000;display:flex;align-items:flex-start;justify-content:center;padding:24px 12px;overflow:auto;";
+  overlay.innerHTML =
+    '<div style="background:#fff;border-radius:16px;max-width:600px;width:100%;box-shadow:0 24px 60px rgba(15,23,42,.35);overflow:hidden;">' +
+      '<div style="display:flex;align-items:center;justify-content:space-between;padding:16px 20px;background:linear-gradient(135deg,#1d4ed8,#1e3a8a);color:#fff;">' +
+        '<div style="font-size:1.02rem;font-weight:700;letter-spacing:.2px;"><i class="fas fa-users"></i> Group guests · ' + members.length + ' rooms</div>' +
+        '<button type="button" class="gl-close" style="background:rgba(255,255,255,.18);border:0;width:30px;height:30px;border-radius:999px;font-size:1.1rem;cursor:pointer;color:#fff;line-height:1;">&times;</button>' +
+      '</div>' +
+      '<div style="padding:16px 20px 6px;">' +
+        '<details style="margin-bottom:14px;"><summary style="cursor:pointer;font-size:.82rem;font-weight:600;color:#1d4ed8;list-style:none;display:flex;align-items:center;gap:6px;"><i class="fas fa-wand-magic-sparkles"></i> Paste or scan the organiser&rsquo;s list</summary>' +
+          '<textarea id="gl-paste" rows="3" placeholder="e.g.  Room 201 Ravi Kumar 9876543210" style="width:100%;margin-top:9px;border:1px solid #e2e8f0;border-radius:10px;padding:10px;font-size:.85rem;resize:vertical;box-sizing:border-box;"></textarea>' +
+          '<div style="display:flex;gap:8px;margin-top:9px;flex-wrap:wrap;align-items:center;">' +
+            '<button type="button" id="gl-parse-btn" style="background:#1d4ed8;color:#fff;border:0;border-radius:9px;padding:8px 15px;font-size:.8rem;font-weight:600;cursor:pointer;">Fill from text</button>' +
+            '<label style="background:#f1f5f9;border:1px solid #e2e8f0;border-radius:9px;padding:8px 15px;font-size:.8rem;font-weight:600;cursor:pointer;"><i class="fas fa-camera"></i> Scan photo<input type="file" id="gl-scan" accept="image/*" style="display:none;"></label>' +
+            '<span id="gl-scan-status" style="font-size:.76rem;color:#64748b;"></span>' +
+          '</div></details>' +
+        '<table style="width:100%;border-collapse:collapse;">' +
+          '<thead><tr>' +
+            '<th style="text-align:left;padding:6px 8px;font-size:.66rem;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:#94a3b8;">Room</th>' +
+            '<th style="text-align:left;padding:6px 8px;font-size:.66rem;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:#94a3b8;">Guest name</th>' +
+            '<th style="text-align:left;padding:6px 8px;font-size:.66rem;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:#94a3b8;">Mobile</th>' +
+            '<th style="padding:6px 8px;"></th>' +
+          '</tr></thead>' +
+          '<tbody id="gl-tbody"></tbody>' +
+        '</table>' +
+      '</div>' +
+      '<div style="padding:14px 20px;border-top:1px solid #eef2f7;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">' +
+        '<span style="font-size:.74rem;color:#94a3b8;">Each guest gets their own confirmation (no price) + ID link.</span>' +
+        '<div style="display:flex;gap:8px;">' +
+          '<button type="button" class="gl-close" style="background:#f1f5f9;border:1px solid #e2e8f0;border-radius:10px;padding:10px 18px;font-weight:600;cursor:pointer;font-size:.86rem;">Close</button>' +
+          '<button type="button" id="gl-save-btn" style="background:#059669;color:#fff;border:0;border-radius:10px;padding:10px 22px;font-weight:700;cursor:pointer;font-size:.86rem;box-shadow:0 4px 12px rgba(5,150,105,.3);">Save</button>' +
+        '</div>' +
+      '</div>' +
+    '</div>';
+  document.body.appendChild(overlay);
+
+  const close = () => { overlay.remove(); _glState = null; };
+  overlay.querySelectorAll(".gl-close").forEach((b) => b.addEventListener("click", close));
+  overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
+  overlay.querySelector("#gl-parse-btn").addEventListener("click", () => {
+    _glFill(_glParseText(document.getElementById("gl-paste").value));
+  });
+  overlay.querySelector("#gl-save-btn").addEventListener("click", _glSave);
+  overlay.querySelector("#gl-scan").addEventListener("change", (e) => {
+    const f = e.target.files && e.target.files[0];
+    if (f) _glScanPhoto(f);
+  });
+
+  _glRenderTable();
+  prefetchIdLinks(_glState.rooms.map((r) => r.booking_id)).then(() => {
+    if (_glState) _glRenderTable();
+  });
+}
+
+function _glRenderTable() {
+  const tb = document.getElementById("gl-tbody");
+  if (!tb || !_glState) return;
+  tb.innerHTML = _glState.rooms.map((r, i) => {
+    const st = _glIdStatus(r.booking_id);
+    const mob = _glCleanMobile(r.mobile);
+    let action;
+    if (st === "done") {
+      action = '<button type="button" class="gl-view" data-i="' + i + '" title="View the uploaded ID"' +
+        ' style="background:#ecfdf5;color:#059669;border:1px solid #a7f3d0;border-radius:8px;' +
+        'padding:7px 11px;font-weight:700;cursor:pointer;font-size:.78rem;white-space:nowrap;">' +
+        '<i class="fas fa-check-circle"></i> ID &middot; View</button>';
+    } else {
+      const ready = mob && st === "ready";
+      action = '<button type="button" class="gl-send" data-i="' + i + '"' + (ready ? "" : " disabled") +
+        ' title="' + (ready ? "Send confirmation + ID link" : (mob ? "Save first" : "Add a mobile and save")) + '"' +
+        ' style="background:' + (ready ? "#25D366" : "#e2e8f0") + ';color:' + (ready ? "#fff" : "#94a3b8") +
+        ';border:0;border-radius:8px;padding:7px 11px;font-weight:600;cursor:' + (ready ? "pointer" : "not-allowed") +
+        ';font-size:.78rem;white-space:nowrap;"><i class="fab fa-whatsapp"></i></button>';
+    }
+    const inp = 'width:100%;box-sizing:border-box;border:1px solid #e2e8f0;border-radius:8px;padding:9px 10px;font-size:.88rem;';
+    return '<tr style="border-top:1px solid #eef2f7;">' +
+      '<td style="padding:8px;font-weight:700;color:#1d4ed8;white-space:nowrap;">' + _glEsc(r.room) + '</td>' +
+      '<td style="padding:8px;"><input class="gl-name" data-i="' + i + '" type="text" maxlength="80" value="' + _glEsc(r.name) + '" placeholder="Guest name" style="' + inp + '"></td>' +
+      '<td style="padding:8px;"><input class="gl-mobile" data-i="' + i + '" type="tel" inputmode="numeric" maxlength="15" value="' + _glEsc(r.mobile) + '" placeholder="10-digit mobile" style="' + inp + '"></td>' +
+      '<td style="padding:8px;text-align:right;">' + action + '</td>' +
+    '</tr>';
+  }).join("");
+
+  tb.querySelectorAll(".gl-name").forEach((el) => el.addEventListener("input", () => {
+    const r = _glState.rooms[+el.getAttribute("data-i")]; r.name = el.value; r.touched = true;
+  }));
+  tb.querySelectorAll(".gl-mobile").forEach((el) => el.addEventListener("input", () => {
+    const r = _glState.rooms[+el.getAttribute("data-i")]; r.mobile = el.value; r.touched = true;
+    el.style.borderColor = "#e2e8f0";
+  }));
+  tb.querySelectorAll(".gl-send").forEach((b) => b.addEventListener("click", () => {
+    _glSendOne(_glState.rooms[+b.getAttribute("data-i")].booking_id);
+  }));
+  tb.querySelectorAll(".gl-view").forEach((b) => b.addEventListener("click", () => {
+    _glViewDocs(_glState.rooms[+b.getAttribute("data-i")].mobile);
+  }));
+}
+
+// Open the secure ID viewer for a guest, straight from the editor. Reuses the
+// app's lightbox (customer-docs.js); /get_customer returns the in-app image
+// links (admin/manager only).
+function _glViewDocs(mobile) {
+  const m = String(mobile || "").replace(/\D/g, "");
+  if (!m || typeof openPhotoViewer !== "function") { showNotification("ID viewer unavailable", "error"); return; }
+  apiFetch(`/get_customer/${m}`)
+    .then((r) => r.json())
+    .then((d) => {
+      const urls = (d && d.customer && d.customer.id_doc_urls) || [];
+      if (urls.length) openPhotoViewer(urls, 0, m);
+      else showNotification("No ID photos found for this guest", "error");
+    })
+    .catch(() => showNotification("Couldn't load the ID", "error"));
+}
+
+// Drop parsed rows onto state: match by room, else next empty row. Re-render.
+function _glFill(rows) {
+  if (!_glState) return;
+  const byRoom = {};
+  _glState.rooms.forEach((r) => { byRoom[r.room] = r; });
+  let filled = 0;
+  rows.forEach((row) => {
+    let r = row.room && byRoom[row.room];
+    if (!r) r = _glState.rooms.find((x) => !x.name.trim() && !_glCleanMobile(x.mobile));
+    if (!r) return;
+    if (row.name) r.name = row.name;
+    if (row.mobile) r.mobile = row.mobile;
+    r.touched = true; filled += 1;
+  });
+  _glRenderTable();
+  showNotification(filled ? `Filled ${filled} room${filled !== 1 ? "s" : ""} — check before saving`
+    : "Couldn't match any rooms — fill them in", filled ? "success" : "error");
+}
+
+async function _glScanPhoto(file) {
+  const status = document.getElementById("gl-scan-status");
+  if (status) status.textContent = "Reading…";
+  try {
+    const fd = new FormData();
+    fd.append("file", file);
+    const r = await apiFetch("/api/v2/bookings/parse-guest-list", { method: "POST", body: fd });
+    const data = await r.json();
+    if (r.ok && data.success) {
+      _glFill(data.guests || []);
+      if (status) status.textContent = "Read " + (data.guests ? data.guests.length : 0) + " rows";
+    } else {
+      if (status) status.textContent = "";
+      showNotification(data.message || "Couldn't read the photo", "error");
+    }
+  } catch (e) {
+    if (status) status.textContent = "";
+    showNotification("Scan failed — please type the list", "error");
+  }
+}
+
+async function _glSave() {
+  if (!_glState) return;
+  const saveBtn = document.getElementById("gl-save-btn");
+  const edits = [];
+  let badEl = null;
+  _glState.rooms.forEach((r, i) => {
+    if (!r.touched) return;
+    const name = r.name.trim();
+    const rawMob = r.mobile.trim();
+    const mobile = _glCleanMobile(rawMob);
+    if (rawMob && !mobile) {
+      badEl = document.querySelector('.gl-mobile[data-i="' + i + '"]');
+      return;
+    }
+    if (!name && !mobile) return;
+    edits.push({ r, name, mobile });
+  });
+  if (badEl) { badEl.style.borderColor = "#e11d48"; showNotification("A mobile number looks wrong — fix the red field", "error"); return; }
+  if (!edits.length) { showNotification("Nothing changed to save", "error"); return; }
+
+  saveBtn.disabled = true; saveBtn.textContent = "Saving…";
+  let ok = 0;
+  for (const e of edits) {
+    try {
+      const resp = await apiFetch("/update_booking", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ booking_id: e.r.booking_id, guest_name: e.name, guest_mobile: e.mobile }),
+      });
+      const d = await resp.json();
+      if (d.success) {
+        ok += 1;
+        const bk = (bookings || []).find((b) => b.booking_id === e.r.booking_id);
+        if (bk) { bk.guest_name = e.name; bk.guest_mobile = e.mobile; }
+        delete _idLinks[e.r.booking_id];
+        e.r.name = e.name; e.r.mobile = e.mobile; e.r.touched = false;
+      } else {
+        showNotification("Room " + e.r.room + ": " + (d.message || "save failed"), "error");
+      }
+    } catch (err) {
+      showNotification("Room " + e.r.room + ": save failed", "error");
+    }
+  }
+  saveBtn.disabled = false; saveBtn.textContent = "Save";
+  if (ok) {
+    showNotification("Saved " + ok + " guest" + (ok !== 1 ? "s" : ""), "success");
+    if (typeof renderBookings === "function") renderBookings();
+    await prefetchIdLinks(edits.map((e) => e.r.booking_id));
+  }
+  _glRenderTable();
+}
+
+function _glSendOne(bookingId) {
+  const bk = (bookings || []).find((b) => b.booking_id === bookingId);
+  if (!bk) { showNotification("Booking not found", "error"); return; }
+  const phone = _waNormalisePhone(bk.guest_mobile || "");
+  if (!phone || phone === "91") { showNotification("Save a valid mobile first", "error"); return; }
+  _waOpen(phone, _waSingleBookingMessage(bk, { hidePrice: true }));
+}

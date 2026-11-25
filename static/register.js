@@ -4,14 +4,11 @@
 //      excel GST columns, serial dedup, missing bills
 // ==========================================
 
-// ── Sticky list headers (shared: Register + Bills) ──────────────────────────
-// The wide table container has overflow-x:auto, which makes it a scroll context
-// — so a thead pinned to the viewport never actually sticks. Instead we cap the
-// container's height so the LIST scrolls inside it (page itself stays put): the
-// column header pins at the container top and each date-group header pins right
-// under it, the next date pushing it up. The cap (viewport minus everything
-// above the table minus the bottom nav) is measured and published as a CSS var,
-// so it follows the layout instead of guessing pixels.
+// ── Sticky filter bar (shared: Register + Bills) ────────────────────────────
+// These lists scroll the PAGE: the screen header (and the Bills stats) scroll
+// away while only the filter bar stays pinned. The filter sticks right under the
+// app header, so we measure that header's height and publish it as the CSS var
+// the filter's `top` reads — this follows the layout instead of guessing pixels.
 (function () {
   if (window.ccPinStack) return;
   const pinned = new Set();
@@ -19,21 +16,8 @@
     if (!tabEl || !tabEl.offsetParent) return; // skip hidden tabs (height = 0)
     const header = document.querySelector(".app-container > .header")
                 || document.querySelector(".header");
-    const nav = document.querySelector(".bottom-nav");
-    const thead = tabEl.querySelector(".register-table thead, .bills-table thead");
-    const container = tabEl.querySelector(".register-table-container, .bills-table-container");
-    if (!thead || !container) return;
     const hH = header ? Math.round(header.getBoundingClientRect().height) : 0;
-    const tH = Math.round(thead.getBoundingClientRect().height);
-    const navH = nav ? Math.round(nav.getBoundingClientRect().height) : 0;
-    // Distance from the document top = the container's resting viewport offset
-    // (scroll-position independent, so this is stable whether the page is at
-    // rest or nudged).
-    const top = Math.round(container.getBoundingClientRect().top + window.scrollY);
-    const maxH = Math.max(240, window.innerHeight - top - navH - 8);
     tabEl.style.setProperty("--cc-pin-filter", hH + "px"); // filter bar sticky top
-    tabEl.style.setProperty("--cc-grouptop", tH + "px");   // date header sits under the column header
-    tabEl.style.setProperty("--cc-list-maxh", maxH + "px");
   }
   window.ccPinStack = function (tabEl) {
     if (!tabEl) return;

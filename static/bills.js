@@ -59,7 +59,7 @@
 
 /* ── Filter bar ── */
 .bl-filter-bar {
-  display: flex; flex-wrap: wrap;
+  display: flex; flex-wrap: nowrap; overflow-x: auto;
   align-items: center; gap: 0.4rem;
   margin-bottom: 0.7rem;
   background: #f4f6fb; border-radius: 10px;
@@ -68,6 +68,9 @@
   /* Pin under the app header while the list scrolls (var set by ccPinStack). */
   position: sticky; top: var(--cc-pin-filter, 66px); z-index: 30;
 }
+/* Single-row filter: nothing shrinks/wraps; the bar scrolls sideways if narrow. */
+.bl-filter-bar > * { flex-shrink: 0; }
+.bl-filter-bar .bl-search-input { flex-shrink: 1; }
 .bl-date-range-wrap {
   display: flex; align-items: center; gap: 0.3rem;
   background: #fff; border: 1px solid #d8d8d8; border-radius: 6px;
@@ -108,18 +111,16 @@
 .bills-table-container {
   background: #fff; border-radius: 8px;
   box-shadow: 0 1px 4px rgba(0,0,0,.07);
-  /* Scroll the list inside the card (height capped by ccPinStack) so the
-     column header and date-group headers can pin. overflow:auto keeps the
-     wide table horizontally scrollable too. */
-  overflow: auto; max-height: var(--cc-list-maxh, 70vh); margin-bottom: 1rem;
+  /* Page-scroll model: the list grows and the PAGE scrolls, so the bills header
+     and stats scroll away while only the filter bar (sticky) stays. overflow-x
+     keeps the wide table horizontally scrollable. */
+  overflow-x: auto; max-height: none; margin-bottom: 1rem;
 }
 .bills-table {
   width: 100%; border-collapse: collapse; font-size: 0.81rem;
 }
 .bills-table thead {
   background: var(--primary, #3f51b5); color: #fff;
-  /* Pins to the top of the (now height-capped) scrolling container. */
-  position: sticky; top: 0; z-index: 10;
 }
 .bills-table th {
   padding: 0.55rem 0.45rem; text-align: left;
@@ -137,9 +138,6 @@
   font-size: 0.76rem; color: var(--primary, #3f51b5);
   letter-spacing: .03em;
   border-bottom: 2px solid var(--primary, #3f51b5);
-  /* Pin the current date header right under the column header; the next date's
-     header pushes it up as you scroll (var = column-header height). */
-  position: sticky; top: var(--cc-grouptop, 35px); z-index: 6;
   background: #eef2f7;
 }
 .bl-date-header i { margin-right: 0.35rem; transition: transform 0.2s; }

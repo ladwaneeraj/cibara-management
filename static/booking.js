@@ -1574,6 +1574,13 @@ function renderBookings() {
         ? `<span class="bk-bill-no" data-stay="${escHtml(booking.stay_id)}">Bill …</span>`
         : "";
 
+    // ID-on-file badge: shown once a guest has uploaded (id_collected via the
+    // link) or any ID doc is recorded; tap to open the secure viewer.
+    const _docMob = String(booking.guest_mobile || "").replace(/\D/g, "");
+    const docIcon = (booking.id_collected || booking.id_doc_count > 0)
+      ? `<i class="fas fa-id-card" title="ID on file — tap to view" style="color:#059669;margin-left:7px;cursor:pointer;" onclick="event.stopPropagation(); _glViewDocs('${_docMob}')"></i>`
+      : "";
+
     html += `
       <div class="booking-item ${stateClass}" data-id="${booking.booking_id}"
            role="button" tabindex="0">
@@ -1587,7 +1594,7 @@ function renderBookings() {
             ${sourceBadge}
           </div>
         </div>
-        <div class="booking-guest">${escHtml(booking.guest_name)}</div>
+        <div class="booking-guest">${escHtml(booking.guest_name)}${docIcon}</div>
         <div class="bk-stay-line">
           <i class="fas fa-calendar-check"></i> ${formattedCheckIn}
           <span class="bk-stay-sep">&rarr;</span> ${formattedCheckOut}
@@ -1742,7 +1749,12 @@ function showBookingDetails(bookingId) {
   // Format dates
   const formattedCheckIn = formatDate(checkInDate);
   const formattedCheckOut = formatDate(checkOutDate);
-  const bookingDate = formatDateTime(booking.booking_date);
+  // "Booked On": createdAt carries the real IST time ("YYYY-MM-DD HH:MM:SS");
+  // booking_date is date-only, so for legacy rows show just the date rather than
+  // a misleading 05:30 AM (date-only parsed as UTC midnight).
+  const bookingDate = booking.createdAt
+    ? formatDateTime(String(booking.createdAt).replace(" ", "T"))
+    : (booking.booking_date ? formatDate(new Date(booking.booking_date)) : "N/A");
 
   // Format check-in time with default
   const checkInTime = booking.check_in_time || "14:00";
@@ -1856,31 +1868,34 @@ function showBookingDetails(bookingId) {
         groupPending > 0
           ? `<span style="background:#fef2f2;color:#dc2626;font-size:0.72rem;font-weight:700;padding:3px 10px;border-radius:999px;border:1px solid #fecaca;white-space:nowrap;">₹${groupPending} pending</span>`
           : `<span style="background:#ecfdf5;color:#059669;font-size:0.72rem;font-weight:700;padding:3px 10px;border-radius:999px;border:1px solid #a7f3d0;white-space:nowrap;">Fully paid</span>`;
+      // Each chip switches the details modal to that room (showBookingDetails
+      // repopulates in place). The current room stays highlighted.
       const chips = groupMembers
         .map((m) => {
           const cur = m.booking_id === bookingId;
-          return `<span style="background:${cur ? "#1d4ed8" : "#fff"};color:${cur ? "#fff" : "#475569"};` +
-            `border:1px solid ${cur ? "#1d4ed8" : "#e2e8f0"};border-radius:999px;padding:4px 11px;` +
-            `font-size:0.76rem;font-weight:600;">Room ${escRoom(m.room)}</span>`;
+          return `<button type="button" onclick="showBookingDetails('${escRoom(m.booking_id)}')" ` +
+            `title="View Room ${escRoom(m.room)}" style="background:${cur ? "#1d4ed8" : "#fff"};color:${cur ? "#fff" : "#475569"};` +
+            `border:1px solid ${cur ? "#1d4ed8" : "#e2e8f0"};border-radius:7px;padding:3px 0;width:38px;text-align:center;` +
+            `font-size:0.72rem;font-weight:700;cursor:pointer;line-height:1.3;">${escRoom(m.room)}</button>`;
         })
         .join("");
       // Reset the container's own class styling; the wrapper below owns the look.
       groupBanner.style.cssText = "display:block;padding:0;background:none;border:0;margin-bottom:0.75rem;";
       groupBanner.innerHTML =
-        `<div style="background:linear-gradient(135deg,#eff4ff,#f3f0ff);border:1px solid #e2e8f0;border-radius:14px;padding:15px 16px;">` +
-          `<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:11px;">` +
-            `<div style="font-size:0.92rem;font-weight:700;color:#1e293b;"><i class="fas fa-layer-group" style="color:#1d4ed8;"></i> ${groupMembers.length}-room booking</div>` +
+        `<div style="background:linear-gradient(135deg,#eff4ff,#f3f0ff);border:1px solid #e2e8f0;border-radius:12px;padding:9px 11px;">` +
+          `<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:7px;">` +
+            `<div style="font-size:0.84rem;font-weight:700;color:#1e293b;"><i class="fas fa-layer-group" style="color:#1d4ed8;"></i> ${groupMembers.length}-room booking</div>` +
             `<div style="display:flex;align-items:center;gap:8px;">` +
-              `<span style="font-size:0.78rem;color:#64748b;font-weight:600;">₹${groupTotal}</span>${pendingBadge}` +
+              `<span style="font-size:0.76rem;color:#64748b;font-weight:600;">₹${groupTotal}</span>${pendingBadge}` +
             `</div>` +
           `</div>` +
-          `<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:13px;">${chips}</div>` +
+          `<div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px;">${chips}</div>` +
           `<button type="button" onclick="openGuestListEditor('${escRoom(booking.group_booking_id)}')" ` +
-            `style="width:100%;background:linear-gradient(135deg,#1d4ed8,#1e3a8a);color:#fff;border:0;border-radius:11px;` +
-            `padding:11px;font-size:0.84rem;font-weight:700;cursor:pointer;box-shadow:0 5px 14px rgba(29,78,216,.28);">` +
+            `style="width:100%;background:linear-gradient(135deg,#1d4ed8,#1e3a8a);color:#fff;border:0;border-radius:9px;` +
+            `padding:8px;font-size:0.8rem;font-weight:700;cursor:pointer;box-shadow:0 3px 9px rgba(29,78,216,.24);">` +
             `<i class="fas fa-users"></i> Edit guests &amp; send IDs</button>` +
-          `<div style="margin-top:9px;font-size:0.72rem;color:#94a3b8;text-align:center;">` +
-            `Each guest gets their own confirmation + ID-upload link.</div>` +
+          `<div style="margin-top:6px;font-size:0.68rem;color:#94a3b8;text-align:center;">` +
+            `Tap a room to view it · each guest gets their own ID link.</div>` +
         `</div>`;
       groupBanner.style.display = "";
     } else {
@@ -1899,9 +1914,15 @@ function showBookingDetails(bookingId) {
 
   // Normal bookings: populate payment fields
   if (!isMmt) {
-    document.getElementById("details-total-amount").textContent = `₹${booking.total_amount}`;
-    document.getElementById("details-paid-amount").textContent = `₹${booking.paid_amount}`;
-    document.getElementById("details-balance").textContent = `₹${booking.balance}`;
+    const totEl = document.getElementById("details-total-amount");
+    const paidEl = document.getElementById("details-paid-amount");
+    const balEl = document.getElementById("details-balance");
+    totEl.textContent = `₹${booking.total_amount}`;
+    paidEl.textContent = `₹${booking.paid_amount}`;
+    balEl.textContent = `₹${booking.balance}`;
+    // In a group the banner already shows the group total, so shrink this
+    // per-room money block (it was dominating the modal for multi-room bookings).
+    [totEl, paidEl, balEl].forEach((el) => { if (el) el.style.fontSize = isGroup ? "1.05rem" : ""; });
   }
 
   // OTA Section
@@ -5592,6 +5613,119 @@ function _glIdStatus(bid) {
   return "none";
 }
 
+// WhatsApp-confirmation-sent, tracked per device (like the web-booking cue) so
+// the desk can see at a glance which group guests have had their link sent.
+const _GL_WA_SENT_KEY = "cibara_gl_wa_sent";
+function _glWaSentSet() {
+  try { return new Set(JSON.parse(localStorage.getItem(_GL_WA_SENT_KEY) || "[]")); }
+  catch (e) { return new Set(); }
+}
+function _glMarkWaSent(bid) {
+  try { const s = _glWaSentSet(); s.add(bid); localStorage.setItem(_GL_WA_SENT_KEY, JSON.stringify([...s])); }
+  catch (e) { /* storage off — the Sent badge just won't persist */ }
+}
+
+// 24h "HH:MM" -> "h:MM AM/PM" for display (empty string stays empty).
+function _fmt12(hhmm) {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(hhmm || "");
+  if (!m) return "";
+  let h = +m[1]; const ap = h >= 12 ? "PM" : "AM"; h = (h % 12) || 12;
+  return h + ":" + m[2] + " " + ap;
+}
+
+// Analog clock-face time picker (vanilla, no deps). initial = "HH:MM" 24h or "".
+// Calls onDone("HH:MM" 24h) when the user taps Done.
+function openClockPicker(initial, onDone) {
+  const m0 = /^(\d{1,2}):(\d{2})$/.exec(initial || "");
+  const h24 = m0 ? +m0[1] : 19;
+  const st = { mode: "h", ampm: h24 >= 12 ? "PM" : "AM", h12: (h24 % 12) || 12, min: m0 ? +m0[2] : 0 };
+  const pad = (n) => String(n).padStart(2, "0");
+  const GOLD = "#c9a46a", D = 220, R = 84, C = 110;
+
+  const ov = document.createElement("div");
+  ov.style.cssText = "position:fixed;inset:0;background:rgba(15,23,42,.6);z-index:5000;display:flex;align-items:center;justify-content:center;padding:16px;";
+  ov.innerHTML =
+    '<div style="background:#0f1722;color:#fff;border-radius:16px;padding:18px;width:300px;max-width:100%;box-shadow:0 24px 60px rgba(0,0,0,.5);font-family:inherit;">' +
+      '<div style="display:flex;align-items:flex-start;gap:12px;justify-content:center;margin-bottom:14px;">' +
+        '<div style="display:flex;align-items:baseline;gap:3px;font-size:2.2rem;font-weight:600;">' +
+          '<span id="cp-h" style="cursor:pointer;padding:1px 6px;border-radius:7px;"></span><span>:</span>' +
+          '<span id="cp-m" style="cursor:pointer;padding:1px 6px;border-radius:7px;"></span>' +
+        '</div>' +
+        '<div style="display:flex;flex-direction:column;gap:4px;font-size:.78rem;font-weight:700;">' +
+          '<button type="button" id="cp-am" style="border:1px solid #334155;border-radius:6px;padding:3px 9px;cursor:pointer;background:transparent;color:#cbd5e1;">AM</button>' +
+          '<button type="button" id="cp-pm" style="border:1px solid #334155;border-radius:6px;padding:3px 9px;cursor:pointer;background:transparent;color:#cbd5e1;">PM</button>' +
+        '</div>' +
+      '</div>' +
+      '<div id="cp-face" style="position:relative;width:220px;height:220px;margin:0 auto;border-radius:50%;background:#152033;"></div>' +
+      '<button type="button" id="cp-done" style="width:100%;margin-top:16px;background:#f1efe8;color:#1e293b;border:0;border-radius:10px;padding:12px;font-weight:700;font-size:.95rem;cursor:pointer;">Done</button>' +
+    '</div>';
+  document.body.appendChild(ov);
+  const close = () => ov.remove();
+  ov.addEventListener("click", (e) => { if (e.target === ov) close(); });
+  const face = ov.querySelector("#cp-face");
+  const ang = (i) => (i / 12) * 2 * Math.PI - Math.PI / 2;
+  const px = (i) => C + R * Math.cos(ang(i)), py = (i) => C + R * Math.sin(ang(i));
+
+  function render() {
+    const hEl = ov.querySelector("#cp-h"), mEl = ov.querySelector("#cp-m");
+    hEl.textContent = st.h12; mEl.textContent = pad(st.min);
+    hEl.style.background = st.mode === "h" ? GOLD : "transparent"; hEl.style.color = st.mode === "h" ? "#1e293b" : "#fff";
+    mEl.style.background = st.mode === "m" ? GOLD : "transparent"; mEl.style.color = st.mode === "m" ? "#1e293b" : "#fff";
+    const amEl = ov.querySelector("#cp-am"), pmEl = ov.querySelector("#cp-pm");
+    amEl.style.background = st.ampm === "AM" ? GOLD : "transparent"; amEl.style.color = st.ampm === "AM" ? "#1e293b" : "#cbd5e1";
+    pmEl.style.background = st.ampm === "PM" ? GOLD : "transparent"; pmEl.style.color = st.ampm === "PM" ? "#1e293b" : "#cbd5e1";
+    const hours = st.mode === "h";
+    const selIdx = hours ? st.h12 : st.min / 5;
+    let html = '<svg width="' + D + '" height="' + D + '" style="position:absolute;inset:0;pointer-events:none;">' +
+      '<line x1="' + C + '" y1="' + C + '" x2="' + px(selIdx) + '" y2="' + py(selIdx) + '" stroke="' + GOLD + '" stroke-width="2"/>' +
+      '<circle cx="' + C + '" cy="' + C + '" r="3" fill="' + GOLD + '"/>' +
+      '<circle cx="' + px(selIdx) + '" cy="' + py(selIdx) + '" r="18" fill="' + GOLD + '"/></svg>';
+    for (let k = 0; k < 12; k++) {
+      const idx = hours ? k + 1 : k;
+      const val = hours ? k + 1 : k * 5;
+      const sel = hours ? (val === st.h12) : (val === st.min);
+      html += '<div data-val="' + val + '" style="position:absolute;width:34px;height:34px;left:' + (px(idx) - 17) + 'px;top:' + (py(idx) - 17) +
+        'px;display:flex;align-items:center;justify-content:center;border-radius:50%;cursor:pointer;font-size:.95rem;font-weight:600;z-index:1;color:' +
+        (sel ? "#1e293b" : "#e2e8f0") + ';">' + (hours ? val : pad(val)) + "</div>";
+    }
+    face.innerHTML = html;
+    face.querySelectorAll("[data-val]").forEach((el) => el.addEventListener("click", () => {
+      const v = +el.getAttribute("data-val");
+      if (st.mode === "h") { st.h12 = v; st.mode = "m"; } else { st.min = v; }
+      render();
+    }));
+  }
+  ov.querySelector("#cp-h").addEventListener("click", () => { st.mode = "h"; render(); });
+  ov.querySelector("#cp-m").addEventListener("click", () => { st.mode = "m"; render(); });
+  ov.querySelector("#cp-am").addEventListener("click", () => { st.ampm = "AM"; render(); });
+  ov.querySelector("#cp-pm").addEventListener("click", () => { st.ampm = "PM"; render(); });
+  ov.querySelector("#cp-done").addEventListener("click", () => {
+    onDone(pad((st.h12 % 12) + (st.ampm === "PM" ? 12 : 0)) + ":" + pad(st.min)); close();
+  });
+  render();
+}
+
+// Toggle the editor between read-only (tap-to-call) and edit (inputs) mode.
+function _glSetMode(on) {
+  if (!_glState) return;
+  _glState.editing = on;
+  const tog = document.getElementById("gl-edit-toggle");
+  if (tog) tog.innerHTML = on ? '<i class="fas fa-check"></i> Done' : '<i class="fas fa-pen"></i> Edit';
+  const fill = document.getElementById("gl-fill-section"); if (fill) fill.style.display = on ? "" : "none";
+  const save = document.getElementById("gl-save-btn"); if (save) save.style.display = on ? "" : "none";
+  const hint = document.getElementById("gl-foot-hint");
+  if (hint) hint.textContent = on
+    ? "Fill each room, then Save. Each guest gets their own ID link."
+    : "Tap a mobile to call · tap WhatsApp to send each guest their ID link.";
+  _glRenderTable();
+}
+function _glToggleEdit() {
+  if (!_glState) return;
+  // Leaving edit mode with unsaved changes persists them; otherwise just switch.
+  if (_glState.editing && _glState.rooms.some((r) => r.touched)) { _glSave(); return; }
+  _glSetMode(!_glState.editing);
+}
+
 function openGuestListEditor(groupId) {
   const members = (buildBookingGroupIndex().get(groupId) || [])
     .slice()
@@ -5599,10 +5733,12 @@ function openGuestListEditor(groupId) {
   if (!members.length) { showNotification("No rooms in this group", "error"); return; }
 
   _glState = {
-    groupId,
+    groupId, editing: false,
     rooms: members.map((m) => ({
       room: String(m.room), booking_id: m.booking_id,
-      name: m.guest_name || "", mobile: m.guest_mobile || "", touched: false,
+      name: m.guest_name || "", mobile: m.guest_mobile || "",
+      guests: m.guest_count || 1, checkin: String(m.check_in_time || "").slice(0, 5),
+      touched: false,
     })),
   };
 
@@ -5615,31 +5751,38 @@ function openGuestListEditor(groupId) {
     '<div style="background:#fff;border-radius:16px;max-width:600px;width:100%;box-shadow:0 24px 60px rgba(15,23,42,.35);overflow:hidden;">' +
       '<div style="display:flex;align-items:center;justify-content:space-between;padding:16px 20px;background:linear-gradient(135deg,#1d4ed8,#1e3a8a);color:#fff;">' +
         '<div style="font-size:1.02rem;font-weight:700;letter-spacing:.2px;"><i class="fas fa-users"></i> Group guests · ' + members.length + ' rooms</div>' +
-        '<button type="button" class="gl-close" style="background:rgba(255,255,255,.18);border:0;width:30px;height:30px;border-radius:999px;font-size:1.1rem;cursor:pointer;color:#fff;line-height:1;">&times;</button>' +
+        '<div style="display:flex;gap:8px;align-items:center;">' +
+          '<button type="button" id="gl-edit-toggle" style="background:rgba(255,255,255,.18);border:0;border-radius:8px;padding:7px 13px;font-size:.8rem;font-weight:700;cursor:pointer;color:#fff;"><i class="fas fa-pen"></i> Edit</button>' +
+          '<button type="button" class="gl-close" style="background:rgba(255,255,255,.18);border:0;width:30px;height:30px;border-radius:999px;font-size:1.1rem;cursor:pointer;color:#fff;line-height:1;">&times;</button>' +
+        '</div>' +
       '</div>' +
       '<div style="padding:16px 20px 6px;">' +
-        '<details style="margin-bottom:14px;"><summary style="cursor:pointer;font-size:.82rem;font-weight:600;color:#1d4ed8;list-style:none;display:flex;align-items:center;gap:6px;"><i class="fas fa-wand-magic-sparkles"></i> Paste or scan the organiser&rsquo;s list</summary>' +
+        '<div id="gl-fill-section" style="display:none;"><details style="margin-bottom:14px;" open><summary style="cursor:pointer;font-size:.82rem;font-weight:600;color:#1d4ed8;list-style:none;display:flex;align-items:center;gap:6px;"><i class="fas fa-wand-magic-sparkles"></i> Paste or scan the organiser&rsquo;s list</summary>' +
           '<textarea id="gl-paste" rows="3" placeholder="e.g.  Room 201 Ravi Kumar 9876543210" style="width:100%;margin-top:9px;border:1px solid #e2e8f0;border-radius:10px;padding:10px;font-size:.85rem;resize:vertical;box-sizing:border-box;"></textarea>' +
           '<div style="display:flex;gap:8px;margin-top:9px;flex-wrap:wrap;align-items:center;">' +
             '<button type="button" id="gl-parse-btn" style="background:#1d4ed8;color:#fff;border:0;border-radius:9px;padding:8px 15px;font-size:.8rem;font-weight:600;cursor:pointer;">Fill from text</button>' +
             '<label style="background:#f1f5f9;border:1px solid #e2e8f0;border-radius:9px;padding:8px 15px;font-size:.8rem;font-weight:600;cursor:pointer;"><i class="fas fa-camera"></i> Scan photo<input type="file" id="gl-scan" accept="image/*" style="display:none;"></label>' +
             '<span id="gl-scan-status" style="font-size:.76rem;color:#64748b;"></span>' +
-          '</div></details>' +
-        '<table style="width:100%;border-collapse:collapse;">' +
+          '</div></details></div>' +
+        '<div style="overflow-x:auto;">' +
+        '<table style="width:100%;border-collapse:collapse;min-width:540px;">' +
           '<thead><tr>' +
-            '<th style="text-align:left;padding:6px 8px;font-size:.66rem;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:#94a3b8;">Room</th>' +
-            '<th style="text-align:left;padding:6px 8px;font-size:.66rem;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:#94a3b8;">Guest name</th>' +
-            '<th style="text-align:left;padding:6px 8px;font-size:.66rem;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:#94a3b8;">Mobile</th>' +
-            '<th style="padding:6px 8px;"></th>' +
+            '<th style="text-align:left;padding:6px 6px;font-size:.66rem;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:#94a3b8;">Room</th>' +
+            '<th style="text-align:left;padding:6px 6px;font-size:.66rem;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:#94a3b8;">Guest name</th>' +
+            '<th style="text-align:left;padding:6px 6px;font-size:.66rem;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:#94a3b8;">Mobile</th>' +
+            '<th style="text-align:left;padding:6px 6px;font-size:.66rem;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:#94a3b8;">Pax</th>' +
+            '<th style="text-align:left;padding:6px 6px;font-size:.66rem;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:#94a3b8;">Check-in</th>' +
+            '<th style="padding:6px 6px;"></th>' +
           '</tr></thead>' +
           '<tbody id="gl-tbody"></tbody>' +
         '</table>' +
+        '</div>' +
       '</div>' +
       '<div style="padding:14px 20px;border-top:1px solid #eef2f7;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">' +
-        '<span style="font-size:.74rem;color:#94a3b8;">Each guest gets their own confirmation (no price) + ID link.</span>' +
+        '<span id="gl-foot-hint" style="font-size:.74rem;color:#94a3b8;">Tap a mobile to call · tap WhatsApp to send each guest their ID link.</span>' +
         '<div style="display:flex;gap:8px;">' +
           '<button type="button" class="gl-close" style="background:#f1f5f9;border:1px solid #e2e8f0;border-radius:10px;padding:10px 18px;font-weight:600;cursor:pointer;font-size:.86rem;">Close</button>' +
-          '<button type="button" id="gl-save-btn" style="background:#059669;color:#fff;border:0;border-radius:10px;padding:10px 22px;font-weight:700;cursor:pointer;font-size:.86rem;box-shadow:0 4px 12px rgba(5,150,105,.3);">Save</button>' +
+          '<button type="button" id="gl-save-btn" style="display:none;background:#059669;color:#fff;border:0;border-radius:10px;padding:10px 22px;font-weight:700;cursor:pointer;font-size:.86rem;box-shadow:0 4px 12px rgba(5,150,105,.3);">Save</button>' +
         '</div>' +
       '</div>' +
     '</div>';
@@ -5648,6 +5791,7 @@ function openGuestListEditor(groupId) {
   const close = () => { overlay.remove(); _glState = null; };
   overlay.querySelectorAll(".gl-close").forEach((b) => b.addEventListener("click", close));
   overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
+  overlay.querySelector("#gl-edit-toggle").addEventListener("click", _glToggleEdit);
   overlay.querySelector("#gl-parse-btn").addEventListener("click", () => {
     _glFill(_glParseText(document.getElementById("gl-paste").value));
   });
@@ -5666,15 +5810,25 @@ function openGuestListEditor(groupId) {
 function _glRenderTable() {
   const tb = document.getElementById("gl-tbody");
   if (!tb || !_glState) return;
+  const editing = _glState.editing;
+  const inp = 'width:100%;box-sizing:border-box;border:1px solid #e2e8f0;border-radius:8px;padding:7px 8px;font-size:.85rem;';
+  const td = 'padding:8px 6px;vertical-align:middle;';
   tb.innerHTML = _glState.rooms.map((r, i) => {
     const st = _glIdStatus(r.booking_id);
     const mob = _glCleanMobile(r.mobile);
+    const sent = _glWaSentSet().has(r.booking_id);
     let action;
     if (st === "done") {
       action = '<button type="button" class="gl-view" data-i="' + i + '" title="View the uploaded ID"' +
         ' style="background:#ecfdf5;color:#059669;border:1px solid #a7f3d0;border-radius:8px;' +
         'padding:7px 11px;font-weight:700;cursor:pointer;font-size:.78rem;white-space:nowrap;">' +
         '<i class="fas fa-check-circle"></i> ID &middot; View</button>';
+    } else if (sent && mob) {
+      // Already sent on this device — green check, tap to resend.
+      action = '<button type="button" class="gl-send" data-i="' + i + '" title="Confirmation sent — tap to resend"' +
+        ' style="background:#ecfdf5;color:#059669;border:1px solid #a7f3d0;border-radius:8px;' +
+        'padding:7px 11px;font-weight:700;cursor:pointer;font-size:.78rem;white-space:nowrap;">' +
+        '<i class="fas fa-check"></i> Sent</button>';
     } else {
       const ready = mob && st === "ready";
       action = '<button type="button" class="gl-send" data-i="' + i + '"' + (ready ? "" : " disabled") +
@@ -5683,22 +5837,53 @@ function _glRenderTable() {
         ';border:0;border-radius:8px;padding:7px 11px;font-weight:600;cursor:' + (ready ? "pointer" : "not-allowed") +
         ';font-size:.78rem;white-space:nowrap;"><i class="fab fa-whatsapp"></i></button>';
     }
-    const inp = 'width:100%;box-sizing:border-box;border:1px solid #e2e8f0;border-radius:8px;padding:9px 10px;font-size:.88rem;';
+
+    let nameCell, mobileCell, paxCell, checkinCell;
+    if (editing) {
+      nameCell = '<input class="gl-name" data-i="' + i + '" type="text" maxlength="80" value="' + _glEsc(r.name) + '" placeholder="Guest name" style="' + inp + '">';
+      mobileCell = '<input class="gl-mobile" data-i="' + i + '" type="tel" inputmode="numeric" maxlength="15" value="' + _glEsc(r.mobile) + '" placeholder="10-digit" style="' + inp + 'min-width:104px;">';
+      paxCell = '<input class="gl-guests" data-i="' + i + '" type="number" min="1" max="30" value="' + _glEsc(r.guests) + '" title="Number of guests" style="' + inp + 'width:52px;text-align:center;">';
+      checkinCell = '<button type="button" class="gl-clock" data-i="' + i + '" style="' + inp + 'min-width:104px;text-align:left;cursor:pointer;background:#fff;white-space:nowrap;"><i class="far fa-clock" style="color:#94a3b8;margin-right:5px;"></i>' + (r.checkin ? _fmt12(r.checkin) : '<span style="color:#94a3b8;">Set time</span>') + '</button>';
+    } else {
+      // View mode: plain text (names no longer squeezed) + tap-to-call number.
+      nameCell = r.name ? '<span style="font-weight:600;color:#1e293b;">' + _glEsc(r.name) + '</span>' : '<span style="color:#cbd5e1;">—</span>';
+      mobileCell = mob
+        ? '<a href="tel:+91' + mob + '" style="color:#1d4ed8;text-decoration:none;font-weight:500;white-space:nowrap;">' + mob + '</a>'
+        : '<span style="color:#cbd5e1;">—</span>';
+      paxCell = '<span style="color:#475569;">' + _glEsc(r.guests || 1) + '</span>';
+      checkinCell = r.checkin ? '<span style="color:#475569;white-space:nowrap;"><i class="far fa-clock" style="color:#94a3b8;margin-right:3px;"></i>' + _glEsc(_fmt12(r.checkin)) + '</span>' : '<span style="color:#cbd5e1;">—</span>';
+    }
+
     return '<tr style="border-top:1px solid #eef2f7;">' +
-      '<td style="padding:8px;font-weight:700;color:#1d4ed8;white-space:nowrap;">' + _glEsc(r.room) + '</td>' +
-      '<td style="padding:8px;"><input class="gl-name" data-i="' + i + '" type="text" maxlength="80" value="' + _glEsc(r.name) + '" placeholder="Guest name" style="' + inp + '"></td>' +
-      '<td style="padding:8px;"><input class="gl-mobile" data-i="' + i + '" type="tel" inputmode="numeric" maxlength="15" value="' + _glEsc(r.mobile) + '" placeholder="10-digit mobile" style="' + inp + '"></td>' +
-      '<td style="padding:8px;text-align:right;">' + action + '</td>' +
+      '<td style="' + td + 'font-weight:700;color:#1d4ed8;white-space:nowrap;">' + _glEsc(r.room) + '</td>' +
+      '<td style="' + td + '">' + nameCell + '</td>' +
+      '<td style="' + td + '">' + mobileCell + '</td>' +
+      '<td style="' + td + '">' + paxCell + '</td>' +
+      '<td style="' + td + '">' + checkinCell + '</td>' +
+      '<td style="' + td + 'text-align:right;white-space:nowrap;">' + action + '</td>' +
     '</tr>';
   }).join("");
 
-  tb.querySelectorAll(".gl-name").forEach((el) => el.addEventListener("input", () => {
-    const r = _glState.rooms[+el.getAttribute("data-i")]; r.name = el.value; r.touched = true;
-  }));
-  tb.querySelectorAll(".gl-mobile").forEach((el) => el.addEventListener("input", () => {
-    const r = _glState.rooms[+el.getAttribute("data-i")]; r.mobile = el.value; r.touched = true;
-    el.style.borderColor = "#e2e8f0";
-  }));
+  if (editing) {
+    tb.querySelectorAll(".gl-name").forEach((el) => el.addEventListener("input", () => {
+      const r = _glState.rooms[+el.getAttribute("data-i")]; r.name = el.value; r.touched = true;
+    }));
+    tb.querySelectorAll(".gl-mobile").forEach((el) => el.addEventListener("input", () => {
+      const r = _glState.rooms[+el.getAttribute("data-i")]; r.mobile = el.value; r.touched = true;
+      // Live 10-digit check: red until it cleans to exactly 10 digits.
+      const ok = !el.value.trim() || _glCleanMobile(el.value);
+      el.style.borderColor = ok ? "#e2e8f0" : "#e11d48";
+    }));
+    tb.querySelectorAll(".gl-guests").forEach((el) => el.addEventListener("input", () => {
+      const r = _glState.rooms[+el.getAttribute("data-i")]; r.guests = el.value; r.touched = true;
+    }));
+    tb.querySelectorAll(".gl-clock").forEach((b) => b.addEventListener("click", () => {
+      const i = +b.getAttribute("data-i");
+      openClockPicker(_glState.rooms[i].checkin, (v) => {
+        _glState.rooms[i].checkin = v; _glState.rooms[i].touched = true; _glRenderTable();
+      });
+    }));
+  }
   tb.querySelectorAll(".gl-send").forEach((b) => b.addEventListener("click", () => {
     _glSendOne(_glState.rooms[+b.getAttribute("data-i")].booking_id);
   }));
@@ -5778,10 +5963,14 @@ async function _glSave() {
       return;
     }
     if (!name && !mobile) return;
-    edits.push({ r, name, mobile });
+    const guests = Math.max(1, Math.min(30, parseInt(r.guests, 10) || 1));
+    // Keep only a valid 24h HH:MM; blank means "leave the booking's time as-is".
+    const cin = String(r.checkin || "").slice(0, 5);
+    const checkin = /^([01]\d|2[0-3]):[0-5]\d$/.test(cin) ? cin : "";
+    edits.push({ r, name, mobile, guests, checkin });
   });
   if (badEl) { badEl.style.borderColor = "#e11d48"; showNotification("A mobile number looks wrong — fix the red field", "error"); return; }
-  if (!edits.length) { showNotification("Nothing changed to save", "error"); return; }
+  if (!edits.length) { _glSetMode(false); return; }
 
   saveBtn.disabled = true; saveBtn.textContent = "Saving…";
   let ok = 0;
@@ -5789,15 +5978,17 @@ async function _glSave() {
     try {
       const resp = await apiFetch("/update_booking", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ booking_id: e.r.booking_id, guest_name: e.name, guest_mobile: e.mobile }),
+        body: JSON.stringify(Object.assign(
+          { booking_id: e.r.booking_id, guest_name: e.name, guest_mobile: e.mobile, guest_count: e.guests },
+          e.checkin ? { check_in_time: e.checkin } : {})),
       });
       const d = await resp.json();
       if (d.success) {
         ok += 1;
         const bk = (bookings || []).find((b) => b.booking_id === e.r.booking_id);
-        if (bk) { bk.guest_name = e.name; bk.guest_mobile = e.mobile; }
+        if (bk) { bk.guest_name = e.name; bk.guest_mobile = e.mobile; bk.guest_count = e.guests; if (e.checkin) bk.check_in_time = e.checkin; }
         delete _idLinks[e.r.booking_id];
-        e.r.name = e.name; e.r.mobile = e.mobile; e.r.touched = false;
+        e.r.name = e.name; e.r.mobile = e.mobile; e.r.guests = e.guests; if (e.checkin) e.r.checkin = e.checkin; e.r.touched = false;
       } else {
         showNotification("Room " + e.r.room + ": " + (d.message || "save failed"), "error");
       }
@@ -5811,7 +6002,7 @@ async function _glSave() {
     if (typeof renderBookings === "function") renderBookings();
     await prefetchIdLinks(edits.map((e) => e.r.booking_id));
   }
-  _glRenderTable();
+  if (_glState) { if (ok) _glSetMode(false); else _glRenderTable(); }
 }
 
 function _glSendOne(bookingId) {
@@ -5820,4 +6011,6 @@ function _glSendOne(bookingId) {
   const phone = _waNormalisePhone(bk.guest_mobile || "");
   if (!phone || phone === "91") { showNotification("Save a valid mobile first", "error"); return; }
   _waOpen(phone, _waSingleBookingMessage(bk, { hidePrice: true }));
+  _glMarkWaSent(bookingId);
+  if (_glState) _glRenderTable();
 }

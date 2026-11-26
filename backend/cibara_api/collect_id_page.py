@@ -22,6 +22,17 @@ from datetime import datetime
 # Same Google Maps pin the app's WhatsApp confirmation uses.
 MAPS_LINK = "https://maps.app.goo.gl/Mz5rTrvC3ctyMmUt5"
 
+# Small inline map-pin (no icon font on the guest page), gold to match the brand.
+_PIN = ('<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" '
+        'stroke-width="1.6" style="flex:none;margin-right:9px;color:var(--gold-dk);">'
+        '<path d="M12 21s7-6.5 7-12a7 7 0 1 0-14 0c0 5.5 7 12 7 12Z"/>'
+        '<circle cx="12" cy="9" r="2.6"/></svg>')
+
+# Clock glyph for the compact HH : MM check-in picker.
+_CLOCK = ('<svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" '
+          'stroke-width="1.6" style="flex:none;color:var(--gold-dk);"><circle cx="12" cy="12" r="9"/>'
+          '<path d="M12 7v5l3 2"/></svg>')
+
 
 def _fmt_date(d):
     try:
@@ -84,7 +95,8 @@ def _info_card(info, portal_url):
     info = info or {}
     parts = ['<section class="card"><h2>Before you arrive</h2>',
              f'<a class="line" href="{_esc(MAPS_LINK)}" target="_blank" rel="noopener">'
-             '<span>Directions &amp; location</span><span class="chev">&rsaquo;</span></a>']
+             f'<span style="display:inline-flex;align-items:center;">{_PIN}Directions &amp; location</span>'
+             '<span class="chev">&rsaquo;</span></a>']
     phone = info.get("reception_phone")
     if phone:
         parts.append(f'<a class="line" href="tel:{_esc(phone)}">'
@@ -106,18 +118,35 @@ def _info_card(info, portal_url):
     return "".join(parts)
 
 
-def _upload_card(name):
-    return _UPLOAD.replace("__NAME__", name)
+def _fmt12(hhmm):
+    """24h 'HH:MM' -> 'h:MM AM/PM'; '' for empty/invalid."""
+    s = str(hhmm or "")[:5]
+    if ":" not in s:
+        return ""
+    try:
+        h = int(s.split(":")[0])
+        m = s.split(":")[1]
+    except (ValueError, IndexError):
+        return ""
+    ap = "PM" if h >= 12 else "AM"
+    return f"{h % 12 or 12}:{m} {ap}"
+
+
+def _upload_card(name, ci_value="", ci_label=""):
+    return (_UPLOAD.replace("__NAME__", name)
+            .replace("__CI_VALUE__", ci_value)
+            .replace("__CI_LABEL__", ci_label or "Set time"))
 
 
 def render_page(*, token, guest_name, room, already, booking=None, info=None,
                 portal_url="", hotel="Cibara Comforts"):
     cfg = json.dumps({"token": token, "already": bool(already)})
     name = _esc(guest_name or "Guest")
+    ci_value = str((booking or {}).get("check_in_time") or "")[:5]
     return (_HEAD.replace("__HOTEL__", _esc(hotel))
             + _BRAND.replace("__HOTEL__", _esc(hotel))
             + _booking_card(room, booking)
-            + _upload_card(name)
+            + _upload_card(name, _esc(ci_value), _esc(_fmt12(ci_value)))
             + _info_card(info, portal_url)
             + _BODY_CLOSE.replace("__CFG__", cfg).replace("__HOTEL__", _esc(hotel)))
 
@@ -178,10 +207,17 @@ _HEAD = """<!doctype html><html lang="en"><head>
   /* Fields */
   label.field { display:block; font-size:12px; letter-spacing:1px; text-transform:uppercase;
                 color:var(--muted); font-weight:500; margin:0 0 7px; }
-  input[type=text] { width:100%; padding:13px 15px; border:1px solid var(--line);
+  input[type=text], select { width:100%; padding:13px 15px; border:1px solid var(--line);
           border-radius:3px; font-size:16px; font-family:inherit; background:#fff; color:var(--ink);
           margin:0 0 20px; }
-  input[type=text]:focus { outline:none; border-color:var(--gold); }
+  input[type=text]:focus, select:focus { outline:none; border-color:var(--gold); }
+  select { -webkit-appearance:none; appearance:none; cursor:pointer;
+          background-image:url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' fill='none' stroke='%23bd9e62' stroke-width='2' viewBox='0 0 24 24'%3e%3cpath d='M6 9l6 6 6-6'/%3e%3c/svg%3e");
+          background-repeat:no-repeat; background-position:right 12px center; padding-right:34px; }
+  .timebtn { display:flex; align-items:center; gap:10px; width:100%; margin:0 0 20px;
+          padding:13px 15px; border:1px solid var(--line); border-radius:3px; background:#fff;
+          font-size:16px; font-family:inherit; color:var(--ink); cursor:pointer; text-align:left; }
+  .timebtn:focus { outline:none; border-color:var(--gold); }
   /* Photo slots */
   .slots { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin:2px 0 20px; }
   .slot { position:relative; border:1px solid var(--line); border-radius:3px;
@@ -239,6 +275,10 @@ _UPLOAD = ("""  <section class="card">
         tap the &times; to retake any.</p>
       <label class="field" for="gname">Guest name</label>
       <input type="text" id="gname" value="__NAME__" maxlength="80" autocomplete="name">
+      <label class="field">Expected check-in time</label>
+      <button type="button" id="gci-btn" class="timebtn" data-val="__CI_VALUE__">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" style="color:var(--gold-dk);flex:none;"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+        <span id="gci-label">__CI_LABEL__</span></button>
       <div class="slots">
         <label class="slot"><input type="file" accept="image/*" capture="environment" data-slot="file">
           """ + _CAM + """<span class="lab">ID front</span><span class="opt">Tap to capture</span>
@@ -272,6 +312,61 @@ _BODY_CLOSE = """  <div class="foot">__HOTEL__</div>
   var files = {};
   var err = document.getElementById('err');
   var submit = document.getElementById('submit');
+  // Analog clock-face check-in picker (vanilla, inline — no external scripts).
+  function openClock(initial, onDone){
+    var p=(initial||'').split(':'); var h24=p.length==2?(+p[0]):19;
+    var st={mode:'h',ampm:h24>=12?'PM':'AM',h12:(h24%12)||12,min:p.length==2?(+p[1]):0};
+    function pad(n){n=''+n;return n.length<2?'0'+n:n;}
+    var GOLD='#c9a46a',D=220,R=84,C=110;
+    var ov=document.createElement('div');
+    ov.style.cssText='position:fixed;inset:0;background:rgba(15,23,42,.6);z-index:5000;display:flex;align-items:center;justify-content:center;padding:16px;';
+    ov.innerHTML='<div style="background:#0f1722;color:#fff;border-radius:16px;padding:18px;width:300px;max-width:100%;box-shadow:0 24px 60px rgba(0,0,0,.5);">'+
+      '<div style="display:flex;align-items:flex-start;gap:12px;justify-content:center;margin-bottom:14px;">'+
+        '<div style="display:flex;align-items:baseline;gap:3px;font-size:2.2rem;font-weight:600;">'+
+          '<span id="cp-h" style="cursor:pointer;padding:1px 6px;border-radius:7px;"></span><span>:</span>'+
+          '<span id="cp-m" style="cursor:pointer;padding:1px 6px;border-radius:7px;"></span></div>'+
+        '<div style="display:flex;flex-direction:column;gap:4px;font-size:.78rem;font-weight:700;">'+
+          '<button type="button" id="cp-am" style="border:1px solid #334155;border-radius:6px;padding:3px 9px;cursor:pointer;background:transparent;color:#cbd5e1;">AM</button>'+
+          '<button type="button" id="cp-pm" style="border:1px solid #334155;border-radius:6px;padding:3px 9px;cursor:pointer;background:transparent;color:#cbd5e1;">PM</button></div>'+
+      '</div>'+
+      '<div id="cp-face" style="position:relative;width:220px;height:220px;margin:0 auto;border-radius:50%;background:#152033;"></div>'+
+      '<button type="button" id="cp-done" style="width:100%;margin-top:16px;background:#f1efe8;color:#1e293b;border:0;border-radius:10px;padding:12px;font-weight:700;font-size:.95rem;cursor:pointer;">Done</button>'+
+    '</div>';
+    document.body.appendChild(ov);
+    function close(){ov.remove();}
+    ov.addEventListener('click',function(e){if(e.target===ov)close();});
+    var face=ov.querySelector('#cp-face');
+    function ang(i){return (i/12)*2*Math.PI-Math.PI/2;}
+    function px(i){return C+R*Math.cos(ang(i));} function py(i){return C+R*Math.sin(ang(i));}
+    function render(){
+      var hEl=ov.querySelector('#cp-h'),mEl=ov.querySelector('#cp-m');
+      hEl.textContent=st.h12;mEl.textContent=pad(st.min);
+      hEl.style.background=st.mode=='h'?GOLD:'transparent';hEl.style.color=st.mode=='h'?'#1e293b':'#fff';
+      mEl.style.background=st.mode=='m'?GOLD:'transparent';mEl.style.color=st.mode=='m'?'#1e293b':'#fff';
+      var amEl=ov.querySelector('#cp-am'),pmEl=ov.querySelector('#cp-pm');
+      amEl.style.background=st.ampm=='AM'?GOLD:'transparent';amEl.style.color=st.ampm=='AM'?'#1e293b':'#cbd5e1';
+      pmEl.style.background=st.ampm=='PM'?GOLD:'transparent';pmEl.style.color=st.ampm=='PM'?'#1e293b':'#cbd5e1';
+      var hours=st.mode=='h';var selIdx=hours?st.h12:st.min/5;
+      var html='<svg width="'+D+'" height="'+D+'" style="position:absolute;inset:0;pointer-events:none;">'+
+        '<line x1="'+C+'" y1="'+C+'" x2="'+px(selIdx)+'" y2="'+py(selIdx)+'" stroke="'+GOLD+'" stroke-width="2"/>'+
+        '<circle cx="'+C+'" cy="'+C+'" r="3" fill="'+GOLD+'"/>'+
+        '<circle cx="'+px(selIdx)+'" cy="'+py(selIdx)+'" r="18" fill="'+GOLD+'"/></svg>';
+      for(var k=0;k<12;k++){var idx=hours?k+1:k;var val=hours?k+1:k*5;var sel=hours?(val==st.h12):(val==st.min);
+        html+='<div data-val="'+val+'" style="position:absolute;width:34px;height:34px;left:'+(px(idx)-17)+'px;top:'+(py(idx)-17)+'px;display:flex;align-items:center;justify-content:center;border-radius:50%;cursor:pointer;font-size:.95rem;font-weight:600;z-index:1;color:'+(sel?'#1e293b':'#e2e8f0')+';">'+(hours?val:pad(val))+'</div>';}
+      face.innerHTML=html;
+      var els=face.querySelectorAll('[data-val]');
+      for(var j=0;j<els.length;j++){(function(el){el.addEventListener('click',function(){var v=+el.getAttribute('data-val');if(st.mode=='h'){st.h12=v;st.mode='m';}else{st.min=v;}render();});})(els[j]);}
+    }
+    ov.querySelector('#cp-h').addEventListener('click',function(){st.mode='h';render();});
+    ov.querySelector('#cp-m').addEventListener('click',function(){st.mode='m';render();});
+    ov.querySelector('#cp-am').addEventListener('click',function(){st.ampm='AM';render();});
+    ov.querySelector('#cp-pm').addEventListener('click',function(){st.ampm='PM';render();});
+    ov.querySelector('#cp-done').addEventListener('click',function(){onDone(pad((st.h12%12)+(st.ampm=='PM'?12:0))+':'+pad(st.min));close();});
+    render();
+  }
+  function fmt12(v){if(!v||v.indexOf(':')<0)return 'Set time';var p=v.split(':');var h=+p[0];var ap=h>=12?'PM':'AM';h=(h%12)||12;return h+':'+p[1]+' '+ap;}
+  var gbtn=document.getElementById('gci-btn');
+  if(gbtn){gbtn.addEventListener('click',function(){openClock(gbtn.getAttribute('data-val'),function(v){gbtn.setAttribute('data-val',v);document.getElementById('gci-label').textContent=fmt12(v);});});}
   if (CFG.already) { showDone("We already have your ID on file \\u2014 you're all set. " +
       "You may still upload a new photo below if you'd like."); }
   function showDone(msg){
@@ -310,6 +405,8 @@ _BODY_CLOSE = """  <div class="foot">__HOTEL__</div>
     var fd = new FormData();
     ['file','file2','file3','file4'].forEach(function(k){ if(files[k]) fd.append(k, files[k]); });
     fd.append('name', (document.getElementById('gname').value || '').trim());
+    var gbtn = document.getElementById('gci-btn');
+    if (gbtn && gbtn.getAttribute('data-val')) fd.append('checkin', gbtn.getAttribute('data-val'));
     fetch('/api/v2/collect-id/' + encodeURIComponent(CFG.token) + '/upload',
           { method:'POST', body: fd })
       .then(function(r){ return r.json().then(function(j){ return {ok:r.ok, j:j}; }); })

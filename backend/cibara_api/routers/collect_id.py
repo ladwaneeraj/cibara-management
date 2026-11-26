@@ -17,6 +17,7 @@ photo is stored through the existing private, audited id-docs pipeline
 from __future__ import annotations
 
 import logging
+import re
 import secrets
 import time
 from datetime import datetime, timezone, timedelta
@@ -50,6 +51,12 @@ def _sign(*, mobile: str, name: str, room: str, booking_id: str, exp_ts: int) ->
     payload = {"typ": TOKEN_TYP, "iss": s.JWT_ISSUER, "m": mobile, "n": name[:80],
                "r": str(room)[:12], "b": booking_id, "iat": int(time.time()), "exp": exp_ts}
     return jwt.encode(payload, s.JWT_SECRET, algorithm="HS256")
+
+
+def _valid_checkin(s: str) -> str:
+    """A guest-entered expected check-in, accepted only as 24h HH:MM; else ''."""
+    s = (s or "").strip()
+    return s if re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", s) else ""
 
 
 def _verify(token: str) -> dict:
@@ -233,9 +240,12 @@ async def collect_id_upload(token: str, request: Request,
                             file2: UploadFile | None = File(None),
                             file3: UploadFile | None = File(None),
                             file4: UploadFile | None = File(None),
-                            name: str = Form("", max_length=80)):
+                            name: str = Form("", max_length=80),
+                            checkin: str = Form("", max_length=5)):
     data = _verify(token)
     mobile, booking_id, room = data["m"], data.get("b") or "", data.get("r") or ""
+    # Guest-declared expected check-in, 24h HH:MM only (anything else ignored).
+    checkin = _valid_checkin(checkin)
 
     # Tight per-guest cap on top of the global IP limit — a leaked link can't be
     # used to flood storage.
@@ -280,6 +290,8 @@ async def collect_id_upload(token: str, request: Request,
             upd = {"id_collected": True, "id_collected_at": id_docs.now_iso()}
             if guest and guest.lower() != "guest":
                 upd["guest_name"] = guest
+            if checkin:
+                upd["check_in_time"] = checkin
             if booking_id:
                 db.collection("bookings").document(booking_id).set(upd, merge=True)
             if guest and guest.lower() != "guest":

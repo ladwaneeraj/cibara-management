@@ -136,3 +136,31 @@ def test_page_escapes_and_has_four_slots():
 
 def test_error_page():
     assert "This link has expired." in page.render_error("This link has expired.")
+
+
+# ── expected check-in time (guest-entered, 24h) ─────────────────────────────
+
+def test_valid_checkin_accepts_24h_only():
+    assert c._valid_checkin("07:30") == "07:30"
+    assert c._valid_checkin("23:59") == "23:59"
+    assert c._valid_checkin("00:00") == "00:00"
+    assert c._valid_checkin(" 9:05 ") == ""     # not zero-padded HH
+    assert c._valid_checkin("24:00") == ""      # out of range
+    assert c._valid_checkin("7:30 PM") == ""    # 12h / junk rejected
+    assert c._valid_checkin("") == ""
+
+
+def test_page_prefills_checkin_field():
+    html = page.render_page(token="tok", guest_name="A", room="203", already=False,
+                            booking={"check_in_time": "19:30:00"})
+    assert 'id="gci-btn"' in html            # the clock-picker trigger button
+    assert 'data-val="19:30"' in html        # 24h value carried for submit (seconds trimmed)
+    assert "7:30 PM" in html                 # 12h label shown to the guest
+
+
+def test_fmt12_conversions():
+    assert page._fmt12("19:30") == "7:30 PM"
+    assert page._fmt12("00:05") == "12:05 AM"
+    assert page._fmt12("12:00") == "12:00 PM"
+    assert page._fmt12("09:00") == "9:00 AM"
+    assert page._fmt12("") == "" and page._fmt12("bad") == ""

@@ -76,6 +76,23 @@ def seed(client):
     post("/api/v2/rooms/210/housekeeping", {"room_clean": True})
     post("/api/v2/expenses", {"date": time.strftime("%Y-%m-%d"), "category": "utilities", "description": "Electricity top-up",
                               "amount": 850, "type": "transaction"})
+    # A multi-room booking group (one host books several rooms under their own
+    # name + mobile) so the Bookings screen shows the group banner, clickable
+    # room chips and the guest-list editor.
+    tomorrow   = time.strftime("%Y-%m-%d", time.localtime(time.time() + 86400))
+    day_after  = time.strftime("%Y-%m-%d", time.localtime(time.time() + 2 * 86400))
+    post("/create_multi_booking", {
+        "check_in_date": tomorrow, "check_in_time": "13:00", "check_out_date": day_after,
+        "booking_source": "normal", "payment_method": "cash",
+        "rooms": [{"room": r, "guest_name": "Ramesh (Host)", "guest_mobile": "9876522222",
+                   "guest_count": 2, "total_amount": 1200, "advance": 0}
+                  for r in ("224", "225", "226", "227")],
+    })
+    # Mark one room's guest as having uploaded ID so the list card shows the doc icon.
+    for d in boot.DB.collection("bookings").where("room", "==", "225").stream():
+        if (d.to_dict() or {}).get("group_booking_id"):
+            boot.DB.collection("bookings").document(d.id).set({"id_collected": True}, merge=True)
+
     now = int(time.time() * 1000)
     boot.DB.collection("guestRequests").document("demo1").set({
         "uid": "anon", "room": "202", "stayId": "x", "guestName": "Priya Sharma", "kind": "extra_items",

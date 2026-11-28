@@ -280,16 +280,16 @@ _UPLOAD = ("""  <section class="card">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" style="color:var(--gold-dk);flex:none;"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
         <span id="gci-label">__CI_LABEL__</span></button>
       <div class="slots">
-        <label class="slot"><input type="file" accept="image/*" capture="environment" data-slot="file">
-          """ + _CAM + """<span class="lab">ID front</span><span class="opt">Tap to capture</span>
+        <label class="slot"><input type="file" accept="image/*" data-slot="file">
+          """ + _CAM + """<span class="lab">ID front</span><span class="opt">Camera or gallery</span>
           <button class="rm" type="button" aria-label="Remove">&times;</button></label>
-        <label class="slot"><input type="file" accept="image/*" capture="environment" data-slot="file2">
+        <label class="slot"><input type="file" accept="image/*" data-slot="file2">
           """ + _CAM + """<span class="lab">ID back</span><span class="opt">Optional</span>
           <button class="rm" type="button" aria-label="Remove">&times;</button></label>
-        <label class="slot"><input type="file" accept="image/*" capture="environment" data-slot="file3">
+        <label class="slot"><input type="file" accept="image/*" data-slot="file3">
           """ + _CAM + """<span class="lab">Photo 3</span><span class="opt">Optional</span>
           <button class="rm" type="button" aria-label="Remove">&times;</button></label>
-        <label class="slot"><input type="file" accept="image/*" capture="environment" data-slot="file4">
+        <label class="slot"><input type="file" accept="image/*" data-slot="file4">
           """ + _CAM + """<span class="lab">Photo 4</span><span class="opt">Optional</span>
           <button class="rm" type="button" aria-label="Remove">&times;</button></label>
       </div>
